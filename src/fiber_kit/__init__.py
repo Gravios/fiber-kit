@@ -9,6 +9,7 @@ CLI (installed console scripts) — read <session>.yaml automatically:
     fiber-session <session> <group>          clustering + linking + .fibers/.clu
     fiber-validate-merges <session> <group>   full-session evidence for merges
     fiber-raw-vs-stderiv <session> <group>    raw .fil vs stderiv discrimination
+    fiber-relink <base>.fibers...npz [--clu]  geometry-aware re-link of a finished run
 
 Python:
     import fiber_kit as fk
@@ -19,7 +20,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.2.1"
+__version__ = "0.3.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from .fiber_tracer import trajectory, predict
@@ -29,6 +30,7 @@ from .fiber_session import (
     cluster_chunk, cluster_chunk_fine, fiber_geom, link_chunks,
     read_res, open_spkD, fil_chunk_whitener,
 )
+from .fiber_relink import relink, rewrite_clu, write_report
 
 __all__ = [
     "__version__",
@@ -37,4 +39,5 @@ __all__ = [
     "find_session_yaml", "load_session", "resolve_session_params",
     "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks",
     "read_res", "open_spkD", "fil_chunk_whitener",
+    "relink", "rewrite_clu", "write_report",
 ]
