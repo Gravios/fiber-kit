@@ -110,3 +110,47 @@ for g in np.unique(f['gid'][f['gid'] >= 0]):
 - Profile step runs **after** template/sliding, so it reviews/merges already-clean fibers.
 - Within one shank the refractory test is partially confounded by collision removal;
   the trustworthy validators are the `[2,5] ms` CCG band and full-session rate handoff.
+
+## Post-hoc re-linking by evolving geometry (`fiber-relink`)
+
+`link_chunks` links fibers across chunks only by shared overlap-window spikes. On
+long sessions that strands almost every fiber as its own unit (group 5 of
+`sirotaA-jg-000005-20120312`: 2400 / 2465 gids were single-chunk) because a unit
+firing < ~8 spikes in the 4-min overlap never anchors. Yet the fiber geometry
+itself is an almost-perfect cross-chunk signal — for genuine same-unit
+consecutive chunks the direction-profile distance is ~0.045, template
+correlation ~0.99, |Δdepth| ~0.04 ch (AUC 0.993 vs different units), and it
+drifts smoothly. `fiber-relink` exploits that, post-hoc, on a finished
+`.fibers` run (no re-run needed):
+
+```
+fiber-relink <base>.fibers.<method>.<elec>.npz --clu <base>.clu.<elec> \
+             --out <base>.clu.<elec>.relinked --report relink_report.tsv
+```
+
+It is **strictly additive** (only merges, never splits): it seeds the union-find
+with the existing gids (so every original link is preserved — 100% recall), then
+
+1. **bundles within a chunk** the over-split fragments of one neuron, by
+   *mutual-best* pairing on tight template + direction-profile agreement
+   (iterated, never single-linkage, so it cannot chain distinct neurons), and
+2. **chains across chunks by evolving geometry** with a *noise-aware* distance
+   `wp·profile + (1-wp)·tmpl_dist`, `wp = q/(q+300)`, `q = min(nspk)` — so the
+   sharp direction profile dominates only when both fibers are well sampled and
+   the robust template carries the sparse ones. Matching is **one-to-one forward
+   chaining** (≤1 successor / ≤1 predecessor) under a **chunk-disjoint** union
+   (two tracks sharing a chunk are different neurons), with reciprocal-best +
+   uniqueness margin, a per-step template/depth gate, and a one-chunk gap bridge.
+
+Matchability scales with spike count (the geometry-estimate quality): nspk ≥ 1k
+chains at ~0.03, but the ~87 % of fibers with nspk < 300 are too noisy to link
+on geometry alone and are left as singletons — those need the in-pipeline
+overlap anchors and CCG validation, not geometry. On the group-5 run this took
+2465 → ~1868 units while preserving the longest tracks (the persistent
+interneuron spans 28 chunks) and keeping every geometry-created step below the
+template gate.
+
+The TSV report has one row per re-linked unit (`n_chunks`, `spikes`, end-to-end
+template/depth drift, worst consecutive step) with a `suspect` flag for any unit
+whose worst consecutive step or end-to-end drift is large — which also surfaces
+**inherited** bad links from the original `.clu` for review.
