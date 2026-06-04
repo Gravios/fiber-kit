@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.1.0"
+version = "0.2.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -21,6 +21,7 @@ dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
     "scikit-learn>=1.0",
+    "pyyaml>=5.3",
 ]
 
 [project.optional-dependencies]

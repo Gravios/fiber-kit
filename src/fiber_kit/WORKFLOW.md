@@ -5,30 +5,32 @@ validated signal (AUC ~0.98 same-fiber-halves vs distinct fibers; curvature/
 tangent and derivative features were tested and add nothing — see notes).
 
 ## Files
+- `session_yaml.py` — **new** reads `<session>.yaml`; all CLIs take `<session> <group>`.
 - `fiber_lib.py` `fiber_tracer.py` `klustakwik.py` — primitives (unchanged).
-- `fiber_session.py` — pipeline; **new** `merge_method="profile"` + `--emit-merge-candidates`.
+- `fiber_session.py` — pipeline; `merge_method="profile"` + `--emit-merge-candidates`.
 - `fiber_adapt.py` `fiber_collision.py` `laplacian_link.py` — adaptation / collision / link.
-- `validate_merge_candidates.py` — **new** full-session evidence for proposed merges.
+- `validate_merge_candidates.py` — full-session evidence for proposed merges.
 - `raw_vs_stderiv.py` — raw-`.fil` vs stderiv discrimination test (separate question).
 
-Inputs expected on disk: `<base>.res.<elec>`, `<base>.spkD.<elec>`, `<base>.fil`.
-Example below uses the 20120312 session, shank 5 (edit to taste).
+Inputs expected on disk: `<session>.res.<group>`, `<session>.spkD.<group>`,
+`<session>.fil`, and `<session>.yaml` (or `<session>/<session>.yaml`). The CLIs
+read **channels, sampling rate, nChannels, and nSamples straight from the YAML** —
+you only pass `<session> <group>`. Any `--channels/--ntotal/--sr/...` flag still
+works as an override, and if no YAML is found the tools fall back to requiring them.
 
 ```bash
-BASE=sirotaA-jg-000005-20120312 ; E=5
-CH=32,33,34,35,36,37,38,39 ; NTOT=96
-COMMON="--channels $CH --ntotal $NTOT --nsamp 32 --nchan 8 --sr 32552 \
-        --chunk-min 12 --overlap-min 4 --min-group 200 --fine-method rkk --inclusion-k 3"
+SESSION=sirotaA-jg-000005-20120312 ; G=5     # group is 1-based (spikeDetection.channelGroups)
+COMMON="--chunk-min 12 --overlap-min 4 --min-group 200 --fine-method rkk --inclusion-k 3"
 ```
 
 ## 1. Baseline + curation candidates (recommended path)
 Consolidate normally (sliding), then emit profile candidates **on the clean fibers
 without merging** — review-only. Writes `.clu`, `.fibers.*`, and the candidate tsv.
 ```bash
-python3 fiber_session.py $BASE $E $COMMON \
+fiber-session $SESSION $G $COMMON \
     --merge-method sliding --merge-corr 0.90 \
     --emit-merge-candidates
-# -> <base>.merge_candidates.5.tsv   (gid columns VALID in emit mode)
+# -> <session>.merge_candidates.5.tsv   (gid columns VALID in emit mode)
 ```
 The tsv: `chunk  gid_a  gid_b  local_a  local_b  profile_dist  threshold`,
 sorted by distance (smaller = higher-confidence same-neuron). Threshold is the
@@ -39,7 +41,7 @@ In-sandbox reference (10-min chunk): g5 → 7 candidates @ thr 0.13; g7 → 19 @
 
 ## 2. Validate candidates against full-session evidence
 ```bash
-python3 validate_merge_candidates.py $BASE $E --sr 32552
+fiber-validate-merges $SESSION $G
 ```
 Per pair it prints the cross-correlogram by band and the 30 s rate correlation:
 - **`[2,5] ms` low vs baseline** → relative refractory survives → same-neuron evidence
@@ -53,8 +55,8 @@ Flags are heuristics; eyeball the CCG for borderline pairs.
 ## 3. Apply the merge (after you trust the threshold)
 Auto-apply profile-merge as the consolidation step (no sliding):
 ```bash
-python3 fiber_session.py $BASE $E $COMMON --merge-method profile        # auto threshold
-python3 fiber_session.py $BASE $E $COMMON --merge-method profile --profile-thr 0.12
+fiber-session $SESSION $G $COMMON --merge-method profile        # auto threshold
+fiber-session $SESSION $G $COMMON --merge-method profile --profile-thr 0.12
 ```
 Or keep sliding for fragments and hand-merge only the validated gids from step 2.
 In-sandbox reference: g5 27→14, g7 58→18 (≥120-spike fibers, floor threshold).
@@ -63,7 +65,7 @@ In-sandbox reference: g5 27→14, g7 58→18 (≥120-spike fibers, floor thresho
 Tests whether the un-reduced raw waveform separates the confusable fibers better
 than stderiv (the one feature route the whitening-invariance theorem doesn't forbid):
 ```bash
-python3 raw_vs_stderiv.py $BASE $E --channels $CH --ntotal $NTOT \
+fiber-raw-vs-stderiv $SESSION $G \
     --chunk-min-start 183 --chunk-min 10 --min-spikes 60
 ```
 Read the final line: `mean raw-minus-stderiv on confusable pairs`. Positive ⇒ stderiv
