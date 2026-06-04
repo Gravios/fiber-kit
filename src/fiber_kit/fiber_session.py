@@ -52,6 +52,10 @@ try:
 except ImportError:
     from klustakwik import klustakwik as _rkk
 try:
+    from . import session_yaml as sy
+except ImportError:
+    import session_yaml as sy
+try:
     import diptest as _diptest
     _HAVE_DIP = True
 except Exception:
@@ -567,11 +571,16 @@ def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("base"); ap.add_argument("elec", type=int)
-    ap.add_argument("--channels", required=True); ap.add_argument("--ntotal", type=int, required=True)
-    ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--nchan", type=int, default=8)
-    ap.add_argument("--sr", type=float, default=32552.0)
+    ap = argparse.ArgumentParser(
+        description="Cluster a session group into fibers. Reads <session>.yaml "
+                    "(or <session>/<session>.yaml) for channels/sr/nChannels; "
+                    "CLI flags override the YAML.")
+    ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
+    ap.add_argument("group", type=int, help="1-based spike group (indexes spikeDetection.channelGroups)")
+    ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
+    ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in .fil")
+    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
+    ap.add_argument("--sr", type=float, default=None)
     ap.add_argument("--chunk-min", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")
@@ -613,8 +622,12 @@ def main():
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    gch = np.array([int(x) for x in a.channels.split(",")], int)
-    assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, --nchan={a.nchan}"
+    cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+    a.base = cfg["base"]; a.elec = a.group
+    a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
+    gch = np.array(cfg["channels"], int)
+    assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
     mask = fl.MASK_FULL; p = len(mask) * a.nchan
 
     t0 = time.time()

@@ -31,6 +31,10 @@ try:
     from .fiber_session import read_res
 except ImportError:
     from fiber_session import read_res
+try:
+    from . import session_yaml as sy
+except ImportError:
+    import session_yaml as sy
 
 
 def read_clu(base, elec):
@@ -58,11 +62,13 @@ def rate_corr(tA, tB, sr, bin_s=30.0):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("base"); ap.add_argument("elec", type=int)
-    ap.add_argument("--sr", type=float, default=32552.0)
-    ap.add_argument("--cand", default=None, help="candidates tsv (default <base>.merge_candidates.<elec>.tsv)")
+    ap = argparse.ArgumentParser(description="Full-session evidence for proposed same-neuron merges; reads <session>.yaml for sr.")
+    ap.add_argument("session"); ap.add_argument("group", type=int)
+    ap.add_argument("--sr", type=float, default=None)
+    ap.add_argument("--cand", default=None, help="candidates tsv (default <base>.merge_candidates.<group>.tsv)")
     a = ap.parse_args()
+    cfg = sy.resolve_session_params(a.session, a.group, sr=a.sr, require=())
+    a.base = cfg["base"]; a.elec = a.group; a.sr = cfg["sr"] if cfg["sr"] is not None else 32552.0
     res = read_res(a.base, a.elec); clu = read_clu(a.base, a.elec)
     assert len(res) == len(clu), f".res {len(res)} vs .clu {len(clu)}"
     cand_path = a.cand or f"{a.base}.merge_candidates.{a.elec}.tsv"

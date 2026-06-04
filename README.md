@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.1.0-orange)
+![version](https://img.shields.io/badge/version-0.2.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -45,8 +45,8 @@ pip install "fiber-kit[dip]"     # + diptest, enables DipSplit (bimodal splittin
 From a built artifact:
 
 ```bash
-pip install fiber_kit-0.1.0.tar.gz             # sdist
-pip install fiber_kit-0.1.0-py3-none-any.whl   # wheel
+pip install fiber_kit-0.2.0.tar.gz             # sdist
+pip install fiber_kit-0.2.0-py3-none-any.whl   # wheel
 ```
 
 ## Quick start
@@ -55,9 +55,9 @@ pip install fiber_kit-0.1.0-py3-none-any.whl   # wheel
 and a per-fiber `.fibers` table:
 
 ```bash
+# channels, sampling rate, nChannels and nSamples are read from <session>.yaml
+# (looked up as <session>.yaml or <session>/<session>.yaml); group is 1-based.
 fiber-session sirotaA-jg-000005-20120312 5 \
-    --channels 32,33,34,35,36,37,38,39 --ntotal 96 \
-    --nsamp 32 --nchan 8 --sr 32552 \
     --chunk-min 12 --overlap-min 4 --min-group 200 \
     --fine-method rkk --inclusion-k 3 \
     --merge-method sliding --merge-corr 0.90 \
@@ -112,6 +112,7 @@ The pipeline runs per chunk, then links chunks:
 | `<base>.res.<elec>` | spike times, little-endian `int64`, no header |
 | `<base>.spkD.<elec>` (or `.spk.<elec>`) | waveforms, `int16`, reshaped `(n, nsamp, nchan)` |
 | `<base>.fil` | filtered wideband, `int16`, `ntotal` channels interleaved |
+| `<session>.yaml` | session parameters (nChannels, samplingRate, spikeDetection groups) |
 
 **Outputs:**
 
@@ -177,7 +178,8 @@ fiber-session <base> 5 ... --merge-method profile
 
 | Flag | Default | Purpose |
 |------|---------|---------|
-| `--channels` / `--ntotal` / `--nchan` / `--nsamp` / `--sr` | — / — / 8 / 32 / 32552 | probe geometry & sampling |
+| `<session>` `<group>` | — | positional: session (finds `<session>.yaml`) and 1-based group |
+| `--channels` / `--ntotal` / `--nchan` / `--nsamp` / `--sr` | from YAML | override the YAML-derived probe geometry & sampling |
 | `--chunk-min` / `--overlap-min` | 12 / 4 | chunk length & overlap (minutes) |
 | `--min-group` | 200 | coarse min spikes/fiber (linking anchors) |
 | `--fine-method` | `gmm` | `rkk` \| `gmm` \| `fiber` \| `none` |
@@ -248,7 +250,7 @@ src/fiber_kit/
 ## Requirements
 
 Python ≥ 3.9 · numpy ≥ 1.21 · scipy ≥ 1.7 · scikit-learn ≥ 1.0 ·
-optional: diptest ≥ 0.5 (for DipSplit).
+pyyaml ≥ 5.3 · optional: diptest ≥ 0.5 (for DipSplit).
 
 ## License
 

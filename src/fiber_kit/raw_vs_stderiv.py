@@ -38,6 +38,10 @@ try:
     from .fiber_session import cluster_chunk_fine, read_res, open_spkD
 except ImportError:
     from fiber_session import cluster_chunk_fine, read_res, open_spkD
+try:
+    from . import session_yaml as sy
+except ImportError:
+    import session_yaml as sy
 
 
 def whitener_from(windows, mask):
@@ -78,15 +82,19 @@ def pair_acc(A, B, featfn, fine, inset, reps=10):
 
 
 def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("base"); ap.add_argument("elec", type=int)
-    ap.add_argument("--channels", required=True); ap.add_argument("--ntotal", type=int, required=True)
-    ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--nchan", type=int, default=8)
-    ap.add_argument("--sr", type=float, default=32552.0)
+    ap = argparse.ArgumentParser(description="raw .fil vs stderiv discrimination of the original fibers; reads <session>.yaml.")
+    ap.add_argument("session"); ap.add_argument("group", type=int)
+    ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
+    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
+    ap.add_argument("--sr", type=float, default=None)
     ap.add_argument("--chunk-min-start", type=float, default=0.0); ap.add_argument("--chunk-min", type=float, default=10.0)
     ap.add_argument("--min-spikes", type=int, default=60); ap.add_argument("--min-group", type=int, default=200)
     a = ap.parse_args()
-    gch = np.array([int(x) for x in a.channels.split(",")], int); OFF = fl.EXTRACT_OFFSET; mask = fl.MASK_FULL
+    cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+    a.base = cfg["base"]; a.elec = a.group
+    a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
+    gch = np.array(cfg["channels"], int); OFF = fl.EXTRACT_OFFSET; mask = fl.MASK_FULL
 
     res = read_res(a.base, a.elec); spk_mm, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
     fil = np.memmap(f"{a.base}.fil", dtype='<i2', mode='r').reshape(-1, a.ntotal)
