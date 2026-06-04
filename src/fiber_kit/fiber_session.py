@@ -564,10 +564,8 @@ def open_spkD(base, elec, nsamp, nch):
     raise FileNotFoundError(f"no .spkD/.spk for {base} elec {elec}")
 
 def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
-    s0 = max(0, s0); s1 = min(filmm.shape[0], s1)
-    span = np.asarray(filmm[s0:s1, :][:, gch], dtype=float)
-    rel = (spike_abs - s0).astype(int); rel = rel[(rel >= 0) & (rel < span.shape[0])]
-    return fl.chunk_whitener(span, rel, mask=mask)
+    # memmap path: reads only sampled baseline windows, never the whole span.
+    return fl.chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask)
 
 
 def main():

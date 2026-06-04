@@ -19,7 +19,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from .fiber_tracer import trajectory, predict
