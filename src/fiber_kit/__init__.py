@@ -10,6 +10,7 @@ CLI (installed console scripts) — read <session>.yaml automatically:
     fiber-validate-merges <session> <group>   full-session evidence for merges
     fiber-raw-vs-stderiv <session> <group>    raw .fil vs stderiv discrimination
     fiber-relink <base>.fibers...npz [--clu]  geometry-aware re-link of a finished run
+    fiber-realign <base> <elec> --nsamp --nch  per-spike template offsets + corrected .res
 
 Python:
     import fiber_kit as fk
@@ -20,7 +21,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from .fiber_tracer import trajectory, predict
@@ -31,6 +32,7 @@ from .fiber_session import (
     read_res, open_spkD, fil_chunk_whitener,
 )
 from .fiber_relink import relink, rewrite_clu, write_report
+from .fiber_realign import template_offsets, realign, write_outputs
 
 __all__ = [
     "__version__",
@@ -40,4 +42,5 @@ __all__ = [
     "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks",
     "read_res", "open_spkD", "fil_chunk_whitener",
     "relink", "rewrite_clu", "write_report",
+    "template_offsets", "realign", "write_outputs",
 ]
