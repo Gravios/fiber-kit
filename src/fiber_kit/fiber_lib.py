@@ -28,23 +28,77 @@ def fil_to_spkD_space(fil_trace):
     return T2
 
 # ── per-chunk whitener from occupancy-masked .fil baseline (in spkD space) ──
-def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0):
-    """Noise whitener + mean in the masked spkD space, from off-spike baseline.
-    fil_trace: (T,nCh) raw voltage; spike_samples_rel: spike times relative to trace start."""
-    T2 = fil_to_spkD_space(fil_trace); T = T2.shape[0]
-    forb = np.zeros(T, bool)
-    for sp in spike_samples_rel:
-        forb[max(0, sp-guard):min(T, sp+guard)] = True
-    rng = np.random.default_rng(seed); base=[]; tries=0
-    while len(base) < n_base and tries < 50*n_base:
-        s = int(rng.integers(0, T-32)); tries += 1
-        if not forb[s:s+32].any(): base.append(T2[s:s+32])
-    base = np.array(base)
-    bm = base[:, mask, :].reshape(len(base), -1); nmean = bm.mean(0)
+def _fit_whitener(base, mask):
+    """Fit the masked-space mean + ZCA whitener from collected baseline snippets."""
+    if len(base) == 0:
+        raise RuntimeError("chunk_whitener: no off-spike baseline snippets found "
+                           "(span too short, or spikes cover it). Lower n_base/guard or widen the span.")
+    bm = np.asarray(base)[:, mask, :].reshape(len(base), -1).astype(np.float64)
+    nmean = bm.mean(0)
     C = LedoitWolf().fit(bm - nmean).covariance_
     ev, Vv = np.linalg.eigh(C); ev = np.maximum(ev, 1e-9)
-    W = Vv @ np.diag(1/np.sqrt(ev)) @ Vv.T
+    W = Vv @ np.diag(1.0 / np.sqrt(ev)) @ Vv.T
     return W, nmean, len(base)
+
+
+def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, pad=1):
+    """Draw up to n_base off-spike 32-sample snippets WITHOUT materializing the
+    whole span.  `read_window(r0, r1)` returns the raw (rows, nCh) float window;
+    only sampled windows are read and stderiv-transformed.  Forbidden zones are
+    tested by searchsorted on the sorted spike times (no T-length mask)."""
+    sp = np.sort(np.asarray(spike_rel, dtype=np.int64))
+    rng = np.random.default_rng(seed)
+    base = []; tries = 0; maxtries = 50 * n_base
+    hi_start = max(1, T - win)
+    while len(base) < n_base and tries < maxtries:
+        tries += 1
+        start = int(rng.integers(0, hi_start))
+        # reject if any spike falls in [start-guard, start+win+guard)
+        i = np.searchsorted(sp, start - guard, "left")
+        j = np.searchsorted(sp, start + win + guard, "right")
+        if j > i:
+            continue
+        r0 = max(0, start - pad)                 # 1 extra row so the temporal diff is exact
+        seg = np.asarray(read_window(r0, start + win), dtype=np.float32)
+        if seg.shape[0] < win:
+            continue
+        base.append(np.asarray(fil_to_spkD_space(seg)[-win:], dtype=np.float32))
+    return base
+
+
+def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0):
+    """Noise whitener + mean in the masked spkD space, from off-spike baseline.
+    fil_trace: (T,nCh) raw voltage (already restricted to the group's channels);
+    spike_samples_rel: spike times relative to trace start.  Memory-frugal: only
+    the sampled snippets are stderiv-transformed, never the whole trace."""
+    fil_trace = np.asarray(fil_trace)
+    T = fil_trace.shape[0]
+
+    def read_window(r0, r1):
+        return fil_trace[r0:r1]
+
+    base = _collect_baseline(read_window, T, spike_samples_rel, n_base, guard, seed)
+    return _fit_whitener(base, mask)
+
+
+def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000, guard=24, seed=0):
+    """Memmap whitener: identical statistics to chunk_whitener but reads ONLY the
+    sampled baseline windows from `filmm` (shape (Ttot, nTotalCh)), so peak memory
+    is O(n_base * 32 * nGroupCh) regardless of span length.  Contiguous channel
+    groups are sliced as a view; non-contiguous fall back to per-window fancy index."""
+    s0 = max(0, int(s0)); s1 = min(filmm.shape[0], int(s1)); T = s1 - s0
+    gch = np.asarray(gch, dtype=np.int64)
+    contiguous = gch.size > 0 and bool((np.diff(gch) == 1).all())
+    lo, hi = int(gch[0]), int(gch[-1]) + 1
+    spike_rel = np.asarray(spike_abs, dtype=np.int64) - s0
+
+    def read_window(r0, r1):
+        if contiguous:
+            return filmm[s0 + r0: s0 + r1, lo:hi]
+        return filmm[s0 + r0: s0 + r1, :][:, gch]
+
+    base = _collect_baseline(read_window, T, spike_rel, n_base, guard, seed)
+    return _fit_whitener(base, mask)
 
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
 def realign(waveforms, lo=6, hi=26, maxlag=4):
