@@ -154,3 +154,35 @@ The TSV report has one row per re-linked unit (`n_chunks`, `spikes`, end-to-end
 template/depth drift, worst consecutive step) with a `suspect` flag for any unit
 whose worst consecutive step or end-to-end drift is large — which also surfaces
 **inherited** bad links from the original `.clu` for review.
+
+## Spike-time correction to the fiber template (`fiber-realign`)
+
+After re-linking, correct each spike's time so it is aligned to the template of
+the unit it now belongs to, and save the per-spike offsets:
+
+```
+fiber-realign <base> <elec> --nsamp 32 --nch 8 --clu <base>.clu.<elec>.relinked
+# -> <base>.res.<elec>.realigned   (int64 LE, = res + round(offset))
+# -> <base>.offsets.<elec>.npy     (float32 sub-sample offset per spike)
+```
+
+Each spike's waveform (`.spkD`/`.spk`) is aligned to its unit's multichannel
+template by cross-correlation (integer lag within `--max-shift`), refined to
+sub-sample resolution by a parabola through the correlation peak; the template is
+recomputed from the aligned spikes and the alignment repeated (`--iters`). Units
+with `< --min-n` spikes are left at zero offset. `res_corrected = res +
+round(offset)`; the full sub-sample offset is saved separately (the integer `.res`
+grid cannot hold it).
+
+Two uses: it removes residual detection jitter, and — run with the **re-linked**
+`.clu` — it forces every spike of a merged unit onto one canonical template, so a
+unit assembled from fibers detected against different per-chunk references gets a
+single consistent spike-time convention. Where the extractor already peak-aligned
+(`process_extractspikes_stderiv`), the integer offsets are correctly small (on the
+group-5 min-183..193 excerpt: 8.9 % nonzero, max ±5 samples, +0.06 % template
+sharpening) while ~88 % of spikes still carry a non-zero **sub-sample** offset —
+so the saved offsets are the substantive output and the corrected `.res` differs
+only for the minority needing an integer shift.
+
+Recommended chain: `fiber-session` → `fiber-relink` (merge) → `fiber-realign`
+(align times to the merged-unit templates).
