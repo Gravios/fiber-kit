@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fiber-kit"
+version = "0.1.0"
+description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "Gravio" }]
+keywords = ["electrophysiology", "spike-sorting", "neurosuite", "klustakwik", "drift"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+]
+dependencies = [
+    "numpy>=1.21",
+    "scipy>=1.7",
+    "scikit-learn>=1.0",
+]
+
+[project.optional-dependencies]
+dip = ["diptest>=0.5"]            # enables DipSplit (bimodal cluster splitting)
+
+[project.scripts]
+fiber-session = "fiber_kit.fiber_session:main"
+fiber-raw-vs-stderiv = "fiber_kit.raw_vs_stderiv:main"
+fiber-validate-merges = "fiber_kit.validate_merge_candidates:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+fiber_kit = ["WORKFLOW.md"]
