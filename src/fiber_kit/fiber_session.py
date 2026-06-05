@@ -617,8 +617,17 @@ def main():
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
+    ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    if a.gpu:
+        try:
+            from . import backend as _bk
+        except ImportError:
+            import backend as _bk
+        on = _bk.use_gpu(True)
+        print(f"[fiber_session] GPU requested: backend = {_bk.backend_name()}"
+              + ("" if on else " (CuPy/CUDA unavailable -> CPU)"))
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
     a.base = cfg["base"]; a.elec = a.group
