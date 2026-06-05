@@ -427,14 +427,22 @@ def geometry_tracks(snaps, waves, W, nmean, mask, n_grid=40, min_n=40):
 
 
 def write_geometry_tracks(tracks, path):
-    """Long-format TSV: one row per (final_fiber, snapshot) with host cluster,
-    purity, and the geometry stats."""
-    with open(path, "w") as f:
-        f.write("fiber\titer\thost\tpurity\t" + "\t".join(_GEOM_KEYS) + "\n")
-        for fc, series in sorted(tracks.items()):
-            for tag, host, frac, s in series:
-                f.write(f"{fc}\t{tag}\t{host}\t{frac:.3f}\t"
-                        + "\t".join(f"{s[k]:.4g}" for k in _GEOM_KEYS) + "\n")
+    """Lossless npz of the per-iteration geometry tracks (one row per
+    (final_fiber, snapshot)).  Long format, no object arrays, so a viewer loads
+    it straight into columns and groups by `fiber`:
+        fiber[N] int, iter[N] str, host[N] int, purity[N] f8,
+        stats[N,11] f8, keys[11] str (= _GEOM_KEYS, the stats column order).
+    Rows are ordered fine -> ... -> final within each fiber."""
+    fib, it, host, pur, rows = [], [], [], [], []
+    for fc, series in sorted(tracks.items()):
+        for tag, h, frac, s in series:
+            fib.append(fc); it.append(str(tag)); host.append(h); pur.append(frac)
+            rows.append([s[k] for k in _GEOM_KEYS])
+    np.savez_compressed(path,
+                        fiber=np.asarray(fib, int), iter=np.asarray(it),
+                        host=np.asarray(host, int), purity=np.asarray(pur, float),
+                        stats=np.asarray(rows, float).reshape(-1, len(_GEOM_KEYS)),
+                        keys=np.asarray(_GEOM_KEYS))
     return path
 
 
@@ -575,15 +583,35 @@ def _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask, min_n=40):
 
 
 def write_chunk_geometry(tracks, path):
-    """Long-format TSV: one row per (global_fiber, chunk) with the chunk start
-    time and the geometry stats measured in that chunk's frame."""
-    with open(path, "w") as f:
-        f.write("fiber\tchunk\tt_min\t" + "\t".join(_GEOM_KEYS) + "\n")
-        for g in sorted(tracks):
-            for c, tmin, s in tracks[g]:
-                f.write(f"{g}\t{c}\t{tmin:.2f}\t"
-                        + "\t".join(f"{s[k]:.4g}" for k in _GEOM_KEYS) + "\n")
+    """Lossless npz of the cross-window (drift) geometry, one row per
+    (global_fiber, chunk).  Long format, no object arrays:
+        fiber[N] int, chunk[N] int, t_min[N] f8, stats[N,11] f8,
+        keys[11] str (= _GEOM_KEYS).  Group by `fiber`, order by `t_min` for the
+    drift time series."""
+    fib, ck, tmin, rows = [], [], [], []
+    for g in sorted(tracks):
+        for c, t, s in tracks[g]:
+            fib.append(g); ck.append(c); tmin.append(t)
+            rows.append([s[k] for k in _GEOM_KEYS])
+    np.savez_compressed(path,
+                        fiber=np.asarray(fib, int), chunk=np.asarray(ck, int),
+                        t_min=np.asarray(tmin, float),
+                        stats=np.asarray(rows, float).reshape(-1, len(_GEOM_KEYS)),
+                        keys=np.asarray(_GEOM_KEYS))
     return path
+
+
+def load_geometry(path):
+    """Load a .geom/.geomchunk npz into a dict with the index columns plus each
+    stat as its own named column (so a viewer/report can do g['cone_med'] without
+    knowing the stats-matrix layout).  Works for both writers."""
+    z = np.load(path, allow_pickle=False)
+    keys = [str(k) for k in z["keys"]]
+    out = {k: z[k] for k in z.files if k != "stats"}
+    out["keys"] = keys
+    for j, k in enumerate(keys):
+        out[k] = z["stats"][:, j]
+    return out
 
 
 def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
@@ -681,7 +709,7 @@ def main():
                          "refined labels as the next seed, up to N extra passes (e.g. 1 = 2 passes); 0 = single pass")
     ap.add_argument("--track-geometry", action="store_true",
                     help="record per-fiber geometry (radius/cone/smoothness/bend) at every iteration and "
-                         "write <base>.geom.<group>.tsv tracking each final fiber back through the loop")
+                         "write <base>.geom.<group>.npz tracking each final fiber back through the loop")
     ap.add_argument("--large", type=int, default=800, help="only clusters >= this are split each iter")
     ap.add_argument("--min-group", type=int, default=40)
     ap.add_argument("--var-margin", type=float, default=0.05,
@@ -779,7 +807,7 @@ def main():
         res_path = nio.write_res(base, elec, res, variant=a.out_variant)
         print(f"wrote {clu_path}\n      {res_path}")
         if tracks is not None:
-            gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.tsv")
+            gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
             print(f"      {gpath}  ({len(tracks)} fibers across windows)")
         print(f"[done] {nglob} global fibers; t={time.time()-t0:.0f}s")
         return
@@ -817,7 +845,7 @@ def main():
     print(f"wrote {clu_path}\n      {res_path}\n      {tsv}")
     if snaps is not None:
         tracks = geometry_tracks(snaps, waves, W, nmean, mask)
-        gpath = write_geometry_tracks(tracks, f"{base}.geom.{elec}.tsv")
+        gpath = write_geometry_tracks(tracks, f"{base}.geom.{elec}.npz")
         print(f"      {gpath}  ({len(tracks)} fibers x {len(snaps)} snapshots)")
     print(f"[done] t={time.time()-t0:.0f}s")
 
