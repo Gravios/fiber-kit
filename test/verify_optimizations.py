@@ -54,6 +54,32 @@ def ewma_ref(ts, tau):
     return a
 
 
+def test_collision():
+    print("collision decompose batch vs per-spike:")
+    from fiber_kit import fiber_collision as fcol
+    rng = np.random.default_rng(1); nchan = 8; nsamp = 32; mask = fl.MASK_FULL; p = len(mask) * nchan
+    A = rng.standard_normal((p, p)); Wm = A @ A.T / p; nm = rng.standard_normal(p)
+    def tpl(ch, amp):
+        prof = np.exp(-0.5 * ((np.arange(nchan) - ch) / 1.3) ** 2)
+        tr = -amp * np.exp(-0.5 * ((np.arange(nsamp) - 15) / 1.6) ** 2)
+        return tr[:, None] * prof[None, :]
+    T = {1: tpl(1, 300), 2: tpl(4, 260), 3: tpl(6, 220), 4: tpl(3, 180)}
+    dic = fcol.whiten_atoms(T, Wm, nm, mask=mask, shifts=range(-8, 9))
+    ks = list(T); n = 250; waves = np.zeros((n, nsamp, nchan))
+    for i in range(n):
+        a, b = rng.choice(ks, 2, replace=False)
+        waves[i] = T[a] * rng.uniform(.5, 1.5) + np.roll(T[b], rng.integers(-6, 7), 0) * rng.uniform(.3, 1.2) \
+            + rng.standard_normal((nsamp, nchan)) * 15
+    per = [fcol.decompose(waves[i], dic, Wm, nm, mask) for i in range(n)]
+    bat = fcol.decompose_batch(waves, dic, Wm, nm, mask)
+    ints = all(np.array_equal(np.array([d[k] for d in per]), np.asarray(bat[k]))
+               for k in ('k1', 'tau1', 'k2', 'tau2'))
+    flo = max(float(np.abs(np.array([d[k] for d in per]) - np.asarray(bat[k])).max())
+              for k in ('a1', 'a2', 'gain', 'r1n', 'r2n', 'xn'))
+    check("decompose_batch keys/taus identical to per-spike", ints)
+    check("decompose_batch amplitudes/gain match (<=1e-9)", flo <= 1e-9)
+
+
 def test_equality():
     print("numerical equality vs reference loops:")
     rng = np.random.default_rng(0)
@@ -155,6 +181,12 @@ def test_gpu():
     p = len(fl.MASK_FULL) * 8; Wm = rng.standard_normal((p, p)); nm = rng.standard_normal(p)
     Xg = fl.features(W, Wm, nm)[0]; bk.use_gpu(False); Xc = fl.features(W, Wm, nm)[0]; bk.use_gpu(True)
     check("GPU features matches CPU (<=1e-2)", float(np.abs(Xg - Xc).max()) <= 1e-2)
+    # tracer residual matrix on GPU vs CPU
+    Xf = rng.standard_normal((500, 10)) * np.arange(1, 11)
+    trajs = {k: ft.trajectory(rng.standard_normal((300, 10)) * np.arange(1, 11)) for k in ("a", "b", "c")}
+    resg, _ = ft._residual_matrix(Xf, trajs, list(trajs))
+    bk.use_gpu(False); resc, _ = ft._residual_matrix(Xf, trajs, list(trajs)); bk.use_gpu(True)
+    check("GPU tracer residuals match CPU (<=1e-3)", float(np.abs(resg - resc).max()) <= 1e-3)
     bk.use_gpu(False)
 
 
@@ -189,6 +221,7 @@ def main():
     ap.add_argument("--bench", action="store_true"); ap.add_argument("--gpu", action="store_true")
     a = ap.parse_args()
     test_equality()
+    test_collision()
     test_parallel()
     if a.gpu:
         test_gpu()

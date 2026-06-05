@@ -410,8 +410,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         if len(T) > 1:
             dic = fcol.whiten_atoms(T, W, nmean, mask=mask,
                                     shifts=range(-collision_shift, collision_shift + 1))
-            gains = {int(i): fcol.decompose(fl.realign(waves[i:i + 1])[0], dic, W, nmean, mask)['gain']
-                     for i in noise}
+            gvec = fcol.decompose_batch(waves[noise], dic, W, nmean, mask)['gain']
+            gains = {int(noise[j]): float(gvec[j]) for j in range(len(noise))}
             coll = [i for i, gn in gains.items() if gn > collision_gain]
             if len(coll) >= 20:
                 try:

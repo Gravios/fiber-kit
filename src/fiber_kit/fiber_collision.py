@@ -64,6 +64,55 @@ def _feat(w, W, nmean, mask):
     return (w[mask, :].reshape(-1) - nmean) @ W            # w already peak-aligned
 
 
+def decompose_batch(waves, dic, W, nmean, mask=fl.MASK_FULL, exclude_self=True, u1_shift=0):
+    """Vectorized two-step matching pursuit over MANY already-peak-aligned spikes
+    at once.  `waves` is (n, nsamp, nch) (e.g. the noise-cluster waveforms — the
+    .spkD extraction is peak-aligned, and realign of a single spike is the
+    identity, so no per-spike realign is needed).  Returns a dict of length-n
+    arrays (k1,a1,tau1,k2,a2,tau2,gain,r1n,r2n,xn) identical to looping
+    decompose() per spike; ~Nx fewer interpreter calls."""
+    M, norm2, keys, shifts, s0 = dic['M'], dic['norm2'], dic['keys'], dic['shifts'], dic['s0']
+    K, S, p = M.shape
+    keys = np.asarray(keys)
+    waves = np.asarray(waves, float)
+    n = len(waves)
+    X = (waves[:, mask, :].reshape(n, -1) - nmean) @ W          # (n, p) whitened features
+    xn = np.sqrt((X * X).sum(1))
+    u1s = np.array([si for si, s in enumerate(shifts) if abs(s) <= u1_shift] or [s0])
+
+    # ── u1: best fiber over the small tau window ──
+    Mu = M[:, u1s, :]                                            # (K, |u1s|, p)
+    proj_u1 = np.einsum('ksp,np->nks', Mu, X)                    # (n, K, |u1s|)
+    red0 = proj_u1 ** 2 / norm2[:, u1s][None]                   # (n, K, |u1s|)
+    flat0 = red0.reshape(n, -1).argmax(1)
+    k1i = flat0 // len(u1s); j1 = flat0 % len(u1s); s1 = u1s[j1]
+    rows = np.arange(n)
+    atom1 = M[k1i, s1]                                          # (n, p)
+    nrm1 = norm2[k1i, s1]                                       # (n,)
+    a1 = (atom1 * X).sum(1) / nrm1
+    r1 = X - a1[:, None] * atom1
+    r1n2 = (r1 * r1).sum(1)
+
+    # ── u2: best OTHER fiber over all shifts ──
+    Mf = M.reshape(K * S, p)
+    proj = r1 @ Mf.T                                           # (n, K*S)
+    red = (proj ** 2 / norm2.reshape(-1)[None]).reshape(n, K, S)
+    if exclude_self:
+        red[rows, k1i, :] = -np.inf
+    flat = red.reshape(n, -1).argmax(1)
+    k2i = flat // S; s2 = flat % S
+    atom2 = M[k2i, s2]; nrm2 = norm2[k2i, s2]
+    a2 = (atom2 * r1).sum(1) / nrm2
+    r2 = r1 - a2[:, None] * atom2
+    r2n2 = (r2 * r2).sum(1)
+    gain = 1.0 - r2n2 / (r1n2 + 1e-12)
+
+    shifts_arr = np.asarray(shifts)
+    return dict(k1=keys[k1i], a1=a1, tau1=shifts_arr[s1],
+                k2=keys[k2i], a2=a2, tau2=shifts_arr[s2], gain=gain,
+                r1n=np.sqrt(r1n2), r2n=np.sqrt(r2n2), xn=xn)
+
+
 def decompose(w, dic, W, nmean, mask=fl.MASK_FULL, exclude_self=True, u1_shift=0):
     """Two-step matching pursuit on one (already realigned) waveform w.
     Step 1: best fiber for u1 (searches +/- u1_shift samples, since realign of a
