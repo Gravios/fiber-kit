@@ -21,7 +21,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
@@ -38,6 +38,9 @@ from .fiber_relink import relink, rewrite_clu, write_report
 from .fiber_realign import template_offsets, realign, write_outputs
 from .fiber_localize import load_geometry, localize, localize_unit
 from .fiber_drift import drift_curve, decentralized_drift, write_drift_table
+from .fiber_position import (
+    load_manifolds, spike_positions, position_by_direction, curve_arclength,
+)
 from .neuro_io import (
     resolve_input, prefer_derived, prefer_canonical,
     read_res_file, write_res_file, read_clu_file, write_clu_file,
@@ -56,6 +59,7 @@ __all__ = [
     "template_offsets", "realign", "write_outputs",
     "load_geometry", "localize", "localize_unit",
     "drift_curve", "decentralized_drift", "write_drift_table",
+    "load_manifolds", "spike_positions", "position_by_direction", "curve_arclength",
     "resolve_input", "prefer_derived", "prefer_canonical",
     "read_res_file", "write_res_file", "read_clu_file", "write_clu_file",
     "read_cluster_res", "read_fet_file", "open_spk", "open_signal",

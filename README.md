@@ -271,6 +271,9 @@ src/fiber_kit/
   fiber_collision.py  collision templates, matching-pursuit decompose/detect
   laplacian_link.py   curve-continuity fragment linking; energy-banding report
   fiber_session.py    pipeline + CLI (cluster_chunk_fine, link, I/O, main)
+  fiber_localize.py   monopole+dipole physical localization from raw waveform spread
+  fiber_drift.py      probe drift tracking from fiber depth trajectories
+  fiber_position.py   drift-independent per-spike normalized position along the fiber manifold
   raw_vs_stderiv.py   raw .fil vs stderiv discrimination test
   validate_merge_candidates.py  full-session evidence for merge candidates
   WORKFLOW.md         end-to-end recipe (also shipped as package data)
