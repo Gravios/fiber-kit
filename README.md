@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.5.0-orange)
+![version](https://img.shields.io/badge/version-0.6.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -216,6 +216,8 @@ fiber-session <base> 5 ... --merge-method profile
 | `--quality-metrics` / `--quality-dims` | off / 10 | L-ratio + isolation distance (O(N·K)) |
 | `--adapt-clean` | off | reject high-energy-at-short-ISI on real fast adapters |
 | `--no-link` / `--no-fine` / `--no-dipsplit` | off | disable linking / refinement / DipSplit |
+| `--jobs` / `-j` | 1 | parallel worker processes over chunks (chunks are independent; output is identical to serial) |
+| `--gpu` | off | run the realign/whiten kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
 
 Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
 <elec> --channels ... --ntotal ...`.
@@ -261,6 +263,7 @@ aren't re-attempted:
 ```
 src/fiber_kit/
   neuro_io.py         neurosuite-3 on-disk I/O: variant resolution, .res/.clu/.fet/.spk readers+writers
+  backend.py          optional CuPy GPU shim for the realign/whiten kernels (numpy default)
   fiber_lib.py        primitives: whitener, realign, features, constants
   fiber_tracer.py     trajectory(), predict(), assign, temperature calibration
   klustakwik.py       standalone KlustaKwik CEM (the "rkk" split)
@@ -276,7 +279,8 @@ src/fiber_kit/
 ## Requirements
 
 Python ≥ 3.9 · numpy ≥ 1.21 · scipy ≥ 1.7 · scikit-learn ≥ 1.0 ·
-pyyaml ≥ 5.3 · optional: diptest ≥ 0.5 (for DipSplit).
+pyyaml ≥ 5.3 · optional: diptest ≥ 0.5 (for DipSplit), cupy-cuda12x ≥ 12
+(for `--gpu`; `pip install "fiber-kit[gpu]"`).
 
 ## License
 
