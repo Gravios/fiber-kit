@@ -274,6 +274,10 @@ src/fiber_kit/
   raw_vs_stderiv.py   raw .fil vs stderiv discrimination test
   validate_merge_candidates.py  full-session evidence for merge candidates
   WORKFLOW.md         end-to-end recipe (also shipped as package data)
+test/
+  verify_optimizations.py  regression + rig verification (equality, parallel,
+                           GPU) for the vectorized/parallel kernels; `--bench`
+                           prints speedups, `--gpu` checks the CuPy path
 ```
 
 ## Requirements
