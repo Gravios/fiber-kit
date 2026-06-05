@@ -346,3 +346,30 @@ waveforms are high-pass filtered (window edges ~0). `channel_residual_profile`
 residual variance driven to the noise floor, and on a jittered 2-sub-unit fiber
 the discriminating channels are correctly recovered (dom-channel realign
 mislocated them).
+
+### Shape-distinctness gate + re-seed (fiber-refine, v0.15.0)
+
+Validation on a partially-curated `.clu` (g5) showed `fiber-refine` would shatter
+high-rate units into energy-level pieces sharing one waveform shape (curated 343
+-> 35 sub-units, median-template corr 0.94-0.99), which mechanically lowered the
+within-cluster band-ISI count (a small-N artifact, not real isolation gain). Two
+fixes:
+
+- `--split-min-corr C` (default 0.93): a split piece or knn-peel energy bucket
+  whose NORMALISED median waveform correlates >= C with its parent is not carved
+  off (kept with the parent). Genuinely distinct sub-units (corr ~0.70 on g5)
+  still split; same-shape energy clones (corr ~0.95) do not. Use 0.95 for more
+  aggressive consolidation of high-rate units.
+- `merge_back` is now ON by default (`--merge-back`, min_sim 0.92, normalized),
+  so a single `refine()` call returns a consolidated sort rather than an
+  over-split one.
+
+With both, g5: 202 -> ~35 clusters, curated 343/258 consolidated, the distinct
+clu-33 sub-units preserved, and the band-ISI total honest (29 vs 30 curated) --
+i.e. beyond dedup, this chunk has little real band contamination to remove.
+
+`--reseed N` re-runs the whole loop using the refined labels as the next seed
+(stops early on convergence). On g5 it did NOT help -- split and merge_back
+partially undo each other, drifting to slightly more clusters without settling --
+so it defaults off (single pass). It is wired for data where the cleaned fibers
+genuinely seed a better pass.

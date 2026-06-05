@@ -118,17 +118,21 @@ def _feats(w, ctx, d):
 
 
 # ── gated cascade: rkk -> dipsplit -> isolate ────────────────────────────────
-def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol):
+def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed=None, scorr=1.0):
     """Accept the sub-labels `sub` over cluster `si` only where a piece lowers the
     per-channel residual variance by >= vmargin AND keeps the [floor,window)
-    refractory within btol of the parent; everything else falls into a residual
-    core.  Returns a list of >=2 index arrays, or None if nothing qualified."""
+    refractory within btol of the parent AND is SHAPE-DISTINCT from the parent
+    (normalised median-waveform corr < scorr) -- the last gate stops a high-rate
+    unit being shattered into energy-level pieces that share its waveform shape;
+    everything else falls into a residual core.  Returns a list of >=2 index
+    arrays, or None if nothing qualified."""
     keep, fail = [], []
     for s in np.unique(sub):
         pc = si[sub == s]
         if len(pc) < mg:
             fail.append(pc); continue
-        if _pcv(waves[pc], ctx) < pv * (1.0 - vmargin) and band_pct(res[pc], ctx) <= pb + btol:
+        shape_dup = pmed is not None and _ncorr(_med(pc, waves), pmed) >= scorr
+        if (not shape_dup) and _pcv(waves[pc], ctx) < pv * (1.0 - vmargin) and band_pct(res[pc], ctx) <= pb + btol:
             keep.append(pc)
         else:
             fail.append(pc)
@@ -142,12 +146,13 @@ def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol):
     return final if len(final) > 1 else None
 
 
-def _gated_split(si, waves, res, ctx, mg, vmargin, btol):
+def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0):
     """Try rkk, then dipsplit, gating each; isolate if neither cleans it."""
     pv = _pcv(waves[si], ctx)
     pb = band_pct(res[si], ctx)
+    pmed = _med(si, waves) if scorr < 1.0 else None
     sub = _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42)
-    fp = _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol)
+    fp = _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr)
     if fp is not None:
         return fp, "rkk"
     if fs._HAVE_DIP:
@@ -156,13 +161,13 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol):
             sub = np.zeros(len(si), int)
             for k, p in enumerate(pcs):
                 sub[p] = k
-            fp = _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol)
+            fp = _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr)
             if fp is not None:
                 return fp, "dip"
     return [si], "iso"
 
 
-def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth):
+def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0):
     out = np.full(len(lab), -1, int)
     nid = 0
     nr = nd = ni = 0
@@ -176,7 +181,7 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
         for p in pcs:
             si = idx[p]
             if len(si) >= large:
-                fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol)
+                fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr)
                 nr += how == "rkk"; nd += how == "dip"; ni += how == "iso"
                 if how == "iso":
                     newi[si] = True
@@ -219,7 +224,7 @@ def _match(a, b, ml=4):
     return best
 
 
-def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi):
+def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi, scorr=1.0):
     pool = np.flatnonzero(lab >= 0)
     sz = np.bincount(lab[pool])
     big = np.flatnonzero(sz >= minref)
@@ -248,16 +253,23 @@ def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi):
     for c in np.unique(lab[lab >= 0]):
         s = np.flatnonzero(lab == c)
         w = win[s]
+        cmed = None
         for ww in np.unique(w[w >= 0]):
             bk = s[w == ww]
             if len(bk) < minnew:
                 continue
+            bmed = _med(bk, waves)
+            if scorr < 1.0:                            # SHAPE-distinctness gate
+                if cmed is None:
+                    cmed = _med(s, waves)
+                if _ncorr(bmed, cmed) >= scorr:        # same shape as its own cluster -> not a contaminant, keep
+                    continue
             if ww not in mc:
                 mc[ww] = _med(np.flatnonzero(lab == ww), waves)
-            if _match(_med(bk, waves), mc[ww]) >= hi:
-                new[bk] = ww; fo += 1                  # amplitude-matched -> fold in
+            if _match(bmed, mc[ww]) >= hi or (scorr < 1.0 and _ncorr(bmed, mc[ww]) >= scorr):
+                new[bk] = ww; fo += 1                  # shape/amplitude match -> fold into the target
             else:
-                new[bk] = nid; nid += 1; ke += 1       # distinct energy level -> new cluster
+                new[bk] = nid; nid += 1; ke += 1       # distinct from source AND target -> new cluster
     return new, fo, ke
 
 
@@ -358,11 +370,11 @@ def _row(s):
 # ── driver ───────────────────────────────────────────────────────────────────
 def refine(waves, res_abs, W, nmean, mask, sr, *,
            floor=16, window_ms=2.0, iters=4, large=800, min_group=40,
-           var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4,
+           var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93,
            knn_k=20, knn_thr=0.3, knn_minref=50, knn_minnew=30,
            knn_dims=16, fold_thr=0.9, init_labels=None,
-           conv_tol=0.0, conv_patience=2,
-           merge_back_enable=False, merge_budget=1.0, merge_min_sim=0.90,
+           conv_tol=0.0, conv_patience=2, reseed=0,
+           merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
@@ -371,8 +383,14 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
 
     `iters` caps the splitting phase; conv_tol>0 stops it early once nfib (within
     conv_tol fraction), swBand and enCV have all held for conv_patience iters.
-    merge_back_enable adds a final contamination-gated merge_back() to a
-    reasonable count."""
+    `split_min_corr` is the shape-distinctness gate: a split piece or peeled
+    energy bucket whose normalised median waveform correlates >= this with its
+    parent is NOT carved off (stops high-rate units being shattered into
+    energy-level clones of one waveform).  merge_back_enable adds a final
+    contamination-gated merge_back() after each pass.  `reseed` re-runs the whole
+    loop using the refined (consolidated) labels as the seed for the next pass,
+    up to `reseed` extra passes, stopping early when the pass leaves nfib/swBand
+    steady -- the cleaned fibers seed a better next pass than the raw input."""
     window = int(round(window_ms * sr / 1000.0))
     ctx = Ctx(W, nmean, mask, sr, int(floor), window)
     if init_labels is None:
@@ -380,42 +398,55 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                                        method=fine_method, var_split=0.0)
     else:
         lab = np.asarray(init_labels, int).copy()
-    isol = np.zeros(len(lab), bool)
     stats = [_iter_stats("fine", lab, waves, res_abs, ctx)]
     if verbose:
         print(f"contamination window = [{floor/sr*1000:.2f}, {window_ms:.2f}] ms "
-              f"([{int(floor)}, {window}] samples)")
+              f"([{int(floor)}, {window}] samples); split_min_corr={split_min_corr}, reseed={reseed}")
         print(_HDR); print(_row(stats[-1]))
-    stable = 0
-    for it in range(iters):
-        lab, isol, nr, nd, ni = _split_all(lab, isol, waves, res_abs, ctx,
-                                           large, min_group, var_margin, brr_tol,
-                                           var_peak, var_depth)
-        F = _gfeat(waves, ctx, knn_dims)
-        lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
-                                 knn_k, knn_thr, knn_minref, knn_minnew, fold_thr)
-        lab = _drop_tiny(lab, min_group)
-        st = _iter_stats(str(it + 1), lab, waves, res_abs, ctx)
-        st.update(rkk=nr, dip=nd, iso=ni, fold=fo, kept=ke)
-        prev = stats[-1]; stats.append(st)
-        if verbose:
-            print(_row(st))
-        if conv_tol > 0:
-            steady = (abs(st["nfib"] - prev["nfib"]) <= conv_tol * max(prev["nfib"], 1)
-                      and abs(st["swBand"] - prev["swBand"]) <= 0.01
-                      and abs(st["enCV"] - prev["enCV"]) <= 0.002)
-            stable = stable + 1 if steady else 0
-            if stable >= conv_patience:
+    npass = max(1, reseed + 1)
+    prev_pass = None
+    for p in range(npass):
+        isol = np.zeros(len(lab), bool)               # fresh isolation view per (re)seed
+        stable = 0
+        for it in range(iters):
+            lab, isol, nr, nd, ni = _split_all(lab, isol, waves, res_abs, ctx,
+                                               large, min_group, var_margin, brr_tol,
+                                               var_peak, var_depth, split_min_corr)
+            F = _gfeat(waves, ctx, knn_dims)
+            lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
+                                     knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr)
+            lab = _drop_tiny(lab, min_group)
+            tag = f"{p+1}.{it+1}" if reseed else str(it + 1)
+            st = _iter_stats(tag, lab, waves, res_abs, ctx)
+            st.update(rkk=nr, dip=nd, iso=ni, fold=fo, kept=ke)
+            prev = stats[-1]; stats.append(st)
+            if verbose:
+                print(_row(st))
+            if conv_tol > 0:
+                steady = (abs(st["nfib"] - prev["nfib"]) <= conv_tol * max(prev["nfib"], 1)
+                          and abs(st["swBand"] - prev["swBand"]) <= 0.01
+                          and abs(st["enCV"] - prev["enCV"]) <= 0.002)
+                stable = stable + 1 if steady else 0
+                if stable >= conv_patience:
+                    if verbose:
+                        print(f"[split phase converged at iter {it + 1}]")
+                    break
+        if merge_back_enable:
+            lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
+                             min_sim=merge_min_sim, mode=merge_mode, verbose=verbose)
+            st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
+            stats.append(st)
+            if verbose:
+                print(_row(st))
+        if reseed:                                    # outer re-seed convergence
+            cur = (st["nfib"], st["swBand"])
+            if (prev_pass is not None
+                    and abs(cur[0] - prev_pass[0]) <= conv_tol * max(prev_pass[0], 1)
+                    and abs(cur[1] - prev_pass[1]) <= 0.01):
                 if verbose:
-                    print(f"[converged: nfib/swBand/enCV steady for {conv_patience} iters at iter {it + 1}]")
+                    print(f"[reseed converged at pass {p + 1}]")
                 break
-    if merge_back_enable:
-        lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
-                         min_sim=merge_min_sim, mode=merge_mode, verbose=verbose)
-        st = _iter_stats("merge", lab, waves, res_abs, ctx)
-        stats.append(st)
-        if verbose:
-            print(_row(st))
+            prev_pass = cur
     return lab, stats
 
 
@@ -454,10 +485,17 @@ def main():
     ap.add_argument("--no-merge-back", dest="merge_back", action="store_false")
     ap.add_argument("--merge-budget", type=float, default=1.0,
                     help="max merged-cluster [floor,window) band%% to accept a merge")
-    ap.add_argument("--merge-min-sim", type=float, default=0.90,
+    ap.add_argument("--merge-min-sim", type=float, default=0.92,
                     help="min median-waveform similarity to consider a merge")
     ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
                     help="normalized = merge energy levels (neuron count); amplitude = keep them")
+    ap.add_argument("--split-min-corr", type=float, default=0.93,
+                    help="shape-distinctness gate: do NOT carve off a split piece / energy bucket whose "
+                         "normalised median waveform correlates >= this with its parent (stops over-fragmenting "
+                         "high-rate units into energy-level clones); 1.0 disables")
+    ap.add_argument("--reseed", type=int, default=0,
+                    help="re-run the whole loop using the refined labels as the next seed, up to N extra "
+                         "passes (stops early on convergence); 0 = single pass")
     ap.add_argument("--large", type=int, default=800, help="only clusters >= this are split each iter")
     ap.add_argument("--min-group", type=int, default=40)
     ap.add_argument("--var-margin", type=float, default=0.05,
@@ -538,12 +576,12 @@ def main():
                         floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                         large=a.large, min_group=a.min_group,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
-                        var_peak=a.var_peak, var_depth=a.var_depth,
+                        var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr,
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
                         knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
                         fold_thr=a.fold_thr, init_labels=init,
                         conv_tol=(a.converge_tol if a.converge else 0.0),
-                        conv_patience=a.converge_patience,
+                        conv_patience=a.converge_patience, reseed=a.reseed,
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                         fine_method=a.fine_method, verbose=True)
