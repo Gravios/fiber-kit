@@ -220,3 +220,30 @@ shank depth is solid but perpendicular distance is identifiable only for interio
 both-flanks units; a 2-D-site probe removes that limit.
 
 Full chain: `fiber-session` → `fiber-relink` → `fiber-realign` → `fiber-localize`.
+## Probe drift tracking (`fiber-drift`)
+
+Track the probe's drift over the session from the fiber files of its groups — no
+raw data, just the per-(chunk,fiber) depths:
+
+```
+fiber-drift <base>.fibers.stderiv.0 <base>.fibers.stderiv.1 ...   # a probe's groups
+# -> fiber_drift.tsv   (chunk, t_min, n_units, drift_um[, per-group])
+```
+
+Each unit tracked across chunks is a drift fiducial. The tool solves a
+decentralised registration `depth_u(c) = base_u + D(c)` (robust median
+alternation) for the shared drift curve `D(c)`, separating it from each unit's own
+depth. Several groups on one probe feed a joint `D(c)` (rigid probe) while each
+group also gets its own `D_g(c)`, so cross-shank spread exposes tilt/bending.
+After removing `D(c)`, the slope of the residual vs a unit's base depth is the
+**depth-gradient of drift** — the signature that triggers position-dependent
+(non-rigid) correction.
+
+Re-linked units are used by default (more fiducials); `--no-relink` falls back to
+raw `.fibers` gid. Depth is in channel units, converted to µm via `--pitch` (20).
+Because cross-chunk tracking gates on small per-step depth change, this resolves
+SLOW drift well; drift faster than the link gate breaks tracks and is better
+estimated by raster registration. Validated on group 5 of
+sirotaA-jg-000005-20120312 (118 fiducial units, 30 chunks over 348 min): a gradual
+~3 µm drift rising to +2 µm by 336 min, with a −0.19 µm/ch depth-gradient flagging
+mild non-rigid motion.
