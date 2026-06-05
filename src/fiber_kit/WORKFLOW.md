@@ -390,7 +390,7 @@ trajectory bend (total turning of d(r), deg) + per-step smoothness.
 
 `--track-geometry` records every cluster's shape stats at every iteration and,
 because the spikes are fixed and only labels move, links each FINAL fiber back
-through the snapshots by spike overlap, writing `<base>.geom.<group>.tsv`
+through the snapshots by spike overlap, writing `<base>.geom.<group>.npz`
 (`fiber, iter, host, purity, <stats>`). API: `geometry_tracks(snaps, waves, W,
 nmean, mask)` + `write_geometry_tracks`; `refine(..., snaps_out=[])` collects the
 per-step labellings.
@@ -447,7 +447,7 @@ drift-free). Each spike's final label comes from its CORE window. The iteration
 knobs (`--iters`, `--reseed`, `--no-converge`) apply per window, so a high-count
 full-session run is meaningful rather than drift-smeared.
 
-`--track-geometry` in chunked mode writes `<base>.geomchunk.<group>.tsv`
+`--track-geometry` in chunked mode writes `<base>.geomchunk.<group>.npz`
 (`fiber, chunk, t_min, <stats>`) -- each global fiber's shape stats measured in
 EACH window's own frame, i.e. the drift signature over time (radius/cone/bend per
 window). API: `refine_chunked(...) -> (global_labels, n_global, tracks)`,
@@ -463,3 +463,20 @@ a single global id across all windows. Two honest caveats:
   - traj_bend is spike-count sensitive (a short tail window inflates it); compare
     the n-robust stats (r_cv, cone_med, resid_mad) across windows for drift, and
     read bend only against windows of comparable n.
+
+### Geometry output format (v0.18.0)
+
+Both geometry artifacts are lossless **npz**, not TSV (the `%.4g` text was lossy
+-- it even rendered spike counts like 12345 as `1.234e+04`), and npz matches the
+rest of the pipeline (`.fibers`, chunk dumps) so the forthcoming fiber viewer
+loads them directly. Long format, no object arrays:
+
+  - `<base>.geom.<group>.npz`      (iteration tracks): `fiber[N]` int, `iter[N]`
+    str, `host[N]` int, `purity[N]` f8, `stats[N,11]` f8, `keys[11]` str.
+  - `<base>.geomchunk.<group>.npz` (drift tracks):     `fiber[N]` int, `chunk[N]`
+    int, `t_min[N]` f8, `stats[N,11]` f8, `keys[11]` str.
+
+`keys` is the column order of `stats` (= the eleven `_GEOM_KEYS`). Group rows by
+`fiber`; order by `iter` (fine->final) or `t_min` (drift). `load_geometry(path)`
+returns the index columns plus each stat as its own named column
+(`g['cone_med']`), so a viewer needs no knowledge of the matrix layout.
