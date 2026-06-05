@@ -314,3 +314,20 @@ Exposed three ways:
   split and energy-only splits are rejected.
 
 Both controls default off (validated behavior unchanged); opt in to tighten.
+
+### Automatic variance-driven splitting (`--var-split`)
+
+Rather than ranking fibers by `chan_resid_var_max` and splitting them by hand,
+`fiber-session --var-split R` auto-splits any fiber whose per-channel residual
+profile is peaked (`max/median channel residual variance >= R`, try R≈2). It
+recursively bisects on the trajectory residual WEIGHTED toward the high-variance
+channels, and — crucially — the per-channel residual variance is the STOP
+criterion: a bisection is taken only while it lowers the mean by the margin
+(`--split-var-margin`, default 0.05 when `--var-split` is on). So it finds the
+right number of shape sub-units, stops at unimodal, and never splits on energy.
+
+Synthetic validation: 2 / 3 true shape sub-units recovered at RandIndex 1.00;
+a single unit with large energy spread and a pair differing in amplitude only
+are both correctly left unsplit. `--var-split-depth` caps recursion (≤ 2^depth
+sub-units/fiber). Recommended: `--var-split 2 --split-var-margin 0.1`, then
+`--cone-channel-k 2.5` to clean residual edges.

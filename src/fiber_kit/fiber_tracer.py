@@ -165,7 +165,8 @@ def channel_residual_profile(waves, W, nmean, mask=None, n_grid=40):
     R = resid_raw.reshape(len(w_al), nm, nch)                   # (n, nmask, nchan)
     v_c = R.var(axis=0).mean(axis=0)                            # per-channel residual variance
     return dict(per_channel=v_c, mean=float(v_c.mean()), max=float(v_c.max()),
-                per_spike_channel=np.sqrt((R * R).mean(1)))     # (n, nchan)
+                per_spike_channel=np.sqrt((R * R).mean(1)),     # (n, nchan)
+                residual=R)                                     # (n, nmask, nchan) raw trajectory residual
 
 
 def split_meanvar(waves, sub, W, nmean, mask=None, n_grid=40, min_n=20):
