@@ -190,6 +190,47 @@ def split_meanvar(waves, sub, W, nmean, mask=None, n_grid=40, min_n=20):
     return par, child, (par - child) / (par + 1e-12)
 
 
+def fiber_shape_stats(waves, W, nmean, mask=None, n_grid=40):
+    """Shape of one cluster's spike distribution AROUND its fiber d(r).  All in
+    whitened feature space, after per-fiber realignment.  Returns a dict:
+
+      n          spike count
+      r_mean     mean energy/radius along the fiber
+      r_cv       radius coefficient of variation (energy spread; high = wide
+                 amplitude range, e.g. bursting/drift or merged energy levels)
+      r_skew     radius skewness (asymmetry of the energy distribution)
+      r_bimod    bimodality coefficient of the radius (>0.555 hints at >1 energy
+                 level / sub-population on the fiber)
+      cone_med   median per-spike angle (deg) to the trajectory direction at its
+                 own radius -- the cone half-angle the spikes occupy
+      cone_p95   95th-pct cone angle (tail tightness)
+      resid_med  median whiteness residual to the energy-local template r*d(r)
+      resid_mad  robust spread of that residual
+      traj_bend  total turning of d(r) over the fiber (deg) -- how much the
+                 footprint direction rotates from low to high energy
+      traj_smooth mean turning per grid step (deg); large/erratic -> kinky fit,
+                 often a merged or contaminated fiber
+    """
+    if mask is None:
+        mask = fl.MASK_FULL
+    Wal = fl.realign(waves)
+    X = (Wal[:, mask, :].reshape(len(waves), -1) - nmean) @ W
+    r = np.linalg.norm(X, axis=1); d = X / (r[:, None] + 1e-12)
+    grid, D = trajectory(X, n_grid=n_grid)
+    pdir = predict_many((grid, D), r)                       # unit dir at each spike's radius
+    cone = np.degrees(np.arccos(np.clip((d * pdir).sum(1), -1.0, 1.0)))
+    resid = np.linalg.norm(X - r[:, None] * pdir, axis=1)
+    turn = np.degrees(np.arccos(np.clip((D[:-1] * D[1:]).sum(1), -1.0, 1.0)))
+    rm = float(r.mean()); rs = float(r.std()); n = len(r)
+    z = (r - rm) / (rs + 1e-12); g1 = float((z ** 3).mean()); g2 = float((z ** 4).mean() - 3.0)
+    bimod = float((g1 * g1 + 1.0) / (g2 + 3.0)) if n > 3 else float('nan')
+    rmed = float(np.median(resid))
+    return dict(n=n, r_mean=rm, r_cv=float(rs / (rm + 1e-12)), r_skew=g1, r_bimod=bimod,
+                cone_med=float(np.median(cone)), cone_p95=float(np.percentile(cone, 95)),
+                resid_med=rmed, resid_mad=float(1.4826 * np.median(np.abs(resid - rmed))),
+                traj_bend=float(turn.sum()), traj_smooth=float(turn.mean()) if len(turn) else 0.0)
+
+
 def predict_many(traj, r):
     """Vectorized predict over an array of radii -> (len(r), dim) unit directions.
     Same clamp-at-ends + linear-interp-on-grid as predict(), computed for all
