@@ -616,14 +616,14 @@ def load_geometry(path):
 
 def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    chunk_min, overlap_min, *, init=None, refine_kw=None,
-                   min_group=40, track_geometry=False, verbose=True):
+                   min_group=40, track_geometry=False, make_bundles=False, verbose=True):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
     then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
     spikes in adjacent windows' overlap prove identity).  Final per-spike label
     comes from each spike's CORE window.  Returns (global_labels, n_global,
-    chunk_tracks|None).  This is the correct way to run on a long drifting
-    session -- pooling the whole session into one trajectory smears the fiber."""
+    chunk_tracks|None, bundles|None).  This is the correct way to run on a long
+    drifting session -- pooling the whole session into one trajectory smears it."""
     refine_kw = dict(refine_kw or {})
     chunks, nchunks = _chunk_bounds(res, sr, chunk_min, overlap_min)
     filmm = nio.open_signal(f"{base}.fil", ntotal)
@@ -658,7 +658,46 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         print(f"[chunked] {nglob} global fibers across {nchunks} windows "
               f"(overlap-anchor linked); {int((glab >= 0).sum())}/{len(glab)} spikes assigned")
     tracks = _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask) if track_geometry else None
-    return glab, nglob, tracks
+    bundles = _chunk_bundles(chunks, glab, waves, chunk_W, chunk_nm, mask) if make_bundles else None
+    return glab, nglob, tracks, bundles
+
+
+def _chunk_bundles(chunks, glab, waves, chunk_W, chunk_nm, mask, npos=50, min_n=40):
+    """For every (global fiber, chunk) fit the fiber trajectory in that chunk's
+    whitened frame and UN-whiten it to a template curve r*d(r) in raw feature
+    space -- comparable across chunks despite their different whiteners, so a
+    bundle's per-chunk curves can be drawn together and their spread read as
+    drift.  Returns long-format arrays for the .bundles npz."""
+    fib, ch, tmin, cnt, curves = [], [], [], [], []
+    for ck in chunks:
+        c = ck["c"]
+        if c not in chunk_W:
+            continue
+        Wc, nmc = chunk_W[c], chunk_nm[c]; Winv = np.linalg.pinv(Wc)
+        core = ck["core"]; gl = glab[core]
+        for g in np.unique(gl[gl >= 0]):
+            sel = core[gl == g]
+            if len(sel) < min_n:
+                continue
+            Wal = fl.realign(waves[sel])
+            X = (Wal[:, mask, :].reshape(len(sel), -1) - nmc) @ Wc
+            r = np.linalg.norm(X, axis=1); tr = ft.trajectory(X)
+            rg = np.linspace(np.quantile(r, 0.05), np.quantile(r, 0.95), npos)
+            tmpl = (rg[:, None] * ft.predict_many(tr, rg)) @ Winv + nmc   # un-whitened curve
+            fib.append(int(g)); ch.append(c); tmin.append(ck["tmin"]); cnt.append(len(sel))
+            curves.append(tmpl)
+    return (np.asarray(fib, int), np.asarray(ch, int), np.asarray(tmin, float),
+            np.asarray(cnt, int), np.asarray(curves, float))
+
+
+def write_bundles(arrays, path):
+    """Write the .bundles npz consumed by fiber_view.load_bundles_npz:
+        fiber[N] int, chunk[N] int, t_min[N] f8, count[N] int,
+        curves[N, NPOS, nfeat] f8 (un-whitened template curves)."""
+    fib, ch, tmin, cnt, curves = arrays
+    np.savez_compressed(path, fiber=fib, chunk=ch, t_min=tmin, count=cnt,
+                        curves=curves if len(curves) else np.zeros((0, 0, 0)))
+    return path
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
@@ -733,6 +772,9 @@ def main():
                          "overlap-anchor; 0 = single whole-session pass (assumes stationary)")
     ap.add_argument("--chunk-overlap-minutes", type=float, default=1.0,
                     help="overlap between adjacent windows used for overlap-anchor linking (drift-aware mode)")
+    ap.add_argument("--bundles", action="store_true",
+                    help="drift-aware mode: also write <base>.bundles.<group>.npz (per-chunk un-whitened "
+                         "template curves per global fiber) for the fiber-view-gui bundle table")
     ap.add_argument("--gpu", action="store_true")
     a = ap.parse_args()
 
@@ -798,10 +840,11 @@ def main():
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method)
-        glab, nglob, tracks = refine_chunked(
+        glab, nglob, tracks, bundles = refine_chunked(
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
-            min_group=a.min_group, track_geometry=a.track_geometry, verbose=True)
+            min_group=a.min_group, track_geometry=a.track_geometry,
+            make_bundles=a.bundles, verbose=True)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
         clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
         res_path = nio.write_res(base, elec, res, variant=a.out_variant)
@@ -809,6 +852,9 @@ def main():
         if tracks is not None:
             gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
             print(f"      {gpath}  ({len(tracks)} fibers across windows)")
+        if bundles is not None:
+            bpath = write_bundles(bundles, f"{base}.bundles.{elec}.npz")
+            print(f"      {bpath}  ({len(np.unique(bundles[0]))} bundles)  [view with fiber-view-gui]")
         print(f"[done] {nglob} global fibers; t={time.time()-t0:.0f}s")
         return
 
