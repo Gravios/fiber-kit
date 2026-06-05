@@ -21,13 +21,14 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.11.0"
+__version__ = "0.12.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
 from . import backend
 from .backend import use_gpu, gpu_enabled, backend_name
 from .fiber_tracer import trajectory, predict, predict_many, channel_residual_profile, split_meanvar
+from .fiber_lib import align_xcorr, realign
 from .klustakwik import klustakwik
 from .session_yaml import find_session_yaml, load_session, resolve_session_params
 from .fiber_session import (

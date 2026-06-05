@@ -133,29 +133,31 @@ def predict(traj, r):
 
 
 # ── per-channel residual variance around the fiber (membership-tightening measure) ──
-def channel_residual_profile(waves, W, nmean, mask=None, n_grid=40):
+def channel_residual_profile(waves, W, nmean, mask=None, n_grid=40,
+                             align="xcorr", align_iters=6, align_maxlag=6):
     """Variance of each channel's waveform RESIDUAL TO THE ENERGY-LOCAL TEMPLATE
     r·d(r), in RAW (un-whitened) channel space.
 
-    This is the right "minimal mean variance across channels" objective for the
-    fiber framework.  Two deliberate choices:
+    The spikes are first aligned by ITERATED CIRCULAR CROSS-CORRELATION to the
+    cluster median (align="xcorr", via fiber_lib.align_xcorr) so the residual
+    variance is not inflated by per-spike timing jitter — only after that does
+    the per-channel variance reflect the shape contamination we want to split.
+    align="realign" falls back to the dominant-channel integer aligner.
+
+    Two further deliberate choices (unchanged):
       - residual to the d(r) trajectory, NOT the raw waveform: the trajectory
         already absorbs the legitimate energy / adaptation spread (the fiber is a
         curve), so what remains is genuine SHAPE contamination — minimizing raw
-        per-channel variance instead would just carve the fiber into energy bands
-        (re-creating the over-split this pipeline exists to prevent).
+        per-channel variance instead would just carve the fiber into energy bands.
       - read in raw channel space (un-whiten the residual): whitening mixes
-        channels, so a per-channel number in whitened space is meaningless, and
-        per the project's own finding whitening is for fiber CENTERS, not
-        per-spike membership.
+        channels, so a per-channel number in whitened space is meaningless.
 
     Returns dict(per_channel v_c (nchan,), mean v̄, max, per_spike_channel
-    (n,nchan) rms residual).  A clean unit -> low, flat v_c; a fiber hiding a
-    shape sub-unit -> v_c PEAKED on the discriminating channels (the channels
-    you see clean up after an rkk split)."""
+    (n,nchan), residual (n,nmask,nchan))."""
     if mask is None:
         mask = fl.MASK_FULL
-    w_al = fl.realign(waves)
+    w_al = fl.align_xcorr(waves, ref="median", iters=align_iters, maxlag=align_maxlag) \
+        if align == "xcorr" else fl.realign(waves)
     nch = w_al.shape[2]; nm = len(mask)
     Xg = (w_al[:, mask, :].reshape(len(w_al), -1) - nmean) @ W
     r = np.linalg.norm(Xg, axis=1)

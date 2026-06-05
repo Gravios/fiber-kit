@@ -131,6 +131,47 @@ def realign(waveforms, lo=6, hi=26, maxlag=4):
     full_src = (xp.arange(T)[None, :] - chosen[:, None]) % T
     return _bk.asnumpy(xp.take_along_axis(W, full_src[:, :, None], axis=1))
 
+
+def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3,
+                return_shifts=False):
+    """Circularly align each (nSamp,nCh) spike to the cluster mean/median waveform
+    by FULL channel-summed cross-correlation, ITERATING until the residual
+    variance stops dropping — so the variance that remains is the shape variance.
+
+    Unlike realign() (which locks the dominant channel's trough at integer lags),
+    this cross-correlates the whole multichannel waveform against a robust
+    reference and refines to SUB-SAMPLE lags (parabolic peak + Fourier phase
+    shift). Median reference by default: robust to the sub-units we are about to
+    split. Circular (Fourier) shifts are exact and harmless here because the
+    spkD/.fil waveforms are high-pass filtered, so the window edges are ~zero and
+    wrap-around introduces no artifact. Re-estimating the reference each pass and
+    iterating is what drives the per-channel residual variance down to the noise
+    floor (single units) and leaves a clean peaked profile on the discriminating
+    channels (contaminated fibers). Returns aligned waves (+ per-spike shifts)."""
+    W = np.asarray(waves, float); n, T, C = W.shape
+    if n < 3:
+        return (W, np.zeros(n)) if return_shifts else W
+    FW = np.fft.fft(W, axis=1); f = np.fft.fftfreq(T)
+    lag = ((np.arange(T) + T // 2) % T) - T // 2          # signed circular lags
+    inwin = np.abs(lag) <= maxlag
+    total = np.zeros(n); cur = W.copy(); prev = np.inf
+    for it in range(iters):
+        templ = np.median(cur, 0) if ref == "median" else cur.mean(0)
+        rv = float(((cur - templ) ** 2).mean())
+        if it > 0 and prev - rv < tol * prev:
+            break
+        prev = rv
+        Ft = np.fft.fft(templ, axis=0)
+        xc = np.fft.ifft(np.fft.fft(cur, axis=1) * np.conj(Ft)[None], axis=1).real.sum(2)  # (n,T)
+        xcm = np.where(inwin[None, :], xc, -np.inf); k = xcm.argmax(1); d = lag[k].astype(float)
+        if subsample:
+            r = np.arange(n); km = (k - 1) % T; kp = (k + 1) % T
+            y0 = xc[r, km]; y1 = xc[r, k]; y2 = xc[r, kp]; den = y0 - 2 * y1 + y2
+            d += np.where(np.abs(den) > 1e-9, 0.5 * (y0 - y2) / den, 0.0).clip(-0.5, 0.5)
+        total += d
+        cur = np.fft.ifft(FW * np.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
+    return (cur, total) if return_shifts else cur
+
 # ── feature pipeline: realign -> mask -> whiten -> polar (radius, direction) ─
 def features(waveforms, W, nmean, mask=MASK_FULL):
     W_al = realign(waveforms)
