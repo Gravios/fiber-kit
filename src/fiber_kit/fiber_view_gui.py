@@ -90,6 +90,7 @@ if _HAVE_GUI:
             self.table = QtWidgets.QTableView()
             self.table.setModel(_BundleTableModel(rows))
             self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
+            self.table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
             self.table.selectionModel().selectionChanged.connect(self._on_select)
             self.view = gl.GLViewWidget()
             self.view.setCameraPosition(distance=6)
@@ -120,8 +121,22 @@ if _HAVE_GUI:
                 self.sliders.append(row)
             btn = QtWidgets.QPushButton("reset to PC1/2/3"); btn.clicked.connect(self._reset_mix)
             g.addWidget(btn, self.ncomp + 2, 0, 1, 4)
+            tour = QtWidgets.QPushButton("tour video (selected)…"); tour.clicked.connect(self._make_tour)
+            g.addWidget(tour, self.ncomp + 3, 0, 1, 4)
             panel.setMaximumWidth(260)
             return panel
+
+        def _make_tour(self):
+            sel = self.table.selectionModel().selectedRows()
+            gids = [self._rows[s.row()]["id"] for s in sel] or list(self.bundles)
+            bundles = [self.bundles[g] for g in gids]
+            out, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save tour video", "tour.gif",
+                                                           "Video (*.gif *.mp4)")
+            if not out:
+                return
+            path, keys, C = fv.render_tour(bundles, out)
+            QtWidgets.QMessageBox.information(self, "fiber-view",
+                                              f"wrote {path}\n{len(bundles)} bundles, {len(keys)} keyframes")
 
         def _mix(self):
             return np.array([[self.sliders[i][j].value() / 100.0 for j in range(3)]

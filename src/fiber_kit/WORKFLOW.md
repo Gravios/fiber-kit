@@ -533,3 +533,27 @@ API (in fiber_view, tested headless): `projection_basis(curves, ncomp)` ->
 identity mix == PCA(3) exactly; a non-identity mix changes the projection. The
 drift score in the table stays on the canonical PCA(3) frame -- the sliders
 affect only the view, not the metric.
+
+### Interesting-projection tour video (v0.21.0)
+
+Rather than hunt through the mix sliders by hand, the tour finds the projections
+that best EXPOSE the selected bundles' structure and animates a smooth path
+through them.  The selected bundles are pooled into one shared PCA(ncomp) space;
+a 3-D projection is scored by how much between-bundle separation + between-chunk
+(drift) scatter it reveals (tr(P'CP), C = the centroid scatter).  Keyframes =
+the default top-3 PCs, the structure-optimal projection (top-3 eigvecs of C),
+then diverse high-scoring random frames; they are interpolated (blend +
+re-orthonormalise) into a smooth tour, the camera also slowly spinning.
+
+  - `fiber-view-tour <base>.bundles.<group>.npz --fibers 1,2,3 -o tour.gif`
+    (or top:N / all; .mp4 if ffmpeg is present, else .gif via Pillow).
+  - GUI: select rows in the bundle table, "tour video (selected)…".
+  - API (tested headless, real GIF rendered): interesting_tour(bundles, ...) ->
+    (pca, scores, blab, clab, keyframes, C); render_tour(bundles, out, ...);
+    _select_bundles. Verified the structure-optimal keyframe scores >= the
+    default top-3 frame.
+
+It is honest projection pursuit, not magic: "interesting" means high
+between-bundle + drift scatter in the shared PC space, so it surfaces views the
+default top-3 hide -- but the same per-chunk-count caveat applies (sparse fibers'
+drift is noise, not structure), and the tour shows what the data has, not more.
