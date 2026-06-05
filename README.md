@@ -34,6 +34,8 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 - [Requirements](#requirements)
 - [License](#license)
 
+See [CHANGELOG.md](CHANGELOG.md) for the version history.
+
 ---
 
 ## Install
