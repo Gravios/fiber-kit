@@ -198,6 +198,17 @@ def _med(idx, waves):
     return np.median(fl.align_xcorr(waves[idx], ref="median", iters=4), 0)
 
 
+def _ncorr(a, b, ml=4):
+    """Shape-only (amplitude-normalised) best-lag correlation in [-1,1]: high when
+    waveform SHAPE matches regardless of scale, so energy levels of one neuron
+    (same fiber direction) score high and merge into one cell."""
+    A = a.ravel(); A = A / (np.linalg.norm(A) + 1e-9); best = -1.0
+    for L in range(-ml, ml + 1):
+        B = np.roll(b, L, axis=0).ravel(); B = B / (np.linalg.norm(B) + 1e-9)
+        best = max(best, float(A @ B))
+    return best
+
+
 def _match(a, b, ml=4):
     """NON-normalised (amplitude-sensitive) best-lag xcorr ratio in [0,1]: high
     only when both shape AND scale match, so energy levels are NOT collapsed."""
@@ -262,6 +273,61 @@ def _drop_tiny(lab, mg):
 
 
 # ── per-iteration statistics ─────────────────────────────────────────────────
+def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
+               mode="normalized", verbose=True):
+    """Contamination-gated agglomerative merge of an over-split sort back down to
+    a reasonable count.  Greedily merges the most-similar cluster pair (by median
+    waveform: shape-only when mode='normalized' -> merges energy levels of one
+    neuron onto its single d(r) fiber; amplitude-sensitive when mode='amplitude'
+    -> keeps energy levels apart) while similarity >= min_sim AND the merged
+    cluster's [floor, window) refractory stays <= budget %.  The gate auto-finds
+    the per-cluster knee, so distinct cells (whose merge would cross the
+    refractory) are never fused.  Returns 0-based labels (-1 noise)."""
+    import heapq
+    u = [int(c) for c in np.unique(lab[lab >= 0])]
+    if len(u) < 2:
+        return lab.copy()
+    groups = {c: np.flatnonzero(lab == c) for c in u}
+    med = {c: _med(groups[c], waves) for c in u}
+    sizes = {c: len(groups[c]) for c in u}
+    active = set(u)
+    nextid = max(u) + 1
+    simfn = _ncorr if mode == "normalized" else _match
+    heap = []
+    for i in range(len(u)):
+        for j in range(i + 1, len(u)):
+            s = simfn(med[u[i]], med[u[j]])
+            if s >= min_sim:
+                heapq.heappush(heap, (-s, u[i], u[j]))
+    nmerge = nrej = 0
+    while heap:
+        negs, a, b = heapq.heappop(heap)
+        if a not in active or b not in active:
+            continue                                   # stale entry (one side already merged)
+        midx = np.concatenate([groups[a], groups[b]])
+        if band_pct(res[midx], ctx) > budget:          # would over-merge distinct cells -> keep apart
+            nrej += 1; continue
+        active.discard(a); active.discard(b)
+        nid = nextid; nextid += 1
+        groups[nid] = midx
+        sizes[nid] = sizes[a] + sizes[b]
+        med[nid] = (sizes[a] * med[a] + sizes[b] * med[b]) / sizes[nid]   # cheap merged template
+        active.add(nid); nmerge += 1
+        for c in active:
+            if c == nid:
+                continue
+            s = simfn(med[nid], med[c])
+            if s >= min_sim:
+                heapq.heappush(heap, (-s, nid, c))
+    out = np.full(len(lab), -1, int)
+    for k, c in enumerate(sorted(active)):
+        out[groups[c]] = k
+    if verbose:
+        print(f"merge-back: {len(u)} -> {len(active)} clusters "
+              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim})")
+    return out
+
+
 def _iter_stats(name, lab, waves, res, ctx):
     u = np.unique(lab[lab >= 0])
     rb, du, sz, cv = [], [], [], []
@@ -295,11 +361,18 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4,
            knn_k=20, knn_thr=0.3, knn_minref=50, knn_minnew=30,
            knn_dims=16, fold_thr=0.9, init_labels=None,
-           fine_method="gmm", coarse_mg=150, verbose=True):
+           conv_tol=0.0, conv_patience=2,
+           merge_back_enable=False, merge_budget=1.0, merge_min_sim=0.90,
+           merge_mode="normalized", fine_method="gmm", coarse_mg=150, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
     list of dicts.  `init_labels` (0-based, -1 noise) is refined in place; if
-    None, a fine sort is produced first with cluster_chunk_fine."""
+    None, a fine sort is produced first with cluster_chunk_fine.
+
+    `iters` caps the splitting phase; conv_tol>0 stops it early once nfib (within
+    conv_tol fraction), swBand and enCV have all held for conv_patience iters.
+    merge_back_enable adds a final contamination-gated merge_back() to a
+    reasonable count."""
     window = int(round(window_ms * sr / 1000.0))
     ctx = Ctx(W, nmean, mask, sr, int(floor), window)
     if init_labels is None:
@@ -313,6 +386,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
         print(f"contamination window = [{floor/sr*1000:.2f}, {window_ms:.2f}] ms "
               f"([{int(floor)}, {window}] samples)")
         print(_HDR); print(_row(stats[-1]))
+    stable = 0
     for it in range(iters):
         lab, isol, nr, nd, ni = _split_all(lab, isol, waves, res_abs, ctx,
                                            large, min_group, var_margin, brr_tol,
@@ -323,6 +397,22 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
         lab = _drop_tiny(lab, min_group)
         st = _iter_stats(str(it + 1), lab, waves, res_abs, ctx)
         st.update(rkk=nr, dip=nd, iso=ni, fold=fo, kept=ke)
+        prev = stats[-1]; stats.append(st)
+        if verbose:
+            print(_row(st))
+        if conv_tol > 0:
+            steady = (abs(st["nfib"] - prev["nfib"]) <= conv_tol * max(prev["nfib"], 1)
+                      and abs(st["swBand"] - prev["swBand"]) <= 0.01
+                      and abs(st["enCV"] - prev["enCV"]) <= 0.002)
+            stable = stable + 1 if steady else 0
+            if stable >= conv_patience:
+                if verbose:
+                    print(f"[converged: nfib/swBand/enCV steady for {conv_patience} iters at iter {it + 1}]")
+                break
+    if merge_back_enable:
+        lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
+                         min_sim=merge_min_sim, mode=merge_mode, verbose=verbose)
+        st = _iter_stats("merge", lab, waves, res_abs, ctx)
         stats.append(st)
         if verbose:
             print(_row(st))
@@ -351,7 +441,23 @@ def main():
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
                     help="biological/ISI-violation window upper bound (ms); contamination is [floor, window)")
     ap.add_argument("--no-dedup", action="store_true", help="skip the sub-floor dedup pass")
-    ap.add_argument("--iters", type=int, default=4)
+    ap.add_argument("--iters", type=int, default=10, help="max splitting iterations (cap)")
+    ap.add_argument("--converge", dest="converge", action="store_true", default=True,
+                    help="stop the splitting phase early once nfib/swBand/enCV are steady (default on)")
+    ap.add_argument("--no-converge", dest="converge", action="store_false")
+    ap.add_argument("--converge-tol", type=float, default=0.01,
+                    help="nfib change (fraction) below which an iteration counts as steady")
+    ap.add_argument("--converge-patience", type=int, default=2,
+                    help="number of consecutive steady iters required to stop")
+    ap.add_argument("--merge-back", dest="merge_back", action="store_true", default=True,
+                    help="final contamination-gated merge-back to a reasonable count (default on)")
+    ap.add_argument("--no-merge-back", dest="merge_back", action="store_false")
+    ap.add_argument("--merge-budget", type=float, default=1.0,
+                    help="max merged-cluster [floor,window) band%% to accept a merge")
+    ap.add_argument("--merge-min-sim", type=float, default=0.90,
+                    help="min median-waveform similarity to consider a merge")
+    ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
+                    help="normalized = merge energy levels (neuron count); amplitude = keep them")
     ap.add_argument("--large", type=int, default=800, help="only clusters >= this are split each iter")
     ap.add_argument("--min-group", type=int, default=40)
     ap.add_argument("--var-margin", type=float, default=0.05,
@@ -436,6 +542,10 @@ def main():
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
                         knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
                         fold_thr=a.fold_thr, init_labels=init,
+                        conv_tol=(a.converge_tol if a.converge else 0.0),
+                        conv_patience=a.converge_patience,
+                        merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
+                        merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                         fine_method=a.fine_method, verbose=True)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
