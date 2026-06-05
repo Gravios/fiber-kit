@@ -650,6 +650,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
     chunk_tracks|None, bundles|None).  This is the correct way to run on a long
     drifting session -- pooling the whole session into one trajectory smears it."""
     refine_kw = dict(refine_kw or {})
+    refine_kw.pop("min_group", None)        # passed explicitly below; avoid double-keyword to refine()
     chunks, nchunks = _chunk_bounds(res, sr, chunk_min, overlap_min)
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     ext_idx = [np.array([], int)] * nchunks
