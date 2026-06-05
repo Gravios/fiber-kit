@@ -405,3 +405,30 @@ corr ~0.70) is immediately distinct: bend ~95-100 deg (~3x), smooth ~2.5, r_cv
 as reassignment resolves its energy levels. A high *stable* bend is the tell that
 a footprint is more than one cell; absolute cone degrees are inflated in whitened
 space, so read fibers relative to each other, not the raw angle.
+
+**Reading the residual along the track.** The geom TSV carries `resid_med` (median
+per-spike whiteness residual to the energy-local template `r*d(r)`) and
+`resid_mad` (its robust spread = along-fiber residual variance). Comparing each
+final fiber to its `fine`-iteration ancestor on g5:
+
+  - Clean single units do NOT drop -- nothing to remove. 343->fiber21 resid_mad
+    2.35->2.36, 258->fiber22 2.21->2.20; level flat at ~12. A small dip appears
+    at the `*.reasgn` rows and merge_back puts it back.
+  - Contaminated / multi-cell fibers DO drop. Curated 33->fiber15 resid_mad
+    3.15->2.77 (-12%), level 14.7->13.6 (-7%); the small contaminated clusters
+    (19,16,2,3) fall 22-41% in mad. Median over all 23 fibers: resid_mad -3.9%,
+    resid_med -1.4% -- a modest tightening concentrated entirely where there was
+    excess variance to lose.
+
+Two caveats when interpreting it: (1) the reduction is driven by the
+refit/reassign step, not the split -- it shows up as a step-change in the
+`*.reasgn` rows (fiber15 mad 3.33 through `1.merge`, then 2.76 at `1.reasgn`),
+which is the evidence that fitting a fresh per-fiber trajectory and reassigning by
+whiteness residual tightens the cloud. (2) It is reduction-by-purification, not a
+better fit of the same spikes: the dropping fibers also shed spikes (fiber15
+1858->997) as contaminants reassign away, so part of the median/MAD drop is just
+losing high-residual outliers. A few small clusters get WORSE (fiber9, 109
+spikes, mad +105%) where merge_back over-absorbs or reassignment pulls in poor
+matches -- the honest cost on low-count fibers. Watch `resid_mad` rising together
+with `purity` falling as the signal that a track is being contaminated rather
+than cleaned.
