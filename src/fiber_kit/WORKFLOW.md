@@ -432,3 +432,34 @@ spikes, mad +105%) where merge_back over-absorbs or reassignment pulls in poor
 matches -- the honest cost on low-count fibers. Watch `resid_mad` rising together
 with `purity` falling as the signal that a track is being contaminated rather
 than cleaned.
+
+### Drift-aware chunked mode (v0.17.0)
+
+Whole-session `refine` pools every spike of a cluster into ONE trajectory and ONE
+whitener, which smears a drifting unit. `--chunk-minutes M` (with
+`--chunk-overlap-minutes`, default 1.0) instead windows the session the way
+`fiber_session` does -- disjoint CORE windows `[lo,hi)` that tile the session,
+plus EXTended windows `[lo-ov, hi+ov)` that overlap their neighbours -- fits a
+SEPARATE whitener and runs the full refine loop inside each (quasi-stationary)
+window, then links per-window fibers by overlap-anchor (`fs.link_chunks`: the same
+physical spikes in adjacent windows' overlap prove identity, mutual-majority,
+drift-free). Each spike's final label comes from its CORE window. The iteration
+knobs (`--iters`, `--reseed`, `--no-converge`) apply per window, so a high-count
+full-session run is meaningful rather than drift-smeared.
+
+`--track-geometry` in chunked mode writes `<base>.geomchunk.<group>.tsv`
+(`fiber, chunk, t_min, <stats>`) -- each global fiber's shape stats measured in
+EACH window's own frame, i.e. the drift signature over time (radius/cone/bend per
+window). API: `refine_chunked(...) -> (global_labels, n_global, tracks)`,
+`write_chunk_geometry`.
+
+Validated (g5 10-min chunk split into 3x4-min windows, overlap 1 min, per-window
+local ids deliberately scrambled): core windows tile all 21710 spikes; stitching
+gives 100% core-spike agreement with the curated labels; 343/258/33 each link to
+a single global id across all windows. Two honest caveats:
+  - Overlap-anchor only links units with >= min_anchor (8) spikes in the overlap,
+    so low-rate units fragment across windows (here 423 globals vs 202 curated,
+    85/202 single-id). Lengthen the overlap or lower min_anchor for sparse units.
+  - traj_bend is spike-count sensitive (a short tail window inflates it); compare
+    the n-robust stats (r_cv, cone_med, resid_mad) across windows for drift, and
+    read bend only against windows of comparable n.
