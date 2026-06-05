@@ -60,6 +60,10 @@ try:
 except ImportError:
     import neuro_io as nio
 try:
+    from . import backend as _bk
+except ImportError:
+    import backend as _bk
+try:
     import diptest as _diptest
     _HAVE_DIP = True
 except Exception:
@@ -567,6 +571,42 @@ def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
     return fl.chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask)
 
 
+# ── chunk-level parallelism ──────────────────────────────────────────────────
+# Each chunk is independent (its own whitener, clustering, geometry), so chunks
+# are the natural coarse-grain parallel axis — the same flatten-the-independent-
+# axis strategy kiloklustakwik uses for its CEM runs.  Workers reopen the .spkD
+# and .fil memmaps from disk (cheap; OS page cache is shared) so no memmap or
+# big array is pickled across the process boundary; only per-chunk spike indices
+# cross it.  Results are independent of worker count and of completion order
+# (cluster_chunk_fine is seeded and per-chunk), so jobs>1 is identical to serial.
+_CTX = {}
+
+
+def _init_chunk_worker(cfg):
+    """Pool initializer: stash the static config and open the memmaps once per
+    worker process.  Also runs (with a fresh dict) for the serial jobs==1 path."""
+    _CTX.clear(); _CTX.update(cfg)
+    if cfg.get("gpu"):
+        _bk.use_gpu(True)
+    _CTX["spk"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                  prefer=nio.prefer_derived())
+    _CTX["filmm"] = nio.open_signal(cfg["fil"], cfg["ntotal"])
+
+
+def _process_chunk(task):
+    """Cluster one chunk.  task = (c, ext, res_e); returns (c, ext, lab, geoms,
+    cand, ncore).  Reads everything else (memmaps + params) from _CTX."""
+    c, ext, res_e = task
+    ctx = _CTX; kw = ctx["cf"]
+    waves = np.asarray(ctx["spk"][ext], dtype=float)
+    s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
+    W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+    cand = []
+    lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
+                                    candidates_out=cand, **kw)
+    return c, ext, lab, geoms, cand
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Cluster a session group into fibers. Reads <session>.yaml "
@@ -618,13 +658,11 @@ def main():
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
+    ap.add_argument("--jobs", "-j", type=int, default=1,
+                    help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.gpu:
-        try:
-            from . import backend as _bk
-        except ImportError:
-            import backend as _bk
         on = _bk.use_gpu(True)
         print(f"[fiber_session] GPU requested: backend = {_bk.backend_name()}"
               + ("" if on else " (CuPy/CUDA unavailable -> CPU)"))
@@ -651,36 +689,55 @@ def main():
     ext_idx = [np.array([], int)] * nchunks; ext_lab = [np.array([], int)] * nchunks
     chunk_geoms = [[] for _ in range(nchunks)]; chunk_tmin = [0.0] * nchunks
     chunk_candidates = [[] for _ in range(nchunks)]
+
+    # ── build per-chunk tasks (small chunks skipped here, serially & cheaply) ──
+    meth = "none" if a.no_fine else a.fine_method
+    cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+              fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
+              incl_k=a.inclusion_k, dipsplit=a.dipsplit,
+              dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min,
+              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
+              merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
+              profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
+              profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
+              deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
+              adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
+              adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr,
+              adapt_taumax=a.adapt_taumax, collision_flag=a.collision_flag,
+              collision_gain=a.collision_gain, collision_shift=a.collision_shift,
+              quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
+    cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
+               nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
+               gch=gch, mask=mask, cf=cf, gpu=a.gpu)
+
+    tasks = []; ncore_of = {}
     for c in range(nchunks):
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
         chunk_tmin[c] = (lo_s - t_min) / a.sr / 60.0
         ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s))
-        ncore = int(((res[ext] >= lo_s) & (res[ext] < hi_s)).sum())
+        ncore = int(((res[ext] >= lo_s) & (res[ext] < hi_s)).sum()); ncore_of[c] = ncore
         if len(ext) < 2 * a.min_group:
             print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore} core ({len(ext)} ext) -> 0 fibers (small)"); continue
-        waves = np.asarray(spk[ext], dtype=float); res_e = res[ext]
-        s0 = int(res_e.min()) - a.nsamp; s1 = int(res_e.max()) + a.nsamp + 1
-        W, nmean, _ = fil_chunk_whitener(filmm, gch, s0, s1, res_e, a.nsamp, mask)
-        meth = "none" if a.no_fine else a.fine_method
-        cand_c = []
-        lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, a.min_group, mask, a.sr,
-                                        method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
-                                        fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
-                                        incl_k=a.inclusion_k, dipsplit=a.dipsplit,
-                                        dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min,
-                                        rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
-                                        merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
-                                        profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
-                                        profile_min_n=a.profile_min_n,
-                                        emit_candidates=a.emit_merge_candidates, candidates_out=cand_c,
-                                        deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
-                                        adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
-                                        adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr, adapt_taumax=a.adapt_taumax,
-                                        collision_flag=a.collision_flag, collision_gain=a.collision_gain, collision_shift=a.collision_shift,
-                                        quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
-        ext_idx[c] = ext; ext_lab[c] = lab; chunk_geoms[c] = geoms; chunk_candidates[c] = cand_c
-        nfib = len(geoms)
-        print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore} core ({len(ext)} ext) -> {nfib} fibers")
+        tasks.append((c, ext, res[ext]))
+
+    def _store(result):
+        c, ext, lab, geoms, cand = result
+        ext_idx[c] = ext; ext_lab[c] = lab; chunk_geoms[c] = geoms; chunk_candidates[c] = cand
+        print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore_of[c]} core ({len(ext)} ext) -> {len(geoms)} fibers")
+
+    jobs = max(1, int(a.jobs))
+    if jobs == 1 or len(tasks) <= 1:
+        _init_chunk_worker(cfg)                       # serial: identical to the former inline loop
+        for task in tasks:
+            _store(_process_chunk(task))
+    else:
+        from concurrent.futures import ProcessPoolExecutor
+        nworkers = min(jobs, len(tasks))
+        print(f"[fiber_session] clustering {len(tasks)} chunks on {nworkers} processes")
+        with ProcessPoolExecutor(max_workers=nworkers,
+                                 initializer=_init_chunk_worker, initargs=(cfg,)) as ex:
+            for result in ex.map(_process_chunk, tasks):
+                _store(result)
 
     if a.no_link:
         gid = {}; n = 0
