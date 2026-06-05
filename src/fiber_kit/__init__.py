@@ -25,7 +25,7 @@ __version__ = "0.5.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
-from .fiber_tracer import trajectory, predict
+from .fiber_tracer import trajectory, predict, predict_many
 from .klustakwik import klustakwik
 from .session_yaml import find_session_yaml, load_session, resolve_session_params
 from .fiber_session import (
@@ -44,7 +44,7 @@ __all__ = [
     "__version__",
     "fiber_lib", "fiber_tracer", "fiber_adapt", "fiber_collision", "laplacian_link",
     "neuro_io",
-    "trajectory", "predict", "klustakwik",
+    "trajectory", "predict", "predict_many", "klustakwik",
     "find_session_yaml", "load_session", "resolve_session_params",
     "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks",
     "read_res", "open_spkD", "fil_chunk_whitener",

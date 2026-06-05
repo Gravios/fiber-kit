@@ -67,10 +67,11 @@ def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
         cur = np.zeros(len(idx), int)                    # current integer lag
         corr = None
         for _ in range(max(1, iters)):
-            # template from currently-aligned spikes (robust median), core region
-            al = np.empty((len(idx), Tcore, C), np.float32)
-            for j, L in enumerate(cur):
-                al[j] = W[j, ms + L:T - ms + L, :]
+            # template from currently-aligned spikes (robust median), core region.
+            # Vectorized gather of each spike's lag-shifted core (was a per-spike
+            # Python loop); identical result, O(n) interpreter calls removed.
+            gidx = np.arange(Tcore)[None, :] + (ms + cur)[:, None]   # (n, Tcore)
+            al = np.take_along_axis(W, gidx[:, :, None], axis=1).astype(np.float32)
             templ = np.median(al, axis=0)                # (Tcore,C)
             tc = templ - templ.mean(axis=0, keepdims=True)
             # correlation at every lag (n, nLags)
