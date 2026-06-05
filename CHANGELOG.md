@@ -4,6 +4,12 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.22.1] — fix: chunked refine duplicate `min_group`
+- `refine_chunked` passed `min_group` both explicitly and inside `refine_kw`,
+  raising `TypeError: refine() got multiple values for keyword argument
+  'min_group'` on any `--chunk-minutes` run. Pop it from `refine_kw` (the
+  explicit arg is authoritative). Single-pass mode was unaffected.
+
 ## [0.22.0] — drift-predicted, signature-gated continuity linking
 - `fiber-refine --chunk-minutes M --link-continuity`: after the overlap-anchor
   backbone, recover fibers too sparse to share enough overlap spikes by bridging
