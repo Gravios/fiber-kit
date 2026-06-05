@@ -217,7 +217,7 @@ fiber-session <base> 5 ... --merge-method profile
 | `--adapt-clean` | off | reject high-energy-at-short-ISI on real fast adapters |
 | `--no-link` / `--no-fine` / `--no-dipsplit` | off | disable linking / refinement / DipSplit |
 | `--jobs` / `-j` | 1 | parallel worker processes over chunks (chunks are independent; output is identical to serial) |
-| `--gpu` | off | run the realign/whiten kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
+| `--gpu` | off | run the realign / whiten / tracer-residual kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
 
 Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
 <elec> --channels ... --ntotal ...`.

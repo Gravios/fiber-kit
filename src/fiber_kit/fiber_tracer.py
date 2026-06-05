@@ -23,6 +23,48 @@ try:
     from . import fiber_lib as fl
 except ImportError:
     import fiber_lib as fl
+try:
+    from . import backend as _bk
+except ImportError:
+    import backend as _bk
+
+
+def _predict_xp(grid, D, r, xp):
+    """predict_many on an arbitrary array module (numpy or cupy); grid/D/r are
+    already on the device.  Same clamp-at-ends + grid linear-interp + unit
+    normalization as predict_many (used only on the GPU residual path)."""
+    j = xp.clip(xp.searchsorted(grid, r), 1, grid.shape[0] - 1)
+    f = (r - grid[j - 1]) / (grid[j] - grid[j - 1])
+    interp = D[j - 1] + (D[j] - D[j - 1]) * f[:, None]
+    out = xp.where((r <= grid[0])[:, None], D[0],
+                   xp.where((r >= grid[-1])[:, None], D[-1], interp))
+    nrm = xp.linalg.norm(out, axis=1, keepdims=True)
+    return out / xp.maximum(nrm, 1e-12)
+
+
+def _whiten(Xraw, nmean, W):
+    """Apply the (centered) whitener: (Xraw - nmean) @ W.  Runs on GPU when
+    backend.gpu_enabled(); numpy path is identical to the plain expression."""
+    return _bk.asnumpy((_bk.asarray(Xraw) - _bk.asarray(nmean)) @ _bk.asarray(W))
+
+
+def _residual_matrix(X, trajs, keys):
+    """Per-spike whitened residual to each fiber's energy-local prediction ->
+    (n, K) plus the radius r.  GPU when enabled; numpy path uses predict_many
+    and is bit-identical to the former in-line loop."""
+    r = np.linalg.norm(X, axis=1)
+    if _bk.gpu_enabled():
+        xp = _bk.xp(); Xd = xp.asarray(X); rd = xp.asarray(r)
+        res = xp.empty((len(X), len(keys)))
+        for k, g in enumerate(keys):
+            grid, D = trajs[g]
+            pred = _predict_xp(xp.asarray(grid), xp.asarray(D), rd, xp)
+            res[:, k] = xp.linalg.norm(Xd - rd[:, None] * pred, axis=1)
+        return _bk.asnumpy(res), r
+    res = np.zeros((len(X), len(keys)))
+    for k, g in enumerate(keys):
+        res[:, k] = np.linalg.norm(X - r[:, None] * predict_many(trajs[g], r), axis=1)
+    return res, r
 
 
 # ── seeding: cluster the outer shell in PCA space (validated: family->1, distinct kept) ──
@@ -145,10 +187,7 @@ def assign(X, trajs, temperature=None):
     `temperature`: None -> uncalibrated dim default; scalar or per-spike array
     (e.g. from calibrate_temperature/temperature_for) -> calibrated posterior."""
     r = np.linalg.norm(X, axis=1); keys = list(trajs)
-    res = np.zeros((len(X), len(keys)))
-    for k, g in enumerate(keys):
-        pred = r[:, None] * predict_many(trajs[g], r)
-        res[:, k] = np.linalg.norm(X - pred, axis=1)
+    res, r = _residual_matrix(X, trajs, keys)
     hard = np.array(keys)[res.argmin(1)]
     if temperature is None:
         Tvec = np.full(len(X), float(X.shape[1]))      # old isotropic default
@@ -178,7 +217,7 @@ def run(waveforms, W, nmean, y_um, mask=fl.MASK_FULL):
     Wal = fl.realign(waveforms)
     Xraw = Wal[:, mask, :].reshape(len(Wal), -1)
     seedlab, _, _, _ = seed_outer_shell(Xraw)
-    X = (Xraw - nmean) @ W
+    X = _whiten(Xraw, nmean, W)
     trajs = {int(L): trajectory(X[seedlab == L]) for L in np.unique(seedlab) if L >= 0}
     if not trajs:
         return None
@@ -201,15 +240,14 @@ def run_from_seeds(waveforms, label_groups, W, nmean, mask=fl.MASK_FULL,
         idx=np.asarray(idx); idx=idx if idx.dtype!=bool else np.flatnonzero(idx)
         if len(idx)<50: continue
         Wal=fl.realign(waveforms[idx])                       # per-fiber alignment
-        Xg=(Wal[:,mask,:].reshape(len(idx),-1)-nmean)@W
+        Xg=_whiten(Wal[:,mask,:].reshape(len(idx),-1), nmean, W)
         trajs[name]=trajectory(Xg); feats[name]=(idx,Xg)
     keys=list(trajs); n=len(waveforms); hard=np.empty(n,dtype=object); post=np.zeros((n,len(keys)))
     # residuals for every seeded spike (each in its own frame), all vs all trajectories
     res_by={}; res_all=[]; rad_all=[]; y_all=[]
     for ni,name in enumerate(keys):
-        idx,Xg=feats[name]; r=np.linalg.norm(Xg,axis=1); res=np.zeros((len(idx),len(keys)))
-        for k,g in enumerate(keys):
-            res[:,k]=np.linalg.norm(Xg-r[:,None]*predict_many(trajs[g],r),axis=1)
+        idx,Xg=feats[name]
+        res,r=_residual_matrix(Xg, trajs, keys)
         hard[idx]=np.array(keys)[res.argmin(1)]; res_by[name]=(idx,r,res)
         res_all.append(res); rad_all.append(r); y_all.append(np.full(len(idx),ni))
     res_all=np.vstack(res_all); rad_all=np.concatenate(rad_all); y_all=np.concatenate(y_all)
