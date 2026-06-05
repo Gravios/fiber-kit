@@ -480,3 +480,38 @@ loads them directly. Long format, no object arrays:
 `fiber`; order by `iter` (fine->final) or `t_min` (drift). `load_geometry(path)`
 returns the index columns plus each stat as its own named column
 (`g['cone_med']`), so a viewer needs no knowledge of the matrix layout.
+
+### fiber-view: figures + rotatable bundle GUI (v0.19.0)
+
+Two front-ends over the fiber math, both optional-dep (`pip install 'fiber-kit[viz]'`).
+
+`fiber-view <session> <group>` (matplotlib, static) renders, per selected fiber:
+  - `templates`  per-channel interpolated waveform-template montage (x=time,
+    y=position along fiber, colour=amplitude; each row a template r*d(r));
+  - `manifold`   local fibers as 3-D curves through a PCA(3) projection;
+  - `stats`      ISI/refractory + fiber_shape_stats (or a .geom track via --geom).
+
+`fiber-view-gui <session>.bundles.<group>.npz` (PySide6 + pyqtgraph, rotatable)
+is the **selectable bundle table**: one row per global fiber (id, n, nchunks,
+t0/t1, drift score, mean bend/r_cv), sorted most-drift-first; selecting a row
+draws that bundle in a rotatable GL view -- the per-chunk trajectories coloured
+by time plus the transparent drift manifold lofted between consecutive chunks.
+
+Data contract (producer/consumer):
+  - `fiber-refine ... --chunk-minutes M --bundles` writes
+    `<base>.bundles.<group>.npz`: long-format `fiber[N] chunk[N] t_min[N]
+    count[N] curves[N,NPOS,nfeat]`, where curves are UN-whitened template curves
+    r*d(r) (raw feature space) so they are comparable across chunks despite each
+    chunk's own whitener -- the per-chunk spread is then real footprint drift.
+  - `fiber_view.load_bundles_npz` / `bundle_table` / `bundle_drift_score` /
+    `bundle_figure` consume it; `fiber_refine._chunk_bundles` / `write_bundles`
+    produce it.
+
+Drift score = mean pairwise per-chunk tip distance / mean curve length in the
+bundle's common PCA(3) frame (~0 = stable rope, larger = fanning sheet). NOTE it
+needs enough spikes per chunk for a stable per-chunk trajectory: validation on a
+single clean 10-min chunk showed per-window fits scatter ~0.5*length from
+sampling noise alone, swamping modest drift -- so the bundle/drift readout is for
+real multi-chunk drifting sessions with adequate per-chunk counts, and sparse
+fibers should be flagged (low count) rather than read as drift. The synthetic
+known-drift validation cleanly separates stable (0.01) from drifting (0.51).

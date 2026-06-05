@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.18.0"
+version = "0.19.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dip = ["diptest>=0.5"]            # enables DipSplit (bimodal cluster splitting)
+viz = ["matplotlib>=3.5", "pyqtgraph>=0.13", "PySide6>=6.4"]  # fiber-view (figures) + fiber-view-gui (rotatable)
 gpu = ["cupy-cuda12x>=12.0"]      # optional GPU acceleration of realign/whiten kernels
 
 [project.scripts]
@@ -38,6 +39,8 @@ fiber-localize = "fiber_kit.fiber_localize:main"
 fiber-drift = "fiber_kit.fiber_drift:main"
 fiber-position = "fiber_kit.fiber_position:main"
 fiber-refine = "fiber_kit.fiber_refine:main"
+fiber-view = "fiber_kit.fiber_view:main"
+fiber-view-gui = "fiber_kit.fiber_view_gui:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
