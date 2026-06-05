@@ -30,6 +30,10 @@ try:
     from . import neuro_io as nio
 except ImportError:
     import neuro_io as nio
+try:
+    from . import session_yaml as sy
+except ImportError:
+    import session_yaml as sy
 
 
 def _read_clu(path):
@@ -132,21 +136,34 @@ def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Per-spike fiber-template offsets + corrected .res spike times.")
-    ap.add_argument("base", help="session base path (<base>.spkD.<elec>/.res.<elec>/.clu.<elec>)")
-    ap.add_argument("elec", type=int, help="electrode/spike group")
-    ap.add_argument("--nsamp", type=int, required=True, help="samples per spike waveform")
-    ap.add_argument("--nch", type=int, required=True, help="channels in the group")
-    ap.add_argument("--clu", default=None, help="cluster file (default <base>.clu.<elec>; pass the relinked one)")
+        description="Per-spike fiber-template offsets + corrected .res spike times. "
+                    "Probe geometry (group channels / nchan / nsamp) is read from "
+                    "<session>.yaml; flags override.")
+    ap.add_argument("session", help="session basename or folder (finds <session>.yaml); "
+                                    "or a file base if no YAML is present")
+    ap.add_argument("group", type=int, help="1-based spike group")
+    ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
+    ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in the recording")
+    ap.add_argument("--nchan", "--nch", dest="nchan", type=int, default=None,
+                    help="override: channels in the group (default from YAML)")
+    ap.add_argument("--nsamp", type=int, default=None, help="override: samples per spike (default from YAML)")
+    ap.add_argument("--sr", type=float, default=None, help="override: sampling rate")
+    ap.add_argument("--clu", default=None,
+                    help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
+                         "e.g. <base>.clu.refine.<group>)")
     ap.add_argument("--max-shift", type=int, default=5)
     ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
-    res, off, ioff, res_corr = realign(a.base, a.elec, a.nsamp, a.nch, a.clu,
+    cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr,
+                                    require=("nchan", "nsamp"))
+    base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
+    res, off, ioff, res_corr = realign(base, group, nsamp, nch, a.clu,
                                        a.max_shift, a.iters, a.min_n)
-    orr, off_path = write_outputs(a.base, a.elec, off, res_corr, a.out_res, a.out_off)
+    orr, off_path = write_outputs(base, group, off, res_corr, a.out_res, a.out_off)
     print(f"[realign] wrote {orr}  and  {off_path}")
 
 
