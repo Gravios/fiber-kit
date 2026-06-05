@@ -173,9 +173,12 @@ def fiber_geom(wsub, res_sub, W, nmean, mask, sr, n_grid=40, chunk_t0=None, chun
     except ImportError:
         import fiber_adapt as _fa
     _z, _ai = _fa.adaptation_residual(wsub, res_sub, W, nmean, mask, sr)
+    crv = ft.channel_residual_profile(wsub, W, nmean, mask) if n >= 20 else None
     return dict(n=n, radius=float(rr.mean()), rate=rate, presence=presence,
                 refrac=refr, burst=burst, isi_cv=isi_cv, hill_fp=hill,
                 resid_med=resid_med, resid_mad=resid_mad,
+                chan_resid_var_mean=float(crv['mean']) if crv else float('nan'),
+                chan_resid_var_max=float(crv['max']) if crv else float('nan'),
                 depth=depth, width_ms=width_ms,
                 radius_slope=radius_slope, depth_slope=depth_slope, dir_drift=dir_drift,
                 adapt_corr=float(_ai['corr']), adapt_tau=float(_ai['tau']), adapt_snr=float(_ai['snr']),
@@ -223,7 +226,8 @@ def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
-                       n_grid=40, incl_k=3.0, dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40,
+                       n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
+                       dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40,
                        rkk_dims=6, rkk_max=50, merge_corr=0.0, merge_method="template", sliding_nwin=14,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        emit_candidates=False, candidates_out=None,
@@ -275,6 +279,15 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
                 newg += [grp[piece] for piece in _dipsplit_rec(Fg, np.arange(len(grp)), dip_min, dip_alpha)]
             groups = newg
+        if split_var_margin > 0 and len(groups) > 1:
+            # accept the split only if it lowers the spike-weighted mean per-channel
+            # RESIDUAL variance by >= margin (real shape sub-units do; energy splits don't)
+            sub = np.full(len(cidx), -1, int)
+            for gi, grp in enumerate(groups):
+                sub[grp] = gi
+            _, _, red = ft.split_meanvar(wcf, sub, W, nmean, mask, n_grid=n_grid, min_n=fine_mg)
+            if red < split_var_margin:
+                groups = [np.arange(len(cidx))]   # reject: insufficient variance reduction
         for grp in groups:
             if len(grp) < fine_mg: continue
             sidx = cidx[grp]; rad = float('nan'); rej = 0
@@ -287,6 +300,18 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum())
                 sidx = sidx[keep]
                 if len(sidx) < fine_mg: continue
+            if cone_channel_k > 0 and len(sidx) >= 40:
+                # tighten the cone PER CHANNEL: drop spikes that are residual outliers
+                # on the discriminative (high-residual-variance) channels — peels
+                # channel-localized contaminants the global norm averages away.
+                prof = ft.channel_residual_profile(waves[sidx], W, nmean, mask, n_grid=n_grid)
+                disc = prof['per_channel'] >= np.percentile(prof['per_channel'], 70)
+                if disc.any():
+                    ed = prof['per_spike_channel'][:, disc]
+                    cmed = np.median(ed, 0); cmad = 1.4826 * np.median(np.abs(ed - cmed), 0) + 1e-9
+                    keep2 = ((ed - cmed) / cmad).max(1) <= cone_channel_k
+                    rej += int((~keep2).sum()); sidx = sidx[keep2]
+                    if len(sidx) < fine_mg: continue
             arej = 0
             if adapt_clean and len(sidx) >= 40:
                 try:
@@ -645,6 +670,12 @@ def main():
     ap.add_argument("--quality-dims", type=int, default=10, help="PCA dims for L-ratio/isolation Mahalanobis")
     ap.add_argument("--pca-k", type=int, default=6); ap.add_argument("--max-sub", type=int, default=8)
     ap.add_argument("--inclusion-k", type=float, default=3.0, help="per-fiber radius = median+k*MAD of residuals; 0 disables")
+    ap.add_argument("--cone-channel-k", type=float, default=0.0,
+                    help="tighten the cone per channel: drop spikes that are residual outliers (>k MAD) "
+                         "on the discriminative channels; 0 disables")
+    ap.add_argument("--split-var-margin", type=float, default=0.0,
+                    help="accept a within-fiber split only if it lowers the mean per-channel residual "
+                         "variance by >= this fraction (e.g. 0.1); 0 accepts all splits")
     ap.add_argument("--dipsplit", dest="dipsplit", action="store_true", default=True)
     ap.add_argument("--no-dipsplit", dest="dipsplit", action="store_false")
     ap.add_argument("--dip-dim", type=int, default=4); ap.add_argument("--dip-alpha", type=float, default=0.01)
@@ -694,7 +725,8 @@ def main():
     meth = "none" if a.no_fine else a.fine_method
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
               fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
-              incl_k=a.inclusion_k, dipsplit=a.dipsplit,
+              incl_k=a.inclusion_k, cone_channel_k=a.cone_channel_k,
+              split_var_margin=a.split_var_margin, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
@@ -783,6 +815,8 @@ def main():
         burst=col('burst', np.float32), isi_cv=col('isi_cv', np.float32), hill_fp=col('hill_fp', np.float32),
         # isolation / compactness
         resid_med=col('resid_med', np.float32), resid_mad=col('resid_mad', np.float32),
+        chan_resid_var_mean=col('chan_resid_var_mean', np.float32),
+        chan_resid_var_max=col('chan_resid_var_max', np.float32),
         nn_dist=col('nn_dist', np.float32), nn_gid=col('nn_gid', int),
         lratio=col('lratio', np.float32), iso_dist=col('iso_dist', np.float32),
         # within-chunk drift

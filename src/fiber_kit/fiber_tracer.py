@@ -132,6 +132,61 @@ def predict(traj, r):
     return pd / np.linalg.norm(pd)
 
 
+# ── per-channel residual variance around the fiber (membership-tightening measure) ──
+def channel_residual_profile(waves, W, nmean, mask=None, n_grid=40):
+    """Variance of each channel's waveform RESIDUAL TO THE ENERGY-LOCAL TEMPLATE
+    r·d(r), in RAW (un-whitened) channel space.
+
+    This is the right "minimal mean variance across channels" objective for the
+    fiber framework.  Two deliberate choices:
+      - residual to the d(r) trajectory, NOT the raw waveform: the trajectory
+        already absorbs the legitimate energy / adaptation spread (the fiber is a
+        curve), so what remains is genuine SHAPE contamination — minimizing raw
+        per-channel variance instead would just carve the fiber into energy bands
+        (re-creating the over-split this pipeline exists to prevent).
+      - read in raw channel space (un-whiten the residual): whitening mixes
+        channels, so a per-channel number in whitened space is meaningless, and
+        per the project's own finding whitening is for fiber CENTERS, not
+        per-spike membership.
+
+    Returns dict(per_channel v_c (nchan,), mean v̄, max, per_spike_channel
+    (n,nchan) rms residual).  A clean unit -> low, flat v_c; a fiber hiding a
+    shape sub-unit -> v_c PEAKED on the discriminating channels (the channels
+    you see clean up after an rkk split)."""
+    if mask is None:
+        mask = fl.MASK_FULL
+    w_al = fl.realign(waves)
+    nch = w_al.shape[2]; nm = len(mask)
+    Xg = (w_al[:, mask, :].reshape(len(w_al), -1) - nmean) @ W
+    r = np.linalg.norm(Xg, axis=1)
+    grid, D = trajectory(Xg, n_grid=n_grid)
+    pred = r[:, None] * predict_many((grid, D), r)              # energy-local template
+    resid_raw = (Xg - pred) @ np.linalg.pinv(W)                 # un-whiten -> raw masked residual
+    R = resid_raw.reshape(len(w_al), nm, nch)                   # (n, nmask, nchan)
+    v_c = R.var(axis=0).mean(axis=0)                            # per-channel residual variance
+    return dict(per_channel=v_c, mean=float(v_c.mean()), max=float(v_c.max()),
+                per_spike_channel=np.sqrt((R * R).mean(1)))     # (n, nchan)
+
+
+def split_meanvar(waves, sub, W, nmean, mask=None, n_grid=40, min_n=20):
+    """Evaluate a proposed split by the minimal-mean-per-channel-residual-variance
+    criterion.  Returns (parent_mean, child_nweighted_mean, fractional_reduction).
+    A real shape sub-split drops the mean materially; a pure energy split does
+    not (the trajectory already explains energy), so this is the acceptance test
+    that lets the split criterion BE the per-channel variance without re-creating
+    energy over-splitting."""
+    par = channel_residual_profile(waves, W, nmean, mask, n_grid)['mean']
+    tot = 0.0; nn = 0
+    for s in np.unique(sub):
+        idx = np.flatnonzero(sub == s)
+        if len(idx) < min_n:
+            continue
+        v = channel_residual_profile(waves[idx], W, nmean, mask, n_grid)['mean']
+        tot += v * len(idx); nn += len(idx)
+    child = tot / nn if nn else par
+    return par, child, (par - child) / (par + 1e-12)
+
+
 def predict_many(traj, r):
     """Vectorized predict over an array of radii -> (len(r), dim) unit directions.
     Same clamp-at-ends + linear-interp-on-grid as predict(), computed for all
