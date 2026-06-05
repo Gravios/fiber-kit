@@ -373,3 +373,35 @@ i.e. beyond dedup, this chunk has little real band contamination to remove.
 partially undo each other, drifting to slightly more clusters without settling --
 so it defaults off (single pass). It is wired for data where the cleaned fibers
 genuinely seed a better pass.
+
+### Fit/reassign re-seed loop + fiber-geometry tracking (v0.16.0)
+
+`--reseed N` now runs the loop the way it should: each pass is
+`split -> merge_back -> refit fibers -> reassign` and the reassigned labels seed
+the next pass (`_refit_reassign` uses `fiber_tracer.run_from_seeds`: per-cluster
+trajectory fit, then every labelled spike re-assigned by whiteness residual;
+noise preserved). Unlike the old label-refeed, this *converges* -- on g5 two
+passes settle at 23 clusters instead of drifting up.
+
+`fiber_tracer.fiber_shape_stats(waves,W,nmean,mask)` returns the shape of one
+cluster's spike cloud AROUND its fiber: radius mean/CV/skew/bimodality, cone
+angle (median + p95 of per-spike angle to d(r)), whiteness residual med/MAD, and
+trajectory bend (total turning of d(r), deg) + per-step smoothness.
+
+`--track-geometry` records every cluster's shape stats at every iteration and,
+because the spikes are fixed and only labels move, links each FINAL fiber back
+through the snapshots by spike overlap, writing `<base>.geom.<group>.tsv`
+(`fiber, iter, host, purity, <stats>`). API: `geometry_tracks(snaps, waves, W,
+nmean, mask)` + `write_geometry_tracks`; `refine(..., snaps_out=[])` collects the
+per-step labellings.
+
+What it exposed on g5: **trajectory bend + smoothness are an intrinsic per-fiber
+fingerprint, near-invariant across all 14 iterations, while radius-bimodality and
+cone respond to cleaning.** Clean single units (curated 343, 258) have flat
+tracks -- bend ~33-41 deg, smooth ~0.8-1.1, r_cv 0.13, r_bimod steady ~0.47. The
+multi-cell footprint (curated 33, which elsewhere splits into 8 units at template
+corr ~0.70) is immediately distinct: bend ~95-100 deg (~3x), smooth ~2.5, r_cv
+0.21-0.30, and r_bimod rising past the 0.555 bimodality threshold (0.49 -> 0.66)
+as reassignment resolves its energy levels. A high *stable* bend is the tell that
+a footprint is more than one cell; absolute cone degrees are inflated in whitened
+space, so read fibers relative to each other, not the raw angle.

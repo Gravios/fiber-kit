@@ -368,6 +368,76 @@ def _row(s):
 
 
 # ── driver ───────────────────────────────────────────────────────────────────
+def _refit_reassign(lab, waves, W, nmean, mask, mg):
+    """Fit a fiber (per-cluster trajectory) from every current cluster, then
+    REASSIGN each labelled spike to the fiber with the smallest whiteness
+    residual (ft.run_from_seeds).  Noise (-1) is preserved; tiny clusters are
+    dropped.  Re-derives membership from the cleaned templates so the next pass
+    seeds off a self-consistent labelling."""
+    groups = {int(c): np.flatnonzero(lab == c) for c in np.unique(lab[lab >= 0])
+              if (lab == c).sum() >= 50}
+    if len(groups) < 2:
+        return lab
+    out = ft.run_from_seeds(waves, groups, W, nmean, mask=mask)
+    keymap = {k: i for i, k in enumerate(out["keys"])}
+    new = lab.copy()
+    nn = np.flatnonzero(lab >= 0)
+    new[nn] = [keymap.get(h, -1) if h is not None else -1 for h in out["hard"][nn]]
+    return _drop_tiny(new, mg)
+
+
+# ── fiber-geometry tracking across iterations ────────────────────────────────
+_GEOM_KEYS = ("n", "r_mean", "r_cv", "r_skew", "r_bimod",
+              "cone_med", "cone_p95", "resid_med", "resid_mad",
+              "traj_bend", "traj_smooth")
+
+
+def geometry_tracks(snaps, waves, W, nmean, mask, n_grid=40, min_n=40):
+    """Follow each FINAL fiber's geometry back through the refine snapshots.
+
+    `snaps` is the list of (tag, labels) recorded per step (labels are over the
+    SAME spikes throughout, so identity links by spike overlap -- no template
+    matching needed).  For every final cluster and snapshot, the host cluster
+    holding the majority of that fiber's spikes is found and its
+    fiber_shape_stats reported.  Returns {final_fiber: [(tag, host, purity,
+    stats), ...]} -- the time series of radius/cone/smoothness/bend as the loop
+    refines, exposing structure (e.g. r_bimod and cone collapsing exactly when a
+    real sub-unit separates, or a bend that stays high because it is two cells)."""
+    per_snap = []
+    for tag, lab in snaps:
+        sc = {}
+        for c in np.unique(lab[lab >= 0]):
+            idx = np.flatnonzero(lab == c)
+            if len(idx) >= min_n:
+                sc[int(c)] = ft.fiber_shape_stats(waves[idx], W, nmean, mask, n_grid=n_grid)
+        per_snap.append((tag, lab, sc))
+    final_lab = per_snap[-1][1]
+    tracks = {}
+    for fc in np.unique(final_lab[final_lab >= 0]):
+        spk = np.flatnonzero(final_lab == fc); series = []
+        for tag, lab, sc in per_snap:
+            sub = lab[spk]; sub = sub[sub >= 0]
+            if len(sub) == 0:
+                continue
+            host = int(np.bincount(sub).argmax()); frac = float((sub == host).mean())
+            if host in sc:
+                series.append((tag, host, frac, sc[host]))
+        tracks[int(fc)] = series
+    return tracks
+
+
+def write_geometry_tracks(tracks, path):
+    """Long-format TSV: one row per (final_fiber, snapshot) with host cluster,
+    purity, and the geometry stats."""
+    with open(path, "w") as f:
+        f.write("fiber\titer\thost\tpurity\t" + "\t".join(_GEOM_KEYS) + "\n")
+        for fc, series in sorted(tracks.items()):
+            for tag, host, frac, s in series:
+                f.write(f"{fc}\t{tag}\t{host}\t{frac:.3f}\t"
+                        + "\t".join(f"{s[k]:.4g}" for k in _GEOM_KEYS) + "\n")
+    return path
+
+
 def refine(waves, res_abs, W, nmean, mask, sr, *,
            floor=16, window_ms=2.0, iters=4, large=800, min_group=40,
            var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93,
@@ -375,7 +445,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            knn_dims=16, fold_thr=0.9, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
-           merge_mode="normalized", fine_method="gmm", coarse_mg=150, verbose=True):
+           merge_mode="normalized", fine_method="gmm", coarse_mg=150,
+           snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
     list of dicts.  `init_labels` (0-based, -1 noise) is refined in place; if
@@ -399,6 +470,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
     else:
         lab = np.asarray(init_labels, int).copy()
     stats = [_iter_stats("fine", lab, waves, res_abs, ctx)]
+    if snaps_out is not None:
+        snaps_out.append(("fine", lab.copy()))
     if verbose:
         print(f"contamination window = [{floor/sr*1000:.2f}, {window_ms:.2f}] ms "
               f"([{int(floor)}, {window}] samples); split_min_corr={split_min_corr}, reseed={reseed}")
@@ -420,6 +493,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
             st = _iter_stats(tag, lab, waves, res_abs, ctx)
             st.update(rkk=nr, dip=nd, iso=ni, fold=fo, kept=ke)
             prev = stats[-1]; stats.append(st)
+            if snaps_out is not None:
+                snaps_out.append((tag, lab.copy()))
             if verbose:
                 print(_row(st))
             if conv_tol > 0:
@@ -436,10 +511,21 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                              min_sim=merge_min_sim, mode=merge_mode, verbose=verbose)
             st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
             stats.append(st)
+            if snaps_out is not None:
+                snaps_out.append((f"{p+1}.merge" if reseed else "merge", lab.copy()))
             if verbose:
                 print(_row(st))
-        if reseed:                                    # outer re-seed convergence
-            cur = (st["nfib"], st["swBand"])
+        if reseed:
+            # fit new fibers from the merged clusters and REASSIGN every spike by
+            # whiteness residual (membership cleanup), then loop back to splitting.
+            lab = _refit_reassign(lab, waves, W, nmean, mask, min_group)
+            st = _iter_stats(f"{p+1}.reasgn", lab, waves, res_abs, ctx)
+            stats.append(st)
+            if snaps_out is not None:
+                snaps_out.append((f"{p+1}.reasgn", lab.copy()))
+            if verbose:
+                print(_row(st))
+            cur = (st["nfib"], st["swBand"])            # outer re-seed convergence
             if (prev_pass is not None
                     and abs(cur[0] - prev_pass[0]) <= conv_tol * max(prev_pass[0], 1)
                     and abs(cur[1] - prev_pass[1]) <= 0.01):
@@ -494,8 +580,11 @@ def main():
                          "normalised median waveform correlates >= this with its parent (stops over-fragmenting "
                          "high-rate units into energy-level clones); 1.0 disables")
     ap.add_argument("--reseed", type=int, default=0,
-                    help="re-run the whole loop using the refined labels as the next seed, up to N extra "
-                         "passes (stops early on convergence); 0 = single pass")
+                    help="re-run the whole loop (split -> merge -> refit fibers -> reassign) using the "
+                         "refined labels as the next seed, up to N extra passes (e.g. 1 = 2 passes); 0 = single pass")
+    ap.add_argument("--track-geometry", action="store_true",
+                    help="record per-fiber geometry (radius/cone/smoothness/bend) at every iteration and "
+                         "write <base>.geom.<group>.tsv tracking each final fiber back through the loop")
     ap.add_argument("--large", type=int, default=800, help="only clusters >= this are split each iter")
     ap.add_argument("--min-group", type=int, default=40)
     ap.add_argument("--var-margin", type=float, default=0.05,
@@ -572,6 +661,7 @@ def main():
     s0 = int(res.min()) - nsamp; s1 = int(res.max()) + nsamp + 1
     W, nmean, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
 
+    snaps = [] if a.track_geometry else None
     lab, stats = refine(waves, res, W, nmean, mask, sr,
                         floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                         large=a.large, min_group=a.min_group,
@@ -584,7 +674,7 @@ def main():
                         conv_patience=a.converge_patience, reseed=a.reseed,
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
-                        fine_method=a.fine_method, verbose=True)
+                        fine_method=a.fine_method, snaps_out=snaps, verbose=True)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
     clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
@@ -596,7 +686,12 @@ def main():
             f.write(f"{s['it']}\t{s['nfib']}\t{s['medBand']:.3f}\t{s['pct2']:.1f}\t"
                     f"{s['swBand']:.3f}\t{s['swDup']:.3f}\t{s['enCV']:.4f}\t{s['nbig']}\t"
                     f"{s['rkk']}\t{s['dip']}\t{s['iso']}\t{s['fold']}\t{s['kept']}\n")
-    print(f"wrote {clu_path}\n      {res_path}\n      {tsv}\n[done] t={time.time()-t0:.0f}s")
+    print(f"wrote {clu_path}\n      {res_path}\n      {tsv}")
+    if snaps is not None:
+        tracks = geometry_tracks(snaps, waves, W, nmean, mask)
+        gpath = write_geometry_tracks(tracks, f"{base}.geom.{elec}.tsv")
+        print(f"      {gpath}  ({len(tracks)} fibers x {len(snaps)} snapshots)")
+    print(f"[done] t={time.time()-t0:.0f}s")
 
 
 if __name__ == "__main__":
