@@ -68,6 +68,37 @@ def load_session(session, group, path=None):
     )
 
 
+def refractory_period_samples(session, group, sr=None, path=None, default=16):
+    """Imposed DETECTION refractory for `group`, in samples, with its source.
+
+    The detector enforces a minimum inter-event interval; sub-floor ISIs are
+    duplicate detections, not contamination.  Looks for, in order:
+      spikeDetection.channelGroups[group-1].refractoryPeriod  (samples)
+      spikeDetection.refractoryPeriod                         (samples)
+      channelGroups[group-1].refractoryMs / spikeDetection.refractoryMs (ms -> samples, needs sr)
+    falling back to `default` (16 samples ~= 0.49 ms at 32552 Hz).  Returns
+    (samples, source) where source is a short provenance string."""
+    path = path or find_session_yaml(session)
+    if path is None:
+        return int(default), "default (no yaml)"
+    doc = _safe_load(path) or {}
+    sd = doc.get("spikeDetection", {}) or {}
+    groups = sd.get("channelGroups", []) or []
+    g = groups[group - 1] if (isinstance(groups, list) and 1 <= group <= len(groups)) else {}
+    if isinstance(g, dict) and g.get("refractoryPeriod") is not None:
+        return int(g["refractoryPeriod"]), "yaml channelGroup.refractoryPeriod"
+    if sd.get("refractoryPeriod") is not None:
+        return int(sd["refractoryPeriod"]), "yaml spikeDetection.refractoryPeriod"
+    ms = None
+    if isinstance(g, dict) and g.get("refractoryMs") is not None:
+        ms = float(g["refractoryMs"])
+    elif sd.get("refractoryMs") is not None:
+        ms = float(sd["refractoryMs"])
+    if ms is not None and sr:
+        return max(1, int(round(ms * sr / 1000.0))), f"yaml refractoryMs={ms}"
+    return int(default), "default (not in yaml)"
+
+
 def resolve_session_params(session, group, channels=None, ntotal=None, nchan=None,
                            nsamp=None, sr=None, require=("channels", "ntotal"), verbose=True):
     """Resolve run parameters from <session>.yaml with CLI overrides taking
