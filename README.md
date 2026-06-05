@@ -26,6 +26,7 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 - [Inputs & outputs](#inputs--outputs)
 - [Per-fiber statistics](#per-fiber-statistics)
 - [Curation: merge candidates & validation](#curation-merge-candidates--validation)
+- [Cross-chunk linking (drift)](#cross-chunk-linking-drift)
 - [Visualization (fiber-view)](#visualization-fiber-view)
 - [CLI reference](#cli-reference)
 - [Python API](#python-api)
@@ -104,7 +105,10 @@ The pipeline runs per chunk, then links chunks:
 8. **Collision flag** *(optional)* — routes recoverable collisions out of the
    noise bin into one dedicated collision cluster.
 9. **Linking** — overlap-anchor mutual-majority matching joins per-chunk fibers
-   into global ids; rows sharing a `gid` are one fiber over time.
+   into global ids; rows sharing a `gid` are one fiber over time. An optional
+   drift-predicted, signature-gated **continuity fallback** (`--link-continuity`)
+   then recovers fibers too sparse to share enough overlap spikes — see
+   [Cross-chunk linking](#cross-chunk-linking-drift).
 
 ## Inputs & outputs
 
@@ -198,6 +202,47 @@ fiber-validate-merges <base> 5 --sr 32552
 # 3. apply once trusted (auto threshold, or --profile-thr / hand-merge the gids)
 fiber-session <base> 5 ... --merge-method profile
 ```
+
+## Cross-chunk linking (drift)
+
+In drift-aware chunked mode (`--chunk-minutes M`) each window is sorted
+independently, so the per-window fibers must be linked into global identities.
+
+**Backbone — overlap-anchor (always on).** Adjacent windows overlap; the *same
+physical spikes* in that overlap carry a label in each window. A mutual-majority
+match on those shared spikes links the two fibers. This is drift-proof: it
+asks only "are these the same spikes?", never "do these look alike?", so it
+holds no matter how much the footprint has moved. Linking on trajectory shape
+was tried and rejected (see [Design notes](#design-notes-what-was-tried-and-rejected)) precisely because shape changes under drift.
+
+**Fallback — drift-predicted, signature-gated continuity (`--link-continuity`,
+opt-in).** A low-rate fiber may not have `min_anchor` spikes in the overlap and
+then fragments across windows. The fallback recovers it *without* trusting shape
+alone: coherent drift Δz(t) is estimated from the well-linked multi-chunk
+globals, and a track that ends is bridged to one that begins within
+`--continuity-max-gap` chunks only if (a) the earlier track's drift-predicted
+depth matches the later track's start within `--continuity-depth-gate` per chunk,
+**and** (b) their template signatures agree (cosine ≥ `--continuity-sig-thr`).
+Bridges may refuse, so genuine discontinuities are preserved.
+
+![hybrid linker](doc/linking/hybrid_linker.png)
+
+*Synthetic coherent-drift validation (`doc/linking/hybrid_linker_prototype.py`).
+Dots are per-chunk fibers coloured by true unit; grey lines are final global
+tracks; green = a continuity bridge between the same unit, red dashed = a wrong
+cross-identity bridge. The sparse unit (~0.045 Hz) fails overlap and fragments
+into 8 pieces; continuity stitches it back to one. Unit X vanishes at chunk 3 and
+unit Y appears at chunk 4 on the **same drift-predicted depth path** but with a
+different waveform — the signature gate refuses that bridge (left), while dropping
+the gate welds them into one identity (right, red). On this data: overlap-only →
+16 globals; signature-gated hybrid → 9 = ground truth, 0 id-mixing; no-gate → 8
+with an identity swap.*
+
+> The depth coordinate here is an energy-weighted channel centroid (geometry-free;
+> uses true channel positions when available). The signature gate's margin depends
+> on how stable a unit's waveform is across drift, so `--continuity-sig-thr` and
+> the depth gate want calibrating on real data — this is a validated prototype of
+> the mechanism, not a tuned production default.
 
 ## Visualization (fiber-view)
 
@@ -301,6 +346,7 @@ fk.cluster_chunk(...)         # coarse mean-shift fibers
 fk.cluster_chunk_fine(...)    # full per-chunk pipeline -> (labels, geoms)
 fk.fiber_geom(...)            # geometry + stats for one fiber
 fk.link_chunks(...)           # cross-chunk overlap-anchor linking
+fk.link_continuity(...)       # drift-predicted, signature-gated continuity fallback
 fk.trajectory(X); fk.predict(traj, r)     # fiber tracer
 fk.read_res(...); fk.open_spkD(...); fk.fil_chunk_whitener(...)
 fk.neuro_io.resolve_input(...); fk.read_clu_file(...); fk.read_cluster_res(...)  # standardized I/O

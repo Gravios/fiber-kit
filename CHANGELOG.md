@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.22.0] — drift-predicted, signature-gated continuity linking
+- `fiber-refine --chunk-minutes M --link-continuity`: after the overlap-anchor
+  backbone, recover fibers too sparse to share enough overlap spikes by bridging
+  global tracks across chunk gaps. Coherent drift Δz(t) is estimated from the
+  well-linked multi-chunk globals; a track that *ends* is bridged to one that
+  *begins* only if the drift-predicted depth matches AND the template signatures
+  agree (cosine >= `--continuity-sig-thr`, default 0.6), within
+  `--continuity-depth-gate` per chunk and `--continuity-max-gap` chunks. Bridges
+  may refuse, preserving genuine discontinuities.
+- API: `fiber_session.link_continuity`; `fiber_refine._chunk_fiber_features`
+  (energy-weighted channel centroid + template signature). Opt-in; the overlap
+  backbone is unchanged when the flag is off.
+- The signature gate is what blocks identity swaps when a different unit appears
+  on a vanished unit's drift path (validated on synthetic coherent-drift data:
+  sig-gated recovers ground truth with 0 id-mixing; the ablation without the
+  gate wrongly merges the swap).
+
 ## [0.21.0] — fiber-view: most-interesting projection tour
 - `fiber-view-tour <base>.bundles.<group>.npz`: guided projection-pursuit tour
   over selected bundles — pools them into one shared PCA space, scores 3-D
