@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.2.0-orange)
+![version](https://img.shields.io/badge/version-0.5.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -105,12 +105,36 @@ The pipeline runs per chunk, then links chunks:
 
 ## Inputs & outputs
 
+All on-disk I/O goes through `fiber_kit.neuro_io`, a standalone port of the
+neurosuite-3 `neurofileio` / `KK_io` conventions (same binary layouts,
+binary-vs-text auto-detection, and variant-aware path resolution), so fiber-kit
+and the C++ toolchain agree on every format.
+
+**Variant-aware naming** (NeuroSuite convention). A per-group typed file may
+exist in representation *variants*; the group is always the trailing token and
+the variant, when present, sits between the type and the group:
+
+| Form | Pattern | Example |
+|------|---------|---------|
+| canonical | `<base>.<type>.<group>` | `…​.spk.5` |
+| dotted variant (preferred new) | `<base>.<type>.<variant>.<group>` | `…​.spk.stderiv.5` |
+| legacy glued (read-only) | `<base>.<type><variant>.<group>` | `…​.spkD.5` |
+
+`neuro_io.resolve_input(base, type, group, prefer)` walks a preference list
+(`prefer_derived() = ["stderiv","D",""]`, `prefer_canonical() = ["","stderiv","D"]`)
+and returns the first file that exists, probing the dotted form before the legacy
+glued form. Waveform reads default to `prefer_derived()` (so a stderiv run picks
+up `.spk.stderiv.N` / `.spk.D.N` / legacy `.spkD.N` before raw `.spk.N`); the
+`.fet` reader defaults to `prefer_canonical()` to match KlustaKwik's
+`pickInputPath`.
+
 **Inputs** (neurosuite binary formats):
 
 | File | Format |
 |------|--------|
-| `<base>.res.<elec>` | spike times, little-endian `int64`, no header |
-| `<base>.spkD.<elec>` (or `.spk.<elec>`) | waveforms, `int16`, reshaped `(n, nsamp, nchan)` |
+| `<base>.res.<elec>` | spike times, little-endian `int64`, no header (text auto-detected) |
+| `<base>.spkD.<elec>` (or `.spk.<elec>`) | waveforms, `int16`, sample-major `(n, nsamp, nchan)` |
+| `<base>.fet.<elec>` (or `.fetD.<elec>`) | `int32` count header + `int64` features, row-major |
 | `<base>.fil` | filtered wideband, `int16`, `ntotal` channels interleaved |
 | `<session>.yaml` | session parameters (nChannels, samplingRate, spikeDetection groups) |
 
@@ -206,6 +230,7 @@ fk.fiber_geom(...)            # geometry + stats for one fiber
 fk.link_chunks(...)           # cross-chunk overlap-anchor linking
 fk.trajectory(X); fk.predict(traj, r)     # fiber tracer
 fk.read_res(...); fk.open_spkD(...); fk.fil_chunk_whitener(...)
+fk.neuro_io.resolve_input(...); fk.read_clu_file(...); fk.read_cluster_res(...)  # standardized I/O
 fk.fiber_lib, fk.fiber_tracer, fk.fiber_adapt, fk.fiber_collision, fk.laplacian_link
 ```
 
@@ -235,6 +260,7 @@ aren't re-attempted:
 
 ```
 src/fiber_kit/
+  neuro_io.py         neurosuite-3 on-disk I/O: variant resolution, .res/.clu/.fet/.spk readers+writers
   fiber_lib.py        primitives: whitener, realign, features, constants
   fiber_tracer.py     trajectory(), predict(), assign, temperature calibration
   klustakwik.py       standalone KlustaKwik CEM (the "rkk" split)

@@ -35,11 +35,15 @@ try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
+try:
+    from . import neuro_io as nio
+except ImportError:
+    import neuro_io as nio
 
 
 def read_clu(base, elec):
-    a = np.fromfile(f"{base}.clu.{elec}", dtype=np.int32)
-    return a[1:]                                   # drop nClusters header
+    _, ids = nio.read_clu(base, elec)
+    return ids                                     # drop nClusters header
 
 
 def ccg_counts(tA, tB, sr, edges_ms):

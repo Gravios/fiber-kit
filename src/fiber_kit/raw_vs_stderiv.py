@@ -42,6 +42,10 @@ try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
+try:
+    from . import neuro_io as nio
+except ImportError:
+    import neuro_io as nio
 
 
 def whitener_from(windows, mask):
@@ -97,7 +101,7 @@ def main():
     gch = np.array(cfg["channels"], int); OFF = fl.EXTRACT_OFFSET; mask = fl.MASK_FULL
 
     res = read_res(a.base, a.elec); spk_mm, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
-    fil = np.memmap(f"{a.base}.fil", dtype='<i2', mode='r').reshape(-1, a.ntotal)
+    fil = nio.open_signal(f"{a.base}.fil", a.ntotal)
     s0 = int(a.chunk_min_start * 60 * a.sr); s1 = int((a.chunk_min_start + a.chunk_min) * 60 * a.sr)
     sel = np.flatnonzero((res >= s0) & (res < s1))
     res_c = res[sel]; spk = np.asarray(spk_mm[sel], float)

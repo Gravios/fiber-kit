@@ -56,6 +56,10 @@ try:
 except ImportError:
     import session_yaml as sy
 try:
+    from . import neuro_io as nio
+except ImportError:
+    import neuro_io as nio
+try:
     import diptest as _diptest
     _HAVE_DIP = True
 except Exception:
@@ -554,14 +558,10 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
 
 
 def read_res(base, elec):
-    return np.fromfile(f"{base}.res.{elec}", dtype='<i8').astype(np.int64)
+    return nio.read_res(base, elec, prefer=nio.prefer_canonical())
 
 def open_spkD(base, elec, nsamp, nch):
-    for ext in (f"{base}.spkD.{elec}", f"{base}.spk.{elec}"):
-        if os.path.exists(ext):
-            mm = np.memmap(ext, dtype='<i2', mode='r'); n = mm.size // (nsamp * nch)
-            return mm[:n * nsamp * nch].reshape(n, nsamp, nch), ext
-    raise FileNotFoundError(f"no .spkD/.spk for {base} elec {elec}")
+    return nio.open_spkD(base, elec, nsamp, nch)
 
 def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
     # memmap path: reads only sampled baseline windows, never the whole span.
@@ -632,7 +632,7 @@ def main():
     res = read_res(a.base, a.elec); nspk = len(res)
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
     assert spk.shape[0] == nspk, f".res {nspk} vs {spkpath} {spk.shape[0]}"
-    filmm = np.memmap(f"{a.base}.fil", dtype='<i2', mode='r').reshape(-1, a.ntotal)
+    filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
     print(f"loaded {nspk} spikes ({spkpath}); .fil {filmm.shape[0]} samples x {a.ntotal} ch")
     if a.dipsplit and not _HAVE_DIP:
         print("  [note] --dipsplit requested but the 'diptest' package is not installed; skipping (pip install diptest)")
@@ -695,8 +695,7 @@ def main():
             if l >= 0: labels[g] = gid[(c, l)]
     clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
     clu_out = a.out or f"{a.base}.clu.{a.elec}"
-    with open(clu_out, "wb") as f:
-        np.array([int(clu.max()) + 1], np.int32).tofile(f); clu.tofile(f)
+    nio.write_clu_file(clu_out, clu)
 
     # ── .fibers.<method>.<elec> : per (chunk,fiber) geometry, tagged with gid ──
     rows = []
@@ -707,7 +706,7 @@ def main():
             rows.append(g2)
     M = len(rows)
     def col(k, dt): return np.array([r[k] for r in rows], dt) if M else np.zeros(0, dt)
-    fib_out = f"{a.base}.fibers.{a.method}.{a.elec}"
+    fib_out = nio.fibers_path(a.base, a.method, a.elec)
     arrs = dict(
         gid=col('gid', int), chunk=col('chunk', int), tmin=col('tmin', np.float32),
         coarse=col('coarse', int), nspk=col('n', int), radius=col('radius', np.float32),
