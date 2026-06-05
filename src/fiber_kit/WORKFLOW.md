@@ -285,3 +285,32 @@ injected drift — i.e. `s` is drift-independent where energy is not.
 
 Full chain: `fiber-session` → `fiber-relink` → `fiber-realign` →
 `fiber-localize` / `fiber-drift` / `fiber-position`.
+
+## Tightening fiber membership by per-channel residual variance
+
+When a fiber sorts well but still hides waveform sub-groups (subtle shape
+differences that an rkk split in Klusters resolves into cleaner templates, fewer
+ISI violations, and channels with much less variance), the measure to target is
+the per-channel variance of the RESIDUAL TO THE ENERGY-LOCAL TEMPLATE r·d(r),
+read in raw (un-whitened) channel space — `fiber_tracer.channel_residual_profile`.
+
+Crucially this is NOT raw per-channel waveform variance: that is dominated by the
+fiber's legitimate energy/adaptation spread (the fiber is a curve), so minimizing
+it would just carve the fiber into energy bands. The residual to d(r) removes the
+energy axis, leaving genuine shape contamination — its per-channel profile peaks
+exactly on the discriminating channels, and a real shape sub-split lowers its
+mean sharply while an energy split does not.
+
+Exposed three ways:
+- `.fibers` now carries `chan_resid_var_mean` / `chan_resid_var_max` per
+  (chunk,fiber): rank fibers by these to find the ones hiding sub-units.
+- `fiber-session --cone-channel-k K` tightens the inclusion cone PER CHANNEL:
+  after the global `--inclusion-k` radius, spikes that are residual outliers
+  (>K MAD) on the discriminative channels are dropped — peeling channel-localized
+  contaminants the global residual norm averages away. (Start K≈2.5–3.)
+- `fiber-session --split-var-margin M` makes the minimal-mean-per-channel-
+  residual-variance the split ACCEPTANCE criterion: a within-fiber split is kept
+  only if it lowers that mean by ≥ M (e.g. 0.1), so real shape sub-units are
+  split and energy-only splits are rejected.
+
+Both controls default off (validated behavior unchanged); opt in to tighten.
