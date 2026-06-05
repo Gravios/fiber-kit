@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.20.0"
+version = "0.21.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -41,6 +41,7 @@ fiber-position = "fiber_kit.fiber_position:main"
 fiber-refine = "fiber_kit.fiber_refine:main"
 fiber-view = "fiber_kit.fiber_view:main"
 fiber-view-gui = "fiber_kit.fiber_view_gui:main"
+fiber-view-tour = "fiber_kit.fiber_view:tour_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

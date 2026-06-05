@@ -333,6 +333,156 @@ def bundle_figure(bundle, sub=8, alpha=0.28, draw_sheet=True, view=(20, 50),
     return fig
 
 
+# ── most-interesting projection tour (guided projection pursuit) ─────────────
+def _orthn(M):
+    return np.linalg.qr(M)[0][:, :3]
+
+
+def _frame_dist(P, Q):
+    """Chordal subspace distance in [0,1] (0 = same 3-D subspace)."""
+    return float(np.sqrt(max(0.0, 3.0 - np.linalg.norm(P.T @ Q, "fro") ** 2)) / np.sqrt(3.0))
+
+
+def _tour_scatter(scores, blab, clab):
+    """Centroid scatter capturing what we want a tour to expose: between-bundle
+    separation + between-chunk-within-bundle drift, in the shared PC space."""
+    K = scores.shape[1]; m = scores.mean(0); Sb = np.zeros((K, K)); Sd = np.zeros((K, K))
+    for b in np.unique(blab):
+        Xb = scores[blab == b]; mb = Xb.mean(0); Sb += len(Xb) * np.outer(mb - m, mb - m)
+        for c in np.unique(clab[blab == b]):
+            Xc = scores[(blab == b) & (clab == c)]; mc = Xc.mean(0)
+            Sd += len(Xc) * np.outer(mc - mb, mc - mb)
+    return Sb + Sd
+
+
+def interesting_tour(bundles, ncomp=6, n_keypoints=4, n_random=800, min_sep=0.5, seed=0):
+    """Build a guided tour through projection space for the SELECTED bundles.
+    Pools their curves into one shared PCA(ncomp) space, scores 3-D projections by
+    how much between-bundle + drift structure they expose (tr(P'CP)), and returns
+    keypoint frames (K x 3): the default top-3 PCs, the structure-optimal
+    projection (top-3 eigvecs of C), then diverse high-scoring random frames.
+    Returns (pca, scores, blab, clab, keyframes, C)."""
+    if PCA is None:
+        raise SystemExit("interesting_tour needs scikit-learn")
+    allc = [c for b in bundles for c in b["curves"]]
+    K = min(ncomp, np.vstack(allc).shape[1])
+    pca = PCA(K).fit(np.vstack(allc))
+    sc, bl, cl = [], [], []
+    for b in bundles:
+        for ci, c in enumerate(b["curves"]):
+            s = pca.transform(c); sc.append(s)
+            bl += [b["gid"]] * len(s); cl += [b["gid"] * 100000 + ci] * len(s)
+    scores = np.vstack(sc); blab = np.array(bl); clab = np.array(cl)
+    C = _tour_scatter(scores, blab, clab)
+    P0 = np.zeros((K, 3))
+    for i in range(3):
+        P0[i, i] = 1.0                                       # default = top-3 PCs
+    w, V = np.linalg.eigh(C); Popt = V[:, np.argsort(w)[::-1][:3]]
+    keys = [P0, _orthn(Popt)]
+    rng = np.random.RandomState(seed)
+    cand = [_orthn(rng.randn(K, 3)) for _ in range(n_random)]
+    order = np.argsort([np.trace(P.T @ C @ P) for P in cand])[::-1]
+    for idx in order:
+        P = cand[idx]
+        if all(_frame_dist(P, k) > min_sep for k in keys):
+            keys.append(P)
+        if len(keys) >= n_keypoints + 1:
+            break
+    return pca, scores, blab, clab, keys, C
+
+
+def _tour_path(keys, steps=24, loop=True):
+    """Interpolate keyframes into a smooth frame sequence (blend + re-orthonormalise)."""
+    seq = keys + [keys[0]] if loop else keys
+    frames = []
+    for a, b in zip(seq[:-1], seq[1:]):
+        for t in np.linspace(0, 1, steps, endpoint=False):
+            frames.append(_orthn((1 - t) * a + t * b))
+    frames.append(seq[-1])
+    return frames
+
+
+def render_tour(bundles, out, ncomp=6, n_keypoints=4, steps=24, fps=20,
+                spin=0.5, seed=0, dpi=110):
+    """Render the most-interesting projection tour of the selected bundles to a
+    video (.gif via Pillow, or .mp4 if ffmpeg is available).  Each frame projects
+    every bundle's per-chunk curves through the touring projection (camera also
+    slowly spins); bundles are coloured distinctly, chunks shaded by time."""
+    _need_mpl()
+    from matplotlib.animation import FuncAnimation, PillowWriter
+    pca, scores, blab, clab, keys, C = interesting_tour(
+        bundles, ncomp=ncomp, n_keypoints=n_keypoints, seed=seed)
+    frames = _tour_path(keys, steps=steps)
+    curves_pc = [[pca.transform(c) for c in b["curves"]] for b in bundles]  # per bundle, per chunk
+    bcols = [cm.tab10(i % 10) for i in range(len(bundles))]
+    allpts = scores
+    fig = plt.figure(figsize=(7, 6)); ax = fig.add_subplot(111, projection="3d")
+
+    def draw(i):
+        P = frames[i]; ax.cla()
+        for bi, chunks in enumerate(curves_pc):
+            nC = len(chunks)
+            for ci, s in enumerate(chunks):
+                Y = s @ P; sh = 0.4 + 0.6 * (ci / max(nC - 1, 1))
+                col = np.array(bcols[bi]); col[:3] = col[:3] * sh
+                ax.plot(Y[:, 0], Y[:, 1], Y[:, 2], color=col, lw=2.0)
+                ax.scatter(*(s[-1] @ P), color=bcols[bi], s=18)
+        G = allpts @ P; pad = 0.05 * (G.max(0) - G.min(0) + 1e-9)
+        ax.set_xlim(G[:, 0].min() - pad[0], G[:, 0].max() + pad[0])
+        ax.set_ylim(G[:, 1].min() - pad[1], G[:, 1].max() + pad[1])
+        ax.set_zlim(G[:, 2].min() - pad[2], G[:, 2].max() + pad[2])
+        ax.set_xticks([]); ax.set_yticks([]); ax.set_zticks([])
+        ax.view_init(elev=18, azim=(spin * i) % 360)
+        ax.set_title(f"interesting tour — structure {np.trace(P.T @ C @ P):.1f}", fontsize=9)
+        return ()
+
+    anim = FuncAnimation(fig, draw, frames=len(frames), interval=1000 // fps, blit=False)
+    if str(out).lower().endswith(".mp4"):
+        try:
+            from matplotlib.animation import FFMpegWriter
+            anim.save(out, writer=FFMpegWriter(fps=fps), dpi=dpi)
+        except Exception:
+            out = str(out)[:-4] + ".gif"; anim.save(out, writer=PillowWriter(fps=fps), dpi=dpi)
+    else:
+        anim.save(out, writer=PillowWriter(fps=fps), dpi=dpi)
+    plt.close(fig)
+    return out, keys, C
+
+
+def _select_bundles(bundles, spec):
+    """spec: 'all', 'top:N', or a comma list of bundle ids."""
+    if spec in (None, "all"):
+        return bundles
+    if isinstance(spec, str) and spec.startswith("top:"):
+        k = int(spec.split(":", 1)[1])
+        return sorted(bundles, key=lambda b: -sum(b["counts"]))[:k]
+    ids = {int(x) for x in str(spec).split(",") if x.strip()}
+    return [b for b in bundles if b["gid"] in ids]
+
+
+def tour_main():
+    _need_mpl()
+    import argparse
+    ap = argparse.ArgumentParser(prog="fiber-view-tour",
+                                 description="Render the most-interesting projection tour of selected bundles "
+                                             "to a video (.gif, or .mp4 if ffmpeg present).")
+    ap.add_argument("bundles", help="a .bundles.<group>.npz from fiber-refine --bundles")
+    ap.add_argument("--fibers", default="all", help="comma list of bundle ids, 'top:N', or 'all'")
+    ap.add_argument("-o", "--out", default=None, help="output .gif/.mp4 (default <bundles>.tour.gif)")
+    ap.add_argument("--ncomp", type=int, default=6); ap.add_argument("--keypoints", type=int, default=4)
+    ap.add_argument("--steps", type=int, default=24, help="interpolation frames per leg")
+    ap.add_argument("--fps", type=int, default=20); ap.add_argument("--spin", type=float, default=0.5)
+    ap.add_argument("--seed", type=int, default=0)
+    a = ap.parse_args()
+    sel = _select_bundles(load_bundles_npz(a.bundles), a.fibers)
+    if len(sel) < 1:
+        raise SystemExit("[fiber-view-tour] no bundles selected")
+    out = a.out or (a.bundles[:-4] if a.bundles.lower().endswith(".npz") else a.bundles) + ".tour.gif"
+    path, keys, C = render_tour(sel, out, ncomp=a.ncomp, n_keypoints=a.keypoints,
+                                steps=a.steps, fps=a.fps, spin=a.spin, seed=a.seed)
+    print(f"wrote {path}  ({len(sel)} bundles, {len(keys)} keyframes)")
+
+
 def load_bundles_npz(path):
     """Load a .bundles npz (producer side: refine_chunked).  Expected long-format
     arrays: fiber[N], chunk[N], t_min[N], count[N], curves[N, NPOS, nfeat]
