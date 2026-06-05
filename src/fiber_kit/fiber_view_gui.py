@@ -79,10 +79,12 @@ if _HAVE_GUI:
             return None
 
     class FiberViewWindow(QtWidgets.QMainWindow):
-        def __init__(self, bundles):
+        def __init__(self, bundles, ncomp=6):
             super().__init__()
             self.setWindowTitle("fiber-view — bundles")
             self.bundles = {b["gid"]: b for b in bundles}
+            self.ncomp = ncomp
+            self.pca = None; self.cv = None; self.sliders = []
             rows = fv.bundle_table(bundles)
             split = QtWidgets.QSplitter()
             self.table = QtWidgets.QTableView()
@@ -93,11 +95,45 @@ if _HAVE_GUI:
             self.view.setCameraPosition(distance=6)
             self.view.addItem(gl.GLAxisItem())
             split.addWidget(self.table); split.addWidget(self.view)
+            split.addWidget(self._make_slider_panel())
             split.setStretchFactor(1, 1)
             self.setCentralWidget(split)
             self._rows = rows
             if rows:
                 self.table.selectRow(0)
+
+        # ── dimensional-contribution sliders (ncomp x 3 mixing matrix) ──
+        def _make_slider_panel(self):
+            panel = QtWidgets.QWidget(); g = QtWidgets.QGridLayout(panel)
+            g.addWidget(QtWidgets.QLabel("<b>projection mix</b>"), 0, 0, 1, 4)
+            for j, ax in enumerate("XYZ"):
+                g.addWidget(QtWidgets.QLabel(ax), 1, j + 1, alignment=QtCore.Qt.AlignHCenter)
+            self.pc_labels = []
+            for i in range(self.ncomp):
+                lab = QtWidgets.QLabel(f"PC{i+1}"); g.addWidget(lab, i + 2, 0); self.pc_labels.append(lab)
+                row = []
+                for j in range(3):
+                    s = QtWidgets.QSlider(QtCore.Qt.Horizontal); s.setRange(-100, 100)
+                    s.setValue(100 if i == j else 0)
+                    s.valueChanged.connect(self._redraw)
+                    g.addWidget(s, i + 2, j + 1); row.append(s)
+                self.sliders.append(row)
+            btn = QtWidgets.QPushButton("reset to PC1/2/3"); btn.clicked.connect(self._reset_mix)
+            g.addWidget(btn, self.ncomp + 2, 0, 1, 4)
+            panel.setMaximumWidth(260)
+            return panel
+
+        def _mix(self):
+            return np.array([[self.sliders[i][j].value() / 100.0 for j in range(3)]
+                             for i in range(self.ncomp)], float)
+
+        def _reset_mix(self):
+            for i in range(self.ncomp):
+                for j in range(3):
+                    self.sliders[i][j].blockSignals(True)
+                    self.sliders[i][j].setValue(100 if i == j else 0)
+                    self.sliders[i][j].blockSignals(False)
+            self._redraw()
 
         def _clear_view(self):
             for it in list(self.view.items):
@@ -108,14 +144,19 @@ if _HAVE_GUI:
             sel = self.table.selectionModel().selectedRows()
             if not sel:
                 return
-            gid = self._rows[sel[0].row()]["id"]
-            self._plot(self.bundles[gid])
+            b = self.bundles[self._rows[sel[0].row()]["id"]]
+            self.cv = b["curves"]
+            self.pca, ev = fv.projection_basis(self.cv, self.ncomp)
+            for i, lab in enumerate(self.pc_labels):                # annotate each PC's variance
+                lab.setText(f"PC{i+1} ({ev[i]:.0f}%)" if i < len(ev) else f"PC{i+1}")
+            self._redraw()
 
-        def _plot(self, bundle):
+        def _redraw(self, *_):
+            if self.pca is None or self.cv is None:
+                return
             self._clear_view()
-            cv = bundle["curves"]; nC = len(cv)
-            fp = PCA(3).fit(np.vstack(cv))
-            M = np.stack([fp.transform(c) for c in cv], 0)
+            Q = fv.apply_mix(self.pca, self.cv, self._mix())
+            M = np.stack(Q, 0); nC = M.shape[0]
             ctr = M.reshape(-1, 3).mean(0); M = M - ctr
             for w in range(nC):
                 col = _viridis(w / max(nC - 1, 1))
@@ -123,9 +164,8 @@ if _HAVE_GUI:
             if nC >= 2:
                 verts, faces, rt = _loft_mesh(M)
                 vc = np.array([_viridis(t) for t in rt]); vc[:, 3] = 0.28
-                mesh = gl.GLMeshItem(vertexes=verts, faces=faces, vertexColors=vc,
-                                     smooth=True, drawEdges=False, glOptions="translucent")
-                self.view.addItem(mesh)
+                self.view.addItem(gl.GLMeshItem(vertexes=verts, faces=faces, vertexColors=vc,
+                                                smooth=True, drawEdges=False, glOptions="translucent"))
 
 
 def main():

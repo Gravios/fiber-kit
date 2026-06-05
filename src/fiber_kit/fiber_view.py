@@ -232,6 +232,34 @@ def _bundle_frame(curves):
     return PCA(3).fit(np.vstack(curves)) if PCA is not None else None
 
 
+def projection_basis(curves, ncomp=6):
+    """PCA with the top `ncomp` components over a bundle's curves; the display
+    projection is a weighted mix of these.  Returns (pca, explained_var_%)."""
+    ncomp = min(ncomp, np.vstack(curves).shape[1])
+    p = PCA(ncomp).fit(np.vstack(curves))
+    return p, p.explained_variance_ratio_ * 100.0
+
+
+def default_mix(ncomp):
+    """K x 3 mixing matrix mapping PC scores to the 3 display axes; identity on
+    the first three (PC1->x, PC2->y, PC3->z), zero elsewhere."""
+    M = np.zeros((ncomp, 3))
+    for i in range(min(3, ncomp)):
+        M[i, i] = 1.0
+    return M
+
+
+def apply_mix(pca, curves, M, normalize=True):
+    """Project each curve through the PCs then mix to 3-D via M (ncomp x 3).
+    Columns are unit-normalised by default so the display axes stay comparable
+    in scale as the user dials contributions in and out."""
+    Mn = np.asarray(M, float)
+    if normalize:
+        nrm = np.linalg.norm(Mn, axis=0)
+        Mn = Mn / np.where(nrm > 0, nrm, 1.0)
+    return [pca.transform(c)[:, :Mn.shape[0]] @ Mn for c in curves]
+
+
 def bundle_drift_score(bundle, frame=None):
     """Drift = mean pairwise distance between per-chunk high-energy tips / mean
     curve length, in the bundle's common PCA(3) frame.  ~0 = stable rope, larger
@@ -267,14 +295,21 @@ def bundle_table(bundles):
     return rows
 
 
-def bundle_figure(bundle, sub=8, alpha=0.28, draw_sheet=True, view=(20, 50)):
-    """Plot one bundle: per-chunk trajectories coloured by time in a common
-    PCA(3) frame, plus (optionally) the transparent drift manifold lofted between
-    consecutive chunks along time.  This is what selecting a table row renders."""
+def bundle_figure(bundle, sub=8, alpha=0.28, draw_sheet=True, view=(20, 50),
+                  ncomp=6, mix=None):
+    """Plot one bundle: per-chunk trajectories coloured by time in the display
+    projection, plus (optionally) the transparent drift manifold lofted between
+    consecutive chunks along time.  The projection is a mix of the top `ncomp`
+    PCs via `mix` (ncomp x 3; default = PC1/PC2/PC3), so the same bundle can be
+    re-viewed along different dimensional contributions.  This is what selecting
+    a table row renders."""
     _need_mpl()
     cv = bundle["curves"]; nC = len(cv)
-    fp = _bundle_frame(cv); ev = fp.explained_variance_ratio_ * 100
-    M = np.stack([fp.transform(c) for c in cv], 0)           # (nC, NPOS, 3)
+    pca, ev6 = projection_basis(cv, ncomp)
+    if mix is None:
+        mix = default_mix(pca.n_components_)
+    Q = apply_mix(pca, cv, mix)
+    M = np.stack(Q, 0)                                       # (nC, NPOS, 3)
     fig = plt.figure(figsize=(8, 7))
     ax = fig.add_subplot(111, projection="3d")
     if draw_sheet and nC >= 2:
@@ -291,11 +326,10 @@ def bundle_figure(bundle, sub=8, alpha=0.28, draw_sheet=True, view=(20, 50)):
         ax.plot(M[w, :, 0], M[w, :, 1], M[w, :, 2], color=col, lw=2.4, zorder=5)
         ax.scatter(*M[w, -1], color=col, s=28, zorder=6)
         ax.scatter(*M[w, 0], color=col, s=12, marker="s", zorder=6)
-    ax.set_xlabel(f"PC1 {ev[0]:.0f}%", fontsize=7); ax.set_ylabel(f"PC2 {ev[1]:.0f}%", fontsize=7)
-    ax.set_zlabel(f"PC3 {ev[2]:.0f}%", fontsize=7); ax.tick_params(labelsize=6)
-    ax.view_init(elev=view[0], azim=view[1])
+    ax.set_xlabel("disp-X", fontsize=7); ax.set_ylabel("disp-Y", fontsize=7); ax.set_zlabel("disp-Z", fontsize=7)
+    ax.tick_params(labelsize=6); ax.view_init(elev=view[0], azim=view[1])
     ax.set_title(f"bundle {bundle['gid']}  —  {nC} chunks, {sum(bundle['counts'])} spikes, "
-                 f"drift {bundle_drift_score(bundle, fp):.2f}", fontsize=9)
+                 f"drift {bundle_drift_score(bundle):.2f}", fontsize=9)
     return fig
 
 
