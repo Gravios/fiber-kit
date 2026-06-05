@@ -186,3 +186,37 @@ only for the minority needing an integer shift.
 
 Recommended chain: `fiber-session` → `fiber-relink` (merge) → `fiber-realign`
 (align times to the merged-unit templates).
+## Physical localization from waveform spread (`fiber-localize`)
+
+Recover each unit's position relative to the probe by fitting a point-source field
+to its RAW per-channel peak-to-peak amplitudes:
+
+```
+fiber-localize <base> <elec> --nsamp 32 --nchan 8 \
+               --probe <session>_probe_0.probe [more .probe ...] \
+               --channels 32,33,34,35,36,37,38,39 --clu <base>.clu.<elec>.relinked
+# -> <base>.localize.<elec>.tsv
+```
+
+Model: `a_c = A/d_c + B·((y_c−y0)/d_c)/d_c²`, `d_c = √((x0−x_c)²+(y0−y_c)²+z0²)`.
+The **monopole** term reads distance from the spatial SPREAD of the footprint
+(FWHM ≈ 3.46·z0 — steep falloff = near, broad = far), independent of source
+strength. The **dipole** term absorbs an ASYMMETRIC footprint and recovers
+distance a symmetric monopole would miss. Distances come with a bootstrap CI over
+spikes; an energy-stratified depth (`depth_shift`) reports axial extent — ~0 for a
+compact source, non-zero for a soma–dendrite axis (the d(r) curvature as a length).
+
+**Localize on RAW amplitudes** (`.spk` / `.fil`), never `.spkD`/whitened — the
+stderiv transform breaks the amplitude–distance law. Pass the **re-linked** `.clu`
+so a unit's full spike set is used.
+
+Each row is flagged `reliable` only if none of: `one_flank` (peak on a terminal
+channel — perpendicular distance unidentifiable on a linear probe), `at_bound`
+(distance pinned to the fit limit), `low_n`, or `high_resid`. Validated on the
+Buzsaki64L octrode (group 5): interior well-sampled units localize tightly
+(z ≈ 24 µm, CI ±1 µm), the dipole term rescues asymmetric units a monopole pins
+to the bound, and edge units are correctly flagged degenerate. On a single linear
+shank depth is solid but perpendicular distance is identifiable only for interior
+both-flanks units; a 2-D-site probe removes that limit.
+
+Full chain: `fiber-session` → `fiber-relink` → `fiber-realign` → `fiber-localize`.
