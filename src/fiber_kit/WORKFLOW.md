@@ -247,3 +247,41 @@ estimated by raster registration. Validated on group 5 of
 sirotaA-jg-000005-20120312 (118 fiducial units, 30 chunks over 348 min): a gradual
 ~3 µm drift rising to +2 µm by 336 min, with a −0.19 µm/ch depth-gradient flagging
 mild non-rigid motion.
+
+## Normalized position along the fiber (`fiber-position`)
+
+A drift-independent per-spike feature: where each spike sits along its unit's
+fiber manifold, `s ∈ [0,1]` (0 = low-energy / most-adapted end, 1 = high-energy
+end), for studying input and adaptation dynamics.
+
+```
+fiber-position <base> <elec> --fibers <base>.fibers.stderiv.<elec> \
+    --nsamp 32 --nchan 8 --ntotal 96 --clu <base>.clu.<elec> [--session <s>.yaml]
+# -> <base>.position.<elec>      (binary float32, parallel to .res)
+# -> <base>.position.<elec>.npz  (res, unit, s, conf, energy, chunk)
+```
+
+The manifold is the one already **estimated in the `.fibers` file**: each
+re-linked unit's stored per-chunk `d(r)` curves are consolidated (arc-length-
+normalized, nspk-weighted) into ONE manifold `d̂(u)`, direction as a function of
+normalized arc length. It is not re-estimated per chunk.
+
+Position is read from the spike's **direction** (footprint shape), not its
+energy: `s` is the arc length `u` whose manifold direction best matches the
+spike. This is what makes it drift-independent — drift slowly rescales a unit's
+amplitude (so energy *walks with the drift*), but the shape-position along the
+manifold is a physiological coordinate that adaptation/input drive, invariant to
+that rescaling. Energy `‖X‖` is reported alongside as a drift-DEPENDENT
+reference. Per-spike direction is noisy over a curve that spans only a modest
+rotation, so `s` is most informative aggregated (per ISI bin / time window) —
+in line with this pipeline treating geometry as a per-population quantity.
+
+`--no-relink` uses raw `.fibers` gid units; `--n-u` sets the manifold arc-length
+resolution; `--min-nspk` the minimum chunk-curve spike count to enter a manifold.
+Synthetic validation (energy drift injected across chunks): manifold recovery
+cos ≈ 1.0, position recovery corr(s, true)=0.96, and for a fixed true position
+the mean `s` is flat across chunks (range 0.03) while energy falls with the
+injected drift — i.e. `s` is drift-independent where energy is not.
+
+Full chain: `fiber-session` → `fiber-relink` → `fiber-realign` →
+`fiber-localize` / `fiber-drift` / `fiber-position`.
