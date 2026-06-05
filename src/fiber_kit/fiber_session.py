@@ -224,9 +224,49 @@ def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
     return [idx]
 
 
+def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
+                    depth=0, max_depth=4):
+    """Variance-driven auto-split: recursively bisect a fiber WHILE its per-channel
+    residual-variance profile is peaked (channel-localized contamination) AND each
+    bisection lowers the mean per-channel residual variance by >= margin.
+
+    The measure is the stopping criterion, so it finds the right number of shape
+    sub-units (no rkk over-fragmentation) and never splits on energy (an
+    energy-only difference leaves the trajectory residual flat). Each split is on
+    the trajectory residual WEIGHTED toward the high-variance channels, so the
+    bisection looks where the contamination actually is. Returns a list of index
+    arrays into `waves`."""
+    n = len(waves)
+    if n < 2 * min_n or depth >= max_depth:
+        return [np.arange(n)]
+    prof = ft.channel_residual_profile(waves, W, nmean, mask, n_grid=n_grid)
+    vc = prof['per_channel']; med = float(np.median(vc)) + 1e-12
+    if vc.max() / med < peak:                         # flat profile -> no shape contamination
+        return [np.arange(n)]
+    wch = np.sqrt(np.maximum(vc - med, 0.0))          # weight discriminative channels (excess over floor)
+    if not np.any(wch > 0):
+        return [np.arange(n)]
+    F = (prof['residual'] * wch[None, None, :]).reshape(n, -1); F = F - F.mean(0)
+    U, S, _ = np.linalg.svd(F, full_matrices=False); Fr = U[:, :dims] * S[:dims]
+    km = KMeans(2, n_init=5, random_state=0).fit_predict(Fr)
+    if np.bincount(km).min() < min_n:
+        return [np.arange(n)]
+    _, _, red = ft.split_meanvar(waves, km, W, nmean, mask, n_grid=n_grid, min_n=min_n)
+    if red < margin:                                  # bisection doesn't reduce the measure -> stop
+        return [np.arange(n)]
+    out = []
+    for k in (0, 1):
+        idx = np.flatnonzero(km == k)
+        for piece in _variance_split(waves[idx], W, nmean, mask, n_grid, peak, margin,
+                                     min_n, dims, depth + 1, max_depth):
+            out.append(idx[piece])
+    return out
+
+
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
+                       var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40,
                        rkk_dims=6, rkk_max=50, merge_corr=0.0, merge_method="template", sliding_nwin=14,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
@@ -288,6 +328,17 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             _, _, red = ft.split_meanvar(wcf, sub, W, nmean, mask, n_grid=n_grid, min_n=fine_mg)
             if red < split_var_margin:
                 groups = [np.arange(len(cidx))]   # reject: insufficient variance reduction
+        if var_split > 0:
+            # auto-split fibers whose per-channel residual profile is peaked,
+            # using the per-channel residual variance itself as the stop criterion
+            vmargin = split_var_margin if split_var_margin > 0 else 0.05
+            newg = []
+            for grp in groups:
+                pieces = (_variance_split(wcf[grp], W, nmean, mask, n_grid, var_split,
+                                          vmargin, fine_mg, rkk_dims, max_depth=var_split_depth)
+                          if len(grp) >= 2 * fine_mg else [np.arange(len(grp))])
+                newg += [grp[pc] for pc in pieces]
+            groups = newg
         for grp in groups:
             if len(grp) < fine_mg: continue
             sidx = cidx[grp]; rad = float('nan'); rej = 0
@@ -676,6 +727,12 @@ def main():
     ap.add_argument("--split-var-margin", type=float, default=0.0,
                     help="accept a within-fiber split only if it lowers the mean per-channel residual "
                          "variance by >= this fraction (e.g. 0.1); 0 accepts all splits")
+    ap.add_argument("--var-split", type=float, default=0.0,
+                    help="auto-split fibers whose per-channel residual profile is peaked: trigger when "
+                         "max/median channel residual variance >= this ratio (e.g. 2.0); 0 disables. "
+                         "Bisects on the high-variance channels, accepting only variance-reducing splits.")
+    ap.add_argument("--var-split-depth", type=int, default=4,
+                    help="max recursion depth for --var-split (max 2^depth sub-units per fiber)")
     ap.add_argument("--dipsplit", dest="dipsplit", action="store_true", default=True)
     ap.add_argument("--no-dipsplit", dest="dipsplit", action="store_false")
     ap.add_argument("--dip-dim", type=int, default=4); ap.add_argument("--dip-alpha", type=float, default=0.01)
@@ -726,7 +783,8 @@ def main():
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
               fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
               incl_k=a.inclusion_k, cone_channel_k=a.cone_channel_k,
-              split_var_margin=a.split_var_margin, dipsplit=a.dipsplit,
+              split_var_margin=a.split_var_margin, var_split=a.var_split,
+              var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
