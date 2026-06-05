@@ -515,3 +515,21 @@ sampling noise alone, swamping modest drift -- so the bundle/drift readout is fo
 real multi-chunk drifting sessions with adequate per-chunk counts, and sparse
 fibers should be flagged (low count) rather than read as drift. The synthetic
 known-drift validation cleanly separates stable (0.01) from drifting (0.51).
+
+### Projection-mix sliders (v0.20.0)
+
+PCA(3) discards most of the variance, so the default view can hide structure.
+The bundle GUI now exposes the projection as an editable **ncomp x 3 mixing
+matrix** (top-K PC scores -> the 3 display axes): a grid of sliders (K rows x
+X/Y/Z), identity = the default PC1/PC2/PC3, each PC row labelled with its
+variance %. Dialing a higher PC into an axis rotates that contribution into view;
+"reset to PC1/2/3" restores the default. The PCA is fit once per selected bundle;
+slider moves only re-multiply the cached scores, so it is live.
+
+API (in fiber_view, tested headless): `projection_basis(curves, ncomp)` ->
+(pca, ev%); `default_mix(ncomp)` -> identity K x 3; `apply_mix(pca, curves, M)`
+-> per-curve 3-D coords (columns unit-normalised so axis scale stays comparable).
+`bundle_figure(..., ncomp, mix)` re-views a bundle along any mix. Verified:
+identity mix == PCA(3) exactly; a non-identity mix changes the projection. The
+drift score in the table stays on the canonical PCA(3) frame -- the sliders
+affect only the view, not the metric.
