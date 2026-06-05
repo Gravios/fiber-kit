@@ -26,11 +26,15 @@ try:
     from . import fiber_session as fs
 except ImportError:
     import fiber_session as fs
+try:
+    from . import neuro_io as nio
+except ImportError:
+    import neuro_io as nio
 
 
 def _read_clu(path):
-    raw = np.fromfile(path, dtype='<i4')
-    return int(raw[0]), raw[1:].astype(np.int64)        # nClusters, per-spike ids
+    nclu, ids = nio.read_clu_file(path)
+    return nclu, ids                                    # nClusters, per-spike ids
 
 
 def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
@@ -120,7 +124,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
 def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
     out_res = out_res or f"{base}.res.{elec}.realigned"
     out_off = out_off or f"{base}.offsets.{elec}.npy"
-    res_corr.astype('<i8').tofile(out_res)              # binary LE int64, same as .res
+    nio.write_res_file(out_res, res_corr)               # binary LE int64, same as .res
     np.save(out_off, off.astype(np.float32))            # sub-sample per-spike offsets
     return out_res, out_off
 

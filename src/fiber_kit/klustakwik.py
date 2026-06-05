@@ -103,6 +103,10 @@ def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
 if __name__ == "__main__":
     # CLI: cluster the whole session (no chunking) on PCA of masked .spkD waveforms.
     import argparse, os, fiber_lib as fl
+    try:
+        from . import neuro_io as nio
+    except ImportError:
+        import neuro_io as nio
     ap = argparse.ArgumentParser()
     ap.add_argument("base"); ap.add_argument("elec", type=int)
     ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--nchan", type=int, default=8)
@@ -111,17 +115,12 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=42); ap.add_argument("--realign", action="store_true")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    for ext in (f"{a.base}.spkD.{a.elec}", f"{a.base}.spk.{a.elec}"):
-        if os.path.exists(ext):
-            mm = np.memmap(ext, dtype='<i2', mode='r'); n = mm.size // (a.nsamp * a.nchan)
-            spk = np.asarray(mm[:n * a.nsamp * a.nchan].reshape(n, a.nsamp, a.nchan), float); break
-    else:
-        raise FileNotFoundError("no .spkD/.spk")
+    mm, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan)
+    spk = np.asarray(mm, float)
     w = (fl.realign(spk) if a.realign else spk)[:, fl.MASK_FULL, :].reshape(len(spk), -1)
     w = w - w.mean(0); U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :a.dims] * S[:a.dims]
     lab = klustakwik(F, max_clusters=a.max_clusters, min_size=a.min_size, seed=a.seed, verbose=True)
     clu = (lab + 1).astype(np.int32)
     out = a.out or f"{a.base}.clu.{a.elec}"
-    with open(out, "wb") as f:
-        np.array([int(clu.max()) + 1], np.int32).tofile(f); clu.tofile(f)
+    nio.write_clu_file(out, clu)
     print(f"{len(np.unique(lab))} clusters -> {out}")

@@ -25,6 +25,10 @@
 import argparse
 import numpy as np
 from collections import defaultdict
+try:
+    from . import neuro_io as nio
+except ImportError:
+    import neuro_io as nio
 
 
 # ── geometry distances on the stored per-fiber summaries ────────────────────
@@ -256,10 +260,9 @@ def relink(npz_path, prof_thr=0.10, tcorr_min=0.96, prof_gate=0.18, tdist_gate=0
 def rewrite_clu(clu_in, clu_out, oldgid2unit):
     """Remap an existing binary .clu (int32 nClusters header + ids; id=gid+1,
     0=noise) onto merged unit ids, renumbered contiguously from 1."""
-    raw = np.fromfile(clu_in, dtype='<i4')
-    ids = raw[1:]                                   # per-spike (gid+1); 0 = noise
+    _, ids = nio.read_clu_file(clu_in)                  # per-spike (gid+1); 0 = noise
     # map old id -> new id (noise stays 0); units renumbered 1..K in first-seen order
-    remap = {0: 0}; nxt = 1; out = np.empty_like(ids)
+    nxt = 1; out = np.empty_like(ids)
     seen = {}
     for i, v in enumerate(ids):
         v = int(v)
@@ -274,8 +277,7 @@ def rewrite_clu(clu_in, clu_out, oldgid2unit):
             seen[key] = nxt; nxt += 1
         out[i] = seen[key]
     n_units = nxt - 1
-    with open(clu_out, 'wb') as f:
-        np.array([n_units + 1], np.int32).tofile(f); out.astype(np.int32).tofile(f)
+    nio.write_clu_file(clu_out, out.astype(np.int32), n_clusters=n_units + 1)
     return n_units, len(ids)
 
 
