@@ -536,6 +536,103 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
     return lab, stats
 
 
+# ── chunked / drift-aware driver ─────────────────────────────────────────────
+def _chunk_bounds(res, sr, chunk_min, overlap_min):
+    """Tile the session into disjoint CORE windows [lo,hi) (every spike lands in
+    exactly one) plus EXTended windows [lo-ov, hi+ov) that overlap their
+    neighbours -- the overlap spikes are the same physical events in both and are
+    used only to link per-window fibers (overlap-anchor)."""
+    chunk_s = chunk_min * 60.0 * sr; ov_s = overlap_min * 60.0 * sr
+    t_min, t_max = int(res.min()), int(res.max())
+    nchunks = max(1, int(np.ceil((t_max - t_min) / chunk_s)))
+    chunks = []
+    for c in range(nchunks):
+        lo = t_min + c * chunk_s; hi = t_min + (c + 1) * chunk_s
+        ext = np.flatnonzero((res >= lo - ov_s) & (res < hi + ov_s))
+        core = np.flatnonzero((res >= lo) & (res < hi))
+        chunks.append(dict(c=c, lo=lo, hi=hi, ext=ext, core=core,
+                           tmin=(lo - t_min) / sr / 60.0))
+    return chunks, nchunks
+
+
+def _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask, min_n=40):
+    """Per global fiber, its fiber_shape_stats in EACH chunk it occupies, each
+    measured in that chunk's OWN whitened frame -- the time series is the drift
+    signature (radius/cone/bend evolving over the session)."""
+    tracks = {}
+    for ck in chunks:
+        c = ck["c"]
+        if c not in chunk_W:
+            continue
+        core = ck["core"]; gl = glab[core]
+        for g in np.unique(gl[gl >= 0]):
+            sel = core[gl == g]
+            if len(sel) < min_n:
+                continue
+            s = ft.fiber_shape_stats(waves[sel], chunk_W[c], chunk_nm[c], mask)
+            tracks.setdefault(int(g), []).append((c, ck["tmin"], s))
+    return tracks
+
+
+def write_chunk_geometry(tracks, path):
+    """Long-format TSV: one row per (global_fiber, chunk) with the chunk start
+    time and the geometry stats measured in that chunk's frame."""
+    with open(path, "w") as f:
+        f.write("fiber\tchunk\tt_min\t" + "\t".join(_GEOM_KEYS) + "\n")
+        for g in sorted(tracks):
+            for c, tmin, s in tracks[g]:
+                f.write(f"{g}\t{c}\t{tmin:.2f}\t"
+                        + "\t".join(f"{s[k]:.4g}" for k in _GEOM_KEYS) + "\n")
+    return path
+
+
+def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
+                   chunk_min, overlap_min, *, init=None, refine_kw=None,
+                   min_group=40, track_geometry=False, verbose=True):
+    """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
+    full refine loop INSIDE each window (so each window is quasi-stationary),
+    then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
+    spikes in adjacent windows' overlap prove identity).  Final per-spike label
+    comes from each spike's CORE window.  Returns (global_labels, n_global,
+    chunk_tracks|None).  This is the correct way to run on a long drifting
+    session -- pooling the whole session into one trajectory smears the fiber."""
+    refine_kw = dict(refine_kw or {})
+    chunks, nchunks = _chunk_bounds(res, sr, chunk_min, overlap_min)
+    filmm = nio.open_signal(f"{base}.fil", ntotal)
+    ext_idx = [np.array([], int)] * nchunks
+    ext_lab = [np.array([], int)] * nchunks
+    chunk_W = {}; chunk_nm = {}
+    for ck in chunks:
+        c, ext = ck["c"], ck["ext"]
+        if len(ext) < 2 * min_group:
+            if verbose:
+                print(f"[chunk {c+1}/{nchunks}] {len(ck['core'])} core ({len(ext)} ext) -> skipped (small)")
+            continue
+        s0 = int(res[ext].min()) - nsamp; s1 = int(res[ext].max()) + nsamp + 1
+        Wc, nmc, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res[ext], nsamp, mask)
+        init_c = init[ext] if init is not None else None
+        labc, _ = refine(waves[ext], res[ext], Wc, nmc, mask, sr,
+                         init_labels=init_c, min_group=min_group, verbose=False, **refine_kw)
+        ext_idx[c] = ext; ext_lab[c] = labc; chunk_W[c] = Wc; chunk_nm[c] = nmc
+        if verbose:
+            print(f"[chunk {c+1}/{nchunks}] t={ck['tmin']:.1f}m  {len(ck['core'])} core "
+                  f"({len(ext)} ext) -> {len(np.unique(labc[labc >= 0]))} fibers")
+    gid, nglob = fs.link_chunks(ext_idx, ext_lab)
+    glab = np.full(len(res), -1, int)                       # final label by CORE window
+    for ck in chunks:
+        c, core = ck["c"], ck["core"]
+        if len(ext_idx[c]) == 0 or len(core) == 0:
+            continue
+        ii = np.searchsorted(ext_idx[c], core)              # ext_idx sorted, core subset of ext
+        labs = ext_lab[c][ii]
+        glab[core] = [gid.get((c, int(l)), -1) if l >= 0 else -1 for l in labs]
+    if verbose:
+        print(f"[chunked] {nglob} global fibers across {nchunks} windows "
+              f"(overlap-anchor linked); {int((glab >= 0).sum())}/{len(glab)} spikes assigned")
+    tracks = _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask) if track_geometry else None
+    return glab, nglob, tracks
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(
@@ -602,6 +699,12 @@ def main():
                     help="non-normalised median-xcorr above which a peeled bucket is folded (else kept as new)")
     ap.add_argument("--fine-method", choices=["gmm", "fiber", "none"], default="gmm",
                     help="method for the initial fine sort when no --in-clu is given")
+    ap.add_argument("--chunk-minutes", type=float, default=0.0,
+                    help="drift-aware mode: window the session into CORE chunks of this many minutes, "
+                         "refine each in its own whitened frame, and link fibers across windows by "
+                         "overlap-anchor; 0 = single whole-session pass (assumes stationary)")
+    ap.add_argument("--chunk-overlap-minutes", type=float, default=1.0,
+                    help="overlap between adjacent windows used for overlap-anchor linking (drift-aware mode)")
     ap.add_argument("--gpu", action="store_true")
     a = ap.parse_args()
 
@@ -655,6 +758,31 @@ def main():
             init = init[keep]
         print(f"dedup: kept {len(keep)} of {len(keep)+n_dup} "
               f"({n_dup} removed; {n_exact} exact ISI=0)")
+
+    if a.chunk_minutes and a.chunk_minutes > 0:
+        refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
+                         large=a.large, min_group=a.min_group, var_margin=a.var_margin,
+                         brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth,
+                         split_min_corr=a.split_min_corr, knn_k=a.knn_k, knn_thr=a.knn_thr,
+                         knn_minref=a.knn_minref, knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
+                         fold_thr=a.fold_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
+                         conv_patience=a.converge_patience, reseed=a.reseed,
+                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
+                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
+                         fine_method=a.fine_method)
+        glab, nglob, tracks = refine_chunked(
+            waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
+            a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
+            min_group=a.min_group, track_geometry=a.track_geometry, verbose=True)
+        ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
+        clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
+        res_path = nio.write_res(base, elec, res, variant=a.out_variant)
+        print(f"wrote {clu_path}\n      {res_path}")
+        if tracks is not None:
+            gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.tsv")
+            print(f"      {gpath}  ({len(tracks)} fibers across windows)")
+        print(f"[done] {nglob} global fibers; t={time.time()-t0:.0f}s")
+        return
 
     # whitener from the .fil baseline over the (deduped) spike span
     filmm = nio.open_signal(f"{base}.fil", ntotal)
