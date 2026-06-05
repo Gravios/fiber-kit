@@ -331,3 +331,18 @@ a single unit with large energy spread and a pair differing in amplitude only
 are both correctly left unsplit. `--var-split-depth` caps recursion (≤ 2^depth
 sub-units/fiber). Recommended: `--var-split 2 --split-var-margin 0.1`, then
 `--cone-channel-k 2.5` to clean residual edges.
+
+### Circular-xcorr alignment makes the residual variance meaningful
+
+The per-channel residual variance is only meaningful AFTER per-spike timing
+jitter is removed — otherwise jitter inflates it and mislocates the
+discriminating channels. `fiber_lib.align_xcorr` aligns each spike to the
+cluster MEDIAN by full (channel-summed) cross-correlation, refined to sub-sample
+lags (parabolic peak + Fourier phase shift), ITERATING until the residual
+variance stops dropping. Circular shifts are exact and harmless because the
+waveforms are high-pass filtered (window edges ~0). `channel_residual_profile`
+(and hence `--var-split` / `--split-var-margin`) uses it by default
+(align="xcorr"). Validated: injected sub-sample jitter recovered at corr 0.9999,
+residual variance driven to the noise floor, and on a jittered 2-sub-unit fiber
+the discriminating channels are correctly recovered (dom-channel realign
+mislocated them).
