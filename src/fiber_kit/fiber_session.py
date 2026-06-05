@@ -278,8 +278,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 w_al = fl.realign(waves[sidx])
                 Xg = (w_al[:, mask, :].reshape(len(sidx), -1) - nmean) @ W
                 grid, D = ft.trajectory(Xg); rr = np.linalg.norm(Xg, axis=1)
-                resid = np.linalg.norm(Xg - np.array([rr[i] * ft.predict((grid, D), float(rr[i]))
-                                                      for i in range(len(sidx))]), axis=1)
+                resid = np.linalg.norm(Xg - rr[:, None] * ft.predict_many((grid, D), rr), axis=1)
                 med = float(np.median(resid)); mad = 1.4826 * float(np.median(np.abs(resid - med)))
                 rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum())
                 sidx = sidx[keep]

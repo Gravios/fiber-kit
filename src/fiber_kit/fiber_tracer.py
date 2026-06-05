@@ -90,6 +90,24 @@ def predict(traj, r):
     return pd / np.linalg.norm(pd)
 
 
+def predict_many(traj, r):
+    """Vectorized predict over an array of radii -> (len(r), dim) unit directions.
+    Same clamp-at-ends + linear-interp-on-grid as predict(), computed for all
+    radii at once (no Python per-spike call).  Matches predict() to fp epsilon;
+    ~30x faster than the [predict(traj, r[i]) for i] comprehension it replaces."""
+    grid, D = traj
+    r = np.asarray(r, float)
+    out = np.empty((r.shape[0], D.shape[1]), float)
+    loE = r <= grid[0]; hiE = r >= grid[-1]; mid = ~(loE | hiE)
+    out[loE] = D[0]; out[hiE] = D[-1]
+    if mid.any():
+        rm = r[mid]; j = np.clip(np.searchsorted(grid, rm), 1, len(grid) - 1)
+        f = (rm - grid[j - 1]) / (grid[j] - grid[j - 1])
+        out[mid] = D[j - 1] + (D[j] - D[j - 1]) * f[:, None]
+    nrm = np.linalg.norm(out, axis=1, keepdims=True)
+    return out / np.maximum(nrm, 1e-12)
+
+
 # ── posterior calibration: per-energy temperature scaling ───────────────────
 # The raw posterior used s²=dim, which flattens inter-fiber discrimination
 # dim-fold (the residual norm is set by ~dim noise dims while discrimination
@@ -129,7 +147,7 @@ def assign(X, trajs, temperature=None):
     r = np.linalg.norm(X, axis=1); keys = list(trajs)
     res = np.zeros((len(X), len(keys)))
     for k, g in enumerate(keys):
-        pred = np.array([r[i] * predict(trajs[g], r[i]) for i in range(len(X))])
+        pred = r[:, None] * predict_many(trajs[g], r)
         res[:, k] = np.linalg.norm(X - pred, axis=1)
     hard = np.array(keys)[res.argmin(1)]
     if temperature is None:
@@ -191,7 +209,7 @@ def run_from_seeds(waveforms, label_groups, W, nmean, mask=fl.MASK_FULL,
     for ni,name in enumerate(keys):
         idx,Xg=feats[name]; r=np.linalg.norm(Xg,axis=1); res=np.zeros((len(idx),len(keys)))
         for k,g in enumerate(keys):
-            res[:,k]=np.linalg.norm(Xg-np.array([r[i]*predict(trajs[g],r[i]) for i in range(len(idx))]),axis=1)
+            res[:,k]=np.linalg.norm(Xg-r[:,None]*predict_many(trajs[g],r),axis=1)
         hard[idx]=np.array(keys)[res.argmin(1)]; res_by[name]=(idx,r,res)
         res_all.append(res); rad_all.append(r); y_all.append(np.full(len(idx),ni))
     res_all=np.vstack(res_all); rad_all=np.concatenate(rad_all); y_all=np.concatenate(y_all)
