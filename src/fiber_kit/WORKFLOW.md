@@ -483,6 +483,9 @@ returns the index columns plus each stat as its own named column
 
 ### fiber-view: figures + rotatable bundle GUI (v0.19.0)
 
+![templates](../../doc/fiber-view/templates.png)
+![bundle + drift sheet](../../doc/fiber-view/bundle_drift_sheet.png)
+
 Two front-ends over the fiber math, both optional-dep (`pip install 'fiber-kit[viz]'`).
 
 `fiber-view <session> <group>` (matplotlib, static) renders, per selected fiber:
@@ -535,6 +538,8 @@ drift score in the table stays on the canonical PCA(3) frame -- the sliders
 affect only the view, not the metric.
 
 ### Interesting-projection tour video (v0.21.0)
+
+![interesting tour](../../doc/fiber-view/tour.gif)
 
 Rather than hunt through the mix sliders by hand, the tour finds the projections
 that best EXPOSE the selected bundles' structure and animates a smooth path

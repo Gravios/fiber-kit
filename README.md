@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.6.0-orange)
+![version](https://img.shields.io/badge/version-0.21.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -26,6 +26,7 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 - [Inputs & outputs](#inputs--outputs)
 - [Per-fiber statistics](#per-fiber-statistics)
 - [Curation: merge candidates & validation](#curation-merge-candidates--validation)
+- [Visualization (fiber-view)](#visualization-fiber-view)
 - [CLI reference](#cli-reference)
 - [Python API](#python-api)
 - [Design notes (what was tried and rejected)](#design-notes-what-was-tried-and-rejected)
@@ -196,6 +197,71 @@ fiber-validate-merges <base> 5 --sr 32552
 fiber-session <base> 5 ... --merge-method profile
 ```
 
+## Visualization (fiber-view)
+
+`pip install 'fiber-kit[viz]'` adds three front-ends (matplotlib + PySide6 +
+pyqtgraph) for inspecting fibers. Static figures come from `fiber-view`; the
+rotatable, table-driven explorer and the tour video come from `fiber-view-gui`
+and `fiber-view-tour`, fed by the `<base>.bundles.<group>.npz` written by
+`fiber-refine --chunk-minutes M --bundles`.
+
+**Per-channel template montage** — `fiber-view <session> <group> --mode templates`
+
+![templates](doc/fiber-view/templates.png)
+
+*Real data (g5 clusters 343, 33). For each fiber (row block) and channel, x = time
+(samples), y = position along the fiber (low→high energy), colour = amplitude;
+each row is the interpolated template `r·d(r)`. A single-cell fiber (343) is
+vertically uniform — the footprint only scales with energy — while a multi-cell
+footprint (33, bend ~100°) visibly morphs down the fiber.*
+
+**HDR spike-density isosurfaces** — transparent shells around each fiber
+
+![isosurfaces](doc/fiber-view/isosurfaces.png)
+
+*Real data (8 largest g5 fibers). The 50% / 90% shells enclose that fraction of a
+fiber's member spikes (highest-density region), in the fiber's own local PCA(3)
+frame; the red curve is `d(r)`. Compact smooth blobs are clean single units
+(343, 258); elongated or lumpy envelopes are multi-cell / contaminated (33, 309,
+75). The retained-variance % is printed per fiber — it is low for isotropic clean
+units (so read their 3-D shape cautiously) and higher where the structure is
+genuinely low-dimensional.*
+
+**Local fibers as curves through feature space** — `--mode manifold`
+
+![manifold](doc/fiber-view/manifold.png)
+
+*Real data (g5). Each fiber is the curve `r·d(r)` rising from the shared origin
+(×, `r=0`) into its own footprint direction; dots mark high-energy tips. PCA(3)
+retains ~35% here, so this view separates fibers well but flattens within-fiber
+bend — pair it with the template montage.*
+
+**Chunk-spanning bundle + drift manifold** — one global fiber across the session
+
+![bundle](doc/fiber-view/bundle_drift_sheet.png)
+
+*Synthetic, known drift. A bundle is one global fiber's per-chunk trajectories in
+a shared frame, coloured by time; the transparent sheet is lofted between
+consecutive chunks. Left: a stable unit collapses to a thin ribbon. Right: a
+drifting unit sweeps a broad sheet from chunk 0 (purple) to chunk N (yellow).
+Squares = low-energy start, dots = high-energy tip. In `fiber-view-gui` this is
+rotatable, driven by a **selectable bundle table** sorted by a drift score, with
+sliders that mix the top-K PCs into the three display axes.*
+
+**Most-interesting projection tour** — `fiber-view-tour <base>.bundles.<group>.npz`
+
+![tour](doc/fiber-view/tour.gif)
+
+*Synthetic. Guided projection pursuit: a smooth path through the shared PC space
+of the selected bundles, visiting the projections that best expose between-bundle
+separation + drift (`tr(PᵀCP)`), camera slowly spinning. Each colour is a bundle;
+chunks shade by time. Writes `.gif`, or `.mp4` if ffmpeg is present.*
+
+> The bundle, drift-sheet, and tour figures above are **synthetic** with injected
+> drift, purely to illustrate the displays — a meaningful run needs a real
+> multi-chunk drifting session and enough spikes per chunk for stable per-chunk
+> trajectories (a sparse fiber's "drift" is sampling noise, not structure).
+
 ## CLI reference
 
 `fiber-session <base> <elec>` (key flags; see `--help` for all):
@@ -220,7 +286,10 @@ fiber-session <base> 5 ... --merge-method profile
 | `--gpu` | off | run the realign / whiten / tracer-residual kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
 
 Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
-<elec> --channels ... --ntotal ...`.
+<elec> --channels ... --ntotal ...`, and the visualization front-ends
+`fiber-view` (static figures), `fiber-view-gui` (rotatable bundle table), and
+`fiber-view-tour` (interesting-projection tour video) — see
+[Visualization](#visualization-fiber-view).
 
 ## Python API
 
@@ -274,6 +343,9 @@ src/fiber_kit/
   fiber_localize.py   monopole+dipole physical localization from raw waveform spread
   fiber_drift.py      probe drift tracking from fiber depth trajectories
   fiber_position.py   drift-independent per-spike normalized position along the fiber manifold
+  fiber_refine.py     iterative split/merge/refit refinement + drift-aware chunked mode + geometry/bundle export
+  fiber_view.py       visualization data layer + matplotlib figures (templates, manifold, bundles, isosurfaces, tour)
+  fiber_view_gui.py   PySide6 + pyqtgraph: selectable bundle table -> rotatable 3-D view, mix sliders, tour button
   raw_vs_stderiv.py   raw .fil vs stderiv discrimination test
   validate_merge_candidates.py  full-session evidence for merge candidates
   WORKFLOW.md         end-to-end recipe (also shipped as package data)
