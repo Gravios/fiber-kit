@@ -7,6 +7,10 @@
 # ════════════════════════════════════════════════════════════════════════════
 import numpy as np
 from sklearn.covariance import LedoitWolf
+try:
+    from . import backend as _bk
+except ImportError:
+    import backend as _bk
 
 SR = 32552.0
 MASK_FULL  = np.arange(11, 26)   # WIDE trough+rebound+shoulders (tracking/morph); default.
@@ -109,26 +113,31 @@ def realign(waveforms, lo=6, hi=26, maxlag=4):
     held at a time), pick the first-max lag (identical tie-break to the former
     -maxlag..+maxlag loop), then circularly shift each full waveform by its
     chosen lag via a single take_along_axis.  Bit-identical to the old double
-    loop (np.roll wrap reproduced as (t-lag) mod T); ~14x faster on 20k spikes."""
-    W = np.asarray(waveforms)
+    loop on the numpy path (np.roll wrap reproduced as (t-lag) mod T); ~14x
+    faster on 20k spikes.  Runs on GPU when backend.gpu_enabled() (CuPy);
+    numpy is the default."""
+    xp = _bk.xp()
+    W = _bk.asarray(waveforms)
     nspk, T, _ = W.shape
-    m = W.mean(0); dom = int(np.argmax(m.max(0) - m.min(0))); refw = m[lo:hi, dom]
-    lags = np.arange(-maxlag, maxlag + 1)
-    win = np.arange(lo, hi)
+    m = W.mean(0); dom = int(xp.argmax(m.max(0) - m.min(0))); refw = m[lo:hi, dom]
+    lags = xp.arange(-maxlag, maxlag + 1)
+    win = xp.arange(lo, hi)
     src = (win[None, :] - lags[:, None]) % T          # roll(x,lag)[w] = x[(w-lag) mod T]
     dom_sig = W[:, :, dom]                            # (nspk, T)
-    corr = np.empty((nspk, lags.size), dtype=np.float64)
+    corr = xp.empty((nspk, lags.size), dtype=xp.float64)
     for k in range(lags.size):                        # small fixed loop; vectorized over spikes
         corr[:, k] = dom_sig[:, src[k]] @ refw
     chosen = lags[corr.argmax(1)]                     # argmax = first max = old behaviour
-    full_src = (np.arange(T)[None, :] - chosen[:, None]) % T
-    return np.take_along_axis(W, full_src[:, :, None], axis=1)
+    full_src = (xp.arange(T)[None, :] - chosen[:, None]) % T
+    return _bk.asnumpy(xp.take_along_axis(W, full_src[:, :, None], axis=1))
 
 # ── feature pipeline: realign -> mask -> whiten -> polar (radius, direction) ─
 def features(waveforms, W, nmean, mask=MASK_FULL):
     W_al = realign(waveforms)
-    X = (W_al[:, mask, :].reshape(len(W_al), -1) - nmean) @ W
-    r = np.linalg.norm(X, axis=1)
+    xp = _bk.xp()
+    Xd = (_bk.asarray(W_al[:, mask, :].reshape(len(W_al), -1)) - _bk.asarray(nmean)) \
+        @ _bk.asarray(W)
+    X = _bk.asnumpy(Xd); r = _bk.asnumpy(xp.linalg.norm(Xd, axis=1))
     return X, r, X / r[:, None]
 
 def location_cy(waveforms, y_um):

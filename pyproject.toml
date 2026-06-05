@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dip = ["diptest>=0.5"]            # enables DipSplit (bimodal cluster splitting)
+gpu = ["cupy-cuda12x>=12.0"]      # optional GPU acceleration of realign/whiten kernels
 
 [project.scripts]
 fiber-session = "fiber_kit.fiber_session:main"

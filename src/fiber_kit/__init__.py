@@ -25,6 +25,8 @@ __version__ = "0.5.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
+from . import backend
+from .backend import use_gpu, gpu_enabled, backend_name
 from .fiber_tracer import trajectory, predict, predict_many
 from .klustakwik import klustakwik
 from .session_yaml import find_session_yaml, load_session, resolve_session_params
@@ -43,7 +45,7 @@ from .neuro_io import (
 __all__ = [
     "__version__",
     "fiber_lib", "fiber_tracer", "fiber_adapt", "fiber_collision", "laplacian_link",
-    "neuro_io",
+    "neuro_io", "backend", "use_gpu", "gpu_enabled", "backend_name",
     "trajectory", "predict", "predict_many", "klustakwik",
     "find_session_yaml", "load_session", "resolve_session_params",
     "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks",
