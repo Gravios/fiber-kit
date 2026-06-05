@@ -21,7 +21,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.21.0"
+__version__ = "0.22.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
@@ -32,7 +32,7 @@ from .fiber_lib import align_xcorr, realign
 from .klustakwik import klustakwik
 from .session_yaml import find_session_yaml, load_session, resolve_session_params
 from .fiber_session import (
-    cluster_chunk, cluster_chunk_fine, fiber_geom, link_chunks,
+    cluster_chunk, cluster_chunk_fine, fiber_geom, link_chunks, link_continuity,
     read_res, open_spkD, fil_chunk_whitener,
 )
 from .fiber_relink import relink, rewrite_clu, write_report
@@ -54,7 +54,7 @@ __all__ = [
     "neuro_io", "backend", "use_gpu", "gpu_enabled", "backend_name",
     "trajectory", "predict", "predict_many", "channel_residual_profile", "split_meanvar", "klustakwik",
     "find_session_yaml", "load_session", "resolve_session_params",
-    "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks",
+    "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks", "link_continuity",
     "read_res", "open_spkD", "fil_chunk_whitener",
     "relink", "rewrite_clu", "write_report",
     "template_offsets", "realign", "write_outputs",

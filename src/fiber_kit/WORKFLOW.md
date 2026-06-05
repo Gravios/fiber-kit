@@ -562,3 +562,32 @@ It is honest projection pursuit, not magic: "interesting" means high
 between-bundle + drift scatter in the shared PC space, so it surfaces views the
 default top-3 hide -- but the same per-chunk-count caveat applies (sparse fibers'
 drift is noise, not structure), and the tour shows what the data has, not more.
+
+### Continuity linking fallback for sparse fibers (v0.22.0)
+
+Overlap-anchor linking (`link_chunks`) is the trusted backbone: the same physical
+spikes in adjacent windows' overlap prove identity, which is drift-proof. Its one
+failure mode is a fiber too sparse to put `min_anchor` spikes in the overlap — it
+fragments across windows. `--link-continuity` recovers those without trusting
+trajectory shape (which is untrustworthy under drift):
+
+  1. estimate coherent drift Δz(t) from the well-linked multi-chunk globals
+     (per-chunk median depth step);
+  2. for a global track that ENDS and one that BEGINS within `--continuity-max-gap`
+     chunks, bridge them iff the earlier track's drift-predicted depth matches the
+     later's start (within `--continuity-depth-gate` per chunk of gap) AND the
+     template signatures agree (cosine ≥ `--continuity-sig-thr`);
+  3. otherwise refuse — genuine discontinuities (cell death, abrupt settle, a
+     different unit appearing on the same drift path) are preserved.
+
+The depth coordinate is an energy-weighted channel centroid (`_chunk_fiber_features`;
+geometry-free, uses channel positions when available); the signature is the masked
+mean template. The **signature gate** is the load-bearing part: it blocks identity
+swaps when a different unit appears where a vanished one drifted to. Synthetic
+coherent-drift validation (`doc/linking/hybrid_linker_prototype.py`): overlap-only
+→ 16 globals (sparse unit in 8 pieces); signature-gated hybrid → 9 = ground truth,
+0 id-mixing, sparse recovered, X/Y kept apart; the ablation without the gate → 8
+globals with an X↔Y identity swap. Calibrate `--continuity-sig-thr` / depth gate on
+real data; this is a validated mechanism, not a tuned default.
+
+![hybrid linker](../../doc/linking/hybrid_linker.png)

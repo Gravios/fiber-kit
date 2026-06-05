@@ -636,6 +636,71 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
     return gid, len(roots)
 
 
+def link_continuity(gid, nglob, depth, sig, *, depth_gate=14.0, sig_thr=0.6,
+                    max_gap=2, use_sig=True):
+    """Drift-predicted, signature-gated continuity fallback that runs AFTER the
+    overlap-anchor backbone (`link_chunks`) to recover fibers too sparse to share
+    enough overlap spikes.  Coherent drift is estimated from the multi-chunk
+    globals the backbone already linked (per-chunk median depth step); a global
+    that *ends* is bridged to one that *begins* within `max_gap` chunks only if
+    the earlier track's drift-predicted depth matches the later track's start
+    (within `depth_gate` per chunk of gap) AND their signatures agree
+    (cosine >= `sig_thr`).  The signature gate blocks identity swaps when a
+    different unit appears on a vanished unit's drift path; with `use_sig=False`
+    (ablation) those swaps are wrongly merged.  Bridges may REFUSE, so genuine
+    discontinuities are preserved.
+
+    gid/nglob: output of `link_chunks`.  depth: {(chunk, localid): float} drift
+    coordinate (e.g. energy-weighted channel centroid).  sig: {(chunk, localid):
+    vector} drift-robust template signature.  Returns (gid', nglob')."""
+    from collections import defaultdict
+    members = defaultdict(list)
+    for (c, l), g in gid.items():
+        members[g].append((c, l))
+    step = defaultdict(list)                                   # coherent drift from linked multi-chunk globals
+    for g, ms in members.items():
+        byc = {}
+        for (c, l) in ms:
+            byc.setdefault(c, depth[(c, l)])
+        cs = sorted(byc)
+        for a, b in zip(cs[:-1], cs[1:]):
+            if b == a + 1:
+                step[b].append(byc[b] - byc[a])
+    dstep = {c: float(np.median(v)) for c, v in step.items()}
+    med = float(np.median([np.median(v) for v in step.values()])) if step else 0.0
+    ends, starts = {}, {}
+    for g, ms in members.items():
+        ms = sorted(ms)
+        ends[g] = (ms[-1][0], depth[ms[-1]], np.asarray(sig[ms[-1]], float))
+        starts[g] = (ms[0][0], depth[ms[0]], np.asarray(sig[ms[0]], float))
+    parent = list(range(nglob))
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    nbridge = 0
+    for gb in sorted(starts, key=lambda g: starts[g][0]):
+        cb, zb, sb = starts[gb]; best = None
+        for ge in ends:
+            if find(ge) == find(gb):
+                continue
+            ce, ze, se = ends[ge]; gap = cb - ce
+            if not (1 <= gap <= max_gap):
+                continue
+            pred = ze + sum(dstep.get(k, med) for k in range(ce + 1, cb + 1))
+            scos = float(se @ sb / (np.linalg.norm(se) * np.linalg.norm(sb) + 1e-12))
+            if abs(pred - zb) <= depth_gate * gap and (scos >= sig_thr or not use_sig):
+                score = abs(pred - zb) - 5.0 * scos
+                if best is None or score < best[0]:
+                    best = (score, ge)
+        if best is not None:
+            parent[find(gb)] = find(best[1]); nbridge += 1
+    roots = {}; newg = {}
+    for (c, l), g in gid.items():
+        r = find(g); roots.setdefault(r, len(roots)); newg[(c, l)] = roots[r]
+    return newg, len(roots)
+
+
 def read_res(base, elec):
     return nio.read_res(base, elec, prefer=nio.prefer_canonical())
 

@@ -582,6 +582,30 @@ def _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask, min_n=40):
     return tracks
 
 
+def _chunk_fiber_features(ext_idx, ext_lab, waves, mask, chpos=None):
+    """Per (chunk, localid) features for the continuity fallback.  Mirrors the
+    `_chunk_bundles` convention: waves are (nspike, nsamp, nchan); realign, then
+    keep the informative samples via `mask`.  Yields:
+      depth -- energy-weighted centroid over CHANNELS (per-channel energy summed
+               over the masked samples); a geometry-free drift coordinate (uses
+               chpos if given, else channel index), and
+      sig   -- the masked mean template flattened (drift-robust identity
+               signature for the cosine gate).
+    Returns (depth: {(c,l): float}, sig: {(c,l): vector})."""
+    depth, sig = {}, {}
+    for c in range(len(ext_idx)):
+        if len(ext_idx[c]) == 0:
+            continue
+        for l in np.unique(ext_lab[c][ext_lab[c] >= 0]):
+            sel = ext_idx[c][ext_lab[c] == l]
+            tmpl = fl.realign(waves[sel])[:, mask, :].mean(0)    # (n_masked_samp, nchan)
+            e = (tmpl ** 2).sum(0)                               # per-channel energy
+            pos = np.asarray(chpos, float) if chpos is not None else np.arange(tmpl.shape[1], dtype=float)
+            depth[(c, int(l))] = float((pos * e).sum() / (e.sum() + 1e-12))
+            sig[(c, int(l))] = tmpl.ravel()
+    return depth, sig
+
+
 def write_chunk_geometry(tracks, path):
     """Lossless npz of the cross-window (drift) geometry, one row per
     (global_fiber, chunk).  Long format, no object arrays:
@@ -616,7 +640,8 @@ def load_geometry(path):
 
 def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    chunk_min, overlap_min, *, init=None, refine_kw=None,
-                   min_group=40, track_geometry=False, make_bundles=False, verbose=True):
+                   min_group=40, track_geometry=False, make_bundles=False,
+                   link_continuity=False, continuity_kw=None, chpos=None, verbose=True):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
     then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
@@ -646,6 +671,14 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             print(f"[chunk {c+1}/{nchunks}] t={ck['tmin']:.1f}m  {len(ck['core'])} core "
                   f"({len(ext)} ext) -> {len(np.unique(labc[labc >= 0]))} fibers")
     gid, nglob = fs.link_chunks(ext_idx, ext_lab)
+    if link_continuity:
+        depth, sig = _chunk_fiber_features(ext_idx, ext_lab, waves, mask, chpos)
+        ckw = dict(continuity_kw or {})
+        gid, ng2 = fs.link_continuity(gid, nglob, depth, sig, **ckw)
+        if verbose:
+            print(f"[chunked] continuity fallback: {nglob} -> {ng2} global fibers "
+                  f"(drift-predicted, signature-gated bridging of sparse fibers)")
+        nglob = ng2
     glab = np.full(len(res), -1, int)                       # final label by CORE window
     for ck in chunks:
         c, core = ck["c"], ck["core"]
@@ -775,6 +808,15 @@ def main():
     ap.add_argument("--bundles", action="store_true",
                     help="drift-aware mode: also write <base>.bundles.<group>.npz (per-chunk un-whitened "
                          "template curves per global fiber) for the fiber-view-gui bundle table")
+    ap.add_argument("--link-continuity", action="store_true",
+                    help="drift-aware mode: after overlap-anchor linking, bridge sparse fibers that share too "
+                         "few overlap spikes using a drift-predicted, signature-gated continuity fallback")
+    ap.add_argument("--continuity-sig-thr", type=float, default=0.6,
+                    help="min template cosine to allow a continuity bridge (signature gate; default 0.6)")
+    ap.add_argument("--continuity-depth-gate", type=float, default=14.0,
+                    help="max drift-predicted depth error (per chunk of gap) for a continuity bridge")
+    ap.add_argument("--continuity-max-gap", type=int, default=2,
+                    help="max chunk gap a continuity bridge may span (default 2)")
     ap.add_argument("--gpu", action="store_true")
     a = ap.parse_args()
 
@@ -844,7 +886,11 @@ def main():
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
             min_group=a.min_group, track_geometry=a.track_geometry,
-            make_bundles=a.bundles, verbose=True)
+            make_bundles=a.bundles,
+            link_continuity=a.link_continuity,
+            continuity_kw=dict(sig_thr=a.continuity_sig_thr, depth_gate=a.continuity_depth_gate,
+                               max_gap=a.continuity_max_gap),
+            verbose=True)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
         clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
         res_path = nio.write_res(base, elec, res, variant=a.out_variant)
