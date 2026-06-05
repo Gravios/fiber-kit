@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.7.0"
+version = "0.8.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,6 +35,7 @@ fiber-validate-merges = "fiber_kit.validate_merge_candidates:main"
 fiber-relink = "fiber_kit.fiber_relink:main"
 fiber-realign = "fiber_kit.fiber_realign:main"
 fiber-localize = "fiber_kit.fiber_localize:main"
+fiber-drift = "fiber_kit.fiber_drift:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
