@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.23.0] — fiber-realign reads the session YAML
+- `fiber-realign` now takes `<session> <group>` (like `fiber-refine`) and reads
+  group channels / nchan / nsamp from `<session>.yaml`, with `--channels`,
+  `--ntotal`, `--nchan`, `--nsamp`, `--sr` overrides. `--nsamp`/`--nchan` are no
+  longer required. Backward compatible: a bare file `base` still works (no-YAML
+  fallback), and the old `--nch` is kept as an alias of `--nchan`.
+- `--clu` unchanged; pass the refined labels, e.g. `<base>.clu.refine.<group>`.
+
 ## [0.22.1] — fix: chunked refine duplicate `min_group`
 - `refine_chunked` passed `min_group` both explicitly and inside `refine_kw`,
   raising `TypeError: refine() got multiple values for keyword argument

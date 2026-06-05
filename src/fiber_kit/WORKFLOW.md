@@ -157,14 +157,20 @@ whose worst consecutive step or end-to-end drift is large — which also surface
 
 ## Spike-time correction to the fiber template (`fiber-realign`)
 
-After re-linking, correct each spike's time so it is aligned to the template of
-the unit it now belongs to, and save the per-spike offsets:
+After re-linking (or refinement), correct each spike's time so it is aligned to
+the template of the unit it now belongs to, and save the per-spike offsets.
+Geometry (group channels / nchan / nsamp) is read from `<session>.yaml`:
 
 ```
-fiber-realign <base> <elec> --nsamp 32 --nch 8 --clu <base>.clu.<elec>.relinked
-# -> <base>.res.<elec>.realigned   (int64 LE, = res + round(offset))
-# -> <base>.offsets.<elec>.npy     (float32 sub-sample offset per spike)
+fiber-realign <session> <group> --clu <base>.clu.<group>.refine
+# or, with explicit geometry (no YAML):  --nsamp 32 --nchan 8
+# -> <base>.res.<group>.realigned   (int64 LE, = res + round(offset))
+# -> <base>.offsets.<group>.npy     (float32 sub-sample offset per spike)
 ```
+
+Pass the refined/relinked labels via `--clu` (e.g. `<base>.clu.refine.<group>`)
+so spikes align to their *final* fibers. `--nsamp`/`--nchan` override the YAML;
+the old `--nch` is still accepted as an alias.
 
 Each spike's waveform (`.spkD`/`.spk`) is aligned to its unit's multichannel
 template by cross-correlation (integer lag within `--max-shift`), refined to
