@@ -1,0 +1,113 @@
+# Changelog
+
+All notable changes to **fiber-kit**. Format loosely follows
+[Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
+`0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
+
+## [0.21.0] — fiber-view: most-interesting projection tour
+- `fiber-view-tour <base>.bundles.<group>.npz`: guided projection-pursuit tour
+  over selected bundles — pools them into one shared PCA space, scores 3-D
+  projections by between-bundle separation + drift (`tr(PᵀCP)`), and animates a
+  smooth path through the highest-scoring frames (camera spinning). Writes `.gif`
+  (Pillow) or `.mp4` (ffmpeg). GUI gains multi-select + a "tour video" button.
+- API: `interesting_tour`, `render_tour`, `_select_bundles`.
+
+## [0.20.0] — projection-mix sliders
+- The bundle GUI exposes the projection as an editable `ncomp×3` mixing matrix
+  (top-K PC scores → the 3 display axes): a slider grid (identity = PC1/2/3,
+  each PC row labelled with its variance %) to rotate higher-PC contributions
+  into view. PCA is fit once per bundle; slider moves only re-multiply scores.
+- API: `projection_basis`, `default_mix`, `apply_mix`; `bundle_figure(..., mix=)`.
+
+## [0.19.0] — fiber-view: figures + rotatable bundle GUI
+- `fiber-view` (matplotlib): per-channel interpolated waveform-template montage,
+  local-fiber PCA(3) manifold, ISI/`fiber_shape_stats` panels.
+- `fiber-view-gui` (PySide6 + pyqtgraph): a **selectable bundle table** (one row
+  per global fiber, sorted by drift score) that renders the chosen bundle in a
+  rotatable 3-D view — per-chunk trajectories + transparent lofted drift sheet.
+- Bundle data layer (`make_bundle`, `bundle_table`, `bundle_drift_score`,
+  `bundle_figure`, `load_bundles_npz`); HDR spike-density isosurfaces helper.
+- `fiber-refine --chunk-minutes M --bundles` writes `<base>.bundles.<group>.npz`
+  (per-chunk un-whitened template curves, comparable across chunks).
+- New `[viz]` extra (matplotlib + pyqtgraph + PySide6).
+
+## [0.18.0] — geometry output as lossless npz
+- `<base>.geom.<group>.npz` / `<base>.geomchunk.<group>.npz` replace the lossy
+  `%.4g` TSV; long-format, no object arrays. Added `load_geometry`.
+
+## [0.17.0] — drift-aware chunked mode
+- `fiber-refine --chunk-minutes M`: window the session (disjoint cores + overlap
+  exts), fit a separate whitener and run the full refine loop per quasi-stationary
+  window, then link per-window fibers by overlap-anchor (`fs.link_chunks`); final
+  label by core window. `--track-geometry` writes the per-window (drift) geometry.
+
+## [0.16.0] — fit/reassign re-seed loop + geometry tracking
+- `--reseed N`: each extra pass is split → merge_back → **refit fibers →
+  reassign** (`run_from_seeds`), converging instead of drifting.
+- `fiber_tracer.fiber_shape_stats`: per-fiber radius/cone/bend/smoothness/bimodality.
+- `--track-geometry`: link each final fiber back through iteration snapshots by
+  spike overlap and record its geometry time series.
+
+## [0.15.0] — shape-distinctness split gate + merge-back on
+- `--split-min-corr`: don't carve off a split piece / peeled bucket whose
+  normalised median waveform matches its parent (stops energy-level
+  over-fragmentation). `merge_back` on by default; `--reseed` (label re-feed).
+
+## [0.14.0] — fiber-refine convergence + contamination-gated merge-back
+- Early-stop once nfib/swBand/enCV hold steady; merge-back gated on the imposed
+  refractory band.
+
+## [0.13.0] — fiber-refine
+- New tool: dedup at the imposed refractory, then an iterative gated
+  split/peel/isolate cascade (rkk/dip/knn-peel), each split gated on
+  per-channel residual-variance reduction without worsening <1 ms refractory.
+
+## [0.12.0] — iterated circular-xcorr alignment
+- `fiber_lib.align_xcorr`: align each spike to the cluster median by channel-summed
+  xcorr with sub-sample Fourier phase shift, making the residual-variance measure
+  meaningful.
+
+## [0.11.0] — variance-driven auto-split
+- Recursive KMeans bisection on the channel-weighted trajectory residual, with
+  per-channel residual-variance reduction as the stop criterion.
+
+## [0.10.0] — per-channel residual-variance membership
+- `channel_residual_profile` / `split_meanvar`: tighten membership and gauge
+  contamination by per-channel variance of the residual to the energy-local
+  template; per-channel outlier cone + variance-margin split acceptance.
+
+## [0.9.0] — fiber-position
+- `fiber-position`: drift-independent per-spike normalized position along the
+  consolidated fiber manifold (direction-based).
+
+## [0.8.0] — fiber-drift
+- `fiber-drift`: probe drift tracking from fiber depth trajectories.
+  *(Base commit `d981297` for the current patch series.)*
+
+## [0.7.0] — fiber-localize
+- Monopole + dipole physical localization from raw-waveform spatial spread.
+
+## [0.6.0] — performance
+- Vectorized realign/predict/template alignment; optional CuPy GPU backend for
+  the realign/whiten kernels; chunk-level CPU parallelism (`--jobs`); batched
+  EWMA and collision decomposition; optimization verification/benchmark harness.
+
+## [0.5.0] — standardized I/O
+- `neuro_io`: variant resolution and `.res`/`.clu`/`.fet`/`.spk` readers + writers;
+  all fiber-kit I/O routed through it.
+
+## [0.4.0] — fiber-realign
+- Per-spike fiber-template offsets + corrected `.res`.
+
+## [0.3.0] — fiber-relink
+- Post-hoc geometry-aware re-bundling / re-linking of an existing sort.
+
+## [0.2.1] — whitener memory cap
+- Sample the whitener baseline from the memmap; cap memory at O(n_base).
+
+## [0.2.0] — session YAML
+- `SESSION.yaml` autoloading; CLIs take `<session> <group>`.
+
+## [0.1.0] — initial
+- Coarse mean-shift fibers, cross-chunk overlap-anchor linking, per-fiber
+  geometry + quality / firing / drift statistics; `fiber-session` pipeline.
