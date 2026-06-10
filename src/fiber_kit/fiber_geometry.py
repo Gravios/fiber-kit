@@ -50,6 +50,30 @@ def denoise(waveforms, sigma=DEFAULT_SMOOTH_SIGMA):
     return wf if sigma <= 0 else gaussian_filter1d(wf, sigma, axis=-2)
 
 
+def mutual_center(template, ref_sample=16):
+    """Circularly shift a single (nsamp, nchan) template so its dominant-channel
+    trough sits at ref_sample.  fl.realign aligns spikes only to their OWN cluster
+    mean, so a constant whole-cluster time-offset between two clusters survives and
+    wrecks any cross-cluster cosine / curve comparison (a 4-sample shift can read
+    cosine -0.46 where the centred templates read +0.95).  Centring every cluster's
+    template to a common trough sample removes that nuisance shift; the inter-channel
+    offsets are shift-invariant and unaffected, so this only fixes the comparisons
+    that need it.  This is the cross-cluster counterpart to realign's within-cluster
+    alignment, and is required before template cosine is used as an identity gate."""
+    t = np.asarray(template, float)
+    dom = int(np.argmax(t.max(0) - t.min(0)))
+    return np.roll(t, ref_sample - int(np.argmin(t[:, dom])), axis=0)
+
+
+def mutual_center_spikes(waveforms, ref_sample=16):
+    """mutual_center applied to a (nspk, nsamp, nchan) stack: shift every spike by
+    the single offset that brings the cluster-mean dominant trough to ref_sample
+    (rigid whole-cluster shift; preserves within-cluster structure realign set up)."""
+    w = np.asarray(waveforms, float)
+    m = w.mean(0); dom = int(np.argmax(m.max(0) - m.min(0)))
+    return np.roll(w, ref_sample - int(np.argmin(m[:, dom])), axis=1)
+
+
 def fiber_curve(masked_templates_by_spike, energy, nq=DEFAULT_NQ):
     """d(r) curve as a stack of UN-WHITENED mean templates over energy quantiles.
 
