@@ -71,10 +71,27 @@ def probe_files(doc, yaml_dir, group=None):
         if 1 <= group <= len(groups):
             for k in _PROBE_KEYS:
                 collect((groups[group - 1] or {}).get(k))
+    # the canonical ndmanager 'probes:' list: one entry per probe, each with a
+    # probeFile; concatenate in channelOffset order so load_geometry's global table
+    # lines up with global channel ids (probe 0 @ offset 0, probe 1 @ offset 64, ...)
+    probes = doc.get("probes")
+    if isinstance(probes, list):
+        entries = [p for p in probes if isinstance(p, dict) and p.get("probeFile")]
+        entries.sort(key=lambda p: p.get("channelOffset", 0))
+        for p in entries:
+            collect(p["probeFile"])
 
+    roots = [yaml_dir]
+    plp = doc.get("probeLibraryPath")
+    if isinstance(plp, str) and plp:
+        roots.append(os.path.expanduser(plp))                # ndmanager probe library
     out, seen = [], set()
     for p in found:
-        rp = p if os.path.isabs(p) else os.path.normpath(os.path.join(yaml_dir, p))
+        if os.path.isabs(p):
+            rp = p
+        else:
+            rp = next((c for c in (os.path.normpath(os.path.join(r, p)) for r in roots)
+                       if os.path.exists(c)), os.path.normpath(os.path.join(yaml_dir, p)))
         if rp not in seen:
             seen.add(rp); out.append(rp)
     return out
