@@ -97,15 +97,19 @@ def build_bundles(n_frag, links):
 
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, max_resid=0.08,
-                 min_n=20, mask=None):
-    """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n).
-    Returns dict(chunk, chunks, D, links, bundles, link_mask)."""
+                 min_n=20, min_snr=0.0, mask=None):
+    """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
+    [snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).  When frag carries
+    'snr' and min_snr>0, the linkable set is additionally gated on waveform SNR -- resid
+    measures localization quality, not amplitude/noise, so the two are complementary."""
     if mask is None:
         mask = fl.MASK_FULL
     y0 = frag["y0"]; A = frag["A"]; logA = np.log(np.clip(A, 1, None))
     chunk = (np.asarray(frag["t_mid"], float) / 60.0 // chunk_min).astype(int)   # t_mid is seconds
     linkable = ((frag["one_flank"] == 0) & (y0 > 0) & (y0 < 140)
                 & (frag["resid"] < max_resid) & (frag["n"] >= min_n))
+    if min_snr > 0 and "snr" in frag:
+        linkable &= np.asarray(frag["snr"]) >= min_snr
     idx = np.flatnonzero(linkable)
     chunks = sorted(int(c) for c in np.unique(chunk[idx]))
     D = estimate_drift(y0[idx], logA[idx], frag["n"][idx].astype(float), chunk[idx], chunks)
@@ -151,6 +155,7 @@ def main():
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--max-resid", type=float, default=0.08)
     ap.add_argument("--min-n", type=int, default=20)
+    ap.add_argument("--min-snr", type=float, default=0.0, help="gate linkable fragments on waveform SNR (needs snr in the cpos table; 0=off)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.linked)")
     a = ap.parse_args()
 
@@ -169,7 +174,7 @@ def main():
     frag = {k: z[k] for k in z.files if k != "cols"}
 
     R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
-                     max_resid=a.max_resid, min_n=a.min_n)
+                     max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr)
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)

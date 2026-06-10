@@ -83,7 +83,13 @@ def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100
         r = loc.localize_unit(W, xy, dipole=dipole, nboot=nboot)
         r["n"] = int(len(W))
         if templates:
-            r["template"] = np.median(fl.realign(W), 0).astype(np.float32)
+            tmpl = np.median(fl.realign(W), 0)
+            r["template"] = tmpl.astype(np.float32)
+            # waveform SNR: dominant-channel peak-to-peak / baseline noise (raw amplitudes).
+            # noise = median across spikes/channels of the pre-peak baseline sample std.
+            ptp = float((tmpl.max(0) - tmpl.min(0)).max())
+            noise = float(np.median(np.std(W[:, :6, :], axis=1)))
+            r["snr"] = ptp / (noise + 1e-6)
         per[int(cid)] = r
     return per
 
@@ -119,7 +125,7 @@ def read_cpos(path):
 
 def write_cluster_table(path, per):
     keys = ["x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank",
-            "resid", "y_lo", "y_hi", "z_lo", "z_hi", "n",
+            "resid", "y_lo", "y_hi", "z_lo", "z_hi", "n", "snr",
             "t_min", "t_mid", "t_max"]            # per-fragment time (s); placed in time for drift/linking
     cids = sorted(per)
     arrs = {"clu": np.array(cids, int)}
