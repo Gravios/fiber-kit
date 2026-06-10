@@ -44,6 +44,7 @@ try:
     from . import session_yaml as sy
     from . import neuro_io as nio
     from . import fiber_split as fsp
+    from . import fiber_geometry as fg
     from . import backend as _bk
     from .klustakwik import klustakwik as _rkk
 except ImportError:                                   # script / flat-layout fallback
@@ -53,6 +54,7 @@ except ImportError:                                   # script / flat-layout fal
     import session_yaml as sy
     import neuro_io as nio
     import fiber_split as fsp
+    import fiber_geometry as fg
     import backend as _bk
     from klustakwik import klustakwik as _rkk
 
@@ -677,6 +679,7 @@ def load_geometry(path):
 def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    chunk_min, overlap_min, *, init=None, refine_kw=None,
                    min_group=40, track_geometry=False, make_bundles=False,
+                   strict_link=True, link_min_anchor=20,
                    link_continuity=False, continuity_kw=None, chpos=None, verbose=True):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
@@ -707,7 +710,10 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         if verbose:
             print(f"[chunk {c+1}/{nchunks}] t={ck['tmin']:.1f}m  {len(ck['core'])} core "
                   f"({len(ext)} ext) -> {len(np.unique(labc[labc >= 0]))} fibers")
-    gid, nglob = fs.link_chunks(ext_idx, ext_lab)
+    if strict_link:                                        # geometry+timing veto blocks chaining
+        gid, nglob = fg.link_chunks_strict(ext_idx, ext_lab, waves, mask, min_anchor=link_min_anchor)
+    else:
+        gid, nglob = fs.link_chunks(ext_idx, ext_lab)
     if link_continuity:
         depth, sig = _chunk_fiber_features(ext_idx, ext_lab, waves, mask, chpos)
         ckw = dict(continuity_kw or {})
@@ -850,6 +856,10 @@ def main():
     ap.add_argument("--bundles", action="store_true",
                     help="drift-aware mode: also write <base>.bundles.<group>.npz (per-chunk un-whitened "
                          "template curves per global fiber) for the fiber-view-gui bundle table")
+    ap.add_argument("--legacy-link", action="store_true",
+                    help="use the old overlap-only link_chunks (no geometry/timing veto)")
+    ap.add_argument("--min-anchor", type=int, default=20,
+                    help="min shared overlap spikes to link two per-chunk fibers (strict linker)")
     ap.add_argument("--link-continuity", action="store_true",
                     help="drift-aware mode: after overlap-anchor linking, bridge sparse fibers that share too "
                          "few overlap spikes using a drift-predicted, signature-gated continuity fallback")
@@ -929,6 +939,7 @@ def main():
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
             min_group=a.min_group, track_geometry=a.track_geometry,
             make_bundles=a.bundles,
+            strict_link=not a.legacy_link, link_min_anchor=a.min_anchor,
             link_continuity=a.link_continuity,
             continuity_kw=dict(sig_thr=a.continuity_sig_thr, depth_gate=a.continuity_depth_gate,
                                max_gap=a.continuity_max_gap),
