@@ -39,6 +39,47 @@ def _safe_load(path):
         return yaml.safe_load(f)
 
 
+_PROBE_KEYS = ("probeFile", "probeFiles", "probe", "probeFileName", "probefile", "probes")
+
+
+def probe_files(doc, yaml_dir, group=None):
+    """Resolve the NeuroSuite .probe file path(s) named by a session YAML.
+
+    Searches, in order: top-level probeFile/probeFiles/probe/...; the 'files',
+    'general', 'spikeDetection' and 'acquisitionSystem' sub-sections; and the
+    per-group entry spikeDetection.channelGroups[group-1].probe.  A value may be a
+    single path or a list; relative paths resolve against the YAML's directory.
+    Returns a (de-duplicated, order-preserving) list of paths, or [] if none."""
+    found = []
+
+    def collect(v):
+        if v is None:
+            return
+        for item in (v if isinstance(v, (list, tuple)) else [v]):
+            if isinstance(item, str) and item:
+                found.append(item)
+
+    for k in _PROBE_KEYS:
+        collect(doc.get(k))
+    for sect in ("files", "general", "spikeDetection", "acquisitionSystem"):
+        d = doc.get(sect) or {}
+        if isinstance(d, dict):
+            for k in _PROBE_KEYS:
+                collect(d.get(k))
+    if group is not None:
+        groups = (doc.get("spikeDetection", {}) or {}).get("channelGroups", []) or []
+        if 1 <= group <= len(groups):
+            for k in _PROBE_KEYS:
+                collect((groups[group - 1] or {}).get(k))
+
+    out, seen = [], set()
+    for p in found:
+        rp = p if os.path.isabs(p) else os.path.normpath(os.path.join(yaml_dir, p))
+        if rp not in seen:
+            seen.add(rp); out.append(rp)
+    return out
+
+
 def load_session(session, group, path=None):
     """Parse <session>.yaml for `group` (1-based). Returns a dict with base,
     yaml, group, ntotal, sr, nbits, nchan, channels, nsamp, peak, nfeatures."""
@@ -56,6 +97,7 @@ def load_session(session, group, path=None):
     if not channels:
         raise ValueError(f"group {group} in {path} has no 'channels'")
     base = path[:-5] if path.endswith(".yaml") else path[:-4]
+    probe = probe_files(doc, os.path.dirname(os.path.abspath(path)), group)
     return dict(
         base=base, yaml=path, group=group,
         ntotal=int(acq["nChannels"]) if acq.get("nChannels") is not None else None,
@@ -65,6 +107,7 @@ def load_session(session, group, path=None):
         nsamp=int(g["nSamples"]) if g.get("nSamples") is not None else None,
         peak=int(g["peakSampleIndex"]) if g.get("peakSampleIndex") is not None else None,
         nfeatures=int(g["nFeatures"]) if g.get("nFeatures") is not None else None,
+        probe=probe,
     )
 
 
@@ -110,18 +153,19 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
         info = load_session(session, group, path=yp)
         cfg = dict(base=info["base"], yaml=yp, group=group, channels=info["channels"],
                    ntotal=info["ntotal"], nchan=info["nchan"], nsamp=info["nsamp"],
-                   sr=info["sr"], peak=info["peak"])
+                   sr=info["sr"], peak=info["peak"], probe=info.get("probe") or None)
         if verbose:
             print(f"[session] {yp}: nChannels={info['ntotal']} sr={info['sr']} "
                   f"group {group} -> {info['nchan']} ch {info['channels']} "
-                  f"nSamples={info['nsamp']} peak={info['peak']}")
+                  f"nSamples={info['nsamp']} peak={info['peak']}"
+                  + (f" probe={info['probe']}" if info.get("probe") else ""))
     else:
         base = session.rstrip("/")
         for ext in (".yaml", ".yml"):
             if base.endswith(ext):
                 base = base[:-len(ext)]
         cfg = dict(base=base, yaml=None, group=group, channels=None, ntotal=None,
-                   nchan=None, nsamp=32, sr=32552.0, peak=None)
+                   nchan=None, nsamp=32, sr=32552.0, peak=None, probe=None)
         if verbose:
             print(f"[session] no YAML for '{session}'; using base='{base}' + explicit flags")
 
