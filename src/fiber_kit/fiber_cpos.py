@@ -29,9 +29,9 @@ import os
 import numpy as np
 
 try:
-    from . import fiber_localize as loc, neuro_io as nio, session_yaml as sy
+    from . import fiber_localize as loc, fiber_lib as fl, neuro_io as nio, session_yaml as sy
 except ImportError:
-    import fiber_localize as loc, neuro_io as nio, session_yaml as sy
+    import fiber_localize as loc, fiber_lib as fl, neuro_io as nio, session_yaml as sy
 
 CPOS_COLS = ("x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank")
 
@@ -67,19 +67,24 @@ def fil_extractor(filmm, res, col_idx, peak=16, nsamp=32, sample_offset=0):
     return extract
 
 
-def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100):
+def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100, templates=True):
     """Localize each cluster's median raw template.  `extract(idx)` maps spike INDICES
-    (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n)}."""
+    (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n,
+    and 'template' = realigned median raw waveform when templates=True -- the shape
+    signature used to co-gate / link fragments across chunks)."""
     per = {}
     for cid in np.unique(clu[clu >= 0]):
         idx = np.flatnonzero(clu == cid)
         if len(idx) < min_spikes:
             continue
-        W = extract(idx)
+        W = np.asarray(extract(idx), float)
         if len(W) < min_spikes:
             continue
-        r = loc.localize_unit(np.asarray(W, float), xy, dipole=dipole, nboot=nboot)
-        r["n"] = int(len(W)); per[int(cid)] = r
+        r = loc.localize_unit(W, xy, dipole=dipole, nboot=nboot)
+        r["n"] = int(len(W))
+        if templates:
+            r["template"] = np.median(fl.realign(W), 0).astype(np.float32)
+        per[int(cid)] = r
     return per
 
 
@@ -120,6 +125,8 @@ def write_cluster_table(path, per):
     arrs = {"clu": np.array(cids, int)}
     for k in keys:
         arrs[k] = np.array([per[c].get(k, np.nan) for c in cids], float)
+    if cids and "template" in per[cids[0]]:
+        arrs["template"] = np.stack([per[c]["template"] for c in cids]).astype(np.float32)
     np.savez(path, cols=np.array(CPOS_COLS), **arrs)
     return path
 
@@ -148,6 +155,7 @@ def main():
     ap.add_argument("--out-stage", default=None, help="cpos fiber STAGE AFTER the group (default: mirror --clu-stage)")
     ap.add_argument("--min-spikes", type=int, default=15)
     ap.add_argument("--no-dipole", action="store_true")
+    ap.add_argument("--no-templates", action="store_true", help="skip per-cluster median templates in the .clusters.npz")
     ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry (else from chunk xy via YAML)")
     a = ap.parse_args()
 
@@ -184,7 +192,7 @@ def main():
         extract = fil_extractor(filmm, res, channels, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
         src = a.fil or f"{base}.fil"
 
-    per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole)
+    per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole, templates=not a.no_templates)
     sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
     for cid, r in per.items():
         t = res[clu == cid]
