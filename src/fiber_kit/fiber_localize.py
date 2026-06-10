@@ -94,6 +94,8 @@ def _fit(a, xy, dipole=True):
     ub = [xy[:, 0].max() + 60, xy[:, 1].max() + 40, 300.0, 1e9]
     if dipole:
         p0 += [0.0]; lb += [-1e11]; ub += [1e11]
+    p0 = list(np.clip(np.asarray(p0, float), lb, ub))   # keep the initial guess feasible
+                                                         # (bootstrap resamples can push p0[3] past ub)
     fscale = max(a.max() * 0.05, 1e-6)
 
     def resid(p):
