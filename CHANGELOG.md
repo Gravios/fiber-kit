@@ -4,6 +4,19 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.25.0] — residual split integrated into fiber-refine (opt-out)
+- `refine()` runs a final residual-split cleanup by default (`fiber_split`): each
+  output fiber is split on the residual to its shared d(r) when that lowers
+  held-out residual energy beyond a random split of the same cluster. Disable
+  with `--no-residual-split`. Applies in single-pass and per-chunk (chunked) mode.
+- Params `residual_split=True`, `residual_margin`; an "rsplit" row is logged.
+- On the real g5 chunk it carved envelope-similar siblings out of coarse fibers
+  (clu-free) spanning the discriminator types: a sub-sample timing shift
+  (diff∥∂/∂t, cos 0.93), a distinct waveform shape (cos 0.26), and amplitude.
+- NOTE: acceptance is residual-energy-vs-null only; a refractory-improvement /
+  time-stability tiebreaker (esp. for pure-timing-shift splits, the most
+  alignment-sensitive) is the recommended next gate.
+
 ## [0.24.0] — recursive residual splitting (fiber_split)
 - `fiber_split`: refine a fiber by splitting on the residual to its single shared
   d(r) (where an envelope-similar second unit hides). A candidate binary split in

@@ -43,6 +43,7 @@ try:
     from . import fiber_session as fs
     from . import session_yaml as sy
     from . import neuro_io as nio
+    from . import fiber_split as fsp
     from . import backend as _bk
     from .klustakwik import klustakwik as _rkk
 except ImportError:                                   # script / flat-layout fallback
@@ -51,6 +52,7 @@ except ImportError:                                   # script / flat-layout fal
     import fiber_session as fs
     import session_yaml as sy
     import neuro_io as nio
+    import fiber_split as fsp
     import backend as _bk
     from klustakwik import klustakwik as _rkk
 
@@ -446,6 +448,30 @@ def write_geometry_tracks(tracks, path):
     return path
 
 
+def _residual_refine(lab, X, min_group, margin=0.02, max_depth=4, verbose=False):
+    """Final cleanup: split any over-merged fiber on the residual to its single
+    shared d(r) (fiber_split), accepting a split only when it lowers held-out
+    residual energy beyond a random split of the same cluster.  Returns
+    (labels, n_clusters_split)."""
+    out = lab.copy()
+    nxt = (int(lab.max()) + 1) if (lab >= 0).any() else 0
+    nsplit = 0
+    for c in sorted(set(int(x) for x in lab if x >= 0)):
+        idx = np.where(lab == c)[0]
+        if len(idx) < 2 * min_group:
+            continue
+        sub = fsp.recursive_split(X[idx], min_n=min_group, max_depth=max_depth, margin=margin)
+        k = int(sub.max()) + 1
+        if k <= 1:
+            continue
+        for ch in range(1, k):                            # child 0 keeps id c; rest get new ids
+            out[idx[sub == ch]] = nxt; nxt += 1
+        nsplit += 1
+    if verbose and nsplit:
+        print(f"[residual-split] {nsplit} cluster(s) refined -> {nxt} fibers total")
+    return out, nsplit
+
+
 def refine(waves, res_abs, W, nmean, mask, sr, *,
            floor=16, window_ms=2.0, iters=4, large=800, min_group=40,
            var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93,
@@ -454,6 +480,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
+           residual_split=True, residual_margin=0.02,
            snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
@@ -541,6 +568,15 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                     print(f"[reseed converged at pass {p + 1}]")
                 break
             prev_pass = cur
+    if residual_split:                                    # opt-out final cleanup: clean clusters
+        Xw = (fl.realign(waves)[:, mask, :].reshape(len(waves), -1) - nmean) @ W
+        lab, nsp = _residual_refine(lab, Xw, min_group, margin=residual_margin, verbose=verbose)
+        st = _iter_stats("rsplit", lab, waves, res_abs, ctx); st["rsplit"] = nsp
+        stats.append(st)
+        if snaps_out is not None:
+            snaps_out.append(("rsplit", lab.copy()))
+        if verbose:
+            print(_row(st))
     return lab, stats
 
 
@@ -756,6 +792,11 @@ def main():
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
                     help="biological/ISI-violation window upper bound (ms); contamination is [floor, window)")
     ap.add_argument("--no-dedup", action="store_true", help="skip the sub-floor dedup pass")
+    ap.add_argument("--no-residual-split", dest="residual_split", action="store_false",
+                    help="disable the final residual-split cleanup (on by default): each output "
+                         "fiber is split on the residual to its shared d(r) when that lowers "
+                         "held-out residual energy beyond a random split of the same cluster")
+    ap.set_defaults(residual_split=True)
     ap.add_argument("--iters", type=int, default=10, help="max splitting iterations (cap)")
     ap.add_argument("--converge", dest="converge", action="store_true", default=True,
                     help="stop the splitting phase early once nfib/swBand/enCV are steady (default on)")
@@ -882,7 +923,7 @@ def main():
                          conv_patience=a.converge_patience, reseed=a.reseed,
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
-                         fine_method=a.fine_method)
+                         fine_method=a.fine_method, residual_split=a.residual_split)
         glab, nglob, tracks, bundles = refine_chunked(
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
@@ -923,7 +964,8 @@ def main():
                         conv_patience=a.converge_patience, reseed=a.reseed,
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
-                        fine_method=a.fine_method, snaps_out=snaps, verbose=True)
+                        fine_method=a.fine_method, residual_split=a.residual_split,
+                        snaps_out=snaps, verbose=True)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
     clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
