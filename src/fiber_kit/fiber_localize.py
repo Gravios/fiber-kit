@@ -217,11 +217,12 @@ def main():
     ap.add_argument("base"); ap.add_argument("elec", type=int)
     ap.add_argument("--nsamp", type=int, required=True)
     ap.add_argument("--nchan", type=int, required=True)
-    ap.add_argument("--probe", nargs="+", required=True,
-                    help="NeuroSuite .probe YAML(s), in global-channel order")
+    ap.add_argument("--probe", nargs="+", default=None,
+                    help="NeuroSuite .probe YAML(s), in global-channel order "
+                         "(default: the probe named in <session>.yaml)")
     ap.add_argument("--channels", default=None,
                     help="comma-separated global channel ids of this group (else read <session>.yaml)")
-    ap.add_argument("--session", default=None, help="session for channel lookup if --channels omitted")
+    ap.add_argument("--session", default=None, help="session for channel/probe lookup if --channels/--probe omitted")
     ap.add_argument("--clu", default=None, help="cluster file (pass the re-linked .clu)")
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--min-n", type=int, default=50)
@@ -229,13 +230,20 @@ def main():
     ap.add_argument("--max-resid", type=float, default=0.10)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    # resolve channels and/or probe from <session>.yaml when not given explicitly
+    cfg = (sy.resolve_session_params(a.session or a.base, a.elec, require=())
+           if (not a.channels or not a.probe) else None)
     if a.channels:
         channels = [int(c) for c in a.channels.split(",")]
-    elif a.session:
-        channels = sy.resolve_session_params(a.session, a.elec)["channels"]
+    elif cfg and cfg.get("channels"):
+        channels = cfg["channels"]
     else:
-        raise SystemExit("[localize] need --channels or --session for the group's channel ids")
-    xy = load_geometry(a.probe, channels)
+        raise SystemExit("[localize] need --channels or a <session>.yaml for the group's channel ids")
+    probe = a.probe or (cfg.get("probe") if cfg else None)
+    if not probe:
+        raise SystemExit("[localize] no probe geometry: pass --probe or name it in "
+                         "<session>.yaml (probeFile/probe/...)")
+    xy = load_geometry(probe, channels)
     rows = localize(a.base, a.elec, a.nsamp, a.nchan, xy, a.clu,
                     dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid)
     out = a.out or f"{a.base}.localize.{a.elec}.tsv"
