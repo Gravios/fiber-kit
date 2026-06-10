@@ -197,3 +197,40 @@ def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5
         for l in set(int(x) for x in ext_lab[c] if x >= 0):
             r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
     return gid, len(roots)
+
+
+# ── curl: intra-chunk fiber fingerprint from the inter-channel timing field ──
+# Treat per-channel cross-correlation lags as a 1-form on the channel graph and
+# take its CURL (the circulation / non-integrable part, via discrete Helmholtz):
+# the part of the pairwise timing NOT explained by any single consistent
+# wavefront.  It is a reproducible per-fiber fingerprint that distinguishes
+# fibers whose median templates are similar but whose spatiotemporal timing
+# differs -- exactly the template-near-duplicates an envelope/template metric
+# merges (on real g5: same-fiber curl distance ~0.74 vs template-similar pairs
+# 3.4-26; intra-chunk match AUC 0.83).  INTRA-CHUNK ONLY: it is computed from the
+# median waveform and is NOT drift-invariant, so it discriminates fibers within
+# one chunk's frame, not across chunks.  Geometry-free (graph Helmholtz); pair
+# with interchannel_offsets for the gradient/slowness half if positions help.
+def curl_feature(template, maxlag=5):
+    """Curl 1-form of the inter-channel CC-lag field of a (denoised) median
+    template (nsamp, nchan).  Returns a vector over the nchan*(nchan-1)/2 channel
+    pairs; compare two fibers with curl_distance.  Denoise the template first."""
+    T = np.asarray(template, float); nch = T.shape[1]
+    pairs = [(i, j) for i in range(nch) for j in range(i + 1, nch)]
+    lag = np.zeros(len(pairs))
+    for k, (i, j) in enumerate(pairs):
+        wi, wj = T[:, i], T[:, j]
+        cc = [float(wi @ np.roll(wj, t)) for t in range(-maxlag, maxlag + 1)]
+        t0 = int(np.argmax(cc)) - maxlag
+        cm, c0, cp = float(wi @ np.roll(wj, t0 - 1)), float(wi @ np.roll(wj, t0)), float(wi @ np.roll(wj, t0 + 1))
+        dn = cm - 2 * c0 + cp
+        lag[k] = t0 + (0.5 * (cm - cp) / dn if abs(dn) > 1e-9 else 0.0)
+    inc = np.zeros((len(pairs), nch))                       # graph incidence
+    for k, (i, j) in enumerate(pairs): inc[k, i] = 1; inc[k, j] = -1
+    phi, *_ = np.linalg.lstsq(np.vstack([inc, np.eye(1, nch)]), np.append(lag, 0.0), rcond=None)
+    return lag - inc @ phi                                  # Helmholtz curl part (gradient removed)
+
+
+def curl_distance(c1, c2):
+    """Euclidean distance between two curl 1-forms (same channel set)."""
+    return float(np.linalg.norm(np.asarray(c1, float) - np.asarray(c2, float)))
