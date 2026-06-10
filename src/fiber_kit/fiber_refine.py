@@ -792,7 +792,12 @@ def main():
     ap.add_argument("--in-clu", default=None,
                     help="path to the input sort to refine; "
                          "default = canonical .clu if present, else a fresh fine sort")
-    ap.add_argument("--out-variant", default="refine", help="variant tag for the output .clu/.res")
+    ap.add_argument("--out-method", default="stderiv",
+                    help="feature space written BEFORE the group (standard|stderiv|...); "
+                         "refine operates in stderiv space, so default stderiv")
+    ap.add_argument("--out-variant", "--out-stage", dest="out_variant", default="refine",
+                    help="fiber STAGE written AFTER the group, e.g. 'refine' -> "
+                         "<base>.clu.<out-method>.<group>.refine  ('' for none)")
     ap.add_argument("--refr-floor", type=int, default=None,
                     help="imposed detection refractory (samples); default = from yaml")
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
@@ -923,13 +928,13 @@ def main():
         print(f"dedup: kept {len(keep)} of {len(keep)+n_dup} "
               f"({n_dup} removed; {n_exact} exact ISI=0)")
         if n_dup > 0:                                   # keep .spk/.fet row-aligned with the deduped .res/.clu
-            nio.write_spk(base, elec, spk[keep], variant=a.out_variant)
+            nio.write_spk(base, elec, spk[keep], variant=a.out_method, tag=a.out_variant)
             try:
                 fet = nio.read_fet(base, elec)
             except FileNotFoundError:
                 fet = None
             if fet is not None and fet.ok and fet.n_spikes == len(keep) + n_dup:
-                nio.write_fet(base, elec, fet.values[keep], variant=a.out_variant)
+                nio.write_fet(base, elec, fet.values[keep], variant=a.out_method, tag=a.out_variant)
                 print(f"dedup: rewrote .spk + .fet ({a.out_variant or 'canonical'}) to {len(keep)} spikes")
             else:
                 have = fet.n_spikes if (fet is not None and fet.ok) else "none"
@@ -958,8 +963,8 @@ def main():
                                max_gap=a.continuity_max_gap),
             verbose=True)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
-        clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
-        res_path = nio.write_res(base, elec, res, variant=a.out_variant)
+        clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_variant)
+        res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_variant)
         print(f"wrote {clu_path}\n      {res_path}")
         if tracks is not None:
             gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
@@ -992,8 +997,8 @@ def main():
                         snaps_out=snaps, verbose=True)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
-    clu_path = nio.write_clu(base, elec, ids, variant=a.out_variant)
-    res_path = nio.write_res(base, elec, res, variant=a.out_variant)
+    clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_variant)
+    res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_variant)
     tsv = f"{base}.refine.{elec}.tsv"
     with open(tsv, "w") as f:
         f.write("iter\tnfib\tmedBand\tpct<2\tswBand\tswDup\tenCV\tnbig\trkk\tdip\tiso\tfold\tkept\n")
