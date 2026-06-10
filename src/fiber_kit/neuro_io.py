@@ -54,8 +54,8 @@ __all__ = [
     "read_res_file", "write_res_file", "read_res", "write_res",
     "read_clu_file", "write_clu_file", "read_clu", "write_clu",
     "read_cluster_res",
-    "read_fet_file", "read_fet",
-    "open_spk_file", "open_spk", "open_spkD",
+    "read_fet_file", "read_fet", "write_fet_file", "write_fet",
+    "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
     "open_signal",
     "fibers_path",
 ]
@@ -270,6 +270,25 @@ def read_fet(base, elec, prefer=None):
     return read_fet_file(r.path)
 
 
+def write_fet_file(path, values):
+    """Write a binary .fet: int32 feature-count header + nSpikes x nFeatures
+    int64 values row-major (inverse of read_fet_file)."""
+    values = np.asarray(values, dtype=FET_DTYPE)
+    if values.ndim != 2:
+        raise ValueError("write_fet_file expects (nSpikes, nFeatures)")
+    with open(path, "wb") as f:
+        np.array([values.shape[1]], FET_HDR_DTYPE).tofile(f)
+        values.tofile(f)
+    return path
+
+
+def write_fet(base, elec, values, variant=""):
+    """Write <base>.fet[.<variant>].<elec> (binary), mirroring write_res/write_clu."""
+    g = str(elec)
+    name = f"{base}.fet.{g}" if variant == "" else f"{base}.fet.{variant}.{g}"
+    return write_fet_file(name, values)
+
+
 # ── .spk.N / .spkD.N (int16, sample-major, no header) ────────────────────────
 def open_spk_file(path, nsamp, nchan, mode="r"):
     """Memmap a .spk/.spkD file as (nSpikes, nsamp, nchan) int16, sample-major.
@@ -296,6 +315,20 @@ def open_spkD(base, elec, nsamp, nch, mode="r"):
     — returns (memmap, path), preferring the derived (stderiv) representation."""
     mm, r = open_spk(base, elec, nsamp, nch, prefer=prefer_derived(), mode=mode)
     return mm, r.path
+
+
+def write_spk_file(path, waves):
+    """Write a .spk/.spkD: int16, sample-major, no header (inverse of
+    open_spk_file).  `waves` is (nSpikes, nsamp, nchan)."""
+    np.asarray(waves, dtype=SPK_DTYPE).tofile(path)
+    return path
+
+
+def write_spk(base, elec, waves, variant=""):
+    """Write <base>.spk[.<variant>].<elec> (int16, sample-major)."""
+    g = str(elec)
+    name = f"{base}.spk.{g}" if variant == "" else f"{base}.spk.{variant}.{g}"
+    return write_spk_file(name, waves)
 
 
 # ── .dat / .fil / .lfp (interleaved int16) ───────────────────────────────────
