@@ -22,9 +22,32 @@
 #  spurious adjacent link.
 # ════════════════════════════════════════════════════════════════════════════
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 
 DEFAULT_NQ = 5
 DEFAULT_GEO_THR = 1.3        # calibrated on real g5: 95% recall, ~1.5% false-merge
+DEFAULT_SMOOTH_SIGMA = 1.0   # Gaussian temporal denoise; see denoise() calibration
+
+
+def denoise(waveforms, sigma=DEFAULT_SMOOTH_SIGMA):
+    """Strip the high-frequency noise floor off RAW footprints before building
+    the curve, by Gaussian-smoothing along the sample axis (-2), per channel.
+    waveforms: (..., nsamp, nchan) realigned (un-whitened) waveforms.
+
+    The geometry curve is built from raw footprints (cross-chunk comparable,
+    unlike whitened features), so it carries the recording noise floor; that
+    floor is what spreads same-unit curves and caps the strict link recall.
+    Calibrated on real g5 (curated identity, temporal split): sigma~1.0 lifts the
+    perfectly-separable same-unit fraction 0.68 -> 0.95 AND pushes the nearest
+    different-unit pair 1.23 -> 1.61 (it denoises without collapsing the fine
+    timing structure that separates near-duplicate units).  A linear Gaussian
+    beats a 5-pt median here because the noise is ~white and the median's
+    nonlinear peak/trough clipping distorts the discriminative shape.  Over-
+    smoothing is the failure mode: sigma>=2 starts merging fine-structure
+    near-duplicates (the different-unit floor falls back below the unfiltered
+    value), so keep sigma ~1.  sigma<=0 disables."""
+    wf = np.asarray(waveforms, float)
+    return wf if sigma <= 0 else gaussian_filter1d(wf, sigma, axis=-2)
 
 
 def fiber_curve(masked_templates_by_spike, energy, nq=DEFAULT_NQ):
