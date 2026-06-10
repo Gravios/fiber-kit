@@ -16,15 +16,16 @@
 #  amplitude–distance law.  (NB: de-adaptation is deliberately NOT applied —
 #  position is scale-invariant, and A's energy dependence is the trajectory signal.)
 #
-#    fiber-cpos <session> <group> [--clu-variant V] [--out-variant V]
+#    fiber-cpos <session> <group> [--clu-method M --clu-stage S] [--out-method M --out-stage S]
 #               [--channels ...] [--ntotal N] [--nsamp 32] [--peak 16]
 #
 #  Outputs (dotted-variant, .res order):
-#    <base>.cpos.<out-variant>.<elec>            int32 nCols header + float32 (Nspk x nCols)
+#    <base>.cpos.<method>.<elec>.<stage>            int32 nCols header + float32 (Nspk x nCols)
 #                                                cols = x0,y0,z0,A,dist,depth_shift,one_flank
-#    <base>.cpos.<out-variant>.<elec>.clusters.npz   per-cluster full localization (+CIs, n, resid)
+#    <base>.cpos.<method>.<elec>.<stage>.clusters.npz   per-cluster full localization (+CIs, n, resid)
 # ─────────────────────────────────────────────────────────────────────────────
 import argparse
+import os
 import numpy as np
 
 try:
@@ -35,16 +36,29 @@ except ImportError:
 CPOS_COLS = ("x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank")
 
 
-def fil_extractor(filmm, col_idx, peak=16, nsamp=32, sample_offset=0):
-    """Return extract(spike_samples)->(m, nsamp, nchan) RAW waveforms, dropping any
-    spike whose window falls outside the .fil.  `col_idx` selects the group's columns
-    in the interleaved .fil; `sample_offset` subtracts the .fil's first absolute
-    sample (0 for a full recording, lo_sample for a windowed slice)."""
+def spk_extractor(spk):
+    """Return extract(idx)->(len(idx), nsamp, nchan) RAW waveforms from a pre-extracted
+    STANDARD .spk (e.g. nio.open_spk_file on the standard/raw method -- NEVER the stderiv
+    .spkD: the stderiv transform breaks the amplitude-distance law).  Preferred source:
+    alignment, window and channel-map are fixed once at extraction, no full-recording I/O."""
+    spk = np.asarray(spk)
+
+    def extract(idx):
+        return np.asarray(spk[np.asarray(idx, int)], np.float32)
+    return extract
+
+
+def fil_extractor(filmm, res, col_idx, peak=16, nsamp=32, sample_offset=0):
+    """Return extract(idx)->(m, nsamp, nchan) RAW waveforms windowed from the .fil at the
+    spike times res[idx], dropping any spike whose window falls outside the file.  `col_idx`
+    selects the group's columns in the interleaved .fil; `sample_offset` subtracts the .fil's
+    first absolute sample (0 for a full recording, lo_sample for a windowed slice).  Fallback
+    source when no standard .spk is available."""
     pre, post = peak, nsamp - peak
     T = filmm.shape[0]; col_idx = np.asarray(col_idx, int)
 
-    def extract(spike_samples):
-        ss = np.asarray(spike_samples, np.int64) - sample_offset
+    def extract(idx):
+        ss = np.asarray(res[np.asarray(idx, int)], np.int64) - sample_offset
         ok = (ss - pre >= 0) & (ss + post <= T)
         out = np.empty((int(ok.sum()), nsamp, len(col_idx)), np.float32)
         for k, t in enumerate(ss[ok]):
@@ -53,14 +67,15 @@ def fil_extractor(filmm, col_idx, peak=16, nsamp=32, sample_offset=0):
     return extract
 
 
-def localize_clusters(extract, res, clu, xy, *, min_spikes=15, dipole=True, nboot=100):
-    """Localize each cluster's median raw template.  Returns {clu_id: localize_unit dict (+ n)}."""
+def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100):
+    """Localize each cluster's median raw template.  `extract(idx)` maps spike INDICES
+    (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n)}."""
     per = {}
     for cid in np.unique(clu[clu >= 0]):
         idx = np.flatnonzero(clu == cid)
         if len(idx) < min_spikes:
             continue
-        W = extract(res[idx])
+        W = extract(idx)
         if len(W) < min_spikes:
             continue
         r = loc.localize_unit(np.asarray(W, float), xy, dipole=dipole, nboot=nboot)
@@ -108,9 +123,10 @@ def write_cluster_table(path, per):
     return path
 
 
-def cpos_path(base, variant, elec):
-    g = str(elec)
-    return f"{base}.cpos.{g}" if variant == "" else f"{base}.cpos.{variant}.{g}"
+def cpos_path(base, elec, method="", stage=""):
+    """<base>.cpos[.<method>].<elec>[.<stage>] -- mirrors the source clu's method+stage so
+    e.g. the cpos of clu.stderiv.5.refine is cpos.stderiv.5.refine."""
+    return nio.session_path(base, "cpos", elec, variant=method, tag=stage)
 
 
 def main():
@@ -120,10 +136,15 @@ def main():
     ap.add_argument("session"); ap.add_argument("group", type=int)
     ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
     ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--peak", type=int, default=16)
-    ap.add_argument("--fil", default=None, help="path to raw .fil (default <base>.fil)")
+    ap.add_argument("--spk", default=None, help="path to a STANDARD/raw .spk (preferred over .fil); never the stderiv .spkD")
+    ap.add_argument("--spk-method", default="standard", help="method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec>")
+    ap.add_argument("--fil", default=None, help="path to raw .fil (fallback if no standard .spk)")
     ap.add_argument("--fil-offset", type=int, default=0, help="first absolute sample of the .fil (0 for full recording)")
-    ap.add_argument("--clu-variant", default="", help="read <base>.clu.<clu-variant>.<elec>")
-    ap.add_argument("--out-variant", default="stderiv", help="tag for <base>.cpos.<out-variant>.<elec>")
+    ap.add_argument("--clu-method", default="stderiv", help="source-clu feature space BEFORE the group (standard|stderiv|...)")
+    ap.add_argument("--clu-stage", default="refine", help="source-clu fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<clu-stage>")
+    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--clu-stage)")
+    ap.add_argument("--out-method", default=None, help="cpos method BEFORE the group (default: mirror --clu-method)")
+    ap.add_argument("--out-stage", default=None, help="cpos fiber STAGE AFTER the group (default: mirror --clu-stage)")
     ap.add_argument("--min-spikes", type=int, default=15)
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry (else from chunk xy via YAML)")
@@ -137,18 +158,38 @@ def main():
         raise SystemExit("[cpos] need probe geometry: pass --probe or ensure <session>.yaml carries site xy")
 
     res = nio.read_res(base, elec)
-    prefer = [a.clu_variant, ""] if a.clu_variant else nio.prefer_canonical()
-    _, clu = nio.read_clu(base, elec, n_spikes=len(res), prefer=prefer)
-    filmm = nio.open_signal(a.fil or f"{base}.fil", ntotal)
-    col_idx = channels                                     # .fil column = physical channel id
-    extract = fil_extractor(filmm, col_idx, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
+    if a.in_clu:
+        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
+    else:
+        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.clu_stage, n_spikes=len(res))
 
-    per = localize_clusters(extract, res, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole)
+    # Prefer a pre-extracted STANDARD/raw .spk (method-pinned, never stderiv): alignment,
+    # window and channel-map are fixed at extraction.  Fall back to windowing the .fil.
+    spk_path = a.spk
+    if spk_path is None:
+        for cand in (nio.session_path(base, "spk", elec, variant=a.spk_method), f"{base}.spk.{elec}"):
+            if os.path.exists(cand):
+                spk_path = cand; break
+    if spk_path is not None:
+        if spk_path.endswith((f".spkD.{elec}", f".spk.stderiv.{elec}", f".spk.D.{elec}")):
+            raise SystemExit(f"[cpos] refusing stderiv waveforms for localization: {spk_path} "
+                             f"(use a standard/raw .spk; stderiv breaks the amplitude-distance law)")
+        spk = nio.open_spk_file(spk_path, a.nsamp, len(channels))
+        extract = spk_extractor(spk); src = spk_path
+    else:
+        filmm = nio.open_signal(a.fil or f"{base}.fil", ntotal)
+        extract = fil_extractor(filmm, res, channels, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
+        src = a.fil or f"{base}.fil"
+
+    per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole)
     T = spike_table(len(res), clu, per)
-    p = write_cpos(cpos_path(base, a.out_variant, elec), T)
-    pc = write_cluster_table(cpos_path(base, a.out_variant, elec) + ".clusters.npz", per)
+    out_method = a.out_method if a.out_method is not None else a.clu_method
+    out_stage = a.out_stage if a.out_stage is not None else a.clu_stage
+    cp = cpos_path(base, elec, method=out_method, stage=out_stage)
+    p = write_cpos(cp, T)
+    pc = write_cluster_table(cp + ".clusters.npz", per)
     nflank = sum(int(r["one_flank"]) for r in per.values())
-    print(f"localized {len(per)}/{len(np.unique(clu[clu>=0]))} clusters "
+    print(f"localized {len(per)}/{len(np.unique(clu[clu>=0]))} clusters from {src} "
           f"({nflank} edge/one-flank); wrote {p}  and  {pc}")
     print(f"  cpos columns: {CPOS_COLS}")
 
