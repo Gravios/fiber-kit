@@ -153,9 +153,11 @@ def main():
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal, nsamp=a.nsamp)
     base = cfg["base"]; elec = a.group; ntotal = cfg["ntotal"]
     channels = np.array(cfg["channels"], int)
-    xy = loc.load_geometry(a.probe, channels) if a.probe else np.array(cfg.get("xy"))
-    if xy is None:
-        raise SystemExit("[cpos] need probe geometry: pass --probe or ensure <session>.yaml carries site xy")
+    probe = a.probe or cfg.get("probe")            # CLI --probe wins; else the path(s) named in <session>.yaml
+    if not probe:
+        raise SystemExit("[cpos] no probe geometry: <session>.yaml names no probe file "
+                         "(probeFile/probe/...) and no --probe was given")
+    xy = loc.load_geometry(probe, channels)
 
     res = nio.read_res(base, elec)
     if a.in_clu:
