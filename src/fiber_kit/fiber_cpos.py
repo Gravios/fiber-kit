@@ -114,7 +114,8 @@ def read_cpos(path):
 
 def write_cluster_table(path, per):
     keys = ["x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank",
-            "resid", "y_lo", "y_hi", "z_lo", "z_hi", "n"]
+            "resid", "y_lo", "y_hi", "z_lo", "z_hi", "n",
+            "t_min", "t_mid", "t_max"]            # per-fragment time (s); placed in time for drift/linking
     cids = sorted(per)
     arrs = {"clu": np.array(cids, int)}
     for k in keys:
@@ -184,6 +185,11 @@ def main():
         src = a.fil or f"{base}.fil"
 
     per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole)
+    sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
+    for cid, r in per.items():
+        t = res[clu == cid]
+        r["t_min"] = float(t.min() / sr); r["t_max"] = float(t.max() / sr)
+        r["t_mid"] = float(np.median(t) / sr)
     T = spike_table(len(res), clu, per)
     out_method = a.out_method if a.out_method is not None else a.clu_method
     out_stage = a.out_stage if a.out_stage is not None else a.clu_stage
