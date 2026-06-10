@@ -150,7 +150,7 @@ def main():
     ap.add_argument("--sr", type=float, default=None, help="override: sampling rate")
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
-                         "e.g. <base>.clu.refine.<group>)")
+                         "e.g. <base>.clu.stderiv.<group>.refine)")
     ap.add_argument("--max-shift", type=int, default=5)
     ap.add_argument("--iters", type=int, default=2)
     ap.add_argument("--min-n", type=int, default=20)

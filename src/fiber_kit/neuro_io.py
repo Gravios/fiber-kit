@@ -158,15 +158,30 @@ def read_res(base, elec, prefer=None):
     return read_res_file(r.path)
 
 
+def session_path(base, type_, group, variant="", tag=""):
+    """Canonical neurosuite-3 path:  <base>.<type>[.<variant>].<group>[.<tag>].
+
+    `variant` (the feature space / method: standard|stderiv|sdiff|...) precedes the
+    group; `tag` (the post-group fiber/pipeline STAGE: refine|realigned|...) follows
+    it.  Empty slots are omitted.  The tag axis is method-pinned (built directly,
+    never probed by resolve_input), so e.g. the refined stderiv sort of group 5 is
+        <base>.clu.stderiv.5.refine
+    -- variant `stderiv` before the group, fiber stage `refine` after it."""
+    p = f"{base}.{type_}"
+    if variant:
+        p += f".{variant}"
+    p += f".{group}"
+    if tag:
+        p += f".{tag}"
+    return p
+
+
 def write_res(base, elec, times, variant="", tag=None):
     """Write <base>.res[.<variant>].<elec>[.<tag>] as binary int64.  `tag` is the
-    post-group curation-tag axis (e.g. 'realigned' -> <base>.res.<elec>.realigned),
-    a separate axis from `variant` and never touched by resolve_input."""
-    g = str(elec)
-    name = f"{base}.res.{g}" if variant == "" else f"{base}.res.{variant}.{g}"
-    if tag:
-        name = f"{name}.{tag}"
-    return write_res_file(name, times)
+    post-group fiber-stage / curation axis (e.g. 'refine' -> <base>.res.<variant>.<elec>.refine,
+    'realigned' -> ...res.<elec>.realigned), a separate axis from `variant` and never
+    touched by resolve_input."""
+    return write_res_file(session_path(base, "res", elec, variant=variant, tag=tag or ""), times)
 
 
 # ── .clu.N ───────────────────────────────────────────────────────────────────
@@ -214,10 +229,23 @@ def read_clu(base, elec, n_spikes=None, prefer=None):
     return read_clu_file(r.path, n_spikes=n_spikes)
 
 
-def write_clu(base, elec, ids, n_clusters=None, variant=""):
-    g = str(elec)
-    name = f"{base}.clu.{g}" if variant == "" else f"{base}.clu.{variant}.{g}"
-    return write_clu_file(name, ids, n_clusters=n_clusters)
+def read_clu_at(base, elec, variant="", tag="", n_spikes=None):
+    """Read a method-pinned staged .clu directly (no resolve_input probing):
+    <base>.clu[.<variant>].<elec>[.<tag>], e.g. variant='stderiv', tag='refine'
+    -> <base>.clu.stderiv.<elec>.refine.  Raises with the expected path if absent."""
+    path = session_path(base, "clu", elec, variant=variant, tag=tag)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            f"no .clu at {path} (variant={variant!r}, tag={tag!r}); pass --in-clu or fix the method/stage")
+    return read_clu_file(path, n_spikes=n_spikes)
+
+
+def write_clu(base, elec, ids, n_clusters=None, variant="", tag=""):
+    """Write <base>.clu[.<variant>].<elec>[.<tag>].  `variant` = method (before group),
+    `tag` = fiber stage (after group), e.g. variant='stderiv', tag='refine' ->
+    <base>.clu.stderiv.<elec>.refine."""
+    return write_clu_file(session_path(base, "clu", elec, variant=variant, tag=tag),
+                          ids, n_clusters=n_clusters)
 
 
 # ── matched .clu + .res pair (mirrors neurofileio::readClusterRes) ───────────
@@ -282,11 +310,10 @@ def write_fet_file(path, values):
     return path
 
 
-def write_fet(base, elec, values, variant=""):
-    """Write <base>.fet[.<variant>].<elec> (binary), mirroring write_res/write_clu."""
-    g = str(elec)
-    name = f"{base}.fet.{g}" if variant == "" else f"{base}.fet.{variant}.{g}"
-    return write_fet_file(name, values)
+def write_fet(base, elec, values, variant="", tag=""):
+    """Write <base>.fet[.<variant>].<elec>[.<tag>] (binary), mirroring write_res/write_clu.
+    `variant` = method (before group), `tag` = fiber stage (after group)."""
+    return write_fet_file(session_path(base, "fet", elec, variant=variant, tag=tag), values)
 
 
 # ── .spk.N / .spkD.N (int16, sample-major, no header) ────────────────────────
@@ -324,11 +351,10 @@ def write_spk_file(path, waves):
     return path
 
 
-def write_spk(base, elec, waves, variant=""):
-    """Write <base>.spk[.<variant>].<elec> (int16, sample-major)."""
-    g = str(elec)
-    name = f"{base}.spk.{g}" if variant == "" else f"{base}.spk.{variant}.{g}"
-    return write_spk_file(name, waves)
+def write_spk(base, elec, waves, variant="", tag=""):
+    """Write <base>.spk[.<variant>].<elec>[.<tag>] (int16, sample-major).  `variant` =
+    method (before group), `tag` = fiber stage (after group)."""
+    return write_spk_file(session_path(base, "spk", elec, variant=variant, tag=tag), waves)
 
 
 # ── .dat / .fil / .lfp (interleaved int16) ───────────────────────────────────

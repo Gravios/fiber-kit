@@ -70,9 +70,12 @@ def main():
     ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
     ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
     ap.add_argument("--sr", type=float, default=None)
-    ap.add_argument("--variant", default="refine",
-                    help="read <base>.clu.<variant>.<elec> (default: refine; '' = canonical)")
-    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --variant)")
+    ap.add_argument("--clu-method", default="stderiv",
+                    help="feature space BEFORE the group (standard|stderiv|...); default stderiv")
+    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",
+                    help="fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> "
+                         "(default: refine; '' = no stage)")
+    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--chunk-min", type=float, default=12.0)
     ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--whole-session", action="store_true",
@@ -93,8 +96,7 @@ def main():
     if a.in_clu:
         _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
     else:
-        _, clu = nio.read_clu(base, elec, n_spikes=len(res),
-                              prefer={a.variant, ""} if a.variant else nio.prefer_canonical())
+        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
     spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
