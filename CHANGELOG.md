@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.24.0] — recursive residual splitting (fiber_split)
+- `fiber_split`: refine a fiber by splitting on the residual to its single shared
+  d(r) (where an envelope-similar second unit hides). A candidate binary split in
+  the residual subspace is ACCEPTED only if it lowers OUT-OF-SAMPLE residual
+  energy more than a random split of the same node (per-node null), so it never
+  rewards the trivial decrease from adding clusters. `recursive_split`,
+  `accept_split`, `total_residual_energy`, `shared_fiber_residual`.
+- Validated clu-free on the real g5 chunk: refining a coarse CEM baseline cut
+  held-out total residual energy ~32%, while a matched random refinement to the
+  same cluster count did not (-2%) -> +33% over random at equal K. The splitter
+  refines an existing fiber; it does not bootstrap a full sort from one root.
+
 ## [0.23.0] — fiber-realign reads the session YAML
 - `fiber-realign` now takes `<session> <group>` (like `fiber-refine`) and reads
   group channels / nchan / nsamp from `<session>.yaml`, with `--channels`,

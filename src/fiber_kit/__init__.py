@@ -21,7 +21,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.23.0"
+__version__ = "0.24.0"
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io
@@ -30,6 +30,7 @@ from .backend import use_gpu, gpu_enabled, backend_name
 from .fiber_tracer import trajectory, predict, predict_many, channel_residual_profile, split_meanvar
 from .fiber_lib import align_xcorr, realign
 from .klustakwik import klustakwik
+from .fiber_split import recursive_split, total_residual_energy, accept_split
 from .session_yaml import find_session_yaml, load_session, resolve_session_params
 from .fiber_session import (
     cluster_chunk, cluster_chunk_fine, fiber_geom, link_chunks, link_continuity,
