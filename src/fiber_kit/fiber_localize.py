@@ -135,6 +135,7 @@ def localize_unit(wav, xy, dipole=True, nboot=200, min_terc=60, rng=None):
     a = np.median(ptp, 0)
     p, sig, rel = _fit(a, xy, dipole)
     x0, y0, z0 = float(p[0]), float(p[1]), abs(float(p[2]))
+    A = float(p[3])                                  # monopole source amplitude (drift-invariant identity)
     B = float(p[4]) if dipole else 0.0
     pc = int(np.argmax(a))
     dist = float(np.sqrt((x0 - xy[pc, 0]) ** 2 + (y0 - xy[pc, 1]) ** 2 + z0 ** 2))
@@ -153,7 +154,7 @@ def localize_unit(wav, xy, dipole=True, nboot=200, min_terc=60, rng=None):
         y_low = _fit(np.median(ptp[o[:t]], 0), xy, dipole)[0][1]
         y_high = _fit(np.median(ptp[o[2 * t:]], 0), xy, dipole)[0][1]
         depth_shift = float(y_high - y_low)
-    return dict(x0=x0, y0=y0, z0=z0, dist=dist, dipoleB=B, resid=rel,
+    return dict(x0=x0, y0=y0, z0=z0, A=A, dist=dist, dipoleB=B, resid=rel,
                 sig_y=float(sig[1]), z_lo=float(z_lo), z_hi=float(z_hi),
                 y_lo=float(y_lo), y_hi=float(y_hi), depth_shift=depth_shift,
                 one_flank=_edge_flag(a, xy),
