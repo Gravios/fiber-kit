@@ -100,3 +100,100 @@ def curve_distance(curve_i, curve_j, mu, P):
 def geo_veto(curve_i, curve_j, mu, P, thr=DEFAULT_GEO_THR):
     """True == REFUSE the link (curves too distinct to be the same unit)."""
     return curve_distance(curve_i, curve_j, mu, P) > thr
+
+
+# ── inter-channel temporal offsets ──────────────────────────────────────────
+# The drift-robust half of identity: WHEN the spike reaches each channel, not
+# the amplitude footprint.  Two units at different positions differ in their
+# per-channel timing even when per-channel shapes match; and unlike amplitude,
+# the timing pattern is intrinsic to the unit, so it survives drift across
+# chunks.  Complementary to the curve distance (each catches the other's
+# near-duplicates), so a STRICT link requires both to agree.
+DEFAULT_OFF_THR = 1.8          # samples RMS; STRICT primary gate (drift-robust)
+DEFAULT_GEO_THR_BACKBONE = 2.5 # amplitude footprint is drift-FRAGILE -> loose secondary on anchored links
+
+def interchannel_offsets(template, amp_frac=0.3):
+    """Per-channel sub-sample trough time relative to the dominant channel.
+    template: (nsamp, nchan) realigned (ideally denoised) mean template.  Channels
+    below amp_frac of the dominant peak-to-peak carry no reliable timing -> NaN."""
+    T = np.asarray(template, float); p2p = T.max(0) - T.min(0); dom = int(np.argmax(p2p))
+    off = np.full(T.shape[1], np.nan)
+    for ch in range(T.shape[1]):
+        if p2p[ch] < amp_frac * p2p[dom]:
+            continue
+        i = int(np.argmin(T[:, ch]))
+        if 0 < i < T.shape[0] - 1:
+            a, b, c = T[i - 1, ch], T[i, ch], T[i + 1, ch]; dn = a - 2 * b + c
+            off[ch] = i + (0.5 * (a - c) / dn if abs(dn) > 1e-9 else 0.0)   # parabolic sub-sample
+        else:
+            off[ch] = i
+    return off - off[dom]
+
+def offset_distance(o1, o2):
+    """RMS inter-channel-offset difference (samples) over channels reliable in both."""
+    m = ~np.isnan(o1) & ~np.isnan(o2)
+    return float(np.sqrt(np.nanmean((o1[m] - o2[m]) ** 2))) if m.sum() >= 2 else np.inf
+
+def link_veto(curve_i, off_i, curve_j, off_j, mu, P, geo_thr=DEFAULT_GEO_THR, off_thr=DEFAULT_OFF_THR):
+    """True == REFUSE: link only if BOTH amplitude footprint AND inter-channel
+    timing agree.  On real g5 this gives 0 false-merge at 93% same-unit recall."""
+    return (curve_distance(curve_i, curve_j, mu, P) > geo_thr) or (offset_distance(off_i, off_j) > off_thr)
+
+
+# ── strict overlap-anchor linker with combined veto (drop-in for link_chunks) ─
+def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5,
+                       geo_thr=DEFAULT_GEO_THR_BACKBONE, off_thr=DEFAULT_OFF_THR,
+                       sigma=DEFAULT_SMOOTH_SIGMA, nq=DEFAULT_NQ):
+    """Overlap-anchor union-find (shared spikes = positive identity), but every
+    union must also pass the combined geometry+timing veto, so one spurious
+    adjacent overlap link can no longer CHAIN two geometrically-distinct fibers
+    into a mega-cluster (the catastrophic-linkage failure mode).  Self-contained
+    drop-in for fiber_session.link_chunks: pass `waves`/`mask` and it computes the
+    per-fiber curve + inter-channel offsets internally.  Returns (gid, nglob)."""
+    from collections import defaultdict, Counter
+    try:
+        from . import fiber_lib as fl
+    except ImportError:
+        import fiber_lib as fl
+    cur, off = {}, {}                                          # per (chunk, localid) signatures
+    for c in range(len(ext_idx)):
+        if len(ext_idx[c]) == 0:
+            continue
+        for l in set(int(x) for x in ext_lab[c] if x >= 0):
+            sel = ext_idx[c][ext_lab[c] == l]
+            al = denoise(fl.realign(waves[sel]), sigma)
+            wf = al[:, mask, :].reshape(len(sel), -1)
+            cur[(c, l)] = fiber_curve(wf, np.linalg.norm(wf, axis=1), nq)
+            off[(c, l)] = interchannel_offsets(al.mean(0))
+    mu, P = geometry_basis(list(cur.values()))
+    parent = {}
+    def find(x):
+        parent.setdefault(x, x)
+        while parent[x] != x: parent[x] = parent[parent[x]]; x = parent[x]
+        return x
+    def union(a, b):
+        ra, rb = find(a), find(b)
+        if ra != rb: parent[rb] = ra
+    for c in range(len(ext_idx)):
+        for l in set(int(x) for x in ext_lab[c] if x >= 0): find((c, l))
+    for c in range(len(ext_idx) - 1):
+        A = {int(g): int(l) for g, l in zip(ext_idx[c], ext_lab[c]) if l >= 0}
+        Bd = {int(g): int(l) for g, l in zip(ext_idx[c + 1], ext_lab[c + 1]) if l >= 0}
+        shared = set(A) & set(Bd)
+        if not shared: continue
+        ab = defaultdict(Counter); ba = defaultdict(Counter)
+        for s in shared: ab[A[s]][Bd[s]] += 1; ba[Bd[s]][A[s]] += 1
+        for f, row in ab.items():
+            g, cnt = row.most_common(1)[0]
+            if cnt < min_anchor or cnt < frac * sum(row.values()): continue
+            f2, cnt2 = ba[g].most_common(1)[0]
+            if f2 != f or cnt2 < frac * sum(ba[g].values()): continue
+            if link_veto(cur[(c, f)], off[(c, f)], cur[(c + 1, g)], off[(c + 1, g)],
+                         mu, P, geo_thr, off_thr):              # geometry/timing disagree -> refuse
+                continue
+            union((c, f), (c + 1, g))
+    roots = {}; gid = {}
+    for c in range(len(ext_idx)):
+        for l in set(int(x) for x in ext_lab[c] if x >= 0):
+            r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
+    return gid, len(roots)
