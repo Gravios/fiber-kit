@@ -597,3 +597,108 @@ globals with an X↔Y identity swap. Calibrate `--continuity-sig-thr` / depth ga
 real data; this is a validated mechanism, not a tuned default.
 
 ![hybrid linker](../../doc/linking/hybrid_linker.png)
+
+---
+
+# Pipeline audit & reconciliation (v0.23.0) — position/A linking vs the fiber spine
+
+This section audits the whole toolchain end to end, states the one authoritative
+workflow, and folds the recent position/`A` work in as a **complementary signal**
+rather than a parallel path. The driving principle is unchanged: **the fiber is the
+energy-direction curve `d(r)`; the trajectory and its per-energy sub-shapes are the
+product**, not a flat label set. Any step that collapses a unit to one id is a
+*reporting* convenience layered on top of the fibers, never a replacement for them.
+
+## The spine (authoritative — keeps `d(r)`)
+
+```
+fiber-session / fiber-refine --chunk-minutes M --bundles
+        -> <base>.clu  <base>.fibers.<method>.<elec>(.npz)  <base>.bundles.<elec>.npz
+fiber-relink  <base>.fibers... --clu <base>.clu --out <base>.clu.relinked
+        stage 1: intra-chunk over-split merge (mutual-best on template + d(r) profile)
+        stage 2: cross-chunk chaining by EVOLVING GEOMETRY (profile+template+depth gates)
+fiber-realign <session> <group> --clu <base>.clu.relinked      # times -> the merged templates
+fiber-localize / fiber-drift / fiber-position                   # position / drift D(c) / manifold s
+fiber-view / fiber-view-gui / fiber-view-tour                  # inspect bundle trajectories + sub-shapes
+```
+
+Both of the recurring asks are already answered **here**:
+- **"over-clustered, parts of a whole unit"** — `fiber-relink` stage 1, `laplacian_link`
+  (links arcs fragmented BETWEEN energy levels), and `fiber-session --merge-method
+  profile` all collapse over-splits **using the `d(r)` trajectory**, not point estimates.
+- **"fiber/bundle info, special sub-shapes, a separable/continuous physiological
+  process"** — `.fibers`/`.bundles` store the per-chunk `r·d(r)` curves; `fiber-position`
+  gives the drift-independent arc-length `s`; `fiber-view` renders the template montage
+  (x=time, y=position-along-fiber) where those sub-shapes are read. Use `--var-split` /
+  `--cone-channel-k` (residual-to-`d(r)` variance) to expose shape sub-units WITHOUT
+  carving the fiber into energy bands.
+
+## Where the position/`A` linker fits (`fiber-cpos`, `fiber-link`, constellation)
+
+These were validated this session on the real 350-min g5 session and are **kept as a
+complementary PHYSICAL-POSITION signal** — orthogonal to the spine's `d(r)`-SHAPE signal:
+
+- `fiber-cpos` — per-fragment monopole localization `(x0,y0,z0,A)` + realigned raw
+  median template + waveform SNR + time, written to `<base>.cpos.<method>.<elec>.<stage>.clusters.npz`.
+- `fiber-link` — cross-chunk linker on the **full position fingerprint** `(x0, y0-D, z0,
+  logA)` with `A` as the **drift-invariant anchor**, co-gated by template cosine.
+
+Validated facts (do not re-litigate):
+- The full `(x0,y0,z0,A)` fingerprint **halves** cross-chunk link ambiguity vs depth-only
+  (|Δlog A| of linked pairs 0.107 -> 0.054); `z0` helps most, `x0` is degenerate-but-
+  reproducible (a fingerprint, not a position).
+- For shape-confirmed links `A` is invariant to **~3%** (|Δlog A| 0.026) across the whole
+  session — `A` is the identity anchor; drift acts on `y0` only.
+- The **template co-gate, not an SNR pre-filter, sets link cleanliness** (|Δlog A| is flat
+  ~0.02-0.026 for min-SNR 0..8; above ~9 it WORSENS as the registration loses density).
+  So `fiber-link --min-snr` defaults to 0 (off); raise it only to trade coverage for purity.
+
+## Audit findings (the gaps to close — none yet wired)
+
+1. **`fiber-link` collapses to a flat `.clu` and discards the fibers.** It must instead
+   **relabel `.fibers` gids** (the way `fiber-relink` does) so `.bundles` / `fiber-position`
+   / `fiber-view` still see each tracked unit's per-chunk `d(r)` curves. *Until then,
+   `fiber-link` output is a label set only — not a substitute for a relinked `.fibers` run.*
+2. **`fiber-link` is inter-chunk only.** Intra-chunk energy-band over-splits are merged by
+   `fiber-relink` stage 1 / `laplacian_link` / profile-merge — run those first; `fiber-link`
+   alone leaves within-chunk redundancy.
+3. **`fiber-cpos` duplicates `fiber-localize`.** Treat `fiber-cpos` as the per-fragment
+   FEEDER (positions+templates+SNR+time for linking) and `fiber-localize` as the per-FINAL-
+   unit report; they should share one monopole+dipole core, not two.
+4. **The position fingerprint + `A` anchor are not inside `fiber-relink`'s gate.** The end
+   state is ONE linker that uses BOTH shape (`d(r)` profile + template, already there) AND
+   physical position (`x0,y0,z0` + the `A` drift-invariant anchor, new) as complementary
+   cross-chunk evidence — add `(x0,y0,z0,A)` as an optional term in `link_across_chunks`,
+   not as a separate executable.
+5. **Drift is estimated twice** (`fiber-drift` from `.fibers` depths; the constellation
+   `A,y0` density registration in `fiber-link`). Keep `fiber-drift` as the spine's drift
+   (it feeds `fiber-position`); use the `A`-anchored constellation only as a cross-check.
+
+## Recommended end-to-end workflow (until the above are wired)
+
+```bash
+SESSION=sirotaA-jg-000005-20120312 ; G=5
+# 1. fibers with per-chunk d(r) curves + bundles (drift-aware)
+fiber-refine  $SESSION $G --chunk-minutes 12 --chunk-overlap-minutes 1 \
+              --var-split 2 --split-var-margin 0.1 --cone-channel-k 2.5 --bundles
+# 2. collapse over-splits + chain across chunks BY GEOMETRY (keeps gids -> bundles)
+fiber-relink  $SESSION.fibers.stderiv.$G.npz --clu $SESSION.clu.$G \
+              --out $SESSION.clu.$G.relinked --report relink_report.tsv
+# 3. (cross-check) physical-position view: feeder + position-fingerprint linker
+fiber-cpos    $SESSION $G                                   # x0,y0,z0,A + template + SNR + time
+fiber-link    $SESSION $G --cpos-method stderiv --cpos-stage refine   # A-anchored, co-gated
+#    -> compare fiber-link's bundles against fiber-relink's; agreement = high confidence,
+#       position-only links fiber-relink missed = sparse-fiber candidates to review.
+# 4. align times to merged templates, then physiology on the RETAINED fibers
+fiber-realign $SESSION $G --clu $SESSION.clu.$G.relinked
+fiber-drift   $SESSION.fibers.stderiv.$G            # D(c) for fiber-position
+fiber-position $SESSION $G --fibers $SESSION.fibers.stderiv.$G --clu $SESSION.clu.$G.relinked
+fiber-localize $SESSION $G --clu $SESSION.clu.$G.relinked
+# 5. inspect the trajectories + per-energy sub-shapes (the physiology)
+fiber-view-gui $SESSION.bundles.$G.npz             # rotatable bundles, drift sheet, sub-shapes
+```
+
+The collapsed global `.clu` (`fiber-link`'s output, or `fiber-relink`'s remap) is the
+hand-off to Klusters; the `.fibers`/`.bundles`/`.position` artifacts are what carry the
+trajectory and the separable/continuous sub-shape structure for analysis. Never ship only
+the `.clu`.
