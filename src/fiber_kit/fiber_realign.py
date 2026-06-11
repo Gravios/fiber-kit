@@ -54,7 +54,6 @@ def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
     N, T, C = spk.shape
     ms = int(max_shift)
     off = np.zeros(N, np.float32)
-    core = slice(ms, T - ms)
     Tcore = T - 2 * ms
     lags = np.arange(-ms, ms + 1)
 

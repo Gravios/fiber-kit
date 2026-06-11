@@ -84,14 +84,14 @@ def main():
     print(f"{'pair(gid)':>13} {'n_a':>6} {'n_b':>6} {'pdist':>6} | "
           f"{'0-2':>6} {'2-5':>6} {'5-10':>6} {'base':>6} | {'rate_r':>6}  verdict")
     for r in rows:
-        chunk, ga, gb, la, lb, pd, thr = r[0], int(r[1]), int(r[2]), r[3], r[4], float(r[5]), float(r[6])
+        chunk, ga, gb, _, _, pd, _ = r[0], int(r[1]), int(r[2]), r[3], r[4], float(r[5]), float(r[6])
         if ga < 0 or gb < 0:
             continue
         tA, tB = times(ga), times(gb)
         if len(tA) < 30 or len(tB) < 30:
             continue
         c = ccg_counts(tA, tB, a.sr, bands); base = c[-1] + 1e-9
-        ref2 = c[0] / base; ref5 = c[1] / base    # normalized to baseline rate
+        ref5 = c[1] / base    # normalized to baseline rate
         rc = rate_corr(tA, tB, a.sr)
         # same-neuron evidence: relative refractory survives in [2,5] ms AND rates
         # don't co-rise (anti-/un-correlated handoff).  Heuristic flag only.

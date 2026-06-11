@@ -50,7 +50,6 @@ def whiten_atoms(templates, W, nmean, mask=fl.MASK_FULL, shifts=range(-8, 9)):
     shifts = list(shifts)
     s0 = shifts.index(0)
     K, S = len(keys), len(shifts)
-    nsamp = next(iter(templates.values())).shape[0]
     M = np.zeros((K, S, len(mask) * templates[keys[0]].shape[1]))
     for ki, k in enumerate(keys):
         for si, s in enumerate(shifts):

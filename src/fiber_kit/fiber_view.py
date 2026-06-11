@@ -180,7 +180,6 @@ def stats_figure(waves, lab, res, W, nmean, mask, sr, fiber_labels,
     _need_mpl()
     n = len(fiber_labels)
     fig, axes = plt.subplots(n, 2, squeeze=False, figsize=(9, 2.4 * n), constrained_layout=True)
-    win = int(round(window_ms * sr / 1000.0))
     for r0, l in enumerate(fiber_labels):
         idx = np.flatnonzero(lab == l)
         st = ft.fiber_shape_stats(waves[idx], W, nmean, mask)

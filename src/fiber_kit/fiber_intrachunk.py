@@ -203,7 +203,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
             while par[x] != x:
                 par[x] = par[par[x]]; x = par[x]
             return x
-        es = set((a, b) for _, a, b in edges) | set((b, a) for _, a, b in edges)
+        es = {(a, b) for _, a, b in edges} | {(b, a) for _, a, b in edges}
         for _, a, b in edges:
             ra, rb = root(a), root(b)
             if ra == rb:
@@ -270,7 +270,7 @@ def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
     member_spikes : list (per unit) of spike indices into spkD / t_spike_s.
     t_spike_s     : per-spike time in seconds.  Returns (links, {chunk_id: D_um})."""
     uC = units["chunk"]; uY = units["y0"]; uN = len(uC)
-    chunks = sorted(set(int(c) for c in uC))
+    chunks = sorted({int(c) for c in uC})
     ut = [t_spike_s[ix] for ix in member_spikes]
     links = []; D = {chunks[0]: 0.0}
     for kk in range(1, len(chunks)):
@@ -328,8 +328,8 @@ def intrachunk_clu(src_ids, sig_ids, label, *, reserve=(0, 1)):
     lut = {}
     for c in np.unique(src_ids):
         c = int(c)
-        lut[c] = c if c in reserve else (max(reserve) + 1 + fresh(("U", unit_of[c])) if c in unit_of
-                                         else max(reserve) + 1 + fresh(("S", c)))
+        lut[c] = c if c in reserve else (nid + fresh(("U", unit_of[c])) if c in unit_of
+                                         else nid + fresh(("S", c)))
     out = np.array([lut[int(c)] for c in src_ids], np.int32)
     return out, int(out.max()) + 1
 

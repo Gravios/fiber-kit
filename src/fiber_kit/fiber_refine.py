@@ -458,7 +458,7 @@ def _residual_refine(lab, X, min_group, margin=0.02, max_depth=4, verbose=False)
     out = lab.copy()
     nxt = (int(lab.max()) + 1) if (lab >= 0).any() else 0
     nsplit = 0
-    for c in sorted(set(int(x) for x in lab if x >= 0)):
+    for c in sorted({int(x) for x in lab if x >= 0}):
         idx = np.where(lab == c)[0]
         if len(idx) < 2 * min_group:
             continue
