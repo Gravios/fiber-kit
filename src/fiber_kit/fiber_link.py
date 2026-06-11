@@ -119,7 +119,7 @@ def build_bundles(n_frag, links):
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
-                 drift=None, seed_links=None):
+                 drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -153,7 +153,16 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
     if seed_links is not None:
         links += [(int(i), int(j)) for i, j in seed_links]
     bundles = build_bundles(len(y0), links)
-    return dict(chunk=chunk, chunks=chunks, D=D, links=links, bundles=bundles, link_mask=linkable)
+    traj_info = None
+    if refine_trajectory:
+        try:
+            from . import fiber_trajectory as ftj
+        except ImportError:
+            import fiber_trajectory as ftj
+        bundles, traj_info = ftj.refine_bundles(frag, bundles, chunk, chunk_min=chunk_min,
+                                                  ext_min=traj_ext_min)
+    return dict(chunk=chunk, chunks=chunks, D=D, links=links, bundles=bundles,
+                link_mask=linkable, traj_info=traj_info)
 
 
 def global_clu_map(frag_clu, bundles, src_ids, reserve=(0, 1)):
@@ -218,6 +227,12 @@ def main():
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--min-snr", type=float, default=0.0, help="gate linkable fragments on waveform SNR (needs snr in the cpos table; 0=off)")
     ap.add_argument("--from-units", default=None, help="link a fiber-intrachunk <...>.units.npz (per-chunk units) instead of raw cpos fragments")
+    ap.add_argument("--refine-trajectory", action="store_true",
+                    help="post-pass: fit per-bundle depth + PCA-feature trajectories, resolve "
+                         "same-chunk-conflict merges, and attach units lying on a bundle's path")
+    ap.add_argument("--traj-ext-min", type=float, default=0.0,
+                    help="minutes an attach may extend beyond a bundle's member time span "
+                         "(0=interpolation only; ~chunk length allows extrapolation-based extension)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.linked)")
     a = ap.parse_args()
 
@@ -236,7 +251,7 @@ def main():
                  if "drift_um" in z.files else None)
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
-                         gap=a.max_gap, drift=drift, seed_links=seed)
+                         gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -248,7 +263,7 @@ def main():
         frag = {k: z[k] for k in z.files if k != "cols"}
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
-                         gap=a.max_gap)
+                         gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
@@ -258,6 +273,10 @@ def main():
     print(f"[link] {int(R['link_mask'].sum())} linkable {'units' if a.from_units else 'fragments'} over "
           f"{len(R['chunks'])} chunks -> {len(R['links'])} inter-chunk links, {len(multi)} multi-chunk "
           f"bundles (of {len(R['bundles'])}); drift {min(Dv):.0f}..{max(Dv):.0f}um")
+    if R.get("traj_info"):
+        ti = R["traj_info"]
+        print(f"[link] trajectory refine: conflicts {ti['conflicts_before']}->{ti['conflicts_after']}, "
+              f"attached {ti['attached']}, evicted {ti['evicted']} (depth tol {ti['depth_tol']:.1f}, feat tol {ti['feat_tol']:.2f})")
     print(f"[link] wrote {out_path}  ({ncl} units)")
 
 
