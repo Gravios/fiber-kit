@@ -76,7 +76,7 @@ def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96):
     own best match, and only when both the direction profile and the template agree
     tightly.  Iterated a few rounds so a neuron split into >2 fragments can still
     coalesce, while each merge stays a vetted pairwise decision."""
-    grid, dirA, tmpl, nspk, chunk = F['grid'], F['dir'], F['template'], F['nspk'], F['chunk']
+    grid, dirA, tmpl, _, chunk = F['grid'], F['dir'], F['template'], F['nspk'], F['chunk']
     by = defaultdict(list)
     for r in range(len(chunk)):
         if F['gid'][r] >= 0:

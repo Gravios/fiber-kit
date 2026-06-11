@@ -139,7 +139,6 @@ def drift_curve(fibers_files, relink=True, min_nspk=60, min_span=3, pitch=20.0, 
               f"chunks={summary['n_chunks']}")
         print(f"[drift] probe drift range={summary['drift_range_um']}µm  max step={summary['max_step_um']}µm  "
               f"resid={summary['resid_std_um']}µm")
-        nr = abs(grad) > 0.15 and abs(grad) > 0.3 * (rng / max(1, len(chunks)))
         print(f"[drift] depth-gradient={summary['depth_gradient_um_per_ch']}µm/ch "
               f"-> {'NON-RIGID (position-dependent) drift indicated' if abs(grad) > 0.15 else 'consistent with rigid drift'}")
         if summary['cross_shank_spread_um'] is not None:

@@ -19,7 +19,6 @@ try:
     from . import fiber_tracer as ft
 except ImportError:
     import fiber_tracer as ft
-    import fiber_adapt as fa
 
 
 def shared_fiber_residual(X, fit=None):

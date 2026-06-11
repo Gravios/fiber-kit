@@ -97,7 +97,7 @@ def fiber_curve(masked_templates_by_spike, energy, nq=DEFAULT_NQ):
 def geometry_basis(curves, k=3):
     """Canonical PCA(k) direction basis over pooled, unit-normalised curve points.
     `curves`: iterable of (nq, P) arrays.  Returns (mean: (P,), P_basis: (P, k))."""
-    pts = np.vstack([c for c in curves])
+    pts = np.vstack(list(curves))
     pts = pts / (np.linalg.norm(pts, axis=1, keepdims=True) + 1e-12)   # directions
     mu = pts.mean(0)
     _, _, Vt = np.linalg.svd(pts - mu, full_matrices=False)
@@ -183,7 +183,7 @@ def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5
     for c in range(len(ext_idx)):
         if len(ext_idx[c]) == 0:
             continue
-        for l in set(int(x) for x in ext_lab[c] if x >= 0):
+        for l in {int(x) for x in ext_lab[c] if x >= 0}:
             sel = ext_idx[c][ext_lab[c] == l]
             al = denoise(fl.realign(waves[sel]), sigma)
             wf = al[:, mask, :].reshape(len(sel), -1)
@@ -199,7 +199,7 @@ def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5
         ra, rb = find(a), find(b)
         if ra != rb: parent[rb] = ra
     for c in range(len(ext_idx)):
-        for l in set(int(x) for x in ext_lab[c] if x >= 0): find((c, l))
+        for l in {int(x) for x in ext_lab[c] if x >= 0}: find((c, l))
     for c in range(len(ext_idx) - 1):
         A = {int(g): int(l) for g, l in zip(ext_idx[c], ext_lab[c]) if l >= 0}
         Bd = {int(g): int(l) for g, l in zip(ext_idx[c + 1], ext_lab[c + 1]) if l >= 0}
@@ -218,7 +218,7 @@ def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5
             union((c, f), (c + 1, g))
     roots = {}; gid = {}
     for c in range(len(ext_idx)):
-        for l in set(int(x) for x in ext_lab[c] if x >= 0):
+        for l in {int(x) for x in ext_lab[c] if x >= 0}:
             r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
     return gid, len(roots)
 

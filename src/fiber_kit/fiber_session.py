@@ -615,7 +615,7 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
         if ra != rb: parent[rb] = ra
     nC = len(ext_idx)
     for c in range(nC):
-        for l in set(int(x) for x in ext_lab[c] if x >= 0): find((c, l))
+        for l in {int(x) for x in ext_lab[c] if x >= 0}: find((c, l))
     for c in range(nC - 1):
         A = {int(g): int(l) for g, l in zip(ext_idx[c],     ext_lab[c])     if l >= 0}
         B = {int(g): int(l) for g, l in zip(ext_idx[c + 1], ext_lab[c + 1]) if l >= 0}
@@ -631,7 +631,7 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
             union((c, f), (c + 1, g))
     roots = {}; gid = {}
     for c in range(nC):
-        for l in set(int(x) for x in ext_lab[c] if x >= 0):
+        for l in {int(x) for x in ext_lab[c] if x >= 0}:
             r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
     return gid, len(roots)
 
@@ -892,7 +892,7 @@ def main():
     if a.no_link:
         gid = {}; n = 0
         for c in range(nchunks):
-            for l in sorted(set(int(x) for x in ext_lab[c] if x >= 0)): gid[(c, l)] = n; n += 1
+            for l in sorted({int(x) for x in ext_lab[c] if x >= 0}): gid[(c, l)] = n; n += 1
         nglob = n; mode = "chunk-disjoint"
     else:
         gid, nglob = link_chunks(ext_idx, ext_lab, min_anchor=a.min_anchor)

@@ -94,7 +94,7 @@ def load_manifolds(fibers_file, relink=True, min_nspk=60, n_u=64, verbose=True):
     dict (mask, nsamp, nchan, p, sr, channels).  Units are the re-linked tracks
     (default) or raw .fibers gids (relink=False)."""
     z = np.load(fibers_file, allow_pickle=True)
-    gid = z['gid']; chunk = z['chunk']; nspk = z['nspk']
+    gid = z['gid']; nspk = z['nspk']
     grid = z['dir'].shape[1] and z['grid']; dirs = z['dir']      # (M,G), (M,G,p)
     meta = dict(mask=np.asarray(z['meta_mask']) if 'meta_mask' in z.files else fl.MASK_FULL,
                 nsamp=int(z['meta_nsamp']), nchan=int(z['meta_nchan']),
