@@ -261,6 +261,26 @@ def aggregate_units(sig, label):
     return out
 
 
+def group_intrachunk_iter(sig, *, max_iter=5, **kw):
+    """Iterated intra-chunk grouping: group -> aggregate (re-estimate clean unit signatures from the
+    pooled spikes) -> regroup, to convergence, composing the fragment->unit map across passes.  Because
+    aggregation denoises each partial merge, the SAME tight gate keeps finding merges on later passes
+    (g5: 1724 one-pass -> 1124 at max_iter>=4, tight gate, within-unit CCG ~0.07) -- the principled
+    alternative to loosening off_thr for low-count fragments.  **kw forward to group_intrachunk every
+    pass, so --off-n-ref / --cos-thr / gate compose.  max_iter=1 reproduces a single group_intrachunk
+    pass exactly (same partition).  Returns a dense 0-based label over the ORIGINAL fragment rows."""
+    cur = sig
+    f2u = np.arange(len(sig["ids"]))
+    for _ in range(max_iter):
+        lab = group_intrachunk(cur, **kw)
+        if len(np.unique(lab)) == len(cur["ids"]):     # nothing merged this pass -> converged
+            break
+        f2u = lab[f2u]                                  # compose orig->cur with cur->new
+        u = aggregate_units(cur, lab); u["ids"] = u["unit"]
+        cur = u
+    return f2u
+
+
 def _boundary_sig(waves, sigma=fg.DEFAULT_SMOOTH_SIGMA):
     """Centred mean template (flattened, unit-norm), inter-channel offsets, and an
     energy-weighted channel-centroid depth (geometry-free, channel units) from a small
@@ -372,6 +392,9 @@ def main():
                          "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
     ap.add_argument("--off-ceil", type=float, default=DEFAULT_OFF_CEIL,
                     help="cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee).")
+    ap.add_argument("--iter", type=int, default=1, dest="n_iter",
+                    help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
+                         ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
     ap.add_argument("--gate", choices=("cosine", "mmd", "kcov"), default="cosine",
                     help="fragment-merge test: 'cosine' (mean template, default & recommended). "
@@ -405,7 +428,7 @@ def main():
                            chunk_min=a.chunk_minutes, min_n=a.min_n,
                            feats="wave" if a.gate != "cosine" else None,
                            realign_lohi=(_m.realign_lo, _m.realign_hi))
-    label = group_intrachunk(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+    label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                              off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                              gate=a.gate)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
