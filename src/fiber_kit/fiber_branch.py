@@ -110,9 +110,9 @@ def main():
     ap.add_argument("--out", default=None, help="write a per-unit branch report .npz")
     a = ap.parse_args()
 
-    cfg = sy.resolve_session_params(a.session, a.group, require=("nChannels",))
+    cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal",))
     base, elec = cfg["base"], a.group
-    nsamp = int(cfg.get("nSamples", 32)); nch = int(cfg.get("nChannelsGroup", cfg.get("nChannels")))
+    nsamp = int(cfg["nsamp"]); nch = int(cfg["nchan"])
     spk, r = nio.open_spk_raw(base, elec, nsamp, nch)         # RAW waveforms (refuses stderiv)
     if a.clu:
         _, ids = nio.read_clu_file(a.clu)
