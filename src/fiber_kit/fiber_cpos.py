@@ -162,6 +162,12 @@ def main():
     ap.add_argument("--min-spikes", type=int, default=15)
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--no-templates", action="store_true", help="skip per-cluster median templates in the .clusters.npz")
+    ap.add_argument("--nboot", type=int, default=100,
+                    help="bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). "
+                         "This loop is ~5x the rest of the cost (the dominant runtime); positions "
+                         "(x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 "
+                         "for identical positions ~5x faster (analytic sig_y is still written; the "
+                         "percentile CIs become NaN).")
     ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry (else from chunk xy via YAML)")
     a = ap.parse_args()
 
@@ -198,7 +204,8 @@ def main():
         extract = fil_extractor(filmm, res, channels, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
         src = a.fil or f"{base}.fil"
 
-    per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole, templates=not a.no_templates)
+    per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole,
+                            nboot=a.nboot, templates=not a.no_templates)
     sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
     for cid, r in per.items():
         t = res[clu == cid]
