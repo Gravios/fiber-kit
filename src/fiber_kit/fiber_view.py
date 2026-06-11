@@ -503,7 +503,7 @@ def load_group(session, group, in_clu=None, channels=None, ntotal=None, nchan=No
                                     nchan=nchan, nsamp=nsamp, sr=sr)
     base = cfg["base"]; elec = group
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
-    gch = np.array(cfg["channels"], int); mask = fl.MASK_FULL
+    gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
     res = fs.read_res(base, elec)
     spk, _ = fs.open_spkD(base, elec, nsamp, nchan)
     waves = np.asarray(spk[:], dtype=float)

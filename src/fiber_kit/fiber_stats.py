@@ -86,7 +86,7 @@ def main():
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
     base = cfg["base"]; elec = a.group
     ntotal, nchan, nsamp, sr = cfg["ntotal"], cfg["nchan"], cfg["nsamp"], cfg["sr"]
-    gch = np.array(cfg["channels"], int); mask = fl.MASK_FULL
+    gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
 
     res = fs.read_res(base, elec)
     if a.in_clu:

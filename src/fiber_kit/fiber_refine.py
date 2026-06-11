@@ -881,7 +881,7 @@ def main():
     base = cfg["base"]; elec = a.group
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
-    mask = fl.MASK_FULL
+    mask = fl.build_masks(nsamp, cfg["peak"]).full
 
     floor = a.refr_floor
     if floor is None:
