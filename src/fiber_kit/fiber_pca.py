@@ -201,7 +201,7 @@ def realign_pca(spk, clu, res, basis, *, max_shift=5, iters=2, min_n=20, max_glo
 def main():
     ap = argparse.ArgumentParser(description="neurosuite-3 .pca/.pcaD basis: fit a per-channel "
                                              "PCA basis from .spk+.clu and write the binary, or inspect one.")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
+    sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--info", default=None, help="print the header of an existing .pcaD and exit")
     ap.add_argument("--clu-method", default="stderiv"); ap.add_argument("--clu-stage", default="refine")
     ap.add_argument("--data2use", type=int, default=None, help="PCA window length (default: nSamples)")

@@ -147,9 +147,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Write a per-spike cluster-position sidecar (.cpos) by localizing each "
                     "cluster's median RAW template (monopole+dipole). Reads <session>.yaml.")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
-    ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
-    ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--peak", type=int, default=16)
+    sy.add_session_args(ap, nchan=False, sr=False, nsamp_default=32, peak=True)
     ap.add_argument("--spk", default=None, help="path to a STANDARD/raw .spk (preferred over .fil); never the stderiv .spkD")
     ap.add_argument("--spk-method", default="standard", help="method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec>")
     ap.add_argument("--fil", default=None, help="path to raw .fil (fallback if no standard .spk)")

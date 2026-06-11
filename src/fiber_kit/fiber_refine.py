@@ -782,13 +782,7 @@ def main():
         prog="fiber-refine",
         description="Dedup at the imposed refractory, then iteratively split/peel a "
                     "fine sort into clean units; writes a refined .clu (+ deduped .res).")
-    ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
-    ap.add_argument("group", type=int, help="1-based spike group")
-    ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
-    ap.add_argument("--ntotal", type=int, default=None)
-    ap.add_argument("--nsamp", type=int, default=None)
-    ap.add_argument("--nchan", type=int, default=None)
-    ap.add_argument("--sr", type=float, default=None)
+    sy.add_session_args(ap)
     ap.add_argument("--in-clu", default=None,
                     help="path to the input sort to refine; "
                          "default = canonical .clu if present, else a fresh fine sort")
