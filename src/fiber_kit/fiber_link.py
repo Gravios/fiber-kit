@@ -67,32 +67,38 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.85,
-                  pos_thr=1.5, off_thr=1.0, offsets=None):
-    """Mutual-NN candidates in (x0, y0-D, z0, logA) between consecutive chunks, co-gated
-    by template cosine AND inter-channel offset.  Templates are mutual-centred first, so a
-    constant whole-cluster time-shift between two chunks cannot fail the cosine gate
-    (centring is idempotent — a no-op when they are already centred, e.g. fiber-intrachunk
-    units).  The offset RMS co-gate is the drift-robust differentiator that vetoes a
-    co-located different unit that happens to share gross shape; off_thr<=0 disables it.
-    Returns list of (i, j) index pairs (into the passed arrays)."""
+                  pos_thr=1.5, off_thr=1.0, offsets=None, gap=1):
+    """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
+    inter-channel offset.  Templates are mutual-centred first, so a constant whole-cluster
+    time-shift between two chunks cannot fail the cosine gate (centring is idempotent -- a
+    no-op when they are already centred, e.g. fiber-intrachunk units).  The offset RMS
+    co-gate is the drift-robust differentiator that vetoes a co-located different unit that
+    happens to share gross shape; off_thr<=0 disables it.
+
+    gap>1 also matches across a skipped chunk (c -> c+2), but only for source units that
+    found NO link at a smaller gap -- bridging single-chunk dropouts without competing with
+    the adjacent match.  Returns list of (i, j) index pairs (into the passed arrays)."""
     tc = np.array([fg.mutual_center(t) for t in tmpl])
     if offsets is None:
         offsets = np.array([fg.interchannel_offsets(t) for t in tc])
     sy_ = y0.std() + 1e-9; sx = x0.std() + 1e-9; sz = z0.std() + 1e-9; sa = logA.std() + 1e-9
-    links = []
-    for k in range(1, len(chunks)):
-        ai = np.flatnonzero(chunk == chunks[k - 1]); bi = np.flatnonzero(chunk == chunks[k])
-        if len(ai) < 2 or len(bi) < 2:
-            continue
-        dd = D[int(chunks[k])] - D[int(chunks[k - 1])]
-        Fa = np.vstack([y0[ai] / sy_, x0[ai] / sx, z0[ai] / sz, logA[ai] / sa]).T
-        Fb = np.vstack([(y0[bi] - dd) / sy_, x0[bi] / sx, z0[bi] / sz, logA[bi] / sa]).T
-        for u in range(len(bi)):
-            dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
-            if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
-                if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
-                        (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr):
-                    links.append((int(ai[v]), int(bi[u])))
+    links = []; linked_fwd = set()
+    for g in range(1, gap + 1):
+        for k in range(len(chunks) - g):
+            ai = np.flatnonzero(chunk == chunks[k]); bi = np.flatnonzero(chunk == chunks[k + g])
+            if g > 1:
+                ai = np.array([u for u in ai if u not in linked_fwd], int)
+            if len(ai) < 2 or len(bi) < 2:
+                continue
+            dd = D[int(chunks[k + g])] - D[int(chunks[k])]
+            Fa = np.vstack([y0[ai] / sy_, x0[ai] / sx, z0[ai] / sz, logA[ai] / sa]).T
+            Fb = np.vstack([(y0[bi] - dd) / sy_, x0[bi] / sx, z0[bi] / sz, logA[bi] / sa]).T
+            for u in range(len(bi)):
+                dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
+                if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
+                    if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
+                            (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr):
+                        links.append((int(ai[v]), int(bi[u]))); linked_fwd.add(int(ai[v]))
     return links
 
 
@@ -112,13 +118,17 @@ def build_bundles(n_frag, links):
 
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0,
-                 max_resid=0.08, min_n=20, min_snr=0.0, mask=None):
+                 max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
+                 drift=None, seed_links=None):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
-    [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).  When frag
-    carries 'offset' it is used directly for the offset co-gate; otherwise offsets are derived
-    from the centred templates.  When frag carries 'snr' and min_snr>0, the linkable set is
-    additionally gated on waveform SNR -- resid measures localization quality, not
-    amplitude/noise, so the two are complementary."""
+    [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
+
+    drift      : optional {chunk_id: D_um} to use instead of the (composition-fragile)
+                 density cross-correlation -- pass the fiber-intrachunk overlap-backbone
+                 drift here for a true per-unit estimate.
+    seed_links : optional list of (i,j) index pairs (full-array indices) to union into the
+                 bundles before the fingerprint pass -- the overlap-backbone anchors.
+    gap        : max chunk skip for the fingerprint pass (2 bridges single-chunk dropouts)."""
     if mask is None:
         mask = fl.MASK_FULL
     y0 = frag["y0"]; A = frag["A"]; logA = np.log(np.clip(A, 1, None))
@@ -131,12 +141,17 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
         linkable &= np.asarray(frag["snr"]) >= min_snr
     idx = np.flatnonzero(linkable)
     chunks = sorted(int(c) for c in np.unique(chunk[idx]))
-    D = estimate_drift(y0[idx], logA[idx], frag["n"][idx].astype(float), chunk[idx], chunks)
+    if drift is not None:
+        D = {int(c): float(drift.get(int(c), 0.0)) for c in chunks}
+    else:
+        D = estimate_drift(y0[idx], logA[idx], frag["n"][idx].astype(float), chunk[idx], chunks)
     offs = frag["offset"][idx] if "offset" in frag else None
     raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                         chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                        off_thr=off_thr, offsets=offs)
+                        off_thr=off_thr, offsets=offs, gap=gap)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
+    if seed_links is not None:
+        links += [(int(i), int(j)) for i, j in seed_links]
     bundles = build_bundles(len(y0), links)
     return dict(chunk=chunk, chunks=chunks, D=D, links=links, bundles=bundles, link_mask=linkable)
 
@@ -198,6 +213,7 @@ def main():
     ap.add_argument("--cos-thr", type=float, default=0.85)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
+    ap.add_argument("--max-gap", type=int, default=2, help="max chunk skip for the fingerprint pass (2 bridges single-chunk dropouts)")
     ap.add_argument("--max-resid", type=float, default=0.08)
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--min-snr", type=float, default=0.0, help="gate linkable fragments on waveform SNR (needs snr in the cpos table; 0=off)")
@@ -215,8 +231,12 @@ def main():
     if a.from_units:
         z = np.load(a.from_units, allow_pickle=True)
         frag = {k: z[k] for k in ("template", "offset", "x0", "y0", "z0", "A", "t_mid", "n")}
+        seed = z["backbone"].tolist() if "backbone" in z.files and len(z["backbone"]) else None
+        drift = (dict(zip(z["drift_chunks"].tolist(), z["drift_um"].tolist()))
+                 if "drift_um" in z.files else None)
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
-                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n)
+                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
+                         gap=a.max_gap, drift=drift, seed_links=seed)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -227,7 +247,8 @@ def main():
             raise SystemExit(f"[link] {tbl} has no 't_mid' -- re-run fiber-cpos to stamp time")
         frag = {k: z[k] for k in z.files if k != "cols"}
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
-                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr)
+                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
+                         gap=a.max_gap)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
