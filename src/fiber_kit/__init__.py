@@ -31,7 +31,7 @@ from .fiber_tracer import trajectory, predict, predict_many, channel_residual_pr
 from .fiber_lib import align_xcorr  # realign primitive stays under fk.fiber_lib.realign
 from .klustakwik import klustakwik
 from .fiber_split import recursive_split, total_residual_energy, accept_split
-from .session_yaml import find_session_yaml, load_session, resolve_session_params
+from .session_yaml import find_session_yaml, load_session, resolve_session_params, add_session_args, SessionCfg
 from .fiber_session import (
     cluster_chunk, cluster_chunk_fine, fiber_geom, link_chunks, link_continuity,
     read_res, open_spkD, fil_chunk_whitener,
@@ -54,7 +54,7 @@ __all__ = [
     "fiber_lib", "fiber_tracer", "fiber_adapt", "fiber_collision", "laplacian_link",
     "neuro_io", "backend", "use_gpu", "gpu_enabled", "backend_name",
     "trajectory", "predict", "predict_many", "channel_residual_profile", "split_meanvar", "klustakwik",
-    "find_session_yaml", "load_session", "resolve_session_params",
+    "find_session_yaml", "load_session", "resolve_session_params", "add_session_args", "SessionCfg",
     "cluster_chunk", "cluster_chunk_fine", "fiber_geom", "link_chunks", "link_continuity",
     "read_res", "open_spkD", "fil_chunk_whitener",
     "relink", "rewrite_clu", "write_report",

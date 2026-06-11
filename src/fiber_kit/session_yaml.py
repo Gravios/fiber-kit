@@ -12,6 +12,7 @@
 #  base = <yaml path without extension>, so files resolve as base.res.<group> etc.
 # ════════════════════════════════════════════════════════════════════════════
 import os
+from dataclasses import dataclass
 
 
 def find_session_yaml(session):
@@ -159,6 +160,73 @@ def refractory_period_samples(session, group, sr=None, path=None, default=16):
     return int(default), "default (not in yaml)"
 
 
+_SESSION_FIELDS = ("base", "yaml", "group", "channels", "ntotal", "nchan",
+                   "nsamp", "sr", "peak", "probe")
+
+
+@dataclass
+class SessionCfg:
+    """Resolved session parameters.  Supports attribute access (cfg.sr) AND the legacy mapping
+    access (cfg["sr"], cfg.get("sr")) so existing callers keep working unchanged — but an unknown
+    key now raises KeyError instead of silently returning None.  That is the class of bug that let
+    fiber_intrachunk read cfg["samplingRate"] / cfg.get("nSamples", 32) undetected (fixed in 0032):
+    with this type those mistakes fail loudly at the read."""
+    base: object
+    yaml: object
+    group: object
+    channels: object
+    ntotal: object
+    nchan: object
+    nsamp: object
+    sr: object
+    peak: object
+    probe: object
+
+    def __getitem__(self, k):
+        if k not in _SESSION_FIELDS:
+            raise KeyError(f"SessionCfg has no field {k!r}; valid: {_SESSION_FIELDS}")
+        return getattr(self, k)
+
+    def get(self, k, default=None):
+        if k not in _SESSION_FIELDS:
+            raise KeyError(f"SessionCfg has no field {k!r}; valid: {_SESSION_FIELDS}")
+        return getattr(self, k)
+
+    def __contains__(self, k):
+        return k in _SESSION_FIELDS
+
+    def keys(self):
+        return _SESSION_FIELDS
+
+
+def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=True,
+                     nchan=True, sr=True, probe=False, peak=False, nsamp_default=None):
+    """Register the standard <session>.yaml CLI arguments on `ap` so the ~15 tools that resolve a
+    session stop hand-rolling (and occasionally mistyping) them.  Pair with resolve_session_params,
+    which returns a SessionCfg.  Keyword flags select which overrides to expose; nsamp_default /
+    peak / probe cover the documented per-tool variations."""
+    if positional:
+        ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
+        ap.add_argument("group", type=int, help="1-based spike group")
+    if channels:
+        ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
+    if ntotal:
+        ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in the recording")
+    if nchan:
+        ap.add_argument("--nchan", "--nch", dest="nchan", type=int, default=None,
+                        help="override: channels in this group")
+    if nsamp:
+        ap.add_argument("--nsamp", type=int, default=nsamp_default,
+                        help="override: samples per spike (default from YAML)")
+    if sr:
+        ap.add_argument("--sr", type=float, default=None, help="override: sampling rate")
+    if peak:
+        ap.add_argument("--peak", type=int, default=16, help="peak sample index within the window")
+    if probe:
+        ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry")
+    return ap
+
+
 def resolve_session_params(session, group, channels=None, ntotal=None, nchan=None,
                            nsamp=None, sr=None, require=("channels", "ntotal"), verbose=True):
     """Resolve run parameters from <session>.yaml with CLI overrides taking
@@ -197,6 +265,10 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
     if cfg.get("channels") and cfg.get("nchan") is None:
         cfg["nchan"] = len(cfg["channels"])
 
+    bad = [k for k in require if k not in _SESSION_FIELDS]
+    if bad:
+        raise ValueError(f"resolve_session_params: unknown require keys {bad}; "
+                         f"valid: {_SESSION_FIELDS}")
     missing = [k for k in require if cfg.get(k) in (None, [])]
     if missing:
         raise SystemExit(f"[session] missing {missing}: no usable <session>.yaml and no "
@@ -208,4 +280,4 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
     if verbose and cfg.get("nsamp") not in (None, 32):
         print(f"[session] note: fiber_lib MASK_FULL/EXTRACT_OFFSET are calibrated for 32-sample "
               f"windows (peak ~15); this group has nSamples={cfg['nsamp']} — verify masking.")
-    return cfg
+    return SessionCfg(**cfg)

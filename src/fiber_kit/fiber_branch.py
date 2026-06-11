@@ -99,7 +99,7 @@ def branch_units(spk_raw, members, *, min_n=400, nq=fg.DEFAULT_NQ, pitch=20.0, *
 def main():
     ap = argparse.ArgumentParser(description="Flag units whose spikes branch off the single fiber "
                                              "d(r) (a second, energy-independent, depth-coherent waveform class).")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
+    sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--clu", default=None, help="unit-defining .clu (e.g. the .intrachunk or .linked clu); "
                                                 "default resolves the canonical sort")
     ap.add_argument("--clu-method", default="stderiv"); ap.add_argument("--clu-stage", default="refine.linked")
@@ -111,8 +111,8 @@ def main():
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal",))
-    base, elec = cfg["base"], a.group
-    nsamp = int(cfg["nsamp"]); nch = int(cfg["nchan"])
+    base, elec = cfg.base, a.group
+    nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     spk, r = nio.open_spk_raw(base, elec, nsamp, nch)         # RAW waveforms (refuses stderiv)
     if a.clu:
         _, ids = nio.read_clu_file(a.clu)
