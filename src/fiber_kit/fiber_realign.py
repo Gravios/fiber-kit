@@ -138,15 +138,7 @@ def main():
         description="Per-spike fiber-template offsets + corrected .res spike times. "
                     "Probe geometry (group channels / nchan / nsamp) is read from "
                     "<session>.yaml; flags override.")
-    ap.add_argument("session", help="session basename or folder (finds <session>.yaml); "
-                                    "or a file base if no YAML is present")
-    ap.add_argument("group", type=int, help="1-based spike group")
-    ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
-    ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in the recording")
-    ap.add_argument("--nchan", "--nch", dest="nchan", type=int, default=None,
-                    help="override: channels in the group (default from YAML)")
-    ap.add_argument("--nsamp", type=int, default=None, help="override: samples per spike (default from YAML)")
-    ap.add_argument("--sr", type=float, default=None, help="override: sampling rate")
+    sy.add_session_args(ap)
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")

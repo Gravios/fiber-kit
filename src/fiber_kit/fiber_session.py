@@ -753,12 +753,7 @@ def main():
         description="Cluster a session group into fibers. Reads <session>.yaml "
                     "(or <session>/<session>.yaml) for channels/sr/nChannels; "
                     "CLI flags override the YAML.")
-    ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
-    ap.add_argument("group", type=int, help="1-based spike group (indexes spikeDetection.channelGroups)")
-    ap.add_argument("--channels", default=None, help="override: comma-separated physical channels")
-    ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in .fil")
-    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
-    ap.add_argument("--sr", type=float, default=None)
+    sy.add_session_args(ap)
     ap.add_argument("--chunk-min", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")

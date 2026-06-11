@@ -542,19 +542,16 @@ def main():
     ap = argparse.ArgumentParser(prog="fiber-view",
                                  description="Visualise fibers: template montages, a 3-D manifold of "
                                              "local fiber curves, and ISI/geometry panels.")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
+    sy.add_session_args(ap)
     ap.add_argument("--in-clu", default=None, help="sort to view (default canonical .clu)")
     ap.add_argument("--fibers", default="top:6",
                     help="comma list of .clu cluster ids, 'top:N', or 'all' (default top:6)")
     ap.add_argument("--mode", choices=["templates", "manifold", "stats", "all"], default="all")
-    ap.add_argument("--channels", default=None, help="comma list of channels for templates (default all)")
     ap.add_argument("--npos", type=int, default=80, help="positions sampled along the fiber")
     ap.add_argument("--geom", default=None, help="a .geom/.geomchunk npz for the stats geometry track")
     ap.add_argument("--no-dedup", action="store_true")
     ap.add_argument("--out", default=None, help="output path or directory (default next to the session)")
     ap.add_argument("--channels-override", dest="channels_ovr", default=None)
-    ap.add_argument("--ntotal", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
-    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--sr", type=float, default=None)
     a = ap.parse_args()
     _need_mpl()
 

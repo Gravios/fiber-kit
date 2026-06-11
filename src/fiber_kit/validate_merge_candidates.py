@@ -67,8 +67,7 @@ def rate_corr(tA, tB, sr, bin_s=30.0):
 
 def main():
     ap = argparse.ArgumentParser(description="Full-session evidence for proposed same-neuron merges; reads <session>.yaml for sr.")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
-    ap.add_argument("--sr", type=float, default=None)
+    sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False)
     ap.add_argument("--cand", default=None, help="candidates tsv (default <base>.merge_candidates.<group>.tsv)")
     a = ap.parse_args()
     cfg = sy.resolve_session_params(a.session, a.group, sr=a.sr, require=())

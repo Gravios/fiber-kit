@@ -87,10 +87,7 @@ def pair_acc(A, B, featfn, fine, inset, reps=10):
 
 def main():
     ap = argparse.ArgumentParser(description="raw .fil vs stderiv discrimination of the original fibers; reads <session>.yaml.")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
-    ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
-    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
-    ap.add_argument("--sr", type=float, default=None)
+    sy.add_session_args(ap)
     ap.add_argument("--chunk-min-start", type=float, default=0.0); ap.add_argument("--chunk-min", type=float, default=10.0)
     ap.add_argument("--min-spikes", type=int, default=60); ap.add_argument("--min-group", type=int, default=200)
     a = ap.parse_args()

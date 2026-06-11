@@ -214,7 +214,7 @@ def global_clu_map_units(members, bundles, src_ids, reserve=(0, 1)):
 def main():
     ap = argparse.ArgumentParser(description="Link per-chunk fragments into tracked units "
                                              "(position fingerprint + A anchor + template co-gate).")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
+    sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--cpos-method", default="stderiv"); ap.add_argument("--cpos-stage", default="refine")
     ap.add_argument("--clu-method", default=None, help="source .clu method (default: mirror --cpos-method)")
     ap.add_argument("--clu-stage", default=None, help="source .clu stage (default: mirror --cpos-stage)")
