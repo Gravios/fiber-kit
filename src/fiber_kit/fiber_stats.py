@@ -65,11 +65,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Extract per-(chunk,cluster) fiber statistics from an existing "
                     "sort (no re-clustering). Reads <session>.yaml for channels/sr (no probe needed; depth is energy-weighted).")
-    ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
-    ap.add_argument("group", type=int, help="1-based spike group")
-    ap.add_argument("--channels", default=None); ap.add_argument("--ntotal", type=int, default=None)
-    ap.add_argument("--nsamp", type=int, default=None); ap.add_argument("--nchan", type=int, default=None)
-    ap.add_argument("--sr", type=float, default=None)
+    sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv",
                     help="feature space BEFORE the group (standard|stderiv|...); default stderiv")
     ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",

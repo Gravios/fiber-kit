@@ -337,7 +337,7 @@ def intrachunk_clu(src_ids, sig_ids, label, *, reserve=(0, 1)):
 def main():
     ap = argparse.ArgumentParser(description="Collapse over-split fragments within each "
                                              "chunk into units (stderiv cosine + offset + depth).")
-    ap.add_argument("session"); ap.add_argument("group", type=int)
+    sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--cpos-method", default="stderiv")
     ap.add_argument("--cpos-stage", default="refine")
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
@@ -358,8 +358,8 @@ def main():
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
-    base = cfg["base"]; elec = a.group; sr = float(cfg["sr"])
-    nsamp = int(cfg["nsamp"]); nch = int(cfg["nchan"])
+    base = cfg.base; elec = a.group; sr = float(cfg.sr)
+    nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
     clu_stage = a.clu_stage if a.clu_stage is not None else a.cpos_stage
     out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}.intrachunk" if clu_stage else "intrachunk")
