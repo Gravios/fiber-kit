@@ -20,7 +20,6 @@ try:
     from PySide6 import QtCore, QtWidgets
     import pyqtgraph as pg
     import pyqtgraph.opengl as gl
-    from sklearn.decomposition import PCA
     _HAVE_GUI = True
 except Exception:                                            # pragma: no cover
     _HAVE_GUI = False

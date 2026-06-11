@@ -17,7 +17,6 @@ from sklearn.cluster import KMeans
 
 try:
     from . import fiber_tracer as ft
-    from . import fiber_adapt as fa
 except ImportError:
     import fiber_tracer as ft
     import fiber_adapt as fa
