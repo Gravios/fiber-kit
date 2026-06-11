@@ -44,9 +44,9 @@ from .fiber_position import (
     load_manifolds, spike_positions, position_by_direction, curve_arclength,
 )
 from .neuro_io import (
-    resolve_input, prefer_derived, prefer_canonical,
+    resolve_input, prefer_derived, prefer_canonical, prefer_standard,
     read_res_file, write_res_file, read_clu_file, write_clu_file,
-    read_cluster_res, read_fet_file, open_spk, open_signal,
+    read_cluster_res, read_fet_file, open_spk, open_spk_raw, open_signal,
 )
 
 __all__ = [
@@ -62,7 +62,7 @@ __all__ = [
     "load_geometry", "localize", "localize_unit",
     "drift_curve", "decentralized_drift", "write_drift_table",
     "load_manifolds", "spike_positions", "position_by_direction", "curve_arclength",
-    "resolve_input", "prefer_derived", "prefer_canonical",
+    "resolve_input", "prefer_derived", "prefer_canonical", "prefer_standard",
     "read_res_file", "write_res_file", "read_clu_file", "write_clu_file",
-    "read_cluster_res", "read_fet_file", "open_spk", "open_signal",
+    "read_cluster_res", "read_fet_file", "open_spk", "open_spk_raw", "open_signal",
 ]

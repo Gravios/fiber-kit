@@ -73,9 +73,19 @@ ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found
 
 
 def prefer_derived():
-    """Preference order for stderiv-space inputs: derived first, then canonical.
-    Mirrors neurofileio::preferDerived()  ->  {"stderiv", "D", ""}."""
-    return ["stderiv", "D", ""]
+    """Preference order for stderiv-space inputs: derived first, then a raw fallback.
+    Mirrors neurofileio::preferDerived().  Under the dotted naming convention raw is the
+    'standard' variant (<base>.spk.standard.N), so the raw fallback is 'standard' (with the
+    legacy canonical <base>.spk.N last)."""
+    return ["stderiv", "D", "standard", ""]
+
+
+def prefer_standard():
+    """Preference order for RAW (standard) inputs: <base>.spk.standard.N first, then the
+    legacy canonical <base>.spk.N.  Deliberately does NOT fall back to stderiv -- callers
+    that need raw amplitudes (localization, position, raw-PCA) must fail rather than
+    silently localize on the stderiv transform (which breaks the amplitude-distance law)."""
+    return ["standard", ""]
 
 
 def prefer_canonical():
@@ -342,6 +352,17 @@ def open_spkD(base, elec, nsamp, nch, mode="r"):
     — returns (memmap, path), preferring the derived (stderiv) representation."""
     mm, r = open_spk(base, elec, nsamp, nch, prefer=prefer_derived(), mode=mode)
     return mm, r.path
+
+
+def open_spk_raw(base, elec, nsamp, nchan, mode="r"):
+    """Resolve and memmap the RAW (standard) waveforms: <base>.spk.standard.N (then legacy
+    <base>.spk.N).  For position/amplitude work — never returns the stderiv .spk.  Returns
+    (memmap (n,nsamp,nchan), ResolvedInput); raises if the resolved file is a stderiv form."""
+    mm, r = open_spk(base, elec, nsamp, nchan, prefer=prefer_standard(), mode=mode)
+    if r.variant in ("stderiv", "D"):
+        raise FileNotFoundError(f"no raw/standard .spk for {base} elec {elec} "
+                                f"(resolved {r.path}; refusing stderiv for amplitude work)")
+    return mm, r
 
 
 def write_spk_file(path, waves):

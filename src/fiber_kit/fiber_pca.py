@@ -224,7 +224,7 @@ def main():
     data2use = a.data2use or nsamp
     rec_shift = a.rec_shift if a.rec_shift is not None else max(0, nsamp // 2 - data2use // 2)
     spk = (nio.open_spkD(base, elec, nsamp, nch) if a.stderiv
-           else nio.open_spk(base, elec, nsamp, nch)[0])
+           else nio.open_spk_raw(base, elec, nsamp, nch)[0])
     win = extract_windows(spk[:], rec_shift, data2use)
     means, evec = fit_basis(win, nComp=a.ncomp, centered=a.centered)
     out = a.out or nio.session_path(base, "pcaD" if a.stderiv else "pca", elec)
