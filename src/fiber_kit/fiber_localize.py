@@ -42,6 +42,11 @@ import yaml
 from scipy.optimize import least_squares
 
 try:
+    from . import fiber_lib as fl
+except ImportError:
+    import fiber_lib as fl
+
+try:
     from . import neuro_io as nio
 except ImportError:
     import neuro_io as nio
@@ -128,36 +133,72 @@ def _edge_flag(a, xy):
 
 
 # ── per-unit localization ────────────────────────────────────────────────────
-def localize_unit(wav, xy, dipole=True, nboot=200, min_terc=60, rng=None):
+def _profile(wav, method="pc1"):
+    """Per-channel amplitude profile fed to the monopole inverse.
+
+      'ptp'  : median over spikes of per-spike peak-to-peak.  Alignment-invariant, but max-min
+               of ~nsamp noisy samples carries a ~4σ NOISE FLOOR on every channel, so far/low-
+               signal channels are pinned near the floor and the footprint is flattened
+               (measured spatial contrast ~2.9 on g5) — the decay the fit reads is degraded.
+      'wave' : peak-to-peak of the median realigned waveform (noise averaged out).
+      'pc1'  : peak-to-peak of the rank-1 (PC1) denoised template in standard space — the
+               sharpest footprint (contrast ~8.0) and the most precise position
+               (split-half SD_depth/dist/A all lowest).  Default.
+
+    For well-isolated, energy-band-stratified clusters the denoised profiles are both sharper
+    and more precise; 'ptp' is retained for back-compat / very low spike counts."""
+    W = np.asarray(wav, np.float32)
+    if method == "ptp" or len(W) < 8:
+        return np.median(_amp(W), 0)
+    Wr = fl.realign(W)
+    if method == "wave":
+        mw = np.median(Wr, 0)
+        return mw.max(0) - mw.min(0)
+    X = Wr.reshape(len(Wr), -1)                          # PC1: dominant (≈mean) mode, denoised
+    Vt = np.linalg.svd(X, full_matrices=False)[2]
+    t = ((X @ Vt[0]).mean() * Vt[0]).reshape(Wr.shape[1:])
+    return np.abs(t.max(0) - t.min(0))
+
+
+def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", rng=None):
     """Localize one unit from its raw waveforms wav (nspk, nsamp, nchan).
-    Distance is read from the footprint spread (bootstrap CI over spikes);
-    energy-stratified depth gives the axial extent (soma–dendrite signature)."""
+    Position is fit to a denoised per-channel amplitude profile (amp_method, default PC1);
+    energy-stratified depth gives the axial extent (soma–dendrite signature).
+    Depth/distance uncertainty defaults to the analytic Gaussian σ from the fit covariance
+    (percentiles around the mean); nboot>0 re-enables the spike bootstrap (validated to match
+    the analytic σ on well-isolated clusters, so it is redundant and off by default)."""
     rng = rng or np.random.default_rng(0)
-    ptp = _amp(np.asarray(wav, np.float32))             # (nspk, nchan)
-    a = np.median(ptp, 0)
+    W = np.asarray(wav, np.float32)
+    e = (W.max(1) - W.min(1)).max(1)                    # per-spike energy (tercile stratification)
+    method = amp_method
+    a = _profile(W, method)
+    if method != "ptp" and _edge_flag(a, xy):           # edge/one-flank clusters are under-determined;
+        method = "ptp"; a = _profile(W, method)         # the noise-floored profile regularizes the fit
     p, sig, rel = _fit(a, xy, dipole)
     x0, y0, z0 = float(p[0]), float(p[1]), abs(float(p[2]))
     A = float(p[3])                                  # monopole source amplitude (drift-invariant identity)
     B = float(p[4]) if dipole else 0.0
     pc = int(np.argmax(a))
     dist = float(np.sqrt((x0 - xy[pc, 0]) ** 2 + (y0 - xy[pc, 1]) ** 2 + z0 ** 2))
-    # bootstrap distance + depth over spikes (the trustworthy CI)
-    z_lo = z_hi = y_lo = y_hi = np.nan
-    if nboot and len(wav) >= 8:
-        zb = np.empty(nboot); yb = np.empty(nboot)
+    # analytic σ CI ("percentiles around the mean") — default, free from the fit covariance
+    sy, sz = float(sig[1]), float(sig[2])
+    y_lo, y_hi = y0 - sy, y0 + sy
+    z_lo, z_hi = max(z0 - sz, 0.0), z0 + sz
+    if nboot and len(W) >= 8:                            # optional spike bootstrap (redundant)
+        ptp = _amp(W); zb = np.empty(nboot); yb = np.empty(nboot)
         for b in range(nboot):
-            ab = np.median(ptp[rng.integers(0, len(wav), len(wav))], 0)
+            ab = np.median(ptp[rng.integers(0, len(W), len(W))], 0)
             pb, _, _ = _fit(ab, xy, dipole); zb[b] = abs(pb[2]); yb[b] = pb[1]
         z_lo, z_hi = np.percentile(zb, [16, 84]); y_lo, y_hi = np.percentile(yb, [16, 84])
-    # energy-stratified depth → axial extent
+    # energy-stratified depth → axial extent (denoised profile within each tercile)
     depth_shift = np.nan
-    if len(wav) >= min_terc:
-        e = ptp.max(1); o = np.argsort(e); t = len(o) // 3
-        y_low = _fit(np.median(ptp[o[:t]], 0), xy, dipole)[0][1]
-        y_high = _fit(np.median(ptp[o[2 * t:]], 0), xy, dipole)[0][1]
+    if len(W) >= min_terc:
+        o = np.argsort(e); t = len(o) // 3
+        y_low = _fit(_profile(W[o[:t]], method), xy, dipole)[0][1]
+        y_high = _fit(_profile(W[o[2 * t:]], method), xy, dipole)[0][1]
         depth_shift = float(y_high - y_low)
     return dict(x0=x0, y0=y0, z0=z0, A=A, dist=dist, dipoleB=B, resid=rel,
-                sig_y=float(sig[1]), z_lo=float(z_lo), z_hi=float(z_hi),
+                sig_y=sy, z_lo=float(z_lo), z_hi=float(z_hi),
                 y_lo=float(y_lo), y_hi=float(y_hi), depth_shift=depth_shift,
                 one_flank=_edge_flag(a, xy),
                 at_bound=int(z0 < 4.0 or z0 > 299.0))   # distance pinned to the fit limit
@@ -165,7 +206,7 @@ def localize_unit(wav, xy, dipole=True, nboot=200, min_terc=60, rng=None):
 
 # ── driver ───────────────────────────────────────────────────────────────────
 def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
-             min_n=50, nboot=200, max_spikes=2000, max_resid=0.10, verbose=True):
+             min_n=50, nboot=0, max_spikes=2000, max_resid=0.10, amp_method="pc1", verbose=True):
     """Localize every unit in <base>.spk.<elec> (RAW waveforms) using its
     (re-linked) .clu.  Returns one report row per unit."""
     spk, spk_path = nio.open_spk_raw(base, elec, nsamp, nchan)
@@ -185,7 +226,8 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
         if len(idx) > max_spikes:                       # subsample for template/bootstrap
             idx = rng.choice(idx, max_spikes, replace=False)
         wav = np.asarray(spk[np.sort(idx)], np.float32)
-        d = localize_unit(wav, xy, dipole, nboot if len(idx) >= min_n else 0, rng=rng)
+        d = localize_unit(wav, xy, dipole, nboot if len(idx) >= min_n else 0,
+                          amp_method=amp_method, rng=rng)
         d.update(unit=u, nspk=int((np.asarray(labels) == u).sum()),
                  low_n=int(len(idx) < min_n), high_resid=int(d["resid"] > max_resid))
         d["reliable"] = int(not (d["one_flank"] or d["at_bound"] or d["low_n"] or d["high_resid"]))
@@ -226,7 +268,13 @@ def main():
     ap.add_argument("--clu", default=None, help="cluster file (pass the re-linked .clu)")
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--min-n", type=int, default=50)
-    ap.add_argument("--nboot", type=int, default=200)
+    ap.add_argument("--nboot", type=int, default=0,
+                    help="spike bootstrap draws for depth/distance CIs; 0 (default) uses the analytic "
+                         "Gaussian sigma (matches the bootstrap on isolated clusters, ~Nx cheaper).")
+    ap.add_argument("--amp-method", choices=("pc1", "wave", "ptp"), default="pc1",
+                    help="per-channel amplitude profile: pc1=rank-1 denoised template (default, sharpest "
+                         "+ most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, "
+                         "carries a ~4-sigma noise floor on far channels).")
     ap.add_argument("--max-resid", type=float, default=0.10)
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -245,7 +293,8 @@ def main():
                          "<session>.yaml (probeFile/probe/...)")
     xy = load_geometry(probe, channels)
     rows = localize(a.base, a.elec, a.nsamp, a.nchan, xy, a.clu,
-                    dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid)
+                    dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid,
+                    amp_method=a.amp_method)
     out = a.out or f"{a.base}.localize.{a.elec}.tsv"
     write_localizations(rows, out)
     print(f"[localize] wrote {out}")

@@ -67,7 +67,7 @@ def fil_extractor(filmm, res, col_idx, peak=16, nsamp=32, sample_offset=0):
     return extract
 
 
-def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100, templates=True):
+def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=0, amp_method="pc1", templates=True):
     """Localize each cluster's median raw template.  `extract(idx)` maps spike INDICES
     (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n,
     and 'template' = realigned median raw waveform when templates=True -- the shape
@@ -80,7 +80,7 @@ def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=100
         W = np.asarray(extract(idx), float)
         if len(W) < min_spikes:
             continue
-        r = loc.localize_unit(W, xy, dipole=dipole, nboot=nboot)
+        r = loc.localize_unit(W, xy, dipole=dipole, nboot=nboot, amp_method=amp_method)
         r["n"] = int(len(W))
         if templates:
             tmpl = np.median(fl.realign(W), 0)
@@ -162,7 +162,12 @@ def main():
     ap.add_argument("--min-spikes", type=int, default=15)
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--no-templates", action="store_true", help="skip per-cluster median templates in the .clusters.npz")
-    ap.add_argument("--nboot", type=int, default=100,
+    ap.add_argument("--amp-method", choices=("pc1", "wave", "ptp"), default="pc1",
+                    help="per-channel amplitude profile for the position inverse: pc1=rank-1 denoised "
+                         "template (default, sharpest footprint + most precise), wave=median-waveform "
+                         "ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels "
+                         "flattens the footprint).")
+    ap.add_argument("--nboot", type=int, default=0,
                     help="bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). "
                          "This loop is ~5x the rest of the cost (the dominant runtime); positions "
                          "(x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 "
@@ -205,7 +210,7 @@ def main():
         src = a.fil or f"{base}.fil"
 
     per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole,
-                            nboot=a.nboot, templates=not a.no_templates)
+                            nboot=a.nboot, amp_method=a.amp_method, templates=not a.no_templates)
     sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
     for cid, r in per.items():
         t = res[clu == cid]
