@@ -51,8 +51,34 @@ def _offset_rms(o1, o2):
     return float(np.sqrt(np.nanmean((o1[m] - o2[m]) ** 2))) if m.sum() >= 2 else np.inf
 
 
+def kernel_twosample(Xp, Xq, kind="kcov"):
+    """Kernel two-sample divergence between two feature-sample sets (rows = samples).
+
+    kind='mmd'  : squared MMD with a Gaussian kernel (median-heuristic bandwidth) --
+                  the kernel MEAN embedding distance (sensitive to any difference).
+    kind='kcov' : the same with the SQUARED kernel (half the bandwidth), i.e. the
+                  Hilbert-Schmidt distance between the kernel COVARIANCE embeddings
+                  N(0,S_P), N(0,S_Q) -- the separation-of-measure statistic, strongest
+                  on hard high-similarity pairs.
+    Returns a non-negative divergence (0 = identical distributions); caller gates on
+    a calibrated upper threshold."""
+    Xp = np.asarray(Xp, float); Xq = np.asarray(Xq, float)
+    Z = np.vstack([Xp, Xq]); n = len(Xp)
+    G = Z @ Z.T                                            # Gram (no 3-D broadcast tensor)
+    sq = np.diag(G)
+    d2 = np.maximum(sq[:, None] + sq[None, :] - 2 * G, 0.0)
+    iu = np.triu_indices(len(Z), 1)
+    nz = d2[iu][d2[iu] > 0]
+    if nz.size == 0:
+        return 0.0
+    bw = np.median(nz) * (1.0 if kind == "mmd" else 0.5)
+    K = np.exp(-d2 / bw)
+    return float(K[:n, :n].mean() + K[n:, n:].mean() - 2 * K[:n, n:].mean())
+
+
 def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_MIN_N,
-                     reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA):
+                     reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA,
+                     feats=None, feat_dim=12, feat_n=80, feat_seed=0):
     """Per-cluster stderiv signature for matching.
 
     spkD     : (nspk, nsamp, nchan) int16 stderiv waveforms (array or memmap).
@@ -61,15 +87,28 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
                per-cluster mean places the cluster in a chunk.
     pos      : {clu_id: (x0, y0, z0, A)} from the fiber-cpos cluster table.
 
+    feats    : if 'wave', also attach a per-cluster sample of up to feat_n spikes
+               projected onto a global PCA(feat_dim) of the stderiv waveforms, for the
+               kernel two-sample co-gate (group_intrachunk gate='mmd'/'kcov').  Default
+               None keeps the old behaviour (cosine gate only).
+
     Returns a dict of per-cluster arrays keyed by cluster id order in `ids`:
       ids, template (nclu,nsamp,nchan, mutual-centred mean), offset (nclu,nchan),
-      x0,y0,z0,A, chunk, t_mid, n.  Clusters in `reserve`, below min_n, or absent
-      from `pos` are skipped (they stay singletons downstream)."""
+      x0,y0,z0,A, chunk, t_mid, n[, feat].  Clusters in `reserve`, below min_n, or
+      absent from `pos` are skipped (they stay singletons downstream)."""
     order = np.argsort(clu, kind="stable")
     cs = clu[order]
     uq, st = np.unique(cs, return_index=True)
     en = np.r_[st[1:], len(cs)]
-    ids, T, O, X, Y, Z, A, CH, TM, NS = [], [], [], [], [], [], [], [], [], []
+    Vt = mu_w = None
+    if feats == "wave":                                   # global PCA basis for the gate
+        rng = np.random.default_rng(feat_seed)
+        Wf = np.asarray(spkD, np.float32).reshape(len(spkD), -1)
+        Wf = Wf / (np.linalg.norm(Wf, axis=1, keepdims=True) + 1e-9)   # SHAPE space: unit-norm each
+        s = rng.choice(len(Wf), min(len(Wf), 100000), replace=False)   # spike (drop the energy axis the
+        mu_w = Wf[s].mean(0)                                            # cosine gate also discards), so an
+        Vt = np.linalg.svd(Wf[s] - mu_w, full_matrices=False)[2][:feat_dim]   # energy ladder stays one unit
+    ids, T, O, X, Y, Z, A, CH, TM, NS, FT = ([] for _ in range(11))
     for k, c in enumerate(uq):
         c = int(c)
         if c in reserve or c not in pos:
@@ -84,19 +123,56 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         ids.append(c); T.append(tmpl); O.append(fg.interchannel_offsets(tmpl))
         X.append(x0); Y.append(y0); Z.append(z0); A.append(abs(amp))
         CH.append(int(tm / 60.0 // chunk_min)); TM.append(tm); NS.append(len(idx))
-    return dict(ids=np.array(ids, int), template=np.array(T, np.float32),
-                offset=np.array(O, np.float32), x0=np.array(X), y0=np.array(Y),
-                z0=np.array(Z), A=np.array(A), chunk=np.array(CH, int),
-                t_mid=np.array(TM), n=np.array(NS, int))
+        if Vt is not None:
+            ridx = idx if len(idx) <= feat_n else np.random.default_rng(feat_seed + c).choice(idx, feat_n, replace=False)
+            sp = np.asarray(spkD[ridx], np.float32).reshape(len(ridx), -1)
+            sp = sp / (np.linalg.norm(sp, axis=1, keepdims=True) + 1e-9)
+            FT.append((sp - mu_w) @ Vt.T)
+    out = dict(ids=np.array(ids, int), template=np.array(T, np.float32),
+               offset=np.array(O, np.float32), x0=np.array(X), y0=np.array(Y),
+               z0=np.array(Z), A=np.array(A), chunk=np.array(CH, int),
+               t_mid=np.array(TM), n=np.array(NS, int))
+    if Vt is not None:
+        out["feat"] = np.array(FT, dtype=object)
+    return out
 
 
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
-                     depth_gate=DEFAULT_DEPTH_GATE):
-    """Per-chunk complete-linkage clique on (cosine, offset, depth).  Returns a
-    per-cluster integer label (dense, 0-based) — one label per per-chunk unit."""
+                     depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90):
+    """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
+    per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
+
+    gate : 'cosine' (default) tests mean-template cosine >= cos_thr.  'mmd'/'kcov' instead
+           run a kernel two-sample test on each fragment's attached shape features
+           (sig['feat']; build_signatures(..., feats='wave')), applied only to cosine-passing
+           pairs as a precision filter, with a threshold self-calibrated from per-fragment
+           split-half nulls at feat_q.  'kcov' is the covariance-embedding (separation-of-
+           measure) statistic.
+
+           CAUTION: as a *grouping* gate the kernel tests OVER-SPLIT -- they are powerful
+           enough to separate a single neuron's own sub-populations (energy ladder, SNR
+           bands), which the cosine gate is intentionally blunt enough to merge.  On g5 they
+           raise the per-chunk unit count ~1.6x and do not reduce downstream conflicts (those
+           are a link-stage phenomenon; see fiber_trajectory).  Their validated use is
+           discriminating already-formed *units* (e.g. same-chunk conflict pairs, AUC ~0.99),
+           not collapsing fragments.  Left available and off by default for that experiment;
+           do not enable for routine grouping.  Depth and offset gates apply in every mode."""
     T = sig["template"].reshape(len(sig["ids"]), -1)
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
+    use_kernel = gate in ("mmd", "kcov")
+    if use_kernel:
+        if "feat" not in sig:
+            raise ValueError("gate='%s' needs sig['feat'] -- call build_signatures(..., feats='wave')" % gate)
+        feat = sig["feat"]
+        rng = np.random.default_rng(0); nulls = []          # self-calibrate from split-half nulls
+        cal = range(len(feat)) if len(feat) <= 500 else rng.choice(len(feat), 500, replace=False)
+        for fi in cal:
+            f = feat[fi]
+            if len(f) >= 8:
+                r = rng.permutation(len(f)); h = len(r) // 2
+                nulls.append(kernel_twosample(f[r[:h]], f[r[h:]], gate))
+        thr = float(np.quantile(nulls, feat_q)) if nulls else np.inf
     label = np.full(len(sig["ids"]), -1, int); nxt = 0
     for ch in np.unique(chunk):
         ix = np.flatnonzero(chunk == ch); n = len(ix)
@@ -105,11 +181,22 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
         for a in range(n):
             for b in range(a + 1, n):
                 i, j = ix[a], ix[b]
-                if abs(Y[i] - Y[j]) > depth_gate or C[a, b] < cos_thr:
+                if abs(Y[i] - Y[j]) > depth_gate:           # depth gate first (cheap prefilter)
                     continue
+                if use_kernel:
+                    if C[a, b] < cos_thr:                   # cosine is the cheap recall prefilter;
+                        continue                            # the kernel test is the precision filter
+                    s = kernel_twosample(feat[i], feat[j], gate)
+                    if s > thr:
+                        continue
+                    strength = thr - s                      # smaller divergence -> stronger
+                else:
+                    if C[a, b] < cos_thr:
+                        continue
+                    strength = C[a, b]
                 o = _offset_rms(off[i], off[j])
                 if o <= off_thr:
-                    edges.append((C[a, b] - o, a, b))     # strongest agreement first
+                    edges.append((strength - o, a, b))      # strongest agreement first
         edges.sort(reverse=True)
         par = list(range(n)); mem = {k: [k] for k in range(n)}
         def root(x):
@@ -258,6 +345,12 @@ def main():
     ap.add_argument("--cos-thr", type=float, default=DEFAULT_COS_THR)
     ap.add_argument("--off-thr", type=float, default=DEFAULT_OFF_THR)
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
+    ap.add_argument("--gate", choices=("cosine", "mmd", "kcov"), default="cosine",
+                    help="fragment-merge test: 'cosine' (mean template, default & recommended). "
+                         "'mmd'/'kcov' are kernel two-sample tests (precision filter on cosine-passing "
+                         "pairs); NOTE they OVER-SPLIT as a grouping gate (they separate a neuron's own "
+                         "energy/SNR sub-populations) -- exposed for experimentation on unit-vs-unit "
+                         "discrimination, not for routine grouping")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.intrachunk)")
@@ -280,8 +373,10 @@ def main():
            for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
 
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
-                           chunk_min=a.chunk_minutes, min_n=a.min_n)
-    label = group_intrachunk(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate)
+                           chunk_min=a.chunk_minutes, min_n=a.min_n,
+                           feats="wave" if a.gate != "cosine" else None)
+    label = group_intrachunk(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+                             gate=a.gate)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
