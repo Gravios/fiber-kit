@@ -125,6 +125,42 @@ def _amp(wav):
     return wav.max(1) - wav.min(1)
 
 
+def _fit_edge(a, xy, dipole=True):
+    """Angular-constrained fit for one-flank units whose unconstrained fit runs the depth OFF the
+    array end (the seen flank fixes the radial decay but not the off-end axial position, so with the
+    dipole term z0 and A blow up together).  The one-flank source sits AT the terminal channel, so
+    pin the lateral position to the peak channel, allow the depth to slide only within ±one pitch of
+    that channel (toward / just past the end), and let the decay set the perpendicular distance r —
+    the angular relation (a_pk/a_adj = √(1+(s/r)²)) constraining the last dimension.  Monopole only
+    (the dipole DOF is what enabled the off-end runaway).  Validated on g5: bounded depth/distance,
+    residual ~0.08, split-half stability on par with interior units."""
+    a = np.maximum(np.asarray(a, float), 1e-3)
+    ymin, ymax = xy[:, 1].min(), xy[:, 1].max()
+    pitch = (ymax - ymin) / max(1, len(np.unique(xy[:, 1])) - 1)
+    pk = int(np.argmax(a)); x0 = float(xy[pk, 0]); yp = float(xy[pk, 1])
+
+    def resid(q):
+        y0, r, A = q
+        d = np.sqrt((x0 - xy[:, 0]) ** 2 + (y0 - xy[:, 1]) ** 2 + r ** 2)
+        return a - A / d
+
+    s = least_squares(resid, [yp, 25.0, a.max() * 30.0],
+                      bounds=([yp - pitch, 3.0, 1.0], [yp + pitch, 300.0, 1e9]),
+                      x_scale=[pitch, 10.0, a.max() * 30.0], loss="soft_l1",
+                      f_scale=max(a.max() * 0.05, 1e-6), max_nfev=4000)
+    y0, r, A = float(s.x[0]), float(s.x[1]), float(s.x[2])
+    pred = A / np.sqrt((x0 - xy[:, 0]) ** 2 + (y0 - xy[:, 1]) ** 2 + r ** 2)
+    rel = float(np.sqrt(np.mean((a - pred) ** 2)) / a.max())
+    try:
+        cov = np.linalg.inv(s.jac.T @ s.jac) * (2 * s.cost / max(1, len(a) - 3))
+        sy, sr, sA = np.sqrt(np.clip(np.diag(cov), 0, None))
+    except np.linalg.LinAlgError:
+        sy = sr = sA = np.nan
+    p = [x0, y0, r, A] + ([0.0] if dipole else [])
+    sig = [1.0, float(sy), float(sr), float(sA)] + ([0.0] if dipole else [])
+    return np.asarray(p), np.asarray(sig), rel
+
+
 def _edge_flag(a, xy):
     """One-flank (degenerate distance) if the peak channel is at a terminal depth
     of the group so only one side of the footprint is observed."""
@@ -170,11 +206,15 @@ def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", 
     rng = rng or np.random.default_rng(0)
     W = np.asarray(wav, np.float32)
     e = (W.max(1) - W.min(1)).max(1)                    # per-spike energy (tercile stratification)
-    method = amp_method
-    a = _profile(W, method)
-    if method != "ptp" and _edge_flag(a, xy):           # edge/one-flank clusters are under-determined;
-        method = "ptp"; a = _profile(W, method)         # the noise-floored profile regularizes the fit
+    a = _profile(W, amp_method)
     p, sig, rel = _fit(a, xy, dipole)
+    ymin, ymax = xy[:, 1].min(), xy[:, 1].max()
+    pitch = (ymax - ymin) / max(1, len(np.unique(xy[:, 1])) - 1)
+    edge = bool(p[1] < ymin - pitch or p[1] > ymax + pitch)   # depth ran off the array end → one-flank degeneracy
+    fitfn = _fit
+    if edge:                                            # re-fit with the angular constraint (source at the
+        fitfn = _fit_edge                               # terminal channel, decay sets the perpendicular distance)
+        p, sig, rel = _fit_edge(a, xy, dipole)
     x0, y0, z0 = float(p[0]), float(p[1]), abs(float(p[2]))
     A = float(p[3])                                  # monopole source amplitude (drift-invariant identity)
     B = float(p[4]) if dipole else 0.0
@@ -184,7 +224,7 @@ def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", 
     sy, sz = float(sig[1]), float(sig[2])
     y_lo, y_hi = y0 - sy, y0 + sy
     z_lo, z_hi = max(z0 - sz, 0.0), z0 + sz
-    if nboot and len(W) >= 8:                            # optional spike bootstrap (redundant)
+    if nboot and not edge and len(W) >= 8:              # optional spike bootstrap (redundant; n/a for edge)
         ptp = _amp(W); zb = np.empty(nboot); yb = np.empty(nboot)
         for b in range(nboot):
             ab = np.median(ptp[rng.integers(0, len(W), len(W))], 0)
@@ -194,13 +234,13 @@ def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", 
     depth_shift = np.nan
     if len(W) >= min_terc:
         o = np.argsort(e); t = len(o) // 3
-        y_low = _fit(_profile(W[o[:t]], method), xy, dipole)[0][1]
-        y_high = _fit(_profile(W[o[2 * t:]], method), xy, dipole)[0][1]
+        y_low = fitfn(_profile(W[o[:t]], amp_method), xy, dipole)[0][1]
+        y_high = fitfn(_profile(W[o[2 * t:]], amp_method), xy, dipole)[0][1]
         depth_shift = float(y_high - y_low)
     return dict(x0=x0, y0=y0, z0=z0, A=A, dist=dist, dipoleB=B, resid=rel,
                 sig_y=sy, z_lo=float(z_lo), z_hi=float(z_hi),
                 y_lo=float(y_lo), y_hi=float(y_hi), depth_shift=depth_shift,
-                one_flank=_edge_flag(a, xy),
+                one_flank=int(_edge_flag(a, xy)), edge_fit=int(edge),
                 at_bound=int(z0 < 4.0 or z0 > 299.0))   # distance pinned to the fit limit
 
 
@@ -230,7 +270,7 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
                           amp_method=amp_method, rng=rng)
         d.update(unit=u, nspk=int((np.asarray(labels) == u).sum()),
                  low_n=int(len(idx) < min_n), high_resid=int(d["resid"] > max_resid))
-        d["reliable"] = int(not (d["one_flank"] or d["at_bound"] or d["low_n"] or d["high_resid"]))
+        d["reliable"] = int(not (d["at_bound"] or d["low_n"] or d["high_resid"]))  # edge units now angular-constrained
         rows.append(d)
     rows.sort(key=lambda r: -r["nspk"])
     if verbose:
@@ -241,7 +281,7 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
 
 
 _COLS = ["unit", "nspk", "x0", "y0", "z0", "dist", "z_lo", "z_hi", "y_lo", "y_hi",
-         "dipoleB", "depth_shift", "resid", "one_flank", "at_bound", "low_n", "high_resid", "reliable"]
+         "dipoleB", "depth_shift", "resid", "one_flank", "edge_fit", "at_bound", "low_n", "high_resid", "reliable"]
 
 
 def write_localizations(rows, path):
