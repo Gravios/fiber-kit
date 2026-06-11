@@ -151,6 +151,83 @@ def aggregate_units(sig, label):
     return out
 
 
+def _boundary_sig(waves, sigma=fg.DEFAULT_SMOOTH_SIGMA):
+    """Centred mean template (flattened, unit-norm), inter-channel offsets, and an
+    energy-weighted channel-centroid depth (geometry-free, channel units) from a small
+    boundary-window spike stack.  None if too few spikes to sign."""
+    al = fg.mutual_center_spikes(fg.denoise(fl.realign(np.asarray(waves, float)), sigma))
+    t = al.mean(0)
+    e = (t ** 2).sum(0)
+    dep = float((np.arange(t.shape[1]) * e).sum() / (e.sum() + 1e-9))
+    return t.ravel() / (np.linalg.norm(t) + 1e-9), fg.interchannel_offsets(t), dep
+
+
+def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
+                     half_window=3.0, cos_thr=0.90, off_thr=0.80, depth_tol=1.0, min_n=8):
+    """Anchor units across each chunk boundary using only the spikes that STRADDLE it.
+
+    Spikes within +/-half_window minutes of a boundary are measured at almost the same
+    time, so the drift between the chunk-c side and the chunk-(c+1) side is ~0.  Matching
+    boundary-window signatures (template cosine + offset + boundary depth) therefore links
+    the same neuron across the boundary with the drift confound removed.  Two outputs:
+
+      * backbone links  : (unit_i, unit_j) pairs -- the high-confidence cross-chunk
+                          correspondence (mutual-NN cosine>=cos_thr, offset<=off_thr,
+                          boundary depth within depth_tol channels).
+      * drift D(c)      : cumulative median of the *whole-cluster* depth difference over
+                          backbone pairs -- a true per-unit drift estimate that does not
+                          suffer the composition contamination of a density cross-corr
+                          (on real g5 it reads a small wandering +/-~20um where the density
+                          method read a spurious ~120um).
+
+    member_spikes : list (per unit) of spike indices into spkD / t_spike_s.
+    t_spike_s     : per-spike time in seconds.  Returns (links, {chunk_id: D_um})."""
+    uC = units["chunk"]; uY = units["y0"]; uN = len(uC)
+    chunks = sorted(set(int(c) for c in uC))
+    ut = [t_spike_s[ix] for ix in member_spikes]
+    links = []; D = {chunks[0]: 0.0}
+    for kk in range(1, len(chunks)):
+        tb = chunks[kk] * chunk_min * 60.0                  # boundary time (s)
+        lo, hi = tb - half_window * 60.0, tb + half_window * 60.0
+        a = [u for u in range(uN) if uC[u] == chunks[kk - 1]]
+        b = [u for u in range(uN) if uC[u] == chunks[kk]]
+        SA, SB = {}, {}
+        for u in a:
+            m = (ut[u] >= lo) & (ut[u] < tb)
+            if m.sum() >= min_n:
+                SA[u] = _boundary_sig(spkD[member_spikes[u][m]])
+        for u in b:
+            m = (ut[u] >= tb) & (ut[u] < hi)
+            if m.sum() >= min_n:
+                SB[u] = _boundary_sig(spkD[member_spikes[u][m]])
+        if len(SA) < 2 or len(SB) < 2:
+            D[chunks[kk]] = D[chunks[kk - 1]]; continue
+        al, bl = list(SA), list(SB)
+        TA = np.array([SA[u][0] for u in al]); TB = np.array([SB[u][0] for u in bl])
+        DA = np.array([SA[u][2] for u in al]); DB = np.array([SB[u][2] for u in bl])
+        C = TA @ TB.T; pairs = []
+        for ii in range(len(al)):
+            jj = int(np.argmax(C[ii]))
+            if int(np.argmax(C[:, jj])) == ii and C[ii, jj] >= cos_thr \
+                    and _offset_rms(SA[al[ii]][1], SB[bl[jj]][1]) <= off_thr \
+                    and abs(DA[ii] - DB[jj]) <= depth_tol:
+                pairs.append((al[ii], bl[jj]))
+        links += [(int(i), int(j)) for i, j in pairs]
+        ds = float(np.median([uY[j] - uY[i] for i, j in pairs])) if pairs else 0.0
+        D[chunks[kk]] = D[chunks[kk - 1]] + ds
+    return links, D
+
+
+def member_spike_index(src_ids, members):
+    """list (per unit) of spike indices into the source arrays, from each unit's member
+    source-cluster ids (the inverse of build_signatures' grouping)."""
+    order = np.argsort(src_ids, kind="stable"); cs = src_ids[order]
+    uq, st = np.unique(cs, return_index=True); en = np.r_[st[1:], len(cs)]
+    by_clu = {int(u): order[st[k]:en[k]] for k, u in enumerate(uq)}
+    return [np.concatenate([by_clu[int(c)] for c in mm]) if len(mm) else np.array([], int)
+            for mm in members]
+
+
 def intrachunk_clu(src_ids, sig_ids, label, *, reserve=(0, 1)):
     """Map every source spike's cluster id to its per-chunk unit id.  Reserve ids pass
     through; clusters not signed (reserve / too few spikes / no position) keep fresh
@@ -182,6 +259,7 @@ def main():
     ap.add_argument("--off-thr", type=float, default=DEFAULT_OFF_THR)
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
+    ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.intrachunk)")
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     a = ap.parse_args()
@@ -213,10 +291,17 @@ def main():
     print(f"[intrachunk] wrote {out_path}  ({ncl} clusters incl reserve+singletons)")
     if a.emit_units:
         units = aggregate_units(sig, label)
+        mspk = member_spike_index(src.astype(np.int64), units["members"])
+        bb, D = overlap_backbone(units, mspk, spkD, res.astype(float) / sr,
+                                 chunk_min=a.chunk_minutes, half_window=a.boundary_minutes)
+        dch = np.array(sorted(D)); dum = np.array([D[c] for c in dch], float)
         upath = out_path + ".units.npz"
         np.savez(upath, **{k: v for k, v in units.items() if k != "members"},
-                 members=np.array(units["members"], dtype=object))
-        print(f"[intrachunk] wrote {upath}  ({nunits} unit signatures for fiber-link)")
+                 members=np.array(units["members"], dtype=object),
+                 backbone=np.array(bb, int).reshape(-1, 2),
+                 drift_chunks=dch, drift_um=dum)
+        print(f"[intrachunk] wrote {upath}  ({nunits} unit signatures, {len(bb)} overlap-backbone "
+              f"anchors, drift {dum.min():.0f}..{dum.max():.0f}um for fiber-link)")
 
 
 if __name__ == "__main__":
