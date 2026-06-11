@@ -95,7 +95,7 @@ def main():
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
     a.base = cfg["base"]; a.elec = a.group
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
-    gch = np.array(cfg["channels"], int); OFF = fl.EXTRACT_OFFSET; mask = fl.MASK_FULL
+    gch = np.array(cfg["channels"], int); _m = fl.build_masks(cfg["nsamp"], cfg["peak"]); OFF = _m.offset; mask = _m.full
 
     res = read_res(a.base, a.elec); spk_mm, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
     fil = nio.open_signal(f"{a.base}.fil", a.ntotal)

@@ -820,7 +820,7 @@ def main():
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
-    mask = fl.MASK_FULL; p = len(mask) * a.nchan
+    mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full; p = len(mask) * a.nchan
 
     t0 = time.time()
     res = read_res(a.base, a.elec); nspk = len(res)

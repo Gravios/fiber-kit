@@ -78,7 +78,7 @@ def kernel_twosample(Xp, Xq, kind="kcov"):
 
 def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_MIN_N,
                      reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA,
-                     feats=None, feat_dim=12, feat_n=80, feat_seed=0):
+                     feats=None, feat_dim=12, feat_n=80, feat_seed=0, realign_lohi=None):
     """Per-cluster stderiv signature for matching.
 
     spkD     : (nspk, nsamp, nchan) int16 stderiv waveforms (array or memmap).
@@ -116,7 +116,7 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         idx = order[st[k]:en[k]]
         if len(idx) < min_n:
             continue
-        al = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[idx].astype(float)), sigma))
+        al = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[idx].astype(float), *(realign_lohi or ())), sigma))
         tmpl = al.mean(0)
         x0, y0, z0, amp = pos[c]
         tm = float(np.mean(t_mid_s[idx]))
@@ -372,9 +372,11 @@ def main():
     pos = {int(c): (float(x), float(y), float(zz), float(A))
            for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
 
+    _m = fl.build_masks(nsamp, cfg.peak)                  # peak-relative realign window for this nSamples
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
                            chunk_min=a.chunk_minutes, min_n=a.min_n,
-                           feats="wave" if a.gate != "cosine" else None)
+                           feats="wave" if a.gate != "cosine" else None,
+                           realign_lohi=(_m.realign_lo, _m.realign_hi))
     label = group_intrachunk(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                              gate=a.gate)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)

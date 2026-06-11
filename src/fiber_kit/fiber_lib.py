@@ -21,6 +21,45 @@ MASK_NARROW = np.arange(13, 24)  # former default (13-23); ~0.01 worse at low/mi
 MASK_CORE  = np.arange(13, 17)   # tight core; WORST for assignment in every band — seeds only, with care
 EXTRACT_OFFSET = 15              # .spkD window = [res-15, res+17]; detection peak at sample 15
 
+# The masks above and realign's lo/hi window are calibrated for the 32-sample/peak-15 window.
+# Their spans are physical (fixed in SAMPLES, since the sampling rate is constant), so for any
+# other window they should sit at the SAME sample offsets relative to the detection peak.
+# build_masks rebuilds them peak-relative for an arbitrary (nsamp, peak); at (32, 15) it returns
+# byte-identical masks/offsets to the constants above, so 32-sample sessions are unchanged.
+from collections import namedtuple as _namedtuple
+
+Masks = _namedtuple("Masks", "full narrow core offset realign_lo realign_hi")
+
+_FULL_REL    = (-4, 11)    # MASK_FULL   = arange(peak-4,  peak+11)  -> arange(11, 26) at peak 15
+_NARROW_REL  = (-2, 9)     # MASK_NARROW = arange(peak-2,  peak+9)   -> arange(13, 24)
+_CORE_REL    = (-2, 2)     # MASK_CORE   = arange(peak-2,  peak+2)   -> arange(13, 17)
+_REALIGN_REL = (-9, 11)    # realign search window lo/hi             -> (6, 26)
+
+
+def build_masks(nsamp, peak=None):
+    """Build the feature masks + extraction offset + realign window for a spike window of `nsamp`
+    samples whose detection peak sits at index `peak` (the YAML spikeDetection peak / fiber-session
+    'peak').  Reproduces the historical 32-sample/peak-15 constants exactly when (nsamp, peak) ==
+    (32, 15); otherwise it shifts the same physical spans onto the new peak so non-32 windows get a
+    correct mask instead of the mis-placed 32-sample default.
+
+    If `peak` is None it is inferred (15 for nsamp 32, else round(nsamp * 15/32)).  Returns a
+    Masks namedtuple: (full, narrow, core, offset, realign_lo, realign_hi).  Every span is clipped
+    to the valid [0, nsamp) range, so a window too short to hold the full span degrades gracefully
+    rather than indexing out of bounds."""
+    if peak is None:
+        peak = EXTRACT_OFFSET if int(nsamp) == 32 else int(round(int(nsamp) * EXTRACT_OFFSET / 32.0))
+    peak = int(peak); nsamp = int(nsamp)
+    if not (0 <= peak < nsamp):
+        raise ValueError(f"build_masks: peak {peak} outside the window [0, {nsamp})")
+
+    def span(lohi):
+        lo, hi = lohi
+        return np.arange(max(0, peak + lo), min(nsamp, peak + hi))
+
+    return Masks(span(_FULL_REL), span(_NARROW_REL), span(_CORE_REL), peak,
+                 max(0, peak + _REALIGN_REL[0]), min(nsamp, peak + _REALIGN_REL[1]))
+
 # ── confirmed transform: spkD = Δt(ALLPAIRS(fil)), verified cos 0.997 ───────
 def fil_to_spkD_space(fil_trace):
     """fil_trace (T, nCh) raw voltage -> detection/spkD space (T, nCh).

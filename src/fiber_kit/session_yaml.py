@@ -278,6 +278,6 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
         raise SystemExit(f"[session] --channels has {len(cfg['channels'])} entries != nchan={cfg['nchan']}")
     # gentle warning when the mask/offset calibration may not fit
     if verbose and cfg.get("nsamp") not in (None, 32):
-        print(f"[session] note: fiber_lib MASK_FULL/EXTRACT_OFFSET are calibrated for 32-sample "
-              f"windows (peak ~15); this group has nSamples={cfg['nsamp']} — verify masking.")
+        print(f"[session] note: nSamples={cfg['nsamp']} != 32; session tools rebuild masks/realign "
+              f"window peak-relative via fiber_lib.build_masks(nsamp, peak={cfg['peak']}).")
     return SessionCfg(**cfg)
