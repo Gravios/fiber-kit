@@ -366,7 +366,7 @@ def main():
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     res = nio.read_res(base, elec)
-    spkD = nio.open_spkD(base, elec, nsamp, nch)
+    spkD, _ = nio.open_spkD(base, elec, nsamp, nch)   # open_spkD returns (memmap, path)
     tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
     z = np.load(tbl)
     pos = {int(c): (float(x), float(y), float(zz), float(A))
