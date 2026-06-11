@@ -102,6 +102,30 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.8
     return links
 
 
+def bundles_chunk_exclusive(n_frag, links, chunk, strength):
+    """Union-find that REFUSES any merge putting two units in the same chunk.  A neuron cannot be two
+    distinct same-chunk units -- the intra-chunk merger would already have merged them if they were one
+    -- so a bundle spanning the same chunk twice is a provable over-merge (one bad cross-chunk link
+    chaining in a different neuron).  Links are processed strongest-first (`strength`, higher = earlier;
+    pass inf for trusted overlap-backbone seeds) so the best match wins under competition.  This vetoes
+    only the provable collisions; different neurons that never share a chunk are not separable here."""
+    order = sorted(range(len(links)), key=lambda k: -strength[k])
+    par = list(range(n_frag)); chs = [{int(chunk[i])} for i in range(n_frag)]
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]; x = par[x]
+        return x
+    for k in order:
+        i, j = links[k]; ri, rj = find(i), find(j)
+        if ri == rj or (chs[ri] & chs[rj]):
+            continue
+        par[rj] = ri; chs[ri] |= chs[rj]
+    groups = {}
+    for i in range(n_frag):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values())
+
+
 def build_bundles(n_frag, links):
     """Union-find over links; every fragment lands in a bundle (singletons for unlinked)."""
     par = list(range(n_frag))
@@ -119,7 +143,8 @@ def build_bundles(n_frag, links):
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
-                 drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0):
+                 drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
+                 chunk_exclusive=True):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -149,10 +174,18 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
     raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                         chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
                         off_thr=off_thr, offsets=offs, gap=gap)
+    nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
     if seed_links is not None:
         links += [(int(i), int(j)) for i, j in seed_links]
-    bundles = build_bundles(len(y0), links)
+    if chunk_exclusive:
+        Tt = frag["template"]
+        strength = [masked_cos(Tt[i], Tt[j], mask) for i, j in links]
+        for k in range(nraw, len(links)):       # trusted overlap-backbone seeds win first
+            strength[k] = np.inf
+        bundles = bundles_chunk_exclusive(len(y0), links, chunk, strength)
+    else:
+        bundles = build_bundles(len(y0), links)
     traj_info = None
     if refine_trajectory:
         try:
@@ -230,6 +263,9 @@ def main():
     ap.add_argument("--refine-trajectory", action="store_true",
                     help="post-pass: fit per-bundle depth + PCA-feature trajectories, resolve "
                          "same-chunk-conflict merges, and attach units lying on a bundle's path")
+    ap.add_argument("--allow-chunk-clash", action="store_true",
+                    help="disable chunk-exclusive bundling (default OFF: a bundle may not hold two "
+                         "same-chunk units; the exclusion vetoes provable chained over-merges).")
     ap.add_argument("--traj-ext-min", type=float, default=0.0,
                     help="minutes an attach may extend beyond a bundle's member time span "
                          "(0=interpolation only; ~chunk length allows extrapolation-based extension)")
@@ -251,7 +287,8 @@ def main():
                  if "drift_um" in z.files else None)
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
-                         gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min)
+                         gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         chunk_exclusive=not a.allow_chunk_clash)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -263,7 +300,8 @@ def main():
         frag = {k: z[k] for k in z.files if k != "cols"}
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
-                         gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min)
+                         gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         chunk_exclusive=not a.allow_chunk_clash)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
