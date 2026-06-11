@@ -54,3 +54,19 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 fiber_kit = ["WORKFLOW.md"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+
+# House style is deliberately terse and uses scientific names; lint selects the rule
+# classes that catch real defects (pyflakes F, bugbear B, comprehension/perf/simplify)
+# and skips the ones that would only flag the intentional style.  pep8-naming (N) is
+# not selected: matrices/amplitudes use capitals (A, W, X, Vt) by convention.
+[tool.ruff.lint]
+select = ["F", "E", "W", "B", "C4", "SIM", "RET", "PIE"]
+ignore = [
+    "E701",  # multiple statements on one line (colon) — terse house style
+    "E702",  # multiple statements on one line (semicolon) — terse house style
+    "E741",  # ambiguous single-char names (l, A, …) — scientific convention
+]

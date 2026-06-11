@@ -102,7 +102,7 @@ def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
 
 if __name__ == "__main__":
     # CLI: cluster the whole session (no chunking) on PCA of masked .spkD waveforms.
-    import argparse, os, fiber_lib as fl
+    import argparse, fiber_lib as fl
     try:
         from . import neuro_io as nio
     except ImportError:

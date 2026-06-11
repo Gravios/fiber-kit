@@ -34,7 +34,7 @@
 #        --min-group 200 --fine-kappa 40 --fine-dedup-deg 5 --fine-min-group 40 \
 #        --method stderiv [--no-fine] [--no-link]
 # ════════════════════════════════════════════════════════════════════════════
-import argparse, os, time
+import argparse, time
 import numpy as np
 from collections import defaultdict, Counter
 try:

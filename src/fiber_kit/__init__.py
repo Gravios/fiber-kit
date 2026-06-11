@@ -28,7 +28,7 @@ from . import neuro_io
 from . import backend
 from .backend import use_gpu, gpu_enabled, backend_name
 from .fiber_tracer import trajectory, predict, predict_many, channel_residual_profile, split_meanvar
-from .fiber_lib import align_xcorr, realign
+from .fiber_lib import align_xcorr  # realign primitive stays under fk.fiber_lib.realign
 from .klustakwik import klustakwik
 from .fiber_split import recursive_split, total_residual_energy, accept_split
 from .session_yaml import find_session_yaml, load_session, resolve_session_params

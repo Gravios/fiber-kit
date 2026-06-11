@@ -19,7 +19,6 @@
 #  them and the corrected .res so the convention is explicit and reproducible.
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
-import os
 import numpy as np
 
 try:
