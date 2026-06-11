@@ -357,9 +357,9 @@ def main():
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     a = ap.parse_args()
 
-    cfg = sy.resolve_session_params(a.session, a.group, require=("nChannels", "samplingRate"))
-    base = cfg["base"]; elec = a.group; sr = float(cfg["samplingRate"])
-    nsamp = int(cfg.get("nSamples", 32)); nch = int(cfg.get("nChannelsGroup", cfg.get("nChannels")))
+    cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
+    base = cfg["base"]; elec = a.group; sr = float(cfg["sr"])
+    nsamp = int(cfg["nsamp"]); nch = int(cfg["nchan"])
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
     clu_stage = a.clu_stage if a.clu_stage is not None else a.cpos_stage
     out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}.intrachunk" if clu_stage else "intrachunk")
