@@ -168,7 +168,7 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
              min_n=50, nboot=200, max_spikes=2000, max_resid=0.10, verbose=True):
     """Localize every unit in <base>.spk.<elec> (RAW waveforms) using its
     (re-linked) .clu.  Returns one report row per unit."""
-    spk, spk_path = nio.open_spk(base, elec, nsamp, nchan)
+    spk, spk_path = nio.open_spk_raw(base, elec, nsamp, nchan)
     if clu_path:
         _, labels = nio.read_clu_file(clu_path)
     else:
