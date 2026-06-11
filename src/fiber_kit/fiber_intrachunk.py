@@ -42,6 +42,8 @@ except ImportError:
 
 DEFAULT_COS_THR = 0.85
 DEFAULT_OFF_THR = 1.0
+DEFAULT_OFF_NREF = None   # SNR-adaptive offset gate: spike count at which off_thr applies as-is
+DEFAULT_OFF_CEIL = 2.0    #   (None -> flat off_thr).  See _off_thr_eff / the g5 offset<->CCG calibration.
 DEFAULT_DEPTH_GATE = 35.0   # um; the energy ladder's depth spread (spatial fiber)
 DEFAULT_MIN_N = 12          # fragments below this are too noisy to sign reliably
 
@@ -49,6 +51,24 @@ DEFAULT_MIN_N = 12          # fragments below this are too noisy to sign reliabl
 def _offset_rms(o1, o2):
     m = ~np.isnan(o1) & ~np.isnan(o2)
     return float(np.sqrt(np.nanmean((o1[m] - o2[m]) ** 2))) if m.sum() >= 2 else np.inf
+
+
+
+def _off_thr_eff(off_thr, n_i, n_j, n_ref, ceil):
+    """SNR-adaptive inter-channel offset tolerance.  The offset-RMS between two fragments of the
+    SAME neuron carries an estimation-noise floor that scales ~1/sqrt(n) (validated on g5: median
+    same-neuron offset 0.25 at n>=300 rises to 0.77 at n<75), so a flat off_thr over-splits small
+    fragments.  This loosens the gate for low-count pairs: off_thr * sqrt(n_ref / min(n_i,n_j)),
+    clamped to [off_thr, ceil] -- never tighter than the base, never looser than `ceil`.  n_ref=None
+    disables adaptation (returns off_thr).  NOTE the offset still carries identity signal at all n
+    (P(diff|offset) is ~n-independent on g5), so this is a recall/precision knob, not free recall:
+    raising `ceil` past ~2.0 admits a rising different-neuron fraction.  The principled fix for the
+    low-n regime is to re-estimate the offset after fragments are pooled (cross-chunk link /
+    iterative cluster merge), where the higher spike count makes the offset reliable."""
+    if n_ref is None:
+        return off_thr
+    f = (n_ref / max(min(int(n_i), int(n_j)), 1)) ** 0.5
+    return min(ceil, off_thr * max(1.0, f))
 
 
 def kernel_twosample(Xp, Xq, kind="kcov"):
@@ -138,7 +158,8 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
 
 
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
-                     depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90):
+                     depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
+                     off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -173,6 +194,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 r = rng.permutation(len(f)); h = len(r) // 2
                 nulls.append(kernel_twosample(f[r[:h]], f[r[h:]], gate))
         thr = float(np.quantile(nulls, feat_q)) if nulls else np.inf
+    Ncnt = sig.get("n")
     label = np.full(len(sig["ids"]), -1, int); nxt = 0
     for ch in np.unique(chunk):
         ix = np.flatnonzero(chunk == ch); n = len(ix)
@@ -195,7 +217,8 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                         continue
                     strength = C[a, b]
                 o = _offset_rms(off[i], off[j])
-                if o <= off_thr:
+                ot = off_thr if (Ncnt is None or off_n_ref is None) else _off_thr_eff(off_thr, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
+                if o <= ot:
                     edges.append((strength - o, a, b))      # strongest agreement first
         edges.sort(reverse=True)
         par = list(range(n)); mem = {k: [k] for k in range(n)}
@@ -344,6 +367,11 @@ def main():
     ap.add_argument("--chunk-minutes", type=float, default=12.0)
     ap.add_argument("--cos-thr", type=float, default=DEFAULT_COS_THR)
     ap.add_argument("--off-thr", type=float, default=DEFAULT_OFF_THR)
+    ap.add_argument("--off-n-ref", type=float, default=DEFAULT_OFF_NREF,
+                    help="SNR-adaptive offset gate: spike count at which --off-thr applies as-is; "
+                         "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
+    ap.add_argument("--off-ceil", type=float, default=DEFAULT_OFF_CEIL,
+                    help="cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
     ap.add_argument("--gate", choices=("cosine", "mmd", "kcov"), default="cosine",
                     help="fragment-merge test: 'cosine' (mean template, default & recommended). "
@@ -378,6 +406,7 @@ def main():
                            feats="wave" if a.gate != "cosine" else None,
                            realign_lohi=(_m.realign_lo, _m.realign_hi))
     label = group_intrachunk(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+                             off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                              gate=a.gate)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
