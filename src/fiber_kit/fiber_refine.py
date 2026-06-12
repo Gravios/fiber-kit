@@ -958,7 +958,16 @@ def main():
     ap.add_argument("--continuity-max-gap", type=int, default=2,
                     help="max chunk gap a continuity bridge may span (default 2)")
     ap.add_argument("--gpu", action="store_true")
+    ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid"], default=None,
+                    help="feature-building alignment: xcorr (default) or centroid (pure, no refine -- "
+                         "adds the trough-position-vs-asymmetry structure to the clustering/linking "
+                         "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
+                         "the FIBER_ALIGN env var.")
     a = ap.parse_args()
+    if a.feature_align:
+        os.environ["FIBER_ALIGN"] = a.feature_align    # reach any spawned workers
+        fl.set_feature_align(a.feature_align)            # this process
+    print(f"[fiber_refine] feature alignment: {fl.get_feature_align()}")
 
     if a.gpu:
         on = _bk.use_gpu(True)

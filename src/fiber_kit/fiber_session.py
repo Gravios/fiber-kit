@@ -35,6 +35,7 @@
 #        --method stderiv [--no-fine] [--no-link]
 # ════════════════════════════════════════════════════════════════════════════
 import argparse, time
+import os
 import numpy as np
 from collections import defaultdict, Counter
 try:
@@ -946,8 +947,17 @@ def main():
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
+    ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid"], default=None,
+                    help="feature-building alignment: xcorr (default) or centroid (pure, no refine -- "
+                         "adds the trough-position-vs-asymmetry structure to the clustering/linking "
+                         "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
+                         "the FIBER_ALIGN env var.")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    if a.feature_align:
+        os.environ["FIBER_ALIGN"] = a.feature_align   # reach forked/spawned pool workers
+        fl.set_feature_align(a.feature_align)           # this (parent) process
+    print(f"[fiber_session] feature alignment: {fl.get_feature_align()}")
     if a.gpu:
         on = _bk.use_gpu(True)
         print(f"[fiber_session] GPU requested: backend = {_bk.backend_name()}"
