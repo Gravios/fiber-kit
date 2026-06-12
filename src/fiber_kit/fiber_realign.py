@@ -40,6 +40,23 @@ def _read_clu(path):
     return nclu, ids                                    # nClusters, per-spike ids
 
 
+def _parse_clu_variant_tag(clu_path, base, group):
+    """Infer (variant, tag) from a clu path <base>.clu[.<variant>].<group>[.<tag>] so the realign
+    outputs ADHERE to the sort that was passed in (e.g. stderiv / refine) instead of defaulting to
+    standard.  Returns ('', '') if the name doesn't parse."""
+    import os
+    name = os.path.basename(str(clu_path))
+    pre = f"{os.path.basename(str(base))}.clu."
+    if not name.startswith(pre):
+        return "", ""
+    toks = name[len(pre):].split(".")
+    g = str(group)
+    if g not in toks:
+        return "", ""
+    gi = toks.index(g)
+    return ".".join(toks[:gi]), ".".join(toks[gi + 1:])
+
+
 def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
                      subsample=True, noise_label=0):
     """Compute per-spike sub-sample offsets aligning each spike to its unit's
@@ -296,7 +313,11 @@ def main():
                     help="reproject the re-extracted windows onto .pca.standard -> new .fet (implies --reextract)")
     ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
     ap.add_argument("--out-tag", default="realigned",
-                    help="stage tag for committed outputs: .res/.spk/.fet.<group>.<tag>")
+                    help="stage tag for committed outputs: .res/.spk/.fet[.<variant>].<group>.<tag>")
+    ap.add_argument("--out-variant", default=None,
+                    help="variant for committed outputs (default: inferred from --clu, e.g. stderiv; "
+                         "falls back to standard).  The .res adheres to this; .spk/.fet are always raw "
+                         "standard (the aligner/re-extraction use raw waveforms)")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
@@ -309,8 +330,15 @@ def main():
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
         method=a.method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample)
 
-    orr, off_path = write_outputs(base, group, off, res_corr, a.out_res, a.out_off)
-    print(f"[realign] wrote {orr}  and  {off_path}")
+    # outputs ADHERE to the passed clu's variant (e.g. stderiv) rather than defaulting to standard
+    cv, _ctag = _parse_clu_variant_tag(a.clu, base, group) if a.clu else ("", "")
+    out_variant = a.out_variant if a.out_variant is not None else (cv or "standard")
+
+    res_out = nio.write_res(base, group, res_corr, variant=out_variant, tag=a.out_tag)
+    np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
+    if a.out_res:                                          # optional extra explicit copy
+        nio.write_res_file(a.out_res, res_corr)
+    print(f"[realign] committed timestamps -> {res_out}  (variant={out_variant or 'canonical'}, tag={a.out_tag})")
 
     if a.reextract or a.refeaturize:
         try:
@@ -327,9 +355,10 @@ def main():
             fet = refeaturize(spk_new, res_corr, basis)
             fet_out = nio.write_fet(base, group, fet, variant="standard", tag=a.out_tag)
             print(f"[realign] re-featurised -> {fet_out}  ({fet.shape[1]} features incl. time)")
-        # commit the corrected .res next to the re-extracted .spk/.fet under the same stage tag
-        res_out = nio.write_res(base, group, res_corr, variant="standard", tag=a.out_tag)
-        print(f"[realign] committed timestamps -> {res_out}")
+        if out_variant not in ("standard", ""):
+            print(f"[realign] note: .spk/.fet are RAW (standard) — the Klusters aligner and re-extraction "
+                  f"use raw waveforms.  To refresh the {out_variant} .spkD/.fetD, re-run the ndmanager "
+                  f"stderiv extraction/PCA on the committed .res ({res_out}).")
 
 
 if __name__ == "__main__":
