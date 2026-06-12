@@ -310,7 +310,10 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
     method='centroid'  reference-free per-spike energy-centroid alignment (fiber_lib.centroid_shift) to
                        the population's own circular-mean centroid -- needs NO peak/template/labels.
     Returns (res, off, ioff, res_corrected, spk, spk_path, labels)."""
-    spk, r = nio.open_spk(base, elec, nsamp, nch, prefer=variant)
+    # the clu names the variant exactly (.clu.stderiv.N -> .spk.stderiv.N); load THAT file, not a
+    # preference search.  prefer must be a list of variant tokens (a bare string would be walked
+    # character-by-character).  There is no canonical .spk -- only .spk.<variant>.N.
+    spk, r = nio.open_spk(base, elec, nsamp, nch, prefer=[variant or "standard"])
     spk_path = r.path
     res = fs.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
