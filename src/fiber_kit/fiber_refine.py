@@ -121,6 +121,55 @@ def _feats(w, ctx, d):
     return U[:, :d] * S[:d]
 
 
+def _dipsplit_realign(si, waves, ctx, mg, alpha, dim=4, depth=0, maxd=4):
+    """Per-node realign dipsplit (refine side of --dip-realign): re-align + re-featurize via
+    _feats (which aligns to the node's OWN median) at EACH bisection, so a deeper split is judged
+    on its own alignment, not the parent's.  fs._dipsplit_rec features the whole cluster once and
+    recurses on fixed scores; this re-derives them per node.  Returns index arrays of positions
+    within si."""
+    n = len(si)
+    if not fs._HAVE_DIP or n < 2 * mg or depth > maxd:
+        return [np.arange(n)]
+    F = _feats(waves[si], ctx, dim)
+    km = fs.KMeans(2, n_init=4, random_state=0).fit(F)
+    a = np.flatnonzero(km.labels_ == 0); b = np.flatnonzero(km.labels_ == 1)
+    if len(a) < mg or len(b) < mg:
+        return [np.arange(n)]
+    dr = km.cluster_centers_[1] - km.cluster_centers_[0]; dr /= np.linalg.norm(dr) + 1e-9
+    _, p = fs._diptest.diptest(np.ascontiguousarray(F @ dr))
+    if p >= alpha:
+        return [np.arange(n)]
+    out = []
+    for loc in (a, b):
+        for piece in _dipsplit_realign(si[loc], waves, ctx, mg, alpha, dim, depth + 1, maxd):
+            out.append(loc[piece])
+    return out
+
+
+def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2):
+    """Per-cluster realign rkk (refine side of --rkk-realign): seed with rkk on the cluster's
+    aligned features, then iterate {realign EACH sub-cluster to its own median -> re-featurize ->
+    re-cluster}, stopping when the count stabilises, so the final CEM runs on consistently
+    per-cluster-aligned features.  Returns per-spike sub-labels over si."""
+    W = waves[si]
+    F = _feats(W, ctx, dims)
+    lab = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42)
+    for _ in range(max(0, iters)):
+        Wal = np.array(W, dtype=float)
+        for c in np.unique(lab):
+            ix = np.flatnonzero(lab == c)
+            if len(ix) >= 8:
+                Wal[ix] = fl.align_xcorr(W[ix], ref="median", iters=6, maxlag=6)
+        wc = Wal[:, ctx.mask, :].reshape(len(W), -1); wc = wc - wc.mean(0)
+        U, S, _ = np.linalg.svd(wc, full_matrices=False); F = U[:, :dims] * S[:dims]
+        new = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42)
+        stop = len(np.unique(new)) == len(np.unique(lab))
+        lab = new
+        if stop:
+            break
+    return lab
+
+
 # ── gated cascade: rkk -> dipsplit -> isolate ────────────────────────────────
 def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed=None, scorr=1.0):
     """Accept the sub-labels `sub` over cluster `si` only where a piece lowers the
@@ -150,17 +199,20 @@ def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed=N
     return final if len(final) > 1 else None
 
 
-def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0):
+def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
+                 dip_realign=True, rkk_realign=True, rkk_iters=2):
     """Try rkk, then dipsplit, gating each; isolate if neither cleans it."""
     pv = _pcv(waves[si], ctx)
     pb = band_pct(res[si], ctx)
     pmed = _med(si, waves) if scorr < 1.0 else None
-    sub = _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42)
+    sub = (_rkk_realign(si, waves, ctx, 6, 12, mg, rkk_iters) if rkk_realign
+           else _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42))
     fp = _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr)
     if fp is not None:
         return fp, "rkk"
     if fs._HAVE_DIP:
-        pcs = fs._dipsplit_rec(_feats(waves[si], ctx, 4), np.arange(len(si)), mg, 0.05)
+        pcs = (_dipsplit_realign(si, waves, ctx, mg, 0.05, 4) if dip_realign
+               else fs._dipsplit_rec(_feats(waves[si], ctx, 4), np.arange(len(si)), mg, 0.05))
         if len(pcs) > 1:
             sub = np.zeros(len(si), int)
             for k, p in enumerate(pcs):
@@ -171,11 +223,22 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0):
     return [si], "iso"
 
 
-def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0):
+def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0,
+               dip_realign=True, rkk_realign=True, rkk_iters=2,
+               nudge=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01):
     out = np.full(len(lab), -1, int)
     nid = 0
     nr = nd = ni = 0
     newi = isol.copy()
+    amp_thr = np.inf
+    if nudge:                                              # low-amp gate threshold over the active clusters
+        amps = []
+        for c in np.unique(lab[lab >= 0]):
+            idx = np.flatnonzero(lab == c)
+            if isol[idx].mean() <= 0.7 and len(idx) >= 2 * mg:
+                amps.append(fs._amp_spread(waves[idx], ctx.mask)[0])
+        if amps:
+            amp_thr = float(np.percentile(amps, nudge_amp_pct))
     for c in np.unique(lab[lab >= 0]):
         idx = np.flatnonzero(lab == c)
         if isol[idx].mean() > 0.7 or len(idx) < 2 * mg:            # retired or too small -> pass through
@@ -185,7 +248,14 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
         for p in pcs:
             si = idx[p]
             if len(si) >= large:
-                fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr)
+                fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr,
+                                       dip_realign, rkk_realign, rkk_iters)
+                if how == "iso" and nudge and len(si) >= 2 * mg:    # offset-overlay pass on what isolated
+                    amp, nch = fs._amp_spread(waves[si], ctx.mask)
+                    if amp <= amp_thr and nch >= nudge_min_ch:
+                        npc = fs._nudge_split(waves[si], ctx.mask, 4, mg, nudge_alpha, nudge_max)
+                        if len(npc) > 1:                            # accept directly (residual-neutral)
+                            fp = [si[q] for q in npc]; how = "nudge"
                 nr += how == "rkk"; nd += how == "dip"; ni += how == "iso"
                 if how == "iso":
                     newi[si] = True
@@ -483,6 +553,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
+           dip_realign=True, rkk_realign=True, rkk_iters=2,
+           nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
            snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
@@ -521,7 +593,10 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
         for it in range(iters):
             lab, isol, nr, nd, ni = _split_all(lab, isol, waves, res_abs, ctx,
                                                large, min_group, var_margin, brr_tol,
-                                               var_peak, var_depth, split_min_corr)
+                                               var_peak, var_depth, split_min_corr,
+                                               dip_realign, rkk_realign, rkk_iters,
+                                               nudge_split, nudge_max, nudge_amp_pct,
+                                               nudge_min_ch, nudge_alpha)
             F = _gfeat(waves, ctx, knn_dims)
             lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
                                      knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr)
@@ -837,6 +912,20 @@ def main():
                     help="max allowed increase (pp) in [floor,window) refractory for a gated sub-split")
     ap.add_argument("--var-peak", type=float, default=2.0, help="var-split trigger (max/median channel variance)")
     ap.add_argument("--var-depth", type=int, default=4)
+    ap.add_argument("--dip-realign", dest="dip_realign", action="store_true", default=True,
+                    help="realign each dipsplit node to its own median (per-step; default on)")
+    ap.add_argument("--no-dip-realign", dest="dip_realign", action="store_false")
+    ap.add_argument("--rkk-realign", dest="rkk_realign", action="store_true", default=True,
+                    help="interleave rkk (CEM) with per-cluster realignment (default on)")
+    ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false")
+    ap.add_argument("--rkk-realign-iters", dest="rkk_iters", type=int, default=2)
+    ap.add_argument("--nudge-split", dest="nudge_split", action="store_true", default=False,
+                    help="split temporally-offset overlaid units in low-amp clusters by alignment lag "
+                         "(residual-neutral; for from-scratch/coarse sorts, default off)")
+    ap.add_argument("--nudge-max", type=int, default=3)
+    ap.add_argument("--nudge-amp-pct", type=float, default=40.0)
+    ap.add_argument("--nudge-min-channels", dest="nudge_min_ch", type=int, default=4)
+    ap.add_argument("--nudge-alpha", type=float, default=0.01)
     ap.add_argument("--knn-k", type=int, default=20)
     ap.add_argument("--knn-thr", type=float, default=0.3, help="K-NN majority fraction to peel a spike")
     ap.add_argument("--knn-minref", type=int, default=50)
@@ -939,7 +1028,11 @@ def main():
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                          large=a.large, min_group=a.min_group, var_margin=a.var_margin,
                          brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth,
-                         split_min_corr=a.split_min_corr, knn_k=a.knn_k, knn_thr=a.knn_thr,
+                         split_min_corr=a.split_min_corr, dip_realign=a.dip_realign,
+                         rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, nudge_split=a.nudge_split,
+                         nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
+                         nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
+                         knn_k=a.knn_k, knn_thr=a.knn_thr,
                          knn_minref=a.knn_minref, knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
                          fold_thr=a.fold_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
                          conv_patience=a.converge_patience, reseed=a.reseed,
@@ -980,6 +1073,9 @@ def main():
                         large=a.large, min_group=a.min_group,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
                         var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr,
+                        dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters,
+                        nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
+                        nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
                         knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
                         fold_thr=a.fold_thr, init_labels=init,
