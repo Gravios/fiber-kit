@@ -390,8 +390,8 @@ def main():
     ap = argparse.ArgumentParser(
         description="Localize fibers (distance + depth + orientation) from raw waveform spread.")
     ap.add_argument("base"); ap.add_argument("elec", type=int)
-    ap.add_argument("--nsamp", type=int, required=True)
-    ap.add_argument("--nchan", type=int, required=True)
+    ap.add_argument("--nsamp", type=int, default=None, help="override: samples per spike (default from YAML)")
+    ap.add_argument("--nchan", type=int, default=None, help="override: channels in this group (default from YAML)")
     ap.add_argument("--probe", nargs="+", default=None,
                     help="NeuroSuite .probe YAML(s), in global-channel order "
                          "(default: the probe named in <session>.yaml)")
@@ -417,21 +417,24 @@ def main():
                     help="alias for --amp-basis none (per-cluster SVD; unstable at low n)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    # resolve channels and/or probe from <session>.yaml when not given explicitly
-    cfg = (sy.resolve_session_params(a.session or a.base, a.elec, require=())
-           if (not a.channels or not a.probe) else None)
+    # resolve channels/probe/nsamp/nchan from <session>.yaml; explicit CLI values override
+    cfg = sy.resolve_session_params(a.session or a.base, a.elec, require=()) or {}
     if a.channels:
         channels = [int(c) for c in a.channels.split(",")]
-    elif cfg and cfg.get("channels"):
+    elif cfg.get("channels"):
         channels = cfg["channels"]
     else:
         raise SystemExit("[localize] need --channels or a <session>.yaml for the group's channel ids")
-    probe = a.probe or (cfg.get("probe") if cfg else None)
+    probe = a.probe or cfg.get("probe")
     if not probe:
         raise SystemExit("[localize] no probe geometry: pass --probe or name it in "
                          "<session>.yaml (probeFile/probe/...)")
+    nsamp = a.nsamp if a.nsamp is not None else cfg.get("nsamp")
+    nchan = a.nchan if a.nchan is not None else cfg.get("nchan")
+    if nsamp is None or nchan is None:
+        raise SystemExit("[localize] need nSamples/nChannels from <session>.yaml or --nsamp/--nchan")
     xy = load_geometry(probe, channels)
-    rows = localize(a.base, a.elec, a.nsamp, a.nchan, xy, a.clu,
+    rows = localize(a.base, a.elec, nsamp, nchan, xy, a.clu,
                     dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid,
                     amp_method=a.amp_method, amp_basis=("none" if a.no_amp_basis else a.amp_basis))
     out = a.out or f"{a.base}.localize.{a.elec}.tsv"

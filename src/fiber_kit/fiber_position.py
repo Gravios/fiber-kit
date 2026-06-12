@@ -236,9 +236,9 @@ def main():
         description="Per-spike drift-independent position along the fiber manifold (from a .fibers file).")
     ap.add_argument("base"); ap.add_argument("elec", type=int)
     ap.add_argument("--fibers", required=True, help="<base>.fibers.<method>.<elec> (the estimated manifold)")
-    ap.add_argument("--nsamp", type=int, required=True)
-    ap.add_argument("--nchan", type=int, required=True)
-    ap.add_argument("--ntotal", type=int, required=True, help="total channels in the .fil")
+    ap.add_argument("--nsamp", type=int, default=None, help="override: samples per spike (default from YAML)")
+    ap.add_argument("--nchan", type=int, default=None, help="override: channels in this group (default from YAML)")
+    ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in the .fil (default from YAML)")
     ap.add_argument("--channels", default=None, help="comma-separated global channel ids (else from --session/.fibers)")
     ap.add_argument("--session", default=None, help="session .yaml for channel/sr lookup")
     ap.add_argument("--sr", type=float, default=None)
@@ -249,22 +249,28 @@ def main():
     ap.add_argument("--chunk-min", type=float, default=20.0)
     ap.add_argument("--min-n", type=int, default=20)
     a = ap.parse_args()
-    # channels / sr: prefer explicit, else session, else read from the .fibers meta
+    # channels / sr / nsamp / nchan / ntotal: prefer explicit, else session, else the .fibers meta
     gch = sr = None
+    nsamp, nchan, ntotal = a.nsamp, a.nchan, a.ntotal
     if a.channels:
         gch = [int(c) for c in a.channels.split(",")]
     if a.sr:
         sr = a.sr
-    if (gch is None or sr is None) and a.session:
+    if a.session and (gch is None or sr is None or nsamp is None or nchan is None or ntotal is None):
         prm = sy.resolve_session_params(a.session, a.elec)
         gch = gch or prm["channels"]; sr = sr or prm.get("sr")
+        nsamp = nsamp if nsamp is not None else prm.get("nsamp")
+        nchan = nchan if nchan is not None else prm.get("nchan")
+        ntotal = ntotal if ntotal is not None else prm.get("ntotal")
     if gch is None or sr is None:
         z = np.load(a.fibers, allow_pickle=True)
         if gch is None and 'meta_channels' in z.files: gch = np.asarray(z['meta_channels'])
         if sr is None and 'meta_sr' in z.files: sr = float(z['meta_sr'])
     if gch is None or sr is None:
         raise SystemExit("[position] need --channels/--sr or --session (or a .fibers with meta)")
-    out = run(a.base, a.elec, a.fibers, a.nsamp, a.nchan, a.ntotal, gch, sr,
+    if nsamp is None or nchan is None or ntotal is None:
+        raise SystemExit("[position] need nSamples/nChannels/nTotal from <session>.yaml or --nsamp/--nchan/--ntotal")
+    out = run(a.base, a.elec, a.fibers, nsamp, nchan, ntotal, gch, sr,
               clu_path=a.clu, relink=not a.no_relink, min_nspk=a.min_nspk,
               n_u=a.n_u, chunk_min=a.chunk_min, min_n=a.min_n)
     pos_path, npz_path = write_positions(out, a.base, a.elec)
