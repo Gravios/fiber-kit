@@ -351,12 +351,14 @@ def main():
                     help="comma list of feature spaces to refresh from .fil (default: standard + "
                          "stderiv if present).  Each is re-derived from the re-extracted raw window: "
                          "standard=raw, stderiv=SDIFF_ALLPAIRS+temporal-diff, then projected onto its .pca")
-    ap.add_argument("--out-tag", default="realigned",
-                    help="stage tag for committed outputs: .res/.spk/.fet[.<variant>].<group>.<tag>")
+    ap.add_argument("--out-tag", default="",
+                    help="stage tag for committed outputs (default: empty -> overwrite the canonical "
+                         ".res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). "
+                         "Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned")
     ap.add_argument("--out-variant", default=None,
-                    help="variant for committed outputs (default: inferred from --clu, e.g. stderiv; "
-                         "falls back to standard).  The .res adheres to this; .spk/.fet are always raw "
-                         "standard (the aligner/re-extraction use raw waveforms)")
+                    help="variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; "
+                         "falls back to standard).  There is one .res/.clu under this variant; .spk/.fet "
+                         "are written per feature space in --variants (standard raw, stderiv transform)")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
@@ -377,7 +379,8 @@ def main():
     np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
     if a.out_res:                                          # optional extra explicit copy
         nio.write_res_file(a.out_res, res_corr)
-    print(f"[realign] committed timestamps -> {res_out}  (variant={out_variant or 'canonical'}, tag={a.out_tag})")
+    print(f"[realign] committed timestamps -> {res_out}  (variant={out_variant or 'canonical'}, "
+          f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
 
     # realignment shifts timestamps/waveforms but NOT cluster assignments, so emit the clu unchanged
     # under the same variant+tag -- this completes the .clu/.res/.spk/.fet set Klusters loads together
