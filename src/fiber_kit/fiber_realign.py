@@ -100,8 +100,20 @@ def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
     return off, ioff
 
 
+def _upsample_spline(W, factor):
+    """Cubic-spline upsample waveforms (n, T, C) along the sample axis by `factor`,
+    returning (n, factor*(T-1)+1, C).  Used to align on a finer grid (factor=2 -> half-
+    sample lags) for better template matching; the committed .res is rounded back to
+    whole original samples afterwards."""
+    from scipy.interpolate import CubicSpline
+    n, T, C = W.shape
+    t = np.arange(T)
+    tu = np.linspace(0.0, T - 1, factor * (T - 1) + 1)
+    return CubicSpline(t, np.asarray(W, np.float64), axis=1)(tu).astype(np.float32)
+
+
 def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
-                     min_score=0.0, noise_label=0):
+                     min_score=0.0, upsample=1, noise_label=0):
     """Klusters-faithful per-spike realignment (spikerealign.cpp / the XcorrDispatch
     library), made ITERATIVE.
 
@@ -116,16 +128,25 @@ def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
     template and an UN-normalised channel-summed correlation; the cosine score is
     amplitude-invariant, which is what makes Klusters realign tight on low-amplitude units.
 
-    Returns ioff (N,) int32; res_corrected = res + ioff (same convention as template_offsets,
-    so realign()/fiber_pca consume it unchanged).  Integer only — re-extraction from .fil is
-    integer-sample, so a sub-sample part would be discarded anyway."""
+    With upsample>1 the waveforms are cubic-spline interpolated to that many sub-samples first,
+    so the integer-lag search runs on a finer grid (upsample=2 -> half-sample matching); the
+    returned offset is in ORIGINAL samples (best_lag/upsample) and ioff = round(offset) so the
+    committed .res stays whole-sample.
+
+    Returns (off, ioff): off (N,) float32 sub-sample offset in original samples, ioff (N,) int32
+    rounded; res_corrected = res + ioff (same convention as template_offsets)."""
     spk = np.asarray(spk, np.float32)
+    f = max(1, int(upsample))
+    if f > 1:
+        spk = _upsample_spline(spk, f)
+        peak = int(peak) * f
+        max_shift = int(max_shift) * f
     N, T, C = spk.shape
     ms = int(max_shift)
     Tcore = T - 2 * ms
     lags = np.arange(-ms, ms + 1)
     corepeak = int(peak) - ms                              # peak position inside the core window
-    ioff = np.zeros(N, np.int32)
+    ioff_up = np.zeros(N, np.int32)
     by = {}
     for i, l in enumerate(labels):
         by.setdefault(int(l), []).append(i)
@@ -160,8 +181,10 @@ def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
             if np.array_equal(new, cur):
                 break
             cur = new
-        ioff[idx] = cur
-    return ioff
+        ioff_up[idx] = cur
+    off = ioff_up.astype(np.float32) / f                   # back to ORIGINAL samples (sub-sample if f>1)
+    ioff = np.rint(off).astype(np.int32)                   # rounded for the whole-sample .res commit
+    return off, ioff
 
 
 def reextract_from_fil(filmm, gch, res_corr, nsamp, peak, batch=50000):
@@ -201,12 +224,13 @@ def refeaturize(spk_new, res_corr, basis):
 
 
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
-            min_n=20, method="klusters", peak=None, min_score=0.0, verbose=True):
-    """Read .spk/.spkD, .res, .clu; compute per-spike integer offsets and corrected .res.
+            min_n=20, method="klusters", peak=None, min_score=0.0, upsample=1, verbose=True):
+    """Read .spk/.spkD, .res, .clu; compute per-spike offsets and corrected .res.
 
     method='klusters' uses the Klusters iterative normalised-xcorr aligner on the RAW
-    (standard) .spk (klusters_offsets, needs `peak`); method='template' uses the original
-    median/un-normalised aligner on .spkD (template_offsets).  Returns
+    (standard) .spk (klusters_offsets, needs `peak`; upsample>1 enables sub-sample matching
+    via spline interpolation); method='template' uses the original median/un-normalised
+    aligner on .spkD (template_offsets).  Returns
     (res, off, ioff, res_corrected, spk, spk_path, labels)."""
     if method == "klusters":
         spk, r = nio.open_spk_raw(base, elec, nsamp, nch); spk_path = r.path
@@ -223,14 +247,14 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
     if method == "klusters":
         if peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
-        ioff = klusters_offsets(spk, labels, peak, max_shift, iters, min_n, min_score)
-        off = ioff.astype(np.float32)
+        off, ioff = klusters_offsets(spk, labels, peak, max_shift, iters, min_n, min_score, upsample)
     else:
         off, ioff = template_offsets(spk, labels, max_shift, iters, min_n)
     res_corr = res + ioff.astype(np.int64)
     if verbose:
         nz = np.count_nonzero(ioff)
-        print(f"[realign:{method}] {spk_path}: {n} spikes, {nclu - 1} units")
+        up = f" upsample={upsample}x" if (method == "klusters" and upsample > 1) else ""
+        print(f"[realign:{method}{up}] {spk_path}: {n} spikes, {nclu - 1} units")
         print(f"[realign] offsets: nonzero={nz} ({100 * nz / n:.1f}%)  "
               f"mean={off.mean():+.3f}  std={off.std():.3f}  "
               f"|off|>=1: {100 * np.mean(np.abs(ioff) >= 1):.1f}%  "
@@ -263,6 +287,9 @@ def main():
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--min-score", type=float, default=0.0,
                     help="klusters: leave a spike unshifted if its best cosine score is below this")
+    ap.add_argument("--upsample", type=int, default=1,
+                    help="klusters: cubic-spline upsample factor for sub-sample matching "
+                         "(2 = half-sample lags); .res is rounded back to whole samples at save")
     ap.add_argument("--reextract", action="store_true",
                     help="re-extract each spike's window from .fil at the corrected timestamp -> new .spk")
     ap.add_argument("--refeaturize", action="store_true",
@@ -280,7 +307,7 @@ def main():
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
-        method=a.method, peak=cfg.get("peak"), min_score=a.min_score)
+        method=a.method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample)
 
     orr, off_path = write_outputs(base, group, off, res_corr, a.out_res, a.out_off)
     print(f"[realign] wrote {orr}  and  {off_path}")
