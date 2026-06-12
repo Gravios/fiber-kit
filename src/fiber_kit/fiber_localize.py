@@ -169,7 +169,37 @@ def _edge_flag(a, xy):
 
 
 # ── per-unit localization ────────────────────────────────────────────────────
-def _profile(wav, method="pc1"):
+def fit_amp_basis(spk, by, rng, *, k=12, n_clusters=400, per=120, min_n=40):
+    """Fit a GROUP-WIDE low-rank waveform basis once, over realigned spikes pooled across many
+    clusters — the same object the raw .fet encodes.  Returns (mu, Vt) for use as the `basis`
+    argument of _profile / localize_unit.
+
+    Denoising the amplitude template by projecting a cluster's mean onto this fixed basis avoids
+    a per-cluster SVD, whose rank-1 estimate is fit to noise on small/low-SNR clusters and
+    produces an occasional badly-mislocalized unit (split-half SD_depth 90th-pct ~28 µm vs ~16
+    µm here on g5).  The group basis keeps the median denoising win (SD_depth 0.78 µm) while
+    cutting that tail to ptp-like (~16 µm), independent of a cluster's spike count.
+
+    Must be a RAW-waveform basis (raw .spk / raw .fet / .pca) — never the stderiv .fetD, whose
+    whitening breaks the amplitude–distance law the monopole inverse relies on."""
+    cl = [c for c in by if len(by[c]) >= min_n]
+    if not cl:
+        return None
+    cl = list(rng.permutation(np.asarray(cl)))
+    pool = []
+    for c in cl[:n_clusters]:
+        idx = np.asarray(by[int(c)])
+        if len(idx) > per:
+            idx = rng.choice(idx, per, replace=False)
+        Wr = fl.realign(np.asarray(spk[np.sort(idx)], np.float32)).reshape(len(idx), -1)
+        pool.append(Wr)
+    P = np.vstack(pool)
+    mu = P.mean(0)
+    Vt = np.linalg.svd(P - mu, full_matrices=False)[2][:k]
+    return mu, Vt
+
+
+def _profile(wav, method="pc1", basis=None):
     """Per-channel amplitude profile fed to the monopole inverse.
 
       'ptp'  : median over spikes of per-spike peak-to-peak.  Alignment-invariant, but max-min
@@ -177,9 +207,12 @@ def _profile(wav, method="pc1"):
                signal channels are pinned near the floor and the footprint is flattened
                (measured spatial contrast ~2.9 on g5) — the decay the fit reads is degraded.
       'wave' : peak-to-peak of the median realigned waveform (noise averaged out).
-      'pc1'  : peak-to-peak of the rank-1 (PC1) denoised template in standard space — the
-               sharpest footprint (contrast ~8.0) and the most precise position
-               (split-half SD_depth/dist/A all lowest).  Default.
+      'pc1'  : peak-to-peak of a rank-1 denoised template in standard space — the sharpest
+               footprint (contrast ~8.0) and the lowest median split-half SD.  Default.
+               With `basis` (a GROUP-WIDE (mu, Vt) from fit_amp_basis / the raw .fet), the
+               denoising direction comes from that fixed subspace — the correct, stable choice.
+               Without `basis` it falls back to a PER-CLUSTER SVD, which is fit to noise on
+               small/low-SNR clusters (heavy split-half tail); pass a basis whenever possible.
 
     For well-isolated, energy-band-stratified clusters the denoised profiles are both sharper
     and more precise; 'ptp' is retained for back-compat / very low spike counts."""
@@ -190,23 +223,29 @@ def _profile(wav, method="pc1"):
     if method == "wave":
         mw = np.median(Wr, 0)
         return mw.max(0) - mw.min(0)
-    X = Wr.reshape(len(Wr), -1)                          # PC1: dominant (≈mean) mode, denoised
-    Vt = np.linalg.svd(X, full_matrices=False)[2]
+    X = Wr.reshape(len(Wr), -1)
+    if basis is not None:                               # GROUP-WIDE basis (the .fet): denoise the
+        mu, Vt = basis                                  # cluster mean in a fixed subspace — stable at any n
+        m = X.mean(0)
+        t = (mu + (m - mu) @ Vt.T @ Vt).reshape(Wr.shape[1:])
+        return np.abs(t.max(0) - t.min(0))
+    Vt = np.linalg.svd(X, full_matrices=False)[2]       # fallback: per-cluster rank-1 (unstable at low n)
     t = ((X @ Vt[0]).mean() * Vt[0]).reshape(Wr.shape[1:])
     return np.abs(t.max(0) - t.min(0))
 
 
-def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", rng=None):
+def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", rng=None, basis=None):
     """Localize one unit from its raw waveforms wav (nspk, nsamp, nchan).
-    Position is fit to a denoised per-channel amplitude profile (amp_method, default PC1);
-    energy-stratified depth gives the axial extent (soma–dendrite signature).
+    Position is fit to a denoised per-channel amplitude profile (amp_method, default PC1; pass
+    `basis` from fit_amp_basis so the denoising uses the group-wide subspace, not a per-cluster
+    SVD); energy-stratified depth gives the axial extent (soma–dendrite signature).
     Depth/distance uncertainty defaults to the analytic Gaussian σ from the fit covariance
     (percentiles around the mean); nboot>0 re-enables the spike bootstrap (validated to match
     the analytic σ on well-isolated clusters, so it is redundant and off by default)."""
     rng = rng or np.random.default_rng(0)
     W = np.asarray(wav, np.float32)
     e = (W.max(1) - W.min(1)).max(1)                    # per-spike energy (tercile stratification)
-    a = _profile(W, amp_method)
+    a = _profile(W, amp_method, basis)
     p, sig, rel = _fit(a, xy, dipole)
     ymin, ymax = xy[:, 1].min(), xy[:, 1].max()
     pitch = (ymax - ymin) / max(1, len(np.unique(xy[:, 1])) - 1)
@@ -234,8 +273,8 @@ def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", 
     depth_shift = np.nan
     if len(W) >= min_terc:
         o = np.argsort(e); t = len(o) // 3
-        y_low = fitfn(_profile(W[o[:t]], amp_method), xy, dipole)[0][1]
-        y_high = fitfn(_profile(W[o[2 * t:]], amp_method), xy, dipole)[0][1]
+        y_low = fitfn(_profile(W[o[:t]], amp_method, basis), xy, dipole)[0][1]
+        y_high = fitfn(_profile(W[o[2 * t:]], amp_method, basis), xy, dipole)[0][1]
         depth_shift = float(y_high - y_low)
     return dict(x0=x0, y0=y0, z0=z0, A=A, dist=dist, dipoleB=B, resid=rel,
                 sig_y=sy, z_lo=float(z_lo), z_hi=float(z_hi),
@@ -246,9 +285,15 @@ def localize_unit(wav, xy, dipole=True, nboot=0, min_terc=60, amp_method="pc1", 
 
 # ── driver ───────────────────────────────────────────────────────────────────
 def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
-             min_n=50, nboot=0, max_spikes=2000, max_resid=0.10, amp_method="pc1", verbose=True):
+             min_n=50, nboot=0, max_spikes=2000, max_resid=0.10, amp_method="pc1",
+             amp_basis="auto", verbose=True):
     """Localize every unit in <base>.spk.<elec> (RAW waveforms) using its
-    (re-linked) .clu.  Returns one report row per unit."""
+    (re-linked) .clu.  Returns one report row per unit.
+
+    amp_basis : 'auto' (default) fits one group-wide raw-waveform basis (fit_amp_basis) and
+                denoises every cluster's amplitude template by projecting onto it — stable at
+                any spike count, unlike a per-cluster SVD.  None reverts to the per-cluster SVD
+                (back-compat).  Only used when amp_method='pc1'."""
     spk, spk_path = nio.open_spk_raw(base, elec, nsamp, nchan)
     if clu_path:
         _, labels = nio.read_clu_file(clu_path)
@@ -260,6 +305,12 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
         if l > 0:
             by[int(l)].append(i)
     rng = np.random.default_rng(0)
+    basis = None
+    if amp_method == "pc1" and amp_basis == "auto":     # one group-wide basis (the .fet), not per-cluster
+        basis = fit_amp_basis(spk, by, rng)
+        if verbose and basis is not None:
+            print(f"[localize] group amplitude basis: rank {basis[1].shape[0]} over "
+                  f"{min(len(by), 400)} clusters (denoise without per-cluster SVD)")
     rows = []
     for u, idx in sorted(by.items()):
         idx = np.asarray(idx)
@@ -267,7 +318,7 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
             idx = rng.choice(idx, max_spikes, replace=False)
         wav = np.asarray(spk[np.sort(idx)], np.float32)
         d = localize_unit(wav, xy, dipole, nboot if len(idx) >= min_n else 0,
-                          amp_method=amp_method, rng=rng)
+                          amp_method=amp_method, rng=rng, basis=basis)
         d.update(unit=u, nspk=int((np.asarray(labels) == u).sum()),
                  low_n=int(len(idx) < min_n), high_resid=int(d["resid"] > max_resid))
         d["reliable"] = int(not (d["at_bound"] or d["low_n"] or d["high_resid"]))  # edge units now angular-constrained
@@ -316,6 +367,9 @@ def main():
                          "+ most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, "
                          "carries a ~4-sigma noise floor on far channels).")
     ap.add_argument("--max-resid", type=float, default=0.10)
+    ap.add_argument("--no-amp-basis", action="store_true",
+                    help="revert pc1 to a per-cluster SVD instead of the group-wide raw basis "
+                         "(the basis is the stable default; per-cluster SVD is unstable at low n)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     # resolve channels and/or probe from <session>.yaml when not given explicitly
@@ -334,7 +388,7 @@ def main():
     xy = load_geometry(probe, channels)
     rows = localize(a.base, a.elec, a.nsamp, a.nchan, xy, a.clu,
                     dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid,
-                    amp_method=a.amp_method)
+                    amp_method=a.amp_method, amp_basis=(None if a.no_amp_basis else "auto"))
     out = a.out or f"{a.base}.localize.{a.elec}.tsv"
     write_localizations(rows, out)
     print(f"[localize] wrote {out}")
