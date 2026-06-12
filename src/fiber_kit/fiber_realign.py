@@ -379,6 +379,12 @@ def main():
         nio.write_res_file(a.out_res, res_corr)
     print(f"[realign] committed timestamps -> {res_out}  (variant={out_variant or 'canonical'}, tag={a.out_tag})")
 
+    # realignment shifts timestamps/waveforms but NOT cluster assignments, so emit the clu unchanged
+    # under the same variant+tag -- this completes the .clu/.res/.spk/.fet set Klusters loads together
+    # (without it the realigned .res has no matching .clu and the set can't be opened as a unit).
+    clu_out = nio.write_clu(base, group, np.asarray(labels, np.int64), variant=out_variant, tag=a.out_tag)
+    print(f"[realign] clu (ids unchanged) -> {clu_out}")
+
     if a.reextract or a.refeaturize:
         try:
             from . import fiber_pca as fpca
@@ -402,7 +408,7 @@ def main():
             else:
                 print(f"[realign] variant '{v}' has no known waveform transform; skipping"); continue
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
-            print(f"[realign] re-extracted {len(wav)} {v} spikes -> {spk_out}")
+            print(f"[realign] re-extracted {len(wav)} {v} spikes from {fil} -> {spk_out}")
             if a.refeaturize:
                 try:
                     basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
