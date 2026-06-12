@@ -160,24 +160,54 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
     return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=False)
 
 
+def centroid_shift(waves, peak, weight="energy"):
+    """Reference-free per-spike alignment shift via the circular centroid of the energy envelope.
+
+    Treat each channel's per-sample energy e[t] (W**2 for weight='energy', |W| for 'abs') as a mass
+    distribution on the circle theta_t = 2*pi*t/T.  The first DFT bin Z = sum_t e[t] exp(i theta_t) is
+    the complex resultant: its angle is the circular center-of-mass (sub-sample), its magnitude the
+    resultant length (concentration).  Summing Z over channels weights each channel by its own
+    resultant length, so sharply-peaked channels dominate and energy-spread channels contribute little.
+    The shift is the signed circular distance from that centroid to `peak`.  Closed-form, single pass,
+    template-free, sub-sample, and -- unlike a template xcorr -- invariant to how large the initial
+    jitter is (no reference to blur).  Note it centres the ENERGY CENTROID, which for asymmetric
+    waveforms sits a constant offset from the trough; that offset is uniform across a consistent shape
+    so it tightens cleanly, but a committing aligner that must hit the trough sample should calibrate it.
+
+    Returns sh (N,) float32 signed shift in samples; applying a circular roll of -sh lands the centroid
+    on `peak`."""
+    W = np.asarray(waves, float); n, T, C = W.shape
+    th = 2.0 * np.pi * np.arange(T) / T
+    e = (W * W) if weight == "energy" else np.abs(W)
+    Z = (e * np.exp(1j * th)[None, :, None]).sum(1).sum(1)     # (n,) channel-summed complex resultant
+    pos = (np.angle(Z) % (2.0 * np.pi)) * T / (2.0 * np.pi)    # centroid sample in [0,T)
+    sh = peak - pos
+    return ((sh + T / 2.0) % T - T / 2.0).astype(np.float32)   # signed circular distance to peak
+
+
 def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3,
-                return_shifts=False):
+                return_shifts=False, init="cold", peak=None):
     """Circularly align each (nSamp,nCh) spike to the cluster mean/median waveform
     by FULL channel-summed cross-correlation, ITERATING until the residual
     variance stops dropping -- so the variance that remains is the shape variance.
 
     This is the single shared alignment core for fiber-kit: realign() wraps it with
     subsample=False (integer roll), the session/refine splitters call it directly with
-    subsample=True (sub-sample lags via parabolic peak + Fourier phase shift).  Median reference
-    by default: robust to the sub-units we are about to split.  The cross-correlation is the RAW
-    channel-summed correlation (a matched filter) -- argmax over |lag|<=maxlag, no per-lag
-    normalisation -- so there is no large-lag bias.  Circular (Fourier) shifts are exact and
-    harmless because the spkD/.fil waveforms are high-pass filtered (window edges ~zero).
-    Re-estimating the reference each pass drives the per-channel residual variance down to the
-    noise floor (single units) and leaves a clean peaked profile on the discriminating channels
-    (contaminated fibers).  Runs on GPU when backend.gpu_enabled() (CuPy), numpy otherwise -- the
-    arithmetic is backend-agnostic (xp.fft mirrors numpy.fft).  Returns aligned waves (+ per-spike
-    shifts if return_shifts)."""
+    subsample=True.  Median reference by default: robust to the sub-units we are about to split.
+    The cross-correlation is the RAW channel-summed correlation (a matched filter) -- argmax over
+    |lag|<=maxlag, no per-lag normalisation -- so there is no large-lag bias.  Circular (Fourier)
+    shifts are exact and harmless because the spkD/.fil waveforms are high-pass filtered (window
+    edges ~zero).  Runs on GPU when backend.gpu_enabled() (CuPy), numpy otherwise.
+
+    init='centroid' seeds the per-spike shift from centroid_shift() (the reference-free circular
+    centroid) before the xcorr refinement.  Because that seed is invariant to the initial jitter
+    magnitude, one refine pass then matches a fully-iterated cold start even on heavily-jittered /
+    from-scratch data, where a cold xcorr's mean/median template would be blurred.  The seed targets
+    `peak` if given, else the population's mean centroid (alignment is to a self-consistent reference
+    either way; the absolute target only shifts everything by a constant).  init='cold' (default)
+    starts at zero shift and is BIT-IDENTICAL to the previous implementation.
+
+    Returns aligned waves (+ per-spike shifts if return_shifts)."""
     xp = _bk.xp()
     W = _bk.asarray(np.asarray(waves, float)); n, T, C = W.shape
     if n < 3:
@@ -186,7 +216,18 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
     FW = xp.fft.fft(W, axis=1); f = xp.fft.fftfreq(T)
     lag = ((xp.arange(T) + T // 2) % T) - T // 2          # signed circular lags
     inwin = xp.abs(lag) <= maxlag
-    total = xp.zeros(n); cur = W.copy(); prev = float("inf")
+    if init == "centroid":
+        th = 2.0 * np.pi * xp.arange(T) / T
+        Z = ((W * W) * xp.exp(1j * th)[None, :, None]).sum(1).sum(1)   # channel-summed resultant
+        pos = (xp.angle(Z) % (2.0 * np.pi)) * T / (2.0 * np.pi)        # centroid sample in [0,T)
+        target = float(peak) if peak is not None else T / 2.0
+        # cur = ifft(FW exp(2pi i f total)) == roll(W, -total); to move pos -> target, total = pos - target
+        total = (pos - target)
+        total = ((total + T / 2.0) % T - T / 2.0)                      # shortest signed circular shift
+        cur = xp.fft.ifft(FW * xp.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
+    else:
+        total = xp.zeros(n); cur = W.copy()
+    prev = float("inf")
     for it in range(iters):
         templ = xp.median(cur, 0) if ref == "median" else cur.mean(0)
         rv = float(((cur - templ) ** 2).mean())
