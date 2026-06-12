@@ -30,8 +30,10 @@ import numpy as np
 
 try:
     from . import fiber_localize as loc, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    from . import fiber_pca as fpca
 except ImportError:
     import fiber_localize as loc, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    import fiber_pca as fpca
 
 CPOS_COLS = ("x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank")
 
@@ -230,7 +232,7 @@ def main():
     pca_basis = None
     if a.amp_method == "pc1" and amp_basis in ("pca", "auto"):   # prefer the on-disk .pca.standard
         try:
-            pca_basis = loc.load_pca_basis(base, elec)
+            pca_basis = fpca.read_pca(base, elec)
             print(f"[cpos] amplitude basis: on-disk {pca_basis['_path']} (PC1 score per channel)")
         except FileNotFoundError:
             if amp_basis == "pca":
