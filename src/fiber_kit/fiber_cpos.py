@@ -162,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Write a per-spike cluster-position sidecar (.cpos) by localizing each "
                     "cluster's median RAW template (monopole+dipole). Reads <session>.yaml.")
-    sy.add_session_args(ap, nchan=False, sr=False, nsamp_default=32, peak=True)
+    sy.add_session_args(ap, nchan=False, sr=False, nsamp_default=None, peak=True)
     ap.add_argument("--spk", default=None, help="path to a STANDARD/raw .spk (preferred over .fil); never the stderiv .spkD")
     ap.add_argument("--spk-method", default="standard", help="method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec>")
     ap.add_argument("--fil", default=None, help="path to raw .fil (fallback if no standard .spk)")
@@ -217,15 +217,19 @@ def main():
         for cand in (nio.session_path(base, "spk", elec, variant=a.spk_method), f"{base}.spk.{elec}"):
             if os.path.exists(cand):
                 spk_path = cand; break
+    nsamp = cfg["nsamp"]                                # from <session>.yaml (CLI --nsamp overrides via cfg)
+    peak = cfg["peak"] if cfg.get("peak") is not None else a.peak
+    if nsamp is None:
+        raise SystemExit("[cpos] nSamples not in <session>.yaml; pass --nsamp")
     if spk_path is not None:
         if spk_path.endswith((f".spkD.{elec}", f".spk.stderiv.{elec}", f".spk.D.{elec}")):
             raise SystemExit(f"[cpos] refusing stderiv waveforms for localization: {spk_path} "
                              f"(use a standard/raw .spk; stderiv breaks the amplitude-distance law)")
-        spk = nio.open_spk_file(spk_path, a.nsamp, len(channels))
+        spk = nio.open_spk_file(spk_path, nsamp, len(channels))
         extract = spk_extractor(spk); src = spk_path
     else:
         filmm = nio.open_signal(a.fil or f"{base}.fil", ntotal)
-        extract = fil_extractor(filmm, res, channels, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
+        extract = fil_extractor(filmm, res, channels, peak=peak, nsamp=nsamp, sample_offset=a.fil_offset)
         src = a.fil or f"{base}.fil"
 
     amp_basis = "none" if a.no_amp_basis else a.amp_basis
