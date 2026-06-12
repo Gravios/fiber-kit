@@ -240,6 +240,40 @@ def refeaturize(spk_new, res_corr, basis):
     return full
 
 
+def _stderiv_transform(raw_ext):
+    """ndmanager stderiv transform, ported verbatim from process_extractspikes_stderiv /
+    process_alignspikes:sdiff_allpairs.  Two steps per the C++ kernel:
+        sdiff[t,c]   = nChanGrp * raw[t,c] - Σ_j raw[t,j]      (SDIFF_ALLPAIRS)
+        stderiv[t,c] = sdiff[t,c] - sdiff[t-1,c]               (temporal first-difference)
+    clamped to int16.  `raw_ext` is (N, nsamp+1, C): the window PLUS one preceding .fil sample, so
+    the t=0 temporal diff uses the TRUE previous sample (matching the continuous g_prev_sdiff of the
+    original extraction rather than the zero-baseline of process_alignspikes).  Returns (N, nsamp, C)
+    int16, aligned 1:1 with the standard window (raw_ext[:, 1:, :])."""
+    r = np.asarray(raw_ext, np.float64)
+    C = r.shape[2]
+    sd = C * r - r.sum(2, keepdims=True)
+    st = sd[:, 1:, :] - sd[:, :-1, :]
+    return np.clip(st, -32768.0, 32767.0).astype(np.int16)
+
+
+def _variant_present(base, group, variant):
+    """True if this session has a <variant> spk or pca on disk (so realign should refresh it)."""
+    try:
+        if nio.resolve_input(base, "spk", group, [variant]).found:
+            return True
+    except Exception:
+        pass
+    try:
+        from . import fiber_pca as fpca
+    except ImportError:
+        import fiber_pca as fpca
+    try:
+        fpca.read_pca(base, group, prefer=[variant])
+        return True
+    except Exception:
+        return False
+
+
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
             min_n=20, method="klusters", peak=None, min_score=0.0, upsample=1, verbose=True):
     """Read .spk/.spkD, .res, .clu; compute per-spike offsets and corrected .res.
@@ -313,6 +347,10 @@ def main():
     ap.add_argument("--refeaturize", action="store_true",
                     help="reproject the re-extracted windows onto .pca.standard -> new .fet (implies --reextract)")
     ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
+    ap.add_argument("--variants", default=None,
+                    help="comma list of feature spaces to refresh from .fil (default: standard + "
+                         "stderiv if present).  Each is re-derived from the re-extracted raw window: "
+                         "standard=raw, stderiv=SDIFF_ALLPAIRS+temporal-diff, then projected onto its .pca")
     ap.add_argument("--out-tag", default="realigned",
                     help="stage tag for committed outputs: .res/.spk/.fet[.<variant>].<group>.<tag>")
     ap.add_argument("--out-variant", default=None,
@@ -348,18 +386,32 @@ def main():
             import fiber_pca as fpca
         fil = a.fil or f"{base}.fil"
         filmm = nio.open_signal(fil, cfg["ntotal"])
-        spk_new = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp, cfg["peak"])
-        spk_out = nio.write_spk(base, group, spk_new, variant="standard", tag=a.out_tag)
-        print(f"[realign] re-extracted {len(spk_new)} spikes from {fil} -> {spk_out}")
-        if a.refeaturize:
-            basis = fpca.read_pca(base, group, prefer=["standard", ""])
-            fet = refeaturize(spk_new, res_corr, basis)
-            fet_out = nio.write_fet(base, group, fet, variant="standard", tag=a.out_tag)
-            print(f"[realign] re-featurised -> {fet_out}  ({fet.shape[1]} features incl. time)")
-        if out_variant not in ("standard", ""):
-            print(f"[realign] note: .spk/.fet are RAW (standard) — the Klusters aligner and re-extraction "
-                  f"use raw waveforms.  To refresh the {out_variant} .spkD/.fetD, re-run the ndmanager "
-                  f"stderiv extraction/PCA on the committed .res ({res_out}).")
+        # read the window PLUS one preceding sample (peak+1, nsamp+1) so the stderiv temporal diff
+        # at t=0 uses the true previous .fil sample; standard = raw_ext[:, 1:, :]
+        raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, cfg["peak"] + 1)
+        # which feature spaces to refresh: standard always; stderiv (+any listed) when present
+        if a.variants:
+            want = [v.strip() for v in a.variants.split(",") if v.strip()]
+        else:
+            want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
+        for v in want:
+            if v == "standard":
+                wav = raw_ext[:, 1:, :]
+            elif v in ("stderiv", "D"):
+                wav = _stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
+            else:
+                print(f"[realign] variant '{v}' has no known waveform transform; skipping"); continue
+            spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
+            print(f"[realign] re-extracted {len(wav)} {v} spikes -> {spk_out}")
+            if a.refeaturize:
+                try:
+                    basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
+                                          else [v, "D"])
+                except FileNotFoundError:
+                    print(f"[realign]   no .pca basis for {v}; .fet not written"); continue
+                fet = refeaturize(wav, res_corr, basis)
+                fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
+                print(f"[realign]   re-featurised {v} -> {fet_out}  ({fet.shape[1]} features incl. time)")
 
 
 if __name__ == "__main__":
