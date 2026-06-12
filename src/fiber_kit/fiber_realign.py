@@ -30,6 +30,10 @@ try:
 except ImportError:
     import neuro_io as nio
 try:
+    from . import fiber_lib as fl
+except ImportError:
+    import fiber_lib as fl
+try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
@@ -291,18 +295,23 @@ def _variant_present(base, group, variant):
 
 
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
-            min_n=20, method="klusters", peak=None, min_score=0.0, upsample=1, verbose=True):
-    """Read .spk/.spkD, .res, .clu; compute per-spike offsets and corrected .res.
+            min_n=20, method="klusters", peak=None, min_score=0.0, upsample=1,
+            variant="standard", verbose=True):
+    """Read the .spk of the VARIANT the clu/res points to, .res, .clu; compute per-spike
+    offsets and corrected .res.
 
-    method='klusters' uses the Klusters iterative normalised-xcorr aligner on the RAW
-    (standard) .spk (klusters_offsets, needs `peak`; upsample>1 enables sub-sample matching
-    via spline interpolation); method='template' uses the original median/un-normalised
-    aligner on .spkD (template_offsets).  Returns
-    (res, off, ioff, res_corrected, spk, spk_path, labels)."""
-    if method == "klusters":
-        spk, r = nio.open_spk_raw(base, elec, nsamp, nch); spk_path = r.path
-    else:
-        spk, spk_path = fs.open_spkD(base, elec, nsamp, nch)
+    The alignment waveform follows `variant` (resolved by nio.open_spk(prefer=variant)), NOT the
+    method -- so a stderiv clu aligns the stderiv waveforms the curator actually views, instead of
+    deriving the shift from the standard .spk and leaving the stderiv jittered.
+
+    method='klusters'  iterative normalised-xcorr to the cluster template (needs a peak: cfg['peak']
+                       for the standard variant, else the variant's own pooled energy-peak);
+    method='template'  legacy median/un-normalised aligner;
+    method='centroid'  reference-free per-spike energy-centroid alignment (fiber_lib.centroid_shift) to
+                       the population's own circular-mean centroid -- needs NO peak/template/labels.
+    Returns (res, off, ioff, res_corrected, spk, spk_path, labels)."""
+    spk, r = nio.open_spk(base, elec, nsamp, nch, prefer=variant)
+    spk_path = r.path
     res = fs.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
     n = min(len(res), len(labels), spk.shape[0])
@@ -311,17 +320,31 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
             print(f"[realign] WARNING length mismatch res={len(res)} clu={len(labels)} "
                   f"spk={spk.shape[0]} -> using first {n}")
     res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
-    if method == "klusters":
-        if peak is None:
+    is_std = variant in ("standard", "", None)
+    if method == "centroid":
+        T = spk.shape[1]
+        pos = np.asarray(fl._centroid_pos(spk.astype(float)))           # per-spike circular centroid
+        ang = np.angle(np.exp(2j * np.pi * pos / T).mean())            # population circular-mean centroid
+        target = (ang % (2.0 * np.pi)) * T / (2.0 * np.pi)            # reference-free target (no peak arg)
+        # centroid_shift returns sh = signed(target - pos); re-extraction applies roll(-ioff), so the
+        # committing offset that lands each centroid on target is ioff = pos - target = -sh
+        off = -np.asarray(fl.centroid_shift(spk, target), float)
+        ioff = np.rint(off).astype(np.int32)
+        align_peak = target
+    elif method == "klusters":
+        align_peak = peak if is_std else int(np.abs(spk).sum(2).mean(0).argmax())
+        if align_peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
-        off, ioff = klusters_offsets(spk, labels, peak, max_shift, iters, min_n, min_score, upsample)
+        off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample)
     else:
         off, ioff = template_offsets(spk, labels, max_shift, iters, min_n)
+        align_peak = None
     res_corr = res + ioff.astype(np.int64)
     if verbose:
         nz = np.count_nonzero(ioff)
         up = f" upsample={upsample}x" if (method == "klusters" and upsample > 1) else ""
-        print(f"[realign:{method}{up}] {spk_path}: {n} spikes, {nclu - 1} units")
+        pk = f" peak={align_peak:.2f}" if align_peak is not None else ""
+        print(f"[realign:{method}{up} variant={variant}{pk}] {spk_path}: {n} spikes, {nclu - 1} units")
         print(f"[realign] offsets: nonzero={nz} ({100 * nz / n:.1f}%)  "
               f"mean={off.mean():+.3f}  std={off.std():.3f}  "
               f"|off|>=1: {100 * np.mean(np.abs(ioff) >= 1):.1f}%  "
@@ -346,10 +369,12 @@ def main():
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
-    ap.add_argument("--align-method", dest="align_method", choices=["klusters", "template"], default="klusters",
-                    help="alignment algorithm: klusters = iterative normalised-xcorr vs pre-aligned mean "
-                         "(raw .spk); template = legacy median/un-normalised on .spkD.  (Named --align-method "
-                         "to avoid colliding with the --method extraction-variant flag used by other tools.)")
+    ap.add_argument("--align-method", dest="align_method", choices=["klusters", "template", "centroid"], default="klusters",
+                    help="alignment algorithm (runs on the clu's variant waveform): klusters = iterative "
+                         "normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; "
+                         "centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), "
+                         "no peak/template/labels needed.  (Named --align-method to avoid colliding with "
+                         "the --method extraction-variant flag used by other tools.)")
     ap.add_argument("--max-shift", type=int, default=8)
     ap.add_argument("--iters", type=int, default=4)
     ap.add_argument("--min-n", type=int, default=20)
@@ -383,13 +408,13 @@ def main():
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, require=need)
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
-    res, off, ioff, res_corr, spk, spk_path, labels = realign(
-        base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
-        method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample)
-
-    # outputs ADHERE to the passed clu's variant (e.g. stderiv) rather than defaulting to standard
+    # the clu's variant (e.g. stderiv) drives BOTH which .spk is aligned and which variant is committed
     cv, _ctag = _parse_clu_variant_tag(a.clu, base, group) if a.clu else ("", "")
     out_variant = a.out_variant if a.out_variant is not None else (cv or "standard")
+    res, off, ioff, res_corr, spk, spk_path, labels = realign(
+        base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
+        method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample,
+        variant=out_variant)
 
     res_out = nio.write_res(base, group, res_corr, variant=out_variant, tag=a.out_tag)
     np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
