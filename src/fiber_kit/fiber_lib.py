@@ -144,6 +144,27 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
     return _fit_whitener(base, mask)
 
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
+# ── feature-alignment mode switch (A/B lever for the centroid hypothesis) ────
+# "xcorr"    : centroid-seed + iterated xcorr refine (converges to the trough/template alignment).
+# "centroid" : PURE centroid, no refine -> keeps trough-position-vs-asymmetry structure in the
+#              feature space.  realign() and every splitter that calls align_xcorr respect this; the
+#              committing aligners (klusters_offsets/template_offsets) do NOT use align_xcorr and are
+#              unaffected (they must keep the trough on Klusters' canonical sample).
+_FEATURE_ALIGN = "xcorr"
+
+
+def set_feature_align(mode):
+    """Select the feature-building alignment: 'xcorr' (default) or 'centroid' (pure, no refine)."""
+    global _FEATURE_ALIGN
+    if mode not in ("xcorr", "centroid"):
+        raise ValueError("feature align mode must be 'xcorr' or 'centroid'")
+    _FEATURE_ALIGN = mode
+
+
+def get_feature_align():
+    return _FEATURE_ALIGN
+
+
 def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
     """Realign each (nSamp,nCh) spike to a robust cluster reference.
 
@@ -153,10 +174,11 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
     fast (the seed needs only one or two refine passes) and robust to large initial jitter.  This
     replaces the former dominant-channel single-pass trough lock.
 
-    Because the centroid seed is sub-sample, the returned waveforms are sub-sample (Fourier) aligned
-    rather than exact integer rolls -- which is what the feature/template builders that call realign
-    want anyway.  For an exact integer roll use align_xcorr(..., init='cold', subsample=False).
-    `lo`/`hi` are retained for signature compatibility and unused; `maxlag` bounds the refine search."""
+    Honours set_feature_align('centroid') -> pure centroid, no refine.  Because the centroid seed is
+    sub-sample, the returned waveforms are sub-sample (Fourier) aligned rather than exact integer rolls
+    -- which is what the feature/template builders that call realign want anyway.  For an exact integer
+    roll use align_xcorr(..., init='cold', subsample=False).  `lo`/`hi` are retained for signature
+    compatibility and unused; `maxlag` bounds the refine search."""
     return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=False)
 
 
@@ -224,6 +246,15 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
         out = _bk.asnumpy(W)
         return (out, np.zeros(n)) if return_shifts else out
     FW = xp.fft.fft(W, axis=1); f = xp.fft.fftfreq(T)
+    if _FEATURE_ALIGN == "centroid":
+        # A/B lever: PURE centroid alignment, no xcorr refinement, to a FIXED reference (peak if
+        # given else T//2) so different fragments' direction profiles are positioned comparably --
+        # this preserves the trough-position-vs-asymmetry structure the refine would erase.
+        pos = _centroid_pos(W); tgt = float(peak) if peak is not None else float(T // 2)
+        total = ((pos - tgt + T / 2.0) % T - T / 2.0)
+        cur = xp.fft.ifft(FW * xp.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
+        out = _bk.asnumpy(cur)
+        return (out, _bk.asnumpy(total)) if return_shifts else out
     lag = ((xp.arange(T) + T // 2) % T) - T // 2          # signed circular lags
     inwin = xp.abs(lag) <= maxlag
     if init == "centroid":
