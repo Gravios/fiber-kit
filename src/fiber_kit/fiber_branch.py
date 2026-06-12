@@ -102,7 +102,7 @@ def main():
     sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--clu", default=None, help="unit-defining .clu (e.g. the .intrachunk or .linked clu); "
                                                 "default resolves the canonical sort")
-    ap.add_argument("--clu-method", default="stderiv"); ap.add_argument("--clu-stage", default="refine.linked")
+    ap.add_argument("--clu-method", default="stderiv"); ap.add_argument("--clu-stage", default="refine_linked")
     ap.add_argument("--min-n", type=int, default=400, help="skip units with fewer spikes (branch test needs samples)")
     ap.add_argument("--pitch", type=float, default=20.0, help="probe site pitch (um) for the depth-coherence gate")
     ap.add_argument("--depth-um", type=float, default=8.0); ap.add_argument("--sep-min", type=float, default=2.2)
