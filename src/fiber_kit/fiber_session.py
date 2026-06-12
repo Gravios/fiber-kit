@@ -224,6 +224,42 @@ def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
     return [idx]
 
 
+def _aligned_pca(waves, mask, k):
+    """Realign a (sub)cluster to its OWN median by iterated circular cross-correlation
+    (fiber_lib.align_xcorr, the channel-summed sub-sample aligner) and return the top-k PCA scores
+    of the masked, mean-subtracted waveforms.  The integer dominant-channel fl.realign locks a
+    sub-cluster onto the PARENT's peak; re-aligning to this node's own median before featurizing
+    lets a deeper bisection be measured on correct alignment."""
+    w = fl.align_xcorr(waves, ref="median", iters=6, maxlag=6)[:, mask, :].reshape(len(waves), -1)
+    w = w - w.mean(0)
+    U, S, _ = np.linalg.svd(w, full_matrices=False)
+    return U[:, :k] * S[:k]
+
+
+def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4):
+    """Recursive DipSplit that REALIGNS EACH NODE to its own median before deciding the split:
+    the 2-means centroid axis and dip test are recomputed from this sub-cluster's median-aligned
+    PCA (_aligned_pca), so every bisection is judged on its own alignment instead of the parent's
+    (the per-step realign).  Returns a list of index arrays into `waves`."""
+    n = len(waves)
+    if not _HAVE_DIP or n < 2 * min_size or depth > maxd:
+        return [np.arange(n)]
+    F = _aligned_pca(waves, mask, dim)                      # realign THIS node + featurize
+    km = KMeans(2, n_init=4, random_state=0).fit(F)
+    a = np.flatnonzero(km.labels_ == 0); b = np.flatnonzero(km.labels_ == 1)
+    if len(a) < min_size or len(b) < min_size:
+        return [np.arange(n)]
+    dr = km.cluster_centers_[1] - km.cluster_centers_[0]; dr /= np.linalg.norm(dr) + 1e-9
+    _, p = _diptest.diptest(np.ascontiguousarray(F @ dr))
+    if p >= alpha:
+        return [np.arange(n)]
+    out = []
+    for loc in (a, b):
+        for piece in _dipsplit_realign(waves[loc], mask, dim, min_size, alpha, depth + 1, maxd):
+            out.append(loc[piece])
+    return out
+
+
 def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
                     depth=0, max_depth=4):
     """Variance-driven auto-split: recursively bisect a fiber WHILE its per-channel
@@ -267,7 +303,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
                        var_split=0.0, var_split_depth=4,
-                       dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40,
+                       dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
                        rkk_dims=6, rkk_max=50, merge_corr=0.0, merge_method="template", sliding_nwin=14,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        emit_candidates=False, candidates_out=None,
@@ -315,9 +351,13 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             for grp in groups:                       # PCA each GROUP (within-unit variance)
                 if len(grp) < 2 * dip_min:
                     newg.append(grp); continue
-                wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
-                Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
-                newg += [grp[piece] for piece in _dipsplit_rec(Fg, np.arange(len(grp)), dip_min, dip_alpha)]
+                if dip_realign:                      # realign EACH node to its own median (per step)
+                    pieces = _dipsplit_realign(wcf[grp], mask, dip_dim, dip_min, dip_alpha)
+                else:                                # legacy: one parent realign, fixed features
+                    wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
+                    Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
+                    pieces = _dipsplit_rec(Fg, np.arange(len(grp)), dip_min, dip_alpha)
+                newg += [grp[piece] for piece in pieces]
             groups = newg
         if split_var_margin > 0 and len(groups) > 1:
             # accept the split only if it lowers the spike-weighted mean per-channel
@@ -797,6 +837,11 @@ def main():
     ap.add_argument("--no-dipsplit", dest="dipsplit", action="store_false")
     ap.add_argument("--dip-dim", type=int, default=4); ap.add_argument("--dip-alpha", type=float, default=0.01)
     ap.add_argument("--dip-min", type=int, default=40)
+    ap.add_argument("--dip-realign", dest="dip_realign", action="store_true", default=True,
+                    help="realign each dipsplit node to its own median before splitting "
+                         "(per-step alignment; default on)")
+    ap.add_argument("--no-dip-realign", dest="dip_realign", action="store_false",
+                    help="legacy: one parent realign + fixed features for the whole dipsplit recursion")
     ap.add_argument("--fine-kappa", type=float, default=40.0)
     ap.add_argument("--fine-dedup-deg", type=float, default=5.0)
     ap.add_argument("--fine-min-group", type=int, default=40)
@@ -845,7 +890,7 @@ def main():
               incl_k=a.inclusion_k, cone_channel_k=a.cone_channel_k,
               split_var_margin=a.split_var_margin, var_split=a.var_split,
               var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
-              dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min,
+              dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
