@@ -940,6 +940,9 @@ def main():
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
+    ap.add_argument("--clu-stage", dest="clu_stage", default="",
+                    help="post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] "
+                         "(default none); e.g. --clu-stage session")
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
@@ -1045,8 +1048,11 @@ def main():
             l = emap.get(int(g), -1)
             if l >= 0: labels[g] = gid[(c, l)]
     clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
-    clu_out = a.out or f"{a.base}.clu.{a.elec}"
-    nio.write_clu_file(clu_out, clu)
+    if a.out:
+        clu_out = a.out
+        nio.write_clu_file(clu_out, clu)
+    else:                                                 # <base>.clu.<variant>.<elec>[.<stage>]
+        clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
 
     # ── .fibers.<method>.<elec> : per (chunk,fiber) geometry, tagged with gid ──
     rows = []
