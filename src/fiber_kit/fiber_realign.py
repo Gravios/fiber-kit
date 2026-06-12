@@ -131,27 +131,36 @@ def _upsample_spline(W, factor):
 
 def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
                      min_score=0.0, upsample=1, noise_label=0):
-    """Klusters-faithful per-spike realignment (spikerealign.cpp / the XcorrDispatch
-    library), made ITERATIVE.
+    """Klusters-faithful per-spike realignment -- a verbatim match to libklustersshared
+    realign_xcorr_omp.cpp (the kernel Klusters' Shift+P runs) plus spikerealign.cpp's template
+    build.  Per unit:
 
-    Per unit: build the cluster MEAN template, PRE-ALIGN it so its max-summed-|amplitude|
-    sample sits at `peak` (the canonical detection peak — without this the xcorr pulls
-    spikes away from the peak), then score each spike by NORMALISED (cosine) cross-
-    correlation against that template over INTEGER lags in [-max_shift, max_shift]; the
-    best lag is the shift.  Spikes whose best score < min_score keep their current lag.
-    The mean is re-estimated from the freshly-aligned spikes and the pass repeated until
-    the integer shifts stop changing (the iteration a Klusters user does by eye with
-    repeated button presses).  This differs from template_offsets, which uses a MEDIAN
-    template and an UN-normalised channel-summed correlation; the cosine score is
-    amplitude-invariant, which is what makes Klusters realign tight on low-amplitude units.
+      * build the cluster MEAN template, then PRE-ALIGN it so its summed-|amplitude| peak sample
+        (argmax_s Sigma_ch |tmpl[s,ch]|) lands on `peak` (non-circular zero-fill shift, exactly as
+        spikerealign.cpp does -- without this the xcorr pulls spikes off the true peak);
+      * score each spike by NORMALISED cross-correlation over INTEGER lags in [-max_shift,max_shift]
+        using a FULL-window CIRCULAR shift and a CONSTANT full-spike-energy denominator:
 
-    With upsample>1 the waveforms are cubic-spline interpolated to that many sub-samples first,
-    so the integer-lag search runs on a finer grid (upsample=2 -> half-sample matching); the
-    returned offset is in ORIGINAL samples (best_lag/upsample) and ioff = round(offset) so the
-    committed .res stays whole-sample.
+            num(L)   = Sigma_ch Sigma_s  tmpl[s,ch] * spike[(s+L) % N, ch]
+            score(L) = num(L) / sqrt(tmplEnergy * spikeEnergy)      (spikeEnergy over ALL N samples)
+
+        bestLag = argmax score; spikes scoring < min_score keep lag 0.
+
+    The full circular window with a constant (not per-lag) denominator is the crucial detail: a
+    trimmed core window with a per-lag segment norm -- which earlier versions of this function used --
+    inflates the score at large lags and leaves spikes essentially un-tightened (the realign_xcorr_omp
+    header calls this out explicitly).  That bug is why committed re-extractions stayed jittered while
+    Klusters' own Shift+P tightened the same data.
+
+    The pass is repeated up to `iters` times, re-estimating the mean from the freshly-aligned spikes
+    (iters=1 reproduces a single Shift+P press; more iterations sharpen the template and converge).
+
+    With upsample>1 the waveforms are cubic-spline interpolated to that many sub-samples first so the
+    integer-lag search runs on a finer grid; the returned offset is in ORIGINAL samples (bestLag/f)
+    and ioff = round(offset) for the whole-sample .res commit.
 
     Returns (off, ioff): off (N,) float32 sub-sample offset in original samples, ioff (N,) int32
-    rounded; res_corrected = res + ioff (same convention as template_offsets)."""
+    rounded; res_corrected = res + ioff (Klusters' convention: newTs = ts + shift)."""
     spk = np.asarray(spk, np.float32)
     f = max(1, int(upsample))
     if f > 1:
@@ -160,38 +169,45 @@ def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
         max_shift = int(max_shift) * f
     N, T, C = spk.shape
     ms = int(max_shift)
-    Tcore = T - 2 * ms
+    pk = int(peak)
     lags = np.arange(-ms, ms + 1)
-    corepeak = int(peak) - ms                              # peak position inside the core window
-    ioff_up = np.zeros(N, np.int32)
+    arT = np.arange(T)
+    spkE = (spk.astype(np.float64) ** 2).sum((1, 2))          # full per-spike energy (all samples)
+    sqrtSpkE = np.sqrt(spkE) + 1e-12                          # constant across lags (no large-lag bias)
     by = {}
     for i, l in enumerate(labels):
         by.setdefault(int(l), []).append(i)
+    ioff_up = np.zeros(N, np.int32)
     for u, rows in by.items():
         if u == noise_label or len(rows) < min_n:
             continue
         idx = np.asarray(rows)
-        W = spk[idx]                                       # (n,T,C)
+        W = spk[idx]                                          # (n,T,C)
+        sqE = sqrtSpkE[idx]
         cur = np.zeros(len(idx), int)
         for _ in range(max(1, iters)):
-            # MEAN template from the currently-aligned cores (same gather as template_offsets)
-            gidx = np.arange(Tcore)[None, :] + (ms + cur)[:, None]
-            al = np.take_along_axis(W, gidx[:, :, None], axis=1).astype(np.float32)
-            templ = al.mean(0)                             # (Tcore,C) — MEAN (Klusters), not median
-            # pre-align: roll so the max sum|amp| sample lands on the canonical peak
-            amp = np.abs(templ).sum(1)
-            tpk = int(np.argmax(amp))
-            if corepeak - tpk:
-                templ = np.roll(templ, corepeak - tpk, axis=0)
-            tnorm = float(np.sqrt((templ * templ).sum())) + 1e-9
-            # NORMALISED (cosine) cross-correlation at each integer lag
-            best = np.full(len(idx), -np.inf, np.float32)
+            # MEAN template from spikes circularly rolled by their current shift: aligned[s]=W[(s+cur)%T]
+            sidx = (arT[None, :] + cur[:, None]) % T
+            al = np.take_along_axis(W, sidx[:, :, None], axis=1).astype(np.float64)
+            templ = al.mean(0)                                # (T,C) MEAN (Klusters), not median
+            # pre-align: shift template so its summed-|amp| peak lands at `pk` (non-circular zero-fill)
+            tpk = int(np.argmax(np.abs(templ).sum(1)))
+            tshift = pk - tpk
+            if tshift:
+                z = np.zeros_like(templ)
+                if tshift > 0:
+                    z[tshift:] = templ[:T - tshift]
+                else:
+                    z[:T + tshift] = templ[-tshift:]
+                templ = z
+            tnorm = float(np.sqrt((templ * templ).sum())) + 1e-12
+            denom = tnorm * sqE                               # (n,) constant per spike across lags
+            best = np.full(len(idx), -np.inf)
             blag = np.zeros(len(idx), int)
             for L in lags:
-                seg = W[:, ms + L:T - ms + L, :]           # (n,Tcore,C)
-                num = np.einsum('ntc,tc->n', seg, templ)
-                snorm = np.sqrt((seg * seg).sum((1, 2))) + 1e-9
-                score = num / (tnorm * snorm)
+                seg = W[:, (arT + L) % T, :]                  # FULL-window CIRCULAR shift: spike[(s+L)%N]
+                num = np.einsum('ntc,tc->n', seg.astype(np.float64), templ)
+                score = num / denom
                 upd = score > best
                 best[upd] = score[upd]; blag[upd] = L
             new = np.where(best >= min_score, blag, cur)
@@ -199,8 +215,8 @@ def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
                 break
             cur = new
         ioff_up[idx] = cur
-    off = ioff_up.astype(np.float32) / f                   # back to ORIGINAL samples (sub-sample if f>1)
-    ioff = np.rint(off).astype(np.int32)                   # rounded for the whole-sample .res commit
+    off = ioff_up.astype(np.float32) / f                      # back to ORIGINAL samples (sub-sample if f>1)
+    ioff = np.rint(off).astype(np.int32)                      # rounded for the whole-sample .res commit
     return off, ioff
 
 
