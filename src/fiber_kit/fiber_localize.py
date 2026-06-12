@@ -181,21 +181,23 @@ def load_pca_basis(base, elec):
 def _pca_profile(W, basis):
     """Per-channel amplitude profile from the .pca.standard basis: the FIRST principal component
     (PC1) score of each channel IS the amplitude — exactly the first feature of that channel's
-    block in .fet.standard.N, so this equals reading the fet scores directly.  Returns |PC1 score|
-    of the cluster-mean window per channel; mean-subtraction follows the file's `centered` flag
-    (the real basis is centered=0).  No realign — the on-disk extraction already carries the sort's
-    alignment.  Fixed basis -> stable at any spike count."""
+    block in .fet.standard.N, so this equals reading the fet scores directly.  Returns the per-channel
+    |median over spikes of the PC1 score| — the median (not the mean window) rejects outlier spikes
+    that a few high-energy contaminants would otherwise drag the amplitude toward.  Mean-subtraction
+    follows the file's `centered` flag (the real basis is centered=0).  No realign — the on-disk
+    extraction already carries the sort's alignment.  Fixed basis -> stable at any spike count."""
     means, evec = basis["means"], basis["evec"]
     rec, d2, centered = int(basis["recShift"]), int(basis["data2use"]), int(basis["centered"])
     if W.shape[1] < rec + d2:
         raise ValueError(f"_pca_profile: waveform nsamp={W.shape[1]} < recShift+data2use={rec + d2} "
                          f"— the .pca.standard basis is for a different nSamples; use the matching one")
-    win = np.asarray(W, np.float64)[:, rec:rec + d2, :].mean(0)   # (data2use, nch) cluster-mean window
-    nch = min(evec.shape[0], win.shape[1])
+    Wd = np.asarray(W, np.float64)[:, rec:rec + d2, :]            # (n, data2use, nch) per-spike windows
+    nch = min(evec.shape[0], Wd.shape[2])
     prof = np.empty(nch)
     for ch in range(nch):
         mu = means[ch] if centered else 0.0
-        prof[ch] = abs(float(evec[ch][0] @ (win[:, ch] - mu)))    # PC1 score = the channel amplitude
+        s = (Wd[:, :, ch] - mu) @ evec[ch][0]                    # (n,) per-spike PC1 scores
+        prof[ch] = abs(float(np.median(s)))                      # median over spikes = outlier-robust amplitude
     return prof
 
 
