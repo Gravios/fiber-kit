@@ -296,9 +296,10 @@ def main():
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
-    ap.add_argument("--method", choices=["klusters", "template"], default="klusters",
-                    help="klusters = iterative normalised-xcorr vs pre-aligned mean (raw .spk); "
-                         "template = legacy median/un-normalised on .spkD")
+    ap.add_argument("--align-method", dest="align_method", choices=["klusters", "template"], default="klusters",
+                    help="alignment algorithm: klusters = iterative normalised-xcorr vs pre-aligned mean "
+                         "(raw .spk); template = legacy median/un-normalised on .spkD.  (Named --align-method "
+                         "to avoid colliding with the --method extraction-variant flag used by other tools.)")
     ap.add_argument("--max-shift", type=int, default=8)
     ap.add_argument("--iters", type=int, default=4)
     ap.add_argument("--min-n", type=int, default=20)
@@ -322,13 +323,13 @@ def main():
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
     need = ("nchan", "nsamp") + (("ntotal", "peak") if (a.reextract or a.refeaturize
-                                                        or a.method == "klusters") else ())
+                                                        or a.align_method == "klusters") else ())
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, require=need)
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
-        method=a.method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample)
+        method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample)
 
     # outputs ADHERE to the passed clu's variant (e.g. stderiv) rather than defaulting to standard
     cv, _ctag = _parse_clu_variant_tag(a.clu, base, group) if a.clu else ("", "")
