@@ -182,8 +182,8 @@ def session_path(base, type_, group, variant="", tag=""):
         p += f".{variant}"
     p += f".{group}"
     if tag:
-        p += f".{tag}"
-    return p
+        p += f".{str(tag).replace('.', '_')}"   # Klusters parses '.' as a field separator, so a
+    return p                                     # multi-part STAGE must join with '_' (refine_linked)
 
 
 def write_res(base, elec, times, variant="", tag=None):

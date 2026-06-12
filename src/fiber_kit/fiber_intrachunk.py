@@ -404,7 +404,7 @@ def main():
                          "discrimination, not for routine grouping")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
-    ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.intrachunk)")
+    ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_intrachunk)")
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     a = ap.parse_args()
 
@@ -413,7 +413,7 @@ def main():
     nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
     clu_stage = a.clu_stage if a.clu_stage is not None else a.cpos_stage
-    out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}.intrachunk" if clu_stage else "intrachunk")
+    out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}_intrachunk" if clu_stage else "intrachunk")
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     res = nio.read_res(base, elec)

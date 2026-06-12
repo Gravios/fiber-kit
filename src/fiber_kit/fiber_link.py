@@ -269,14 +269,14 @@ def main():
     ap.add_argument("--traj-ext-min", type=float, default=0.0,
                     help="minutes an attach may extend beyond a bundle's member time span "
                          "(0=interpolation only; ~chunk length allows extrapolation-based extension)")
-    ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>.linked)")
+    ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_linked)")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=())
     base = cfg["base"]; elec = a.group
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
     clu_stage = a.clu_stage if a.clu_stage is not None else a.cpos_stage
-    out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}.linked" if clu_stage else "linked")
+    out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}_linked" if clu_stage else "linked")
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     if a.from_units:

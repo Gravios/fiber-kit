@@ -295,7 +295,7 @@ def main():
         description="Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).")
     ap.add_argument("fibers", help="path to <base>.fibers.<method>.<elec>.npz")
     ap.add_argument("--clu", default=None, help="existing .clu to remap (gid+1; 0=noise)")
-    ap.add_argument("--out", default=None, help="output .clu (default <clu>.relinked)")
+    ap.add_argument("--out", default=None, help="output .clu (default <clu>_relinked)")
     ap.add_argument("--report", default=None, help="per-unit drift report TSV")
     ap.add_argument("--prof-thr", type=float, default=0.10);  ap.add_argument("--tcorr-min", type=float, default=0.96)
     ap.add_argument("--prof-gate", type=float, default=0.18);  ap.add_argument("--tdist-gate", type=float, default=0.055)
@@ -310,7 +310,7 @@ def main():
     if a.report:
         write_report(rep, a.report); print(f"[relink] report -> {a.report}")
     if a.clu:
-        out = a.out or (a.clu + ".relinked")
+        out = a.out or (a.clu + "_relinked")
         k, n = rewrite_clu(a.clu, out, oldgid2unit)
         print(f"[relink] {n} spikes remapped -> {k} units -> {out}")
 
