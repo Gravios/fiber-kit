@@ -174,18 +174,8 @@ def _edge_flag(a, xy):
 
 # ── per-unit localization ────────────────────────────────────────────────────
 def load_pca_basis(base, elec):
-    """Read the on-disk per-channel PCA eigenvectors that <base>.fet.standard.<elec> was
-    projected with: <base>.pca.standard.<elec> (then legacy .pca.<elec>), via fiber_pca.read_pcad.
-    Returns the basis dict (means, evec, recShift, data2use, centered) — the exact subspace the
-    sort used, so no SVD is fit at all.  Raises FileNotFoundError if absent (caller may fall back
-    to fit_amp_basis).  RAW/standard only — never the stderiv .pcaD."""
-    r = nio.resolve_input(base, "pca", elec, nio.prefer_standard())
-    if not r.found:
-        raise FileNotFoundError(f"no .pca.standard basis for {base} elec {elec}")
-    b = fpca.read_pcad(r.path)
-    b["_pca"] = True                                    # tag for _profile dispatch
-    b["_path"] = r.path
-    return b
+    """Back-compat alias: all .pca resolve+read lives in fiber_pca.read_pca (next to read_pcad)."""
+    return fpca.read_pca(base, elec)
 
 
 def _pca_profile(W, basis):
@@ -351,7 +341,7 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
     if amp_method == "pc1" and amp_basis not in (None, "none"):
         if amp_basis in ("pca", "auto"):                # prefer the on-disk .pca.standard eigenvectors
             try:
-                basis = load_pca_basis(base, elec)
+                basis = fpca.read_pca(base, elec)
                 if verbose:
                     print(f"[localize] amplitude basis: on-disk {basis['_path']} "
                           f"(per-channel PCA, nComp {basis['evec'].shape[1]})")

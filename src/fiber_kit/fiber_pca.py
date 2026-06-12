@@ -60,6 +60,21 @@ def read_pcad(path):
                 recShift=recShift, means=means, evec=evec)
 
 
+def read_pca(base, elec, prefer=None):
+    """Resolve and read <base>.pca[.<variant>].<elec> (RAW/standard first by default), returning
+    the read_pcad dict tagged _pca/_path for amplitude-basis use.  Centralizes .pca resolve+read
+    here next to read_pcad (neuro_io owns res/clu/fet/spk; fiber_pca owns .pca/.pcaD — and since
+    fiber_pca imports neuro_io, this is the only side that can hold both).  RAW/standard only by
+    default — never the stderiv .pcaD.  Raises FileNotFoundError if absent."""
+    r = nio.resolve_input(base, "pca", elec, prefer or nio.prefer_standard())
+    if not r.found:
+        raise FileNotFoundError(f"no .pca for {base} elec {elec}")
+    b = read_pcad(r.path)
+    b["_pca"] = True                                      # tag for fiber_localize._profile dispatch
+    b["_path"] = r.path
+    return b
+
+
 def write_pcad(path, means, evec, recShift, centered=0):
     """Write a .pca/.pcaD byte-compatible with process_pca (means-then-evec, col-major
     eigenvectors).  means (nCh,data2use); evec (nCh,nComp,data2use)."""
