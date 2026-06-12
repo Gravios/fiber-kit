@@ -145,18 +145,18 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
 
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
 def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
-    """Rigid integer realignment of each (nSamp,nCh) spike to a robust cluster reference.
+    """Realign each (nSamp,nCh) spike to a robust cluster reference.
 
     Thin wrapper over align_xcorr (the shared aligner core): FULL multichannel channel-summed
-    cross-correlation against the cluster MEDIAN, ITERATED to convergence, integer lags.  This
-    replaces the former dominant-channel single-pass trough lock -- aligning on one channel is
-    fragile when two channels share amplitude or the dominant channel is noisy; the channel-summed
-    iterated match is what align_xcorr already uses for the splitters, so both paths now share one
-    implementation (and one backend, CPU or GPU).
+    cross-correlation against the cluster MEDIAN.  Inherits align_xcorr's default init='centroid', so
+    each spike is first seeded by its reference-free circular centroid and then refined by the xcorr --
+    fast (the seed needs only one or two refine passes) and robust to large initial jitter.  This
+    replaces the former dominant-channel single-pass trough lock.
 
-    Returns integer-rolled waveforms (subsample=False -> exact circular roll, sample values
-    preserved).  `lo`/`hi` are retained for signature compatibility and are no longer used (the
-    correlation spans the full window); `maxlag` bounds the search as before."""
+    Because the centroid seed is sub-sample, the returned waveforms are sub-sample (Fourier) aligned
+    rather than exact integer rolls -- which is what the feature/template builders that call realign
+    want anyway.  For an exact integer roll use align_xcorr(..., init='cold', subsample=False).
+    `lo`/`hi` are retained for signature compatibility and unused; `maxlag` bounds the refine search."""
     return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=False)
 
 
@@ -175,37 +175,47 @@ def centroid_shift(waves, peak, weight="energy"):
     so it tightens cleanly, but a committing aligner that must hit the trough sample should calibrate it.
 
     Returns sh (N,) float32 signed shift in samples; applying a circular roll of -sh lands the centroid
-    on `peak`."""
-    W = np.asarray(waves, float); n, T, C = W.shape
-    th = 2.0 * np.pi * np.arange(T) / T
-    e = (W * W) if weight == "energy" else np.abs(W)
-    Z = (e * np.exp(1j * th)[None, :, None]).sum(1).sum(1)     # (n,) channel-summed complex resultant
-    pos = (np.angle(Z) % (2.0 * np.pi)) * T / (2.0 * np.pi)    # centroid sample in [0,T)
+    on `peak`.  Backend-aware: runs on GPU when backend.gpu_enabled() (CuPy), numpy otherwise."""
+    xp = _bk.xp()
+    W = _bk.asarray(np.asarray(waves, float)); T = W.shape[1]
+    pos = _centroid_pos(W, weight)                            # backend array, centroid sample in [0,T)
     sh = peak - pos
-    return ((sh + T / 2.0) % T - T / 2.0).astype(np.float32)   # signed circular distance to peak
+    return _bk.asnumpy((sh + T / 2.0) % T - T / 2.0).astype(np.float32)   # signed circular distance
+
+
+def _centroid_pos(W, weight="energy"):
+    """Per-spike circular-centroid sample position in [0,T) on the active backend.  `W` is an xp array
+    (n,T,C); see centroid_shift for the math.  Shared by centroid_shift and align_xcorr's centroid init
+    so the GPU path avoids a host round-trip."""
+    xp = _bk.xp(); T = W.shape[1]
+    th = 2.0 * np.pi * xp.arange(T) / T
+    e = (W * W) if weight == "energy" else xp.abs(W)
+    Z = (e * xp.exp(1j * th)[None, :, None]).sum(1).sum(1)     # (n,) channel-summed complex resultant
+    return (xp.angle(Z) % (2.0 * np.pi)) * T / (2.0 * np.pi)
 
 
 def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3,
-                return_shifts=False, init="cold", peak=None):
+                return_shifts=False, init="centroid", peak=None):
     """Circularly align each (nSamp,nCh) spike to the cluster mean/median waveform
     by FULL channel-summed cross-correlation, ITERATING until the residual
     variance stops dropping -- so the variance that remains is the shape variance.
 
     This is the single shared alignment core for fiber-kit: realign() wraps it with
-    subsample=False (integer roll), the session/refine splitters call it directly with
-    subsample=True.  Median reference by default: robust to the sub-units we are about to split.
-    The cross-correlation is the RAW channel-summed correlation (a matched filter) -- argmax over
-    |lag|<=maxlag, no per-lag normalisation -- so there is no large-lag bias.  Circular (Fourier)
-    shifts are exact and harmless because the spkD/.fil waveforms are high-pass filtered (window
-    edges ~zero).  Runs on GPU when backend.gpu_enabled() (CuPy), numpy otherwise.
+    subsample=False, the session/refine splitters call it directly.  Median reference by default:
+    robust to the sub-units we are about to split.  The cross-correlation is the RAW channel-summed
+    correlation (a matched filter) -- argmax over |lag|<=maxlag, no per-lag normalisation -- so there
+    is no large-lag bias.  Circular (Fourier) shifts are exact and harmless because the spkD/.fil
+    waveforms are high-pass filtered (window edges ~zero).  Runs on GPU when backend.gpu_enabled().
 
-    init='centroid' seeds the per-spike shift from centroid_shift() (the reference-free circular
-    centroid) before the xcorr refinement.  Because that seed is invariant to the initial jitter
-    magnitude, one refine pass then matches a fully-iterated cold start even on heavily-jittered /
-    from-scratch data, where a cold xcorr's mean/median template would be blurred.  The seed targets
-    `peak` if given, else the population's mean centroid (alignment is to a self-consistent reference
-    either way; the absolute target only shifts everything by a constant).  init='cold' (default)
-    starts at zero shift and is BIT-IDENTICAL to the previous implementation.
+    init='centroid' (DEFAULT) seeds the per-spike shift from the reference-free circular centroid
+    (_centroid_pos) before the xcorr refinement.  Because that seed is invariant to the initial jitter
+    magnitude, the refinement converges in one or two passes (tol early-stop) even on heavily-jittered
+    data where a cold mean/median template would be blurred -- so it is both faster and at least as tight
+    as a cold start.  When `peak` is None the seed targets the population's CIRCULAR-MEAN centroid, i.e.
+    a pure relative de-jitter that leaves the population's absolute position where a cold start would
+    converge (so masked features are unchanged, only the convergence path is shorter).  Pass peak to
+    target an absolute sample, or iters=0 for the pure centroid alignment with no xcorr refinement.
+    init='cold' starts at zero shift and is BIT-IDENTICAL to the pre-centroid implementation.
 
     Returns aligned waves (+ per-spike shifts if return_shifts)."""
     xp = _bk.xp()
@@ -217,13 +227,16 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
     lag = ((xp.arange(T) + T // 2) % T) - T // 2          # signed circular lags
     inwin = xp.abs(lag) <= maxlag
     if init == "centroid":
-        th = 2.0 * np.pi * xp.arange(T) / T
-        Z = ((W * W) * xp.exp(1j * th)[None, :, None]).sum(1).sum(1)   # channel-summed resultant
-        pos = (xp.angle(Z) % (2.0 * np.pi)) * T / (2.0 * np.pi)        # centroid sample in [0,T)
-        target = float(peak) if peak is not None else T / 2.0
+        pos = _centroid_pos(W)                                         # centroid sample in [0,T)
+        if peak is not None:
+            target = float(peak)
+        else:
+            # circular-mean centroid: relative de-jitter that preserves the population's absolute
+            # position (the basin a cold start converges to), so masked features are unchanged
+            ang = xp.angle((xp.exp(2j * np.pi * pos / T)).mean())
+            target = (float(ang) % (2.0 * np.pi)) * T / (2.0 * np.pi)
         # cur = ifft(FW exp(2pi i f total)) == roll(W, -total); to move pos -> target, total = pos - target
-        total = (pos - target)
-        total = ((total + T / 2.0) % T - T / 2.0)                      # shortest signed circular shift
+        total = ((pos - target + T / 2.0) % T - T / 2.0)              # shortest signed circular shift
         cur = xp.fft.ifft(FW * xp.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
     else:
         total = xp.zeros(n); cur = W.copy()
