@@ -100,10 +100,118 @@ def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
     return off, ioff
 
 
+def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
+                     min_score=0.0, noise_label=0):
+    """Klusters-faithful per-spike realignment (spikerealign.cpp / the XcorrDispatch
+    library), made ITERATIVE.
+
+    Per unit: build the cluster MEAN template, PRE-ALIGN it so its max-summed-|amplitude|
+    sample sits at `peak` (the canonical detection peak — without this the xcorr pulls
+    spikes away from the peak), then score each spike by NORMALISED (cosine) cross-
+    correlation against that template over INTEGER lags in [-max_shift, max_shift]; the
+    best lag is the shift.  Spikes whose best score < min_score keep their current lag.
+    The mean is re-estimated from the freshly-aligned spikes and the pass repeated until
+    the integer shifts stop changing (the iteration a Klusters user does by eye with
+    repeated button presses).  This differs from template_offsets, which uses a MEDIAN
+    template and an UN-normalised channel-summed correlation; the cosine score is
+    amplitude-invariant, which is what makes Klusters realign tight on low-amplitude units.
+
+    Returns ioff (N,) int32; res_corrected = res + ioff (same convention as template_offsets,
+    so realign()/fiber_pca consume it unchanged).  Integer only — re-extraction from .fil is
+    integer-sample, so a sub-sample part would be discarded anyway."""
+    spk = np.asarray(spk, np.float32)
+    N, T, C = spk.shape
+    ms = int(max_shift)
+    Tcore = T - 2 * ms
+    lags = np.arange(-ms, ms + 1)
+    corepeak = int(peak) - ms                              # peak position inside the core window
+    ioff = np.zeros(N, np.int32)
+    by = {}
+    for i, l in enumerate(labels):
+        by.setdefault(int(l), []).append(i)
+    for u, rows in by.items():
+        if u == noise_label or len(rows) < min_n:
+            continue
+        idx = np.asarray(rows)
+        W = spk[idx]                                       # (n,T,C)
+        cur = np.zeros(len(idx), int)
+        for _ in range(max(1, iters)):
+            # MEAN template from the currently-aligned cores (same gather as template_offsets)
+            gidx = np.arange(Tcore)[None, :] + (ms + cur)[:, None]
+            al = np.take_along_axis(W, gidx[:, :, None], axis=1).astype(np.float32)
+            templ = al.mean(0)                             # (Tcore,C) — MEAN (Klusters), not median
+            # pre-align: roll so the max sum|amp| sample lands on the canonical peak
+            amp = np.abs(templ).sum(1)
+            tpk = int(np.argmax(amp))
+            if corepeak - tpk:
+                templ = np.roll(templ, corepeak - tpk, axis=0)
+            tnorm = float(np.sqrt((templ * templ).sum())) + 1e-9
+            # NORMALISED (cosine) cross-correlation at each integer lag
+            best = np.full(len(idx), -np.inf, np.float32)
+            blag = np.zeros(len(idx), int)
+            for L in lags:
+                seg = W[:, ms + L:T - ms + L, :]           # (n,Tcore,C)
+                num = np.einsum('ntc,tc->n', seg, templ)
+                snorm = np.sqrt((seg * seg).sum((1, 2))) + 1e-9
+                score = num / (tnorm * snorm)
+                upd = score > best
+                best[upd] = score[upd]; blag[upd] = L
+            new = np.where(best >= min_score, blag, cur)
+            if np.array_equal(new, cur):
+                break
+            cur = new
+        ioff[idx] = cur
+    return ioff
+
+
+def reextract_from_fil(filmm, gch, res_corr, nsamp, peak, batch=50000):
+    """Re-extract each spike's waveform window from the FILTERED signal at its CORRECTED
+    timestamp — the real thing, not a circular roll of the old window.  filmm is the
+    (nSamples, ntotal) int16 memmap from neuro_io.open_signal; gch the group's channel
+    columns; the window is [ts - peak, ts - peak + nsamp).  Edge spikes are clamped.
+    Returns (n, nsamp, len(gch)) int16, sample-major (the .spk layout)."""
+    gch = np.asarray(gch, int)
+    n = len(res_corr); Tlen = filmm.shape[0]
+    out = np.empty((n, nsamp, len(gch)), np.int16)
+    win = np.arange(nsamp)
+    for b0 in range(0, n, batch):
+        b1 = min(b0 + batch, n)
+        idx = (np.asarray(res_corr[b0:b1])[:, None] - int(peak)) + win[None, :]   # (m, nsamp)
+        np.clip(idx, 0, Tlen - 1, out=idx)
+        block = filmm[idx]                                 # (m, nsamp, ntotal)
+        out[b0:b1] = block[:, :, gch]
+    return out
+
+
+def refeaturize(spk_new, res_corr, basis):
+    """Reproject re-extracted windows onto the PCA `basis` (the on-disk .pca.standard the
+    sort used, via fiber_pca.read_pca) to refresh the .fet, and append the corrected
+    timestamp as the final feature column (the neurosuite .fet time convention).  Returns
+    an int64 (n, nCh*nComp + 1) array ready for neuro_io.write_fet."""
+    try:
+        from . import fiber_pca as fpca
+    except ImportError:
+        import fiber_pca as fpca
+    win = fpca.extract_windows(np.asarray(spk_new, np.float64), basis["recShift"], basis["data2use"])
+    fet = fpca.project(win, basis)                         # (n, nCh*nComp), channel-major
+    full = np.empty((len(fet), fet.shape[1] + 1), np.int64)
+    full[:, :-1] = np.rint(fet).astype(np.int64)
+    full[:, -1] = np.asarray(res_corr, np.int64)           # time feature (last column)
+    return full
+
+
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
-            min_n=20, verbose=True):
-    """Read <base>.spkD/.spk, .res, .clu; return (res, off, ioff, res_corrected)."""
-    spk, spk_path = fs.open_spkD(base, elec, nsamp, nch)
+            min_n=20, method="klusters", peak=None, min_score=0.0, verbose=True):
+    """Read .spk/.spkD, .res, .clu; compute per-spike integer offsets and corrected .res.
+
+    method='klusters' uses the Klusters iterative normalised-xcorr aligner on the RAW
+    (standard) .spk (klusters_offsets, needs `peak`); method='template' uses the original
+    median/un-normalised aligner on .spkD (template_offsets).  Returns
+    (res, off, ioff, res_corrected, spk, spk_path, labels)."""
+    if method == "klusters":
+        spk, r = nio.open_spk_raw(base, elec, nsamp, nch); spk_path = r.path
+    else:
+        spk, spk_path = fs.open_spkD(base, elec, nsamp, nch)
     res = fs.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
     n = min(len(res), len(labels), spk.shape[0])
@@ -111,17 +219,23 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
         if verbose:
             print(f"[realign] WARNING length mismatch res={len(res)} clu={len(labels)} "
                   f"spk={spk.shape[0]} -> using first {n}")
-    res, labels, spk = res[:n], labels[:n], spk[:n]
-    off, ioff = template_offsets(spk, labels, max_shift, iters, min_n)
+    res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
+    if method == "klusters":
+        if peak is None:
+            raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
+        ioff = klusters_offsets(spk, labels, peak, max_shift, iters, min_n, min_score)
+        off = ioff.astype(np.float32)
+    else:
+        off, ioff = template_offsets(spk, labels, max_shift, iters, min_n)
     res_corr = res + ioff.astype(np.int64)
     if verbose:
         nz = np.count_nonzero(ioff)
-        print(f"[realign] {spk_path}: {n} spikes, {nclu - 1} units")
+        print(f"[realign:{method}] {spk_path}: {n} spikes, {nclu - 1} units")
         print(f"[realign] offsets: nonzero={nz} ({100 * nz / n:.1f}%)  "
               f"mean={off.mean():+.3f}  std={off.std():.3f}  "
               f"|off|>=1: {100 * np.mean(np.abs(ioff) >= 1):.1f}%  "
-              f"max|off|={np.abs(ioff).max()} samp")
-    return res, off, ioff, res_corr
+              f"max|off|={int(np.abs(ioff).max())} samp")
+    return res, off, ioff, res_corr, spk, spk_path, labels
 
 
 def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
@@ -134,27 +248,61 @@ def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Per-spike fiber-template offsets + corrected .res spike times. "
-                    "Probe geometry (group channels / nchan / nsamp) is read from "
-                    "<session>.yaml; flags override.")
+        description="Per-spike Klusters-style realignment + corrected .res spike times, with "
+                    "optional re-extraction from .fil and re-featurisation (commit-and-reextract "
+                    "finalize).  Probe geometry is read from <session>.yaml; flags override.")
     sy.add_session_args(ap)
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
-    ap.add_argument("--max-shift", type=int, default=5)
-    ap.add_argument("--iters", type=int, default=2)
+    ap.add_argument("--method", choices=["klusters", "template"], default="klusters",
+                    help="klusters = iterative normalised-xcorr vs pre-aligned mean (raw .spk); "
+                         "template = legacy median/un-normalised on .spkD")
+    ap.add_argument("--max-shift", type=int, default=8)
+    ap.add_argument("--iters", type=int, default=4)
     ap.add_argument("--min-n", type=int, default=20)
+    ap.add_argument("--min-score", type=float, default=0.0,
+                    help="klusters: leave a spike unshifted if its best cosine score is below this")
+    ap.add_argument("--reextract", action="store_true",
+                    help="re-extract each spike's window from .fil at the corrected timestamp -> new .spk")
+    ap.add_argument("--refeaturize", action="store_true",
+                    help="reproject the re-extracted windows onto .pca.standard -> new .fet (implies --reextract)")
+    ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
+    ap.add_argument("--out-tag", default="realigned",
+                    help="stage tag for committed outputs: .res/.spk/.fet.<group>.<tag>")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
+    need = ("nchan", "nsamp") + (("ntotal", "peak") if (a.reextract or a.refeaturize
+                                                        or a.method == "klusters") else ())
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr,
-                                    require=("nchan", "nsamp"))
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, require=need)
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
-    res, off, ioff, res_corr = realign(base, group, nsamp, nch, a.clu,
-                                       a.max_shift, a.iters, a.min_n)
+    res, off, ioff, res_corr, spk, spk_path, labels = realign(
+        base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
+        method=a.method, peak=cfg.get("peak"), min_score=a.min_score)
+
     orr, off_path = write_outputs(base, group, off, res_corr, a.out_res, a.out_off)
     print(f"[realign] wrote {orr}  and  {off_path}")
+
+    if a.reextract or a.refeaturize:
+        try:
+            from . import fiber_pca as fpca
+        except ImportError:
+            import fiber_pca as fpca
+        fil = a.fil or f"{base}.fil"
+        filmm = nio.open_signal(fil, cfg["ntotal"])
+        spk_new = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp, cfg["peak"])
+        spk_out = nio.write_spk(base, group, spk_new, variant="standard", tag=a.out_tag)
+        print(f"[realign] re-extracted {len(spk_new)} spikes from {fil} -> {spk_out}")
+        if a.refeaturize:
+            basis = fpca.read_pca(base, group, prefer=["standard", ""])
+            fet = refeaturize(spk_new, res_corr, basis)
+            fet_out = nio.write_fet(base, group, fet, variant="standard", tag=a.out_tag)
+            print(f"[realign] re-featurised -> {fet_out}  ({fet.shape[1]} features incl. time)")
+        # commit the corrected .res next to the re-extracted .spk/.fet under the same stage tag
+        res_out = nio.write_res(base, group, res_corr, variant="standard", tag=a.out_tag)
+        print(f"[realign] committed timestamps -> {res_out}")
 
 
 if __name__ == "__main__":
