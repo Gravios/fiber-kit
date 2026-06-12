@@ -68,19 +68,19 @@ def fil_extractor(filmm, res, col_idx, peak=16, nsamp=32, sample_offset=0):
 
 
 def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=0, amp_method="pc1",
-                      templates=True, amp_basis="auto"):
+                      templates=True, amp_basis="auto", basis=None):
     """Localize each cluster's median raw template.  `extract(idx)` maps spike INDICES
     (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n,
     and 'template' = realigned median raw waveform when templates=True -- the shape
     signature used to co-gate / link fragments across chunks).
 
-    amp_basis='auto' fits ONE group-wide raw basis (loc.fit_amp_basis) and denoises every
-    cluster's amplitude template by projecting onto it, so the positions the depth/offset gates
-    and the linker read are stable at any spike count (no per-cluster SVD tail).  None reverts."""
+    `basis` (pre-resolved, e.g. loc.load_pca_basis's .pca.standard eigenvectors) is used as-is.
+    Otherwise amp_basis in ('auto','fit') fits ONE group-wide raw basis from `extract`, so the
+    positions the depth/offset gates and the linker read are stable at any spike count (no
+    per-cluster SVD tail).  amp_basis='none' (or None) reverts to per-cluster SVD."""
     ids = np.unique(clu[clu >= 0])
     rng = np.random.default_rng(0)
-    basis = None
-    if amp_method == "pc1" and amp_basis == "auto":
+    if basis is None and amp_method == "pc1" and amp_basis in ("auto", "fit"):
         class _Extr:                                       # adapt extract(idx) to fit_amp_basis's spk[idx]
             def __getitem__(self, idx): return np.asarray(extract(idx), np.float32)
         by = {int(c): np.flatnonzero(clu == c) for c in ids}
@@ -178,9 +178,12 @@ def main():
                          "template (default, sharpest footprint + most precise), wave=median-waveform "
                          "ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels "
                          "flattens the footprint).")
+    ap.add_argument("--amp-basis", choices=("auto", "pca", "fit", "none"), default="auto",
+                    help="amplitude basis the gate-facing positions use: 'pca'=read "
+                         ".pca.standard.<elec> (PC1 score per channel = the .fet amplitude); "
+                         "'fit'=group basis from .spk; 'auto'=pca if present else fit; 'none'=per-cluster SVD")
     ap.add_argument("--no-amp-basis", action="store_true",
-                    help="revert pc1 to a per-cluster SVD instead of the group-wide raw basis "
-                         "(the basis is the stable default; the gates read these positions)")
+                    help="alias for --amp-basis none (per-cluster SVD)")
     ap.add_argument("--nboot", type=int, default=0,
                     help="bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). "
                          "This loop is ~5x the rest of the cost (the dominant runtime); positions "
@@ -223,9 +226,18 @@ def main():
         extract = fil_extractor(filmm, res, channels, peak=a.peak, nsamp=a.nsamp, sample_offset=a.fil_offset)
         src = a.fil or f"{base}.fil"
 
+    amp_basis = "none" if a.no_amp_basis else a.amp_basis
+    pca_basis = None
+    if a.amp_method == "pc1" and amp_basis in ("pca", "auto"):   # prefer the on-disk .pca.standard
+        try:
+            pca_basis = loc.load_pca_basis(base, elec)
+            print(f"[cpos] amplitude basis: on-disk {pca_basis['_path']} (PC1 score per channel)")
+        except FileNotFoundError:
+            if amp_basis == "pca":
+                raise
     per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole,
                             nboot=a.nboot, amp_method=a.amp_method, templates=not a.no_templates,
-                            amp_basis=(None if a.no_amp_basis else "auto"))
+                            amp_basis=amp_basis, basis=pca_basis)
     sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
     for cid, r in per.items():
         t = res[clu == cid]

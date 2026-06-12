@@ -54,6 +54,10 @@ try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
+try:
+    from . import fiber_pca as fpca
+except ImportError:
+    import fiber_pca as fpca
 
 
 # ── probe geometry ───────────────────────────────────────────────────────────
@@ -169,6 +173,42 @@ def _edge_flag(a, xy):
 
 
 # ── per-unit localization ────────────────────────────────────────────────────
+def load_pca_basis(base, elec):
+    """Read the on-disk per-channel PCA eigenvectors that <base>.fet.standard.<elec> was
+    projected with: <base>.pca.standard.<elec> (then legacy .pca.<elec>), via fiber_pca.read_pcad.
+    Returns the basis dict (means, evec, recShift, data2use, centered) — the exact subspace the
+    sort used, so no SVD is fit at all.  Raises FileNotFoundError if absent (caller may fall back
+    to fit_amp_basis).  RAW/standard only — never the stderiv .pcaD."""
+    r = nio.resolve_input(base, "pca", elec, nio.prefer_standard())
+    if not r.found:
+        raise FileNotFoundError(f"no .pca.standard basis for {base} elec {elec}")
+    b = fpca.read_pcad(r.path)
+    b["_pca"] = True                                    # tag for _profile dispatch
+    b["_path"] = r.path
+    return b
+
+
+def _pca_profile(W, basis):
+    """Per-channel amplitude profile from the .pca.standard basis: the FIRST principal component
+    (PC1) score of each channel IS the amplitude — exactly the first feature of that channel's
+    block in .fet.standard.N, so this equals reading the fet scores directly.  Returns |PC1 score|
+    of the cluster-mean window per channel; mean-subtraction follows the file's `centered` flag
+    (the real basis is centered=0).  No realign — the on-disk extraction already carries the sort's
+    alignment.  Fixed basis -> stable at any spike count."""
+    means, evec = basis["means"], basis["evec"]
+    rec, d2, centered = int(basis["recShift"]), int(basis["data2use"]), int(basis["centered"])
+    if W.shape[1] < rec + d2:
+        raise ValueError(f"_pca_profile: waveform nsamp={W.shape[1]} < recShift+data2use={rec + d2} "
+                         f"— the .pca.standard basis is for a different nSamples; use the matching one")
+    win = np.asarray(W, np.float64)[:, rec:rec + d2, :].mean(0)   # (data2use, nch) cluster-mean window
+    nch = min(evec.shape[0], win.shape[1])
+    prof = np.empty(nch)
+    for ch in range(nch):
+        mu = means[ch] if centered else 0.0
+        prof[ch] = abs(float(evec[ch][0] @ (win[:, ch] - mu)))    # PC1 score = the channel amplitude
+    return prof
+
+
 def fit_amp_basis(spk, by, rng, *, k=12, n_clusters=400, per=120, min_n=40):
     """Fit a GROUP-WIDE low-rank waveform basis once, over realigned spikes pooled across many
     clusters — the same object the raw .fet encodes.  Returns (mu, Vt) for use as the `basis`
@@ -217,6 +257,8 @@ def _profile(wav, method="pc1", basis=None):
     For well-isolated, energy-band-stratified clusters the denoised profiles are both sharper
     and more precise; 'ptp' is retained for back-compat / very low spike counts."""
     W = np.asarray(wav, np.float32)
+    if basis is not None and isinstance(basis, dict) and basis.get("_pca"):
+        return _pca_profile(W, basis)                   # on-disk per-channel PCA basis (the .fet/.pca)
     if method == "ptp" or len(W) < 8:
         return np.median(_amp(W), 0)
     Wr = fl.realign(W)
@@ -306,11 +348,21 @@ def localize(base, elec, nsamp, nchan, xy, clu_path=None, dipole=True,
             by[int(l)].append(i)
     rng = np.random.default_rng(0)
     basis = None
-    if amp_method == "pc1" and amp_basis == "auto":     # one group-wide basis (the .fet), not per-cluster
-        basis = fit_amp_basis(spk, by, rng)
-        if verbose and basis is not None:
-            print(f"[localize] group amplitude basis: rank {basis[1].shape[0]} over "
-                  f"{min(len(by), 400)} clusters (denoise without per-cluster SVD)")
+    if amp_method == "pc1" and amp_basis not in (None, "none"):
+        if amp_basis in ("pca", "auto"):                # prefer the on-disk .pca.standard eigenvectors
+            try:
+                basis = load_pca_basis(base, elec)
+                if verbose:
+                    print(f"[localize] amplitude basis: on-disk {basis['_path']} "
+                          f"(per-channel PCA, nComp {basis['evec'].shape[1]})")
+            except FileNotFoundError:
+                if amp_basis == "pca":
+                    raise
+        if basis is None and amp_basis in ("auto", "fit"):   # fall back: fit one group-wide basis
+            basis = fit_amp_basis(spk, by, rng)
+            if verbose and basis is not None:
+                print(f"[localize] amplitude basis: fit rank {basis[1].shape[0]} over "
+                      f"{min(len(by), 400)} clusters (no .pca.standard found)")
     rows = []
     for u, idx in sorted(by.items()):
         idx = np.asarray(idx)
@@ -367,9 +419,12 @@ def main():
                          "+ most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, "
                          "carries a ~4-sigma noise floor on far channels).")
     ap.add_argument("--max-resid", type=float, default=0.10)
+    ap.add_argument("--amp-basis", choices=("auto", "pca", "fit", "none"), default="auto",
+                    help="amplitude denoising basis: 'pca' = read .pca.standard.<elec> eigenvectors "
+                         "(PC1 score per channel = the .fet amplitude); 'fit' = fit one group-wide "
+                         "basis from .spk; 'auto' = pca if present else fit; 'none' = per-cluster SVD")
     ap.add_argument("--no-amp-basis", action="store_true",
-                    help="revert pc1 to a per-cluster SVD instead of the group-wide raw basis "
-                         "(the basis is the stable default; per-cluster SVD is unstable at low n)")
+                    help="alias for --amp-basis none (per-cluster SVD; unstable at low n)")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     # resolve channels and/or probe from <session>.yaml when not given explicitly
@@ -388,7 +443,7 @@ def main():
     xy = load_geometry(probe, channels)
     rows = localize(a.base, a.elec, a.nsamp, a.nchan, xy, a.clu,
                     dipole=not a.no_dipole, min_n=a.min_n, nboot=a.nboot, max_resid=a.max_resid,
-                    amp_method=a.amp_method, amp_basis=(None if a.no_amp_basis else "auto"))
+                    amp_method=a.amp_method, amp_basis=("none" if a.no_amp_basis else a.amp_basis))
     out = a.out or f"{a.base}.localize.{a.elec}.tsv"
     write_localizations(rows, out)
     print(f"[localize] wrote {out}")
