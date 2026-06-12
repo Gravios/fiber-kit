@@ -285,6 +285,38 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2):
     return lab
 
 
+def _amp_spread(waves, mask):
+    """Peak amplitude and number of signal channels of the median-aligned template — the
+    low-amplitude / broad-noise gate for the nudge split."""
+    T = np.median(fl.align_xcorr(waves, ref="median", iters=6, maxlag=6), 0)
+    ptp = T.max(0) - T.min(0)
+    amp = float(ptp.max())
+    nch = int((ptp > 0.25 * amp).sum())
+    return amp, nch
+
+
+def _nudge_split(waves, mask, dim, min_size, alpha, max_nudge=3):
+    """Offset-overlay split for low-amplitude clusters.  Two neurons of similar shape a few
+    samples apart are MERGED by median realignment — it collapses the offset, so the per-node
+    realign dipsplit returns them as one (validated: ARI 0.00).  Split on each spike's alignment
+    LAG to the cluster median instead — the 'nudge' each spike wants: bimodal lags = two
+    temporally-offset sub-units (ARI 0.98).  Self-gating: clean clusters have unimodal lags and
+    are returned whole (0% spurious splits in test).  Each offset sub-cluster is then realigned to
+    its own median and dip-refined (reusing _dipsplit_realign)."""
+    n = len(waves)
+    if not _HAVE_DIP or n < 2 * min_size:
+        return [np.arange(n)]
+    _, sh = fl.align_xcorr(waves, ref="median", iters=6, maxlag=max_nudge, return_shifts=True)
+    parts = _dipsplit_rec(np.asarray(sh, float).reshape(-1, 1), np.arange(n), min_size, alpha)
+    if len(parts) == 1:                                  # unimodal lags -> no offset overlay
+        return [np.arange(n)]
+    out = []
+    for p in parts:                                      # refine each offset sub-unit on its own alignment
+        for piece in _dipsplit_realign(waves[p], mask, dim, min_size, alpha):
+            out.append(p[piece])
+    return out
+
+
 def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
                     depth=0, max_depth=4):
     """Variance-driven auto-split: recursively bisect a fiber WHILE its per-channel
@@ -329,6 +361,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
+                       nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
                        rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        emit_candidates=False, candidates_out=None,
@@ -406,6 +439,19 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                                           vmargin, fine_mg, rkk_dims, max_depth=var_split_depth)
                           if len(grp) >= 2 * fine_mg else [np.arange(len(grp))])
                 newg += [grp[pc] for pc in pieces]
+            groups = newg
+        if nudge_split:                                  # gated: split temporally-offset overlaid units
+            gate = [(grp,) + (_amp_spread(wcf[grp], mask) if len(grp) >= 2 * fine_mg else (np.inf, 0))
+                    for grp in groups]
+            finite = [a for _, a, _ in gate if np.isfinite(a)]
+            amp_thr = float(np.percentile(finite, nudge_amp_pct)) if finite else 0.0
+            newg = []
+            for grp, amp, nch in gate:                   # low amplitude + many channels = the condition
+                if amp <= amp_thr and nch >= nudge_min_channels and len(grp) >= 2 * fine_mg:
+                    newg += [grp[pc] for pc in _nudge_split(wcf[grp], mask, dip_dim, fine_mg,
+                                                            nudge_alpha, nudge_max)]
+                else:
+                    newg.append(grp)
             groups = newg
         for grp in groups:
             if len(grp) < fine_mg: continue
@@ -876,6 +922,16 @@ def main():
                          "(per-step alignment; default on)")
     ap.add_argument("--no-dip-realign", dest="dip_realign", action="store_false",
                     help="legacy: one parent realign + fixed features for the whole dipsplit recursion")
+    ap.add_argument("--nudge-split", dest="nudge_split", action="store_true", default=True,
+                    help="for low-amp clusters, split temporally-offset overlaid units by alignment "
+                         "lag (similar-shape neurons a few samples apart that median realign merges); default on")
+    ap.add_argument("--no-nudge-split", dest="nudge_split", action="store_false")
+    ap.add_argument("--nudge-max", type=int, default=3, help="max +/- sample lag tested for offset overlays")
+    ap.add_argument("--nudge-amp-pct", type=float, default=40.0,
+                    help="only clusters below this template-amplitude percentile are nudge-split")
+    ap.add_argument("--nudge-min-channels", type=int, default=4,
+                    help="min signal channels for the broad-noise condition")
+    ap.add_argument("--nudge-alpha", type=float, default=0.01, help="dip-test p for the lag-bimodality split")
     ap.add_argument("--fine-kappa", type=float, default=40.0)
     ap.add_argument("--fine-dedup-deg", type=float, default=5.0)
     ap.add_argument("--fine-min-group", type=int, default=40)
@@ -925,6 +981,7 @@ def main():
               split_var_margin=a.split_var_margin, var_split=a.var_split,
               var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
+              nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
