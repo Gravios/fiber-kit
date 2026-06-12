@@ -6,6 +6,7 @@
 #  session.  See HANDOFF.md for the validation evidence behind each constant.
 # ════════════════════════════════════════════════════════════════════════════
 import numpy as np
+import os as _os
 from sklearn.covariance import LedoitWolf
 try:
     from . import backend as _bk
@@ -150,7 +151,11 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
 #              feature space.  realign() and every splitter that calls align_xcorr respect this; the
 #              committing aligners (klusters_offsets/template_offsets) do NOT use align_xcorr and are
 #              unaffected (they must keep the trough on Klusters' canonical sample).
-_FEATURE_ALIGN = "xcorr"
+# Initial value is read from the FIBER_ALIGN env var so it reaches forked/spawned pool workers; the
+# fiber-session / fiber-refine --feature-align flag sets both the env var and set_feature_align().
+_FEATURE_ALIGN = _os.environ.get("FIBER_ALIGN", "xcorr")
+if _FEATURE_ALIGN not in ("xcorr", "centroid"):     # ignore a malformed env value
+    _FEATURE_ALIGN = "xcorr"
 
 
 def set_feature_align(mode):
