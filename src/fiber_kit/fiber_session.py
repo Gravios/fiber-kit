@@ -260,6 +260,31 @@ def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4
     return out
 
 
+def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2):
+    """rkk (CEM) interleaved with per-cluster realignment -- the per-step realign analog for the
+    flat KK split.  rkk assigns all spikes in one EM run, so there is no recursive node; instead
+    iterate {cluster -> realign EACH cluster to its own median -> re-featurize -> re-cluster}, so
+    the final CEM runs on consistently per-cluster-aligned features (a minority sub-unit locked
+    onto the group's dominant peak by the integer fl.realign is otherwise smeared).  Stops early
+    when the cluster count is unchanged.  Returns per-spike sub-labels."""
+    F = _aligned_pca(waves, mask, dims)                    # whole-group median align + PCA (seed)
+    lab = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42)
+    for _ in range(max(0, iters)):
+        Wal = np.array(waves, dtype=float)
+        for c in np.unique(lab):                           # realign each cluster to its OWN median
+            idx = np.flatnonzero(lab == c)
+            if len(idx) >= 8:
+                Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
+        w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
+        U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
+        new = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42)
+        stop = len(np.unique(new)) == len(np.unique(lab))
+        lab = new
+        if stop:
+            break
+    return lab
+
+
 def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
                     depth=0, max_depth=4):
     """Variance-driven auto-split: recursively bisect a fiber WHILE its per-channel
@@ -304,7 +329,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
-                       rkk_dims=6, rkk_max=50, merge_corr=0.0, merge_method="template", sliding_nwin=14,
+                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -339,9 +364,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             groups = ([np.arange(len(cidx))] if (sub < 0).all()
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
         elif method == "rkk":
-            wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
-            Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
-            sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42)
+            if rkk_realign:                                # per-cluster realign EM loop
+                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters)
+            else:                                          # legacy: one parent realign, fixed features
+                wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
+                Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
+                sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
             sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask)
@@ -798,6 +826,12 @@ def main():
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")
     ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)
+    ap.add_argument("--rkk-realign", dest="rkk_realign", action="store_true", default=True,
+                    help="interleave rkk (CEM) with per-cluster realignment (per-step; default on)")
+    ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false",
+                    help="legacy: one parent realign + fixed features for the rkk split")
+    ap.add_argument("--rkk-realign-iters", type=int, default=2,
+                    help="cluster<->realign passes in the rkk realign loop")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
     ap.add_argument("--merge-method", choices=["template","sliding","profile"], default="template")
     ap.add_argument("--sliding-nwin", type=int, default=14)
@@ -891,7 +925,7 @@ def main():
               split_var_margin=a.split_var_margin, var_split=a.var_split,
               var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
-              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max,
+              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
               profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
