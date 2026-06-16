@@ -160,24 +160,28 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         s = rng.choice(len(Wf), min(len(Wf), 100000), replace=False)   # spike (drop the energy axis the
         mu_w = Wf[s].mean(0)                                            # cosine gate also discards), so an
         Vt = np.linalg.svd(Wf[s] - mu_w, full_matrices=False)[2][:feat_dim]   # energy ladder stays one unit
-    ids, T, O, X, Y, Z, A, CH, TM, NS, FT, NULL = ([] for _ in range(12))
+    ids, T, O, X, Y, Z, A, CH, TM, NS, FT, NULL, VAR, TIMES = ([] for _ in range(14))
     for k, c in enumerate(uq):
         c = int(c)
         if c in reserve or c not in pos:
             continue
-        idx = order[st[k]:en[k]]
-        n_true = len(idx)
+        idx_full = order[st[k]:en[k]]
+        n_true = len(idx_full)
         if n_true < min_n:
             continue
+        idx = idx_full
         if sig_cap and n_true > sig_cap:   # subsample for the MEAN template/offset only; mean unchanged within noise
-            idx = np.random.default_rng(feat_seed + c).choice(idx, sig_cap, replace=False)
+            idx = np.random.default_rng(feat_seed + c).choice(idx_full, sig_cap, replace=False)
         al = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[idx].astype(float), *(realign_lohi or ())), sigma))
         tmpl = al.mean(0)
+        _af = al.reshape(len(al), -1)                              # within-fragment spread (stderiv, flattened)
+        _var = float(((_af - tmpl.reshape(-1)) ** 2).sum(1).mean())
         x0, y0, z0, amp = pos[c]
         tm = float(np.mean(t_mid_s[idx]))
         ids.append(c); T.append(tmpl); O.append(fg.interchannel_offsets(tmpl))
         X.append(x0); Y.append(y0); Z.append(z0); A.append(abs(amp))
         CH.append(int(tm / 60.0 // chunk_min)); TM.append(tm); NS.append(n_true)
+        VAR.append(_var); TIMES.append(np.sort(np.asarray(t_mid_s[idx_full], float)))
         if feats == "cfiber":                  # self-calibration: same-fragment split-half shape distance
             _w = _cfiber_win(al.shape[1], peak); _h = len(al) // 2
             if _h >= 6:
@@ -194,7 +198,8 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
     out = dict(ids=np.array(ids, int), template=np.array(T, np.float32),
                offset=np.array(O, np.float32), x0=np.array(X), y0=np.array(Y),
                z0=np.array(Z), A=np.array(A), chunk=np.array(CH, int),
-               t_mid=np.array(TM), n=np.array(NS, int))
+               t_mid=np.array(TM), n=np.array(NS, int), var=np.array(VAR, float),
+               times=np.array(TIMES, dtype=object))
     if Vt is not None:
         out["feat"] = np.array(FT, dtype=object)
     if feats == "cfiber":
@@ -295,6 +300,125 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
         for L in np.unique(loc):
             label[ix[loc == L]] = nxt; nxt += 1
     return label
+
+
+def _ccg_refrac(ta, tb, sr, win_ms=2.0, base_ms=25.0):
+    """Cross-correlogram refractory ratio: count of b-spikes within +-win_ms of each a-spike,
+    normalised by the expectation from the +-base_ms window.  <1 => refractory dip (the union is
+    consistent with ONE neuron); ~1 flat (independent trains); >1 zero-lag peak.  The TEMPORAL
+    admission term: two fragments of one neuron keep a refractory-clean cross-correlogram."""
+    if len(ta) == 0 or len(tb) == 0:
+        return 1.0
+    w = win_ms / 1000.0 * sr; bw = base_ms / 1000.0 * sr
+    cross = int((np.searchsorted(tb, ta + w) - np.searchsorted(tb, ta - w)).sum())
+    base = int((np.searchsorted(tb, ta + bw) - np.searchsorted(tb, ta - bw)).sum())
+    return float(cross / (base * (win_ms / base_ms) + 1e-9))
+
+
+def _merge_var(flat_i, vi, ni, flat_j, vj, nj):
+    """Exact within-cluster variance (mean over spikes of ||x-mean||^2, flattened) of the union
+    from per-node (mean, var, count) -- no spike re-pooling.  Returns (merged_var, merged_mean)."""
+    w = ni + nj
+    m = (flat_i * ni + flat_j * nj) / w
+    vi2 = vi + float(((flat_i - m) ** 2).sum())
+    vj2 = vj + float(((flat_j - m) ** 2).sum())
+    return (ni * vi2 + nj * vj2) / w, m
+
+
+def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
+                             depth_gate=DEFAULT_DEPTH_GATE, gate="cosine",
+                             cfiber_thr=None, cfiber_win=None,
+                             off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
+                             sr=32552.0, var_env_mult=3.0, ccg_thr=1e9, ccg_win_ms=2.0):
+    """Dynamic-graph agglomeration (priority queue with merge-time recompute), the alternative to
+    the one-shot static-edge complete-linkage in group_intrachunk.  Candidate merges are scored by
+    spatial agreement, but every candidate is RE-EVALUATED against the CURRENT (possibly already
+    merged) node signatures when popped, and after each merge the merged node's edges to its
+    neighbours are re-scored and re-pushed.  As a node grows its template / variance / spike-train
+    update, so a once-valid merge can later be rejected -- this is the fix for the static-graph
+    over-merge (edges scored once from fragment signatures, never refreshed within a pass).
+
+    Admission = SPATIAL and a variance ENVELOPE and TEMPORAL, all on the current node state:
+      spatial : template cosine >= cos_thr (or affine-invariant cfiber shape <= cfiber_thr),
+                inter-channel offset RMS <= off_thr (SNR-adaptive), depth |dy0| <= depth_gate.
+      variance: merged within-cluster spread <= var_env (= var_env_mult * median fragment variance,
+                a FIXED single-unit envelope).  De-fragmentation NECESSARILY grows variance (over-
+                split pieces are tight); the envelope PERMITS growth up to the single-unit scale but
+                blocks over-growth, and because the ceiling is absolute it self-limits as a node fills.
+      temporal: cross-CCG refractory ratio of the two spike trains <= ccg_thr (union stays refractory-
+                consistent with one neuron -- catches co-located different cells the shape gate merges).
+    Returns a dense 0-based label over fragment rows (one label per per-chunk unit)."""
+    import heapq
+    M = len(sig["ids"])
+    T = sig["template"].astype(float).copy()           # running mean templates (M,nsamp,nchan)
+    flat = T.reshape(M, -1).copy()
+    var = sig["var"].astype(float).copy(); nn = sig["n"].astype(float).copy()
+    yy = sig["y0"].astype(float).copy(); off = sig["offset"].astype(float).copy()
+    times = [np.asarray(t, float) for t in sig["times"]]; chunk = sig["chunk"]
+    use_cfiber = gate == "cfiber"
+    cthr = float(cfiber_thr) if (use_cfiber and cfiber_thr is not None) else np.inf
+    var_env = var_env_mult * float(np.median(var)) if len(var) else np.inf   # fixed single-unit envelope
+    shape_cache = {}
+    def shape_of(i):
+        s = shape_cache.get(i)
+        if s is None:
+            s = _cfiber_shapes(T[i], cfiber_win)[0]; shape_cache[i] = s
+        return s
+    label = np.arange(M)
+    def edge(i, j):                                    # admission on CURRENT state -> strength or None
+        if abs(yy[i] - yy[j]) > depth_gate:
+            return None
+        c = float(flat[i] @ flat[j] / (np.linalg.norm(flat[i]) * np.linalg.norm(flat[j]) + 1e-9))
+        if c < cos_thr:
+            return None
+        if use_cfiber:
+            sd = float(np.linalg.norm(shape_of(i) - shape_of(j)))
+            if sd > cthr:
+                return None
+            strength = cthr - sd
+        else:
+            strength = c
+        o = _offset_rms(off[i], off[j])
+        ot = off_thr if (off_n_ref is None) else _off_thr_eff(off_thr, nn[i], nn[j], off_n_ref, off_ceil)
+        if o > ot:
+            return None
+        mv, _ = _merge_var(flat[i], var[i], nn[i], flat[j], var[j], nn[j])
+        if mv > var_env:                               # variance envelope (absolute, self-limiting)
+            return None
+        if _ccg_refrac(times[i], times[j], sr, ccg_win_ms) > ccg_thr:    # temporal
+            return None
+        return strength - o
+    for ch in np.unique(chunk):
+        ix = list(np.flatnonzero(chunk == ch)); active = set(ix); heap = []
+        for a in range(len(ix)):
+            for b in range(a + 1, len(ix)):
+                s = edge(ix[a], ix[b])
+                if s is not None:
+                    heapq.heappush(heap, (-s, ix[a], ix[b]))
+        while heap:
+            _, i, j = heapq.heappop(heap)
+            if i not in active or j not in active:
+                continue
+            if edge(i, j) is None:                     # RE-EVALUATE on current (possibly merged) state
+                continue
+            w = nn[i] + nn[j]
+            mv, _ = _merge_var(flat[i], var[i], nn[i], flat[j], var[j], nn[j])
+            T[i] = (T[i] * nn[i] + T[j] * nn[j]) / w; flat[i] = T[i].reshape(-1)
+            off[i] = fg.interchannel_offsets(T[i]); yy[i] = (yy[i] * nn[i] + yy[j] * nn[j]) / w
+            var[i] = mv; nn[i] = w; times[i] = np.sort(np.concatenate([times[i], times[j]]))
+            shape_cache.pop(i, None); active.discard(j); label[j] = i
+            for k in active:
+                if k == i:
+                    continue
+                s2 = edge(i, k)
+                if s2 is not None:
+                    heapq.heappush(heap, (-s2, i, k))
+    def root(x):
+        while label[x] != x:
+            x = label[x]
+        return x
+    _, dense = np.unique(np.array([root(k) for k in range(M)]), return_inverse=True)
+    return dense.astype(int)
 
 
 def aggregate_units(sig, label):
@@ -453,6 +577,23 @@ def main():
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
+    ap.add_argument("--linkage", choices=("complete", "dynamic"), default="complete",
+                    help="'complete' (default): one-shot static-edge complete-linkage clique. "
+                         "'dynamic': priority-queue agglomeration that recomputes each node and re-scores "
+                         "its edges as merges occur (fixes the static-graph over-merge), with a variance "
+                         "envelope (--var-env-mult) and a temporal cross-CCG gate (--ccg-thr).")
+    ap.add_argument("--var-env-mult", type=float, default=3.0,
+                    help="dynamic linkage: single-unit variance envelope = this * median fragment variance; "
+                         "blocks merges that push a unit's spread past it (permits the growth de-fragmentation "
+                         "needs, caps over-growth).")
+    ap.add_argument("--ccg-thr", type=float, default=1e9,
+                    help="dynamic linkage: max cross-CCG refractory ratio to admit a merge.  DEFAULT OFF "
+                         "(1e9): a simple refractory-dip requirement is WRONG-SIGNED for de-fragmentation -- "
+                         "same-neuron over-split fragments (time-shift dups, and amplitude-splits of bursting "
+                         "cells whose spikes attenuate through the burst) show a short-lag cross-CCG PEAK, not "
+                         "a dip, so a low threshold rejects true merges (g5: collapses 1243->1850).  Left as "
+                         "scaffolding; a correct temporal term needs duplicate-coincidence vs distinct-co-activity.")
+    ap.add_argument("--ccg-win", type=float, default=2.0, help="dynamic linkage: cross-CCG refractory half-window (ms).")
     ap.add_argument("--gate", choices=("cosine", "mmd", "kcov", "cfiber"), default="cosine",
                     help="fragment-merge test: 'cosine' (mean template, default & recommended). "
                          "'cfiber' uses the affine-invariant (rotation+scale) shape descriptor of the "
@@ -506,9 +647,15 @@ def main():
         cfiber_thr = float(np.quantile(nulls, a.cfiber_q)) if nulls.size else np.inf
         print(f"[intrachunk] cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f} "
               f"(split-half null q={a.cfiber_q}, n={nulls.size})")
-    label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
-                             off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
-                             gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win)
+    if a.linkage == "dynamic":
+        label = group_intrachunk_dynamic(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+                    off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, gate=a.gate,
+                    cfiber_thr=cfiber_thr, cfiber_win=cfiber_win, sr=sr,
+                    var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win)
+    else:
+        label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+                                 off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
+                                 gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
