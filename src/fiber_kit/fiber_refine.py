@@ -223,14 +223,30 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
     return [si], "iso"
 
 
+def _feat_var_top3(idx, waves, ctx, k=3):
+    """Mean of the top-k whitened-feature variances of a cluster -- the curator's split trigger.
+    On g5 split-source clusters carry feat_var_top3 ~3.6x the population median (p50 5.84M vs
+    1.64M), while kurtosis/skewness/ISI are NOT discriminative -- so feature variance is the
+    signal that says 'mixture, split me'."""
+    Wf = (waves[idx][:, ctx.mask, :].reshape(len(idx), -1) - ctx.nmean) @ ctx.W
+    return float(np.sort(Wf.var(0))[::-1][:k].mean())
+
+
 def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0,
-               dip_realign=True, rkk_realign=True, rkk_iters=2,
+               dip_realign=True, rkk_realign=True, rkk_iters=2, var_mult=0.0,
                nudge=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01):
     out = np.full(len(lab), -1, int)
     nid = 0
     nr = nd = ni = 0
     newi = isol.copy()
     amp_thr = np.inf
+    fvar = {}; vmed = 0.0                                  # curator split-variance trigger
+    if var_mult and var_mult > 0:
+        for c in np.unique(lab[lab >= 0]):
+            idx = np.flatnonzero(lab == c)
+            if isol[idx].mean() <= 0.7 and len(idx) >= 2 * mg:
+                fvar[c] = _feat_var_top3(idx, waves, ctx)
+        vmed = float(np.median(list(fvar.values()))) if fvar else 0.0
     if nudge:                                              # low-amp gate threshold over the active clusters
         amps = []
         for c in np.unique(lab[lab >= 0]):
@@ -243,6 +259,8 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
         idx = np.flatnonzero(lab == c)
         if isol[idx].mean() > 0.7 or len(idx) < 2 * mg:            # retired or too small -> pass through
             out[idx] = nid; nid += 1; continue
+        if var_mult and var_mult > 0 and vmed > 0 and fvar.get(c, np.inf) < var_mult * vmed:
+            out[idx] = nid; nid += 1; continue                    # below curator split-variance bar -> leave intact
         pcs = fs._variance_split(waves[idx], ctx.W, ctx.nmean, ctx.mask,
                                  40, vpeak, 0.10, mg, 6, max_depth=vdepth)
         for p in pcs:
@@ -552,7 +570,7 @@ def _residual_refine(lab, X, min_group, margin=0.02, max_depth=4, verbose=False)
 
 def refine(waves, res_abs, W, nmean, mask, sr, *,
            floor=16, window_ms=2.0, iters=4, large=800, min_group=40,
-           var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93,
+           var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93, split_var_mult=0.0,
            knn_k=20, knn_thr=0.3, knn_minref=50, knn_minnew=30,
            knn_dims=16, fold_thr=0.9, fold_off_thr=None, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
@@ -601,8 +619,10 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                                                large, min_group, var_margin, brr_tol,
                                                var_peak, var_depth, split_min_corr,
                                                dip_realign, rkk_realign, rkk_iters,
-                                               nudge_split, nudge_max, nudge_amp_pct,
-                                               nudge_min_ch, nudge_alpha)
+                                               var_mult=split_var_mult,
+                                               nudge=nudge_split, nudge_max=nudge_max,
+                                               nudge_amp_pct=nudge_amp_pct,
+                                               nudge_min_ch=nudge_min_ch, nudge_alpha=nudge_alpha)
             F = _gfeat(waves, ctx, knn_dims)
             lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
                                      knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr, off_thr=fold_off_thr)
@@ -923,6 +943,8 @@ def main():
     ap.add_argument("--brr-tol", type=float, default=0.30,
                     help="max allowed increase (pp) in [floor,window) refractory for a gated sub-split")
     ap.add_argument("--var-peak", type=float, default=2.0, help="var-split trigger (max/median channel variance)")
+    ap.add_argument("--split-var-mult", type=float, default=0.0,
+                    help="curator split-variance gate: only attempt to split a cluster whose top-3 whitened-feature variance exceeds this multiple of the median over splittable clusters. From the g5 curation log, split-source clusters carry ~3.6x the median feature variance (and kurtosis/ISI are NOT the trigger), so ~1.5-2.0 matches the curator; below it clusters pass through unsplit. 0 (default) = off (no variance prefilter).")
     ap.add_argument("--var-depth", type=int, default=4)
     ap.add_argument("--dip-realign", dest="dip_realign", action="store_true", default=True,
                     help="realign each dipsplit node to its own median (per-step; default on)")
@@ -1048,7 +1070,7 @@ def main():
     if a.chunk_minutes and a.chunk_minutes > 0:
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                          large=a.large, min_group=a.min_group, var_margin=a.var_margin,
-                         brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth,
+                         brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth, split_var_mult=a.split_var_mult,
                          split_min_corr=a.split_min_corr, dip_realign=a.dip_realign,
                          rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, nudge_split=a.nudge_split,
                          nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
@@ -1093,7 +1115,7 @@ def main():
                         floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                         large=a.large, min_group=a.min_group,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
-                        var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr,
+                        var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr, split_var_mult=a.split_var_mult,
                         dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters,
                         nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
                         nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
