@@ -298,7 +298,7 @@ def _match(a, b, ml=4):
     return best
 
 
-def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi, scorr=1.0):
+def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi, scorr=1.0, off_thr=None):
     pool = np.flatnonzero(lab >= 0)
     sz = np.bincount(lab[pool])
     big = np.flatnonzero(sz >= minref)
@@ -340,8 +340,14 @@ def _knn_apply(lab, F, waves, res, ctx, K, thr, minref, minnew, hi, scorr=1.0):
                     continue
             if ww not in mc:
                 mc[ww] = _med(np.flatnonzero(lab == ww), waves)
-            if _match(bmed, mc[ww]) >= hi or (scorr < 1.0 and _ncorr(bmed, mc[ww]) >= scorr):
-                new[bk] = ww; fo += 1                  # shape/amplitude match -> fold into the target
+            fold = _match(bmed, mc[ww]) >= hi or (scorr < 1.0 and _ncorr(bmed, mc[ww]) >= scorr)
+            if fold and off_thr is not None:                 # INTER-CHANNEL TIMING veto: a small group that
+                ob = fg.interchannel_offsets(bmed, method="xcorr")   # is amplitude/shape-similar to the target
+                ot = fg.interchannel_offsets(mc[ww], method="xcorr") # but timing-distinct is a DIFFERENT cell --
+                if fg.offset_distance(ob, ot) > off_thr:             # don't shatter it into the look-alike (294/295)
+                    fold = False
+            if fold:
+                new[bk] = ww; fo += 1                  # shape/amplitude (and timing) match -> fold into the target
             else:
                 new[bk] = nid; nid += 1; ke += 1       # distinct from source AND target -> new cluster
     return new, fo, ke
@@ -548,7 +554,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            floor=16, window_ms=2.0, iters=4, large=800, min_group=40,
            var_margin=0.05, brr_tol=0.30, var_peak=2.0, var_depth=4, split_min_corr=0.93,
            knn_k=20, knn_thr=0.3, knn_minref=50, knn_minnew=30,
-           knn_dims=16, fold_thr=0.9, init_labels=None,
+           knn_dims=16, fold_thr=0.9, fold_off_thr=None, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
@@ -599,7 +605,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                                                nudge_min_ch, nudge_alpha)
             F = _gfeat(waves, ctx, knn_dims)
             lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
-                                     knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr)
+                                     knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr, off_thr=fold_off_thr)
             lab = _drop_tiny(lab, min_group)
             tag = f"{p+1}.{it+1}" if reseed else str(it + 1)
             st = _iter_stats(tag, lab, waves, res_abs, ctx)
@@ -898,6 +904,12 @@ def main():
                     help="shape-distinctness gate: do NOT carve off a split piece / energy bucket whose "
                          "normalised median waveform correlates >= this with its parent (stops over-fragmenting "
                          "high-rate units into energy-level clones); 1.0 disables")
+    ap.add_argument("--fold-off-thr", type=float, default=None,
+                    help="inter-channel TIMING veto on the knn contaminant-fold: when set, a small group is NOT "
+                         "folded into an amplitude/shape-similar target if their robust (raw xcorr-lag) inter-channel "
+                         "offset profiles differ by more than this many samples -- protects small but timing-distinct "
+                         "cells (e.g. 294 vs 295) from being shattered into a look-alike. g5 calibration: same-cell "
+                         "~0.11, distinct co-located cells ~0.26, so ~0.2-0.25 catches them. None (default) = off.")
     ap.add_argument("--reseed", type=int, default=0,
                     help="re-run the whole loop (split -> merge -> refit fibers -> reassign) using the "
                          "refined labels as the next seed, up to N extra passes (e.g. 1 = 2 passes); 0 = single pass")
@@ -1043,7 +1055,7 @@ def main():
                          nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                          knn_k=a.knn_k, knn_thr=a.knn_thr,
                          knn_minref=a.knn_minref, knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
-                         fold_thr=a.fold_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
+                         fold_thr=a.fold_thr, fold_off_thr=a.fold_off_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
                          conv_patience=a.converge_patience, reseed=a.reseed,
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
@@ -1087,7 +1099,7 @@ def main():
                         nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
                         knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
-                        fold_thr=a.fold_thr, init_labels=init,
+                        fold_thr=a.fold_thr, fold_off_thr=a.fold_off_thr, init_labels=init,
                         conv_tol=(a.converge_tol if a.converge else 0.0),
                         conv_patience=a.converge_patience, reseed=a.reseed,
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
