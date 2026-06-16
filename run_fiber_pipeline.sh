@@ -21,6 +21,8 @@ cd "$DIR"
 FOLD_OFF_THR=0.22   # 0078 (samples): same-cell ~0.11, distinct co-located cells ~0.26,
                     #   so 0.20-0.25 vetoes the 294/295 fold. Empty string = off (old behaviour).
 CFIBER_Q=0.90       # 0079: quantile of the within-fiber cfiber null used as the veto threshold
+SPLIT_VAR_MULT=1.5  # 0081: only split clusters whose top-3 feature variance > this x median (curator trigger)
+REFRAC_CEILING=1.0  # 0080: reject a merge whose combined train 2ms-ISI viol exceeds this %% (high-rate backstop)
 
 # ====================== 1. initial over-clustering ======================
 # --cfiber-gate adds the shape veto to the Block-A fragment merges (precision).
@@ -47,14 +49,14 @@ fiber-cpos "$SESS" "$ELEC" \
 # look-alike if their robust inter-channel offset profiles differ by > this.
 fiber-refine "$SESS" "$ELEC" \
     --fold-off-thr "$FOLD_OFF_THR" \
-    --split-min-corr 0.93 --chunk-minutes 12 \
+    --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" --chunk-minutes 12 \
     --out-method stderiv --out-variant refine
 
 # ====================== 5. within-chunk merge ===========================
 # emits the per-chunk unit signatures (.units.npz) that fiber-link consumes.
 fiber-intrachunk "$SESS" "$ELEC" \
     --clu-stage refine --cpos-stage refine \
-    --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
+    --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 --refrac-ceiling "$REFRAC_CEILING" \
     --sig-cap 8000 --emit-units \
     --out-stage refine_intrachunk
 
