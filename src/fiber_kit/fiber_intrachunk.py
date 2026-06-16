@@ -421,6 +421,106 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
     return dense.astype(int)
 
 
+def dynamic_merge_split(realigned, times, init_label, mask, *, sr=32552.0,
+                        cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR, depth_gate=2.0,
+                        var_env_mult=1.5, split_pca=6, split_min_sil=0.12, split_min_n=40,
+                        split_var_drop=0.9, max_passes=8):
+    """Unified dynamic-graph merge+split on ONE live node set.  Nodes are clusters; the graph
+    updates after EVERY operation: a merge removes two nodes and inserts one (recompute + re-score
+    its edges); a split removes one node and inserts its sub-units (compute their signatures + edges).
+    Each pass drains confident merges first (low residual variance + good shape, growth capped at the
+    single-unit envelope), then scans the remaining high-variance nodes and splits the ones that are
+    mixtures (PCA -> 2-means -> accept iff separable AND splitting drops the variance), and the split
+    products re-enter the merge queue on the next pass -- so merge->split->merge composes on the same
+    graph until nothing changes.
+
+    realigned : (nspk,nsamp,nchan) realigned (mutual-centred) waveforms for the chunk's spikes.
+    times     : (nspk,) spike times (s).   init_label : (nspk,) starting cluster id per spike.
+    Returns a dense 0-based per-SPIKE unit label (splits mean the map is per-spike, not per-fragment)."""
+    import heapq
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import silhouette_score
+    nspk, nsamp, nch = realigned.shape
+    F = realigned[:, mask, :].reshape(nspk, -1)             # clustering/shape features (stderiv masked)
+    def _refrac(t):
+        t = np.sort(t); return 100.0 * np.mean(np.diff(t) < 0.002) if len(t) > 2 else 0.0
+    nodes = {}; spike_node = np.full(nspk, -1, int); nid = 0
+    def make_node(members):
+        members = np.asarray(members, int); m = realigned[members]; tmpl = m.mean(0)
+        fm = F[members]; mean = fm.mean(0); var = float(((fm - mean) ** 2).sum(1).mean())
+        e = (tmpl ** 2).sum(0); y0 = float((np.arange(nch) * e).sum() / (e.sum() + 1e-9))
+        return dict(members=members, mean=mean, tmpl=tmpl, var=var, n=len(members),
+                    off=fg.interchannel_offsets(tmpl), y0=y0, t=np.sort(times[members]))
+    for L in np.unique(init_label):
+        if L < 0:
+            continue
+        mem = np.flatnonzero(init_label == L)
+        if len(mem) == 0:
+            continue
+        nodes[nid] = make_node(mem); spike_node[mem] = nid; nid += 1
+    var_env = var_env_mult * float(np.median([nd["var"] for nd in nodes.values()])) if nodes else np.inf
+    def edge(i, j):                                        # merge admission on CURRENT state
+        a, b = nodes[i], nodes[j]
+        if abs(a["y0"] - b["y0"]) > depth_gate:
+            return None
+        c = float(a["mean"] @ b["mean"] / (np.linalg.norm(a["mean"]) * np.linalg.norm(b["mean"]) + 1e-9))
+        if c < cos_thr:
+            return None
+        if _offset_rms(a["off"], b["off"]) > off_thr:
+            return None
+        w = a["n"] + b["n"]; m = (a["mean"] * a["n"] + b["mean"] * b["n"]) / w
+        mv = (a["n"] * (a["var"] + float(((a["mean"] - m) ** 2).sum())) +
+              b["n"] * (b["var"] + float(((b["mean"] - m) ** 2).sum()))) / w
+        if mv > var_env:                                   # variance envelope: growth ok up to single-unit scale
+            return None
+        return c
+    active = set(nodes)
+    for _ in range(max_passes):
+        heap = []                                          # ---- MERGE drain (dynamic recompute + re-edge) ----
+        al = list(active)
+        for x in range(len(al)):
+            for y in range(x + 1, len(al)):
+                s = edge(al[x], al[y])
+                if s is not None:
+                    heapq.heappush(heap, (-s, al[x], al[y]))
+        while heap:
+            _, i, j = heapq.heappop(heap)
+            if i not in active or j not in active or edge(i, j) is None:
+                continue
+            mem = np.concatenate([nodes[i]["members"], nodes[j]["members"]])
+            nodes[i] = make_node(mem); spike_node[mem] = i
+            active.discard(j); del nodes[j]
+            for k in active:
+                if k != i:
+                    s = edge(i, k)
+                    if s is not None:
+                        heapq.heappush(heap, (-s, min(i, k), max(i, k)))
+        any_split = False                                  # ---- SPLIT scan (mixtures) ----
+        for i in sorted(active, key=lambda k: -nodes[k]["var"]):
+            nd = nodes[i]
+            if nd["n"] < 2 * split_min_n or nd["var"] <= 0.8 * var_env:   # cheap prefilter
+                continue
+            mem = nd["members"]; X = F[mem] - F[mem].mean(0)
+            U = np.linalg.svd(X, full_matrices=False)[2][:split_pca]; P = X @ U.T
+            lab = KMeans(2, n_init=3, random_state=0).fit_predict(P)
+            if min(int((lab == 0).sum()), int((lab == 1).sum())) < split_min_n:
+                continue
+            sub = [mem[lab == 0], mem[lab == 1]]
+            vmax = max(float(((F[s] - F[s].mean(0)) ** 2).sum(1).mean()) for s in sub)
+            ssub = P if len(P) <= 4000 else P[np.random.default_rng(0).choice(len(P), 4000, replace=False)]
+            lsub = lab if len(P) <= 4000 else lab[:len(ssub)]
+            sil = silhouette_score(ssub, lab[:len(ssub)]) if len(np.unique(lab[:len(ssub)])) > 1 else 0.0
+            if sil >= split_min_sil and vmax < split_var_drop * nd["var"]:   # separable AND variance drops => mixture
+                del nodes[i]; active.discard(i)
+                for s in sub:
+                    nodes[nid] = make_node(s); spike_node[s] = nid; active.add(nid); nid += 1
+                any_split = True
+        if not any_split:
+            break
+    _, dense = np.unique(spike_node, return_inverse=True)
+    return dense.astype(int)
+
+
 def aggregate_units(sig, label):
     """Collapse fragment signatures into per-chunk UNIT signatures (n-weighted,
     re-centred template; n-weighted position).  This is the table fiber_link links
@@ -577,11 +677,16 @@ def main():
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
-    ap.add_argument("--linkage", choices=("complete", "dynamic"), default="complete",
+    ap.add_argument("--linkage", choices=("complete", "dynamic", "ms"), default="complete",
                     help="'complete' (default): one-shot static-edge complete-linkage clique. "
                          "'dynamic': priority-queue agglomeration that recomputes each node and re-scores "
                          "its edges as merges occur (fixes the static-graph over-merge), with a variance "
-                         "envelope (--var-env-mult) and a temporal cross-CCG gate (--ccg-thr).")
+                         "envelope (--var-env-mult) and a temporal cross-CCG gate (--ccg-thr). "
+                         "'ms': unified dynamic-graph MERGE+SPLIT -- merge confident-clean (low residual "
+                         "variance + good shape) first, then KNN/PCA-split the high-variance mixtures, with "
+                         "split products re-entering the merge queue, on one live graph (per-spike output).")
+    ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
+    ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
                     help="dynamic linkage: single-unit variance envelope = this * median fragment variance; "
                          "blocks merges that push a unit's spread past it (permits the growth de-fragmentation "
@@ -636,6 +741,26 @@ def main():
            for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
 
     _m = fl.build_masks(nsamp, cfg.peak)                  # peak-relative realign window for this nSamples
+    if a.linkage == "ms":                                  # unified dynamic merge+split (per-spike; no sig needed)
+        sigma = fg.DEFAULT_SMOOTH_SIGMA; res_s = res.astype(float) / sr
+        chid = (res_s / 60.0 / a.chunk_minutes).astype(int)
+        out_lab = np.ones(len(res), int); nxt = 2          # reserve id 1 for too-small / unsigned
+        for ch in np.unique(chid):
+            sel = np.flatnonzero((chid == ch) & (src.astype(np.int64) > 1))
+            if len(sel) < 2 * a.min_n:
+                continue
+            rw = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[sel].astype(float), _m.realign_lo, _m.realign_hi), sigma))
+            lab = dynamic_merge_split(rw, res_s[sel], src[sel].astype(int), _m.full, sr=sr,
+                        cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=max(1.0, a.depth_gate / 20.0),
+                        var_env_mult=a.var_env_mult, split_min_sil=a.split_min_sil, split_min_n=a.split_min_n)
+            out_lab[sel] = lab + nxt; nxt += int(lab.max()) + 1
+        ncl = int(out_lab.max()) + 1
+        out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
+        nio.write_clu_file(out_path, out_lab, n_clusters=ncl)
+        print(f"[intrachunk] merge+split over {len(np.unique(chid))} chunks -> "
+              f"{len(np.unique(out_lab[out_lab > 1]))} per-chunk units (per-spike labelling)")
+        print(f"[intrachunk] wrote {out_path}  ({ncl} clusters incl reserve)")
+        return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
                            chunk_min=a.chunk_minutes, min_n=a.min_n,
