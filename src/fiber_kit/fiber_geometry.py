@@ -136,17 +136,42 @@ def geo_veto(curve_i, curve_j, mu, P, thr=DEFAULT_GEO_THR):
 DEFAULT_OFF_THR = 1.8          # samples RMS; STRICT primary gate (drift-robust)
 DEFAULT_GEO_THR_BACKBONE = 2.5 # amplitude footprint is drift-FRAGILE -> loose secondary on anchored links
 
-def interchannel_offsets(template, amp_frac=0.3):
-    """Per-channel sub-sample trough time relative to the dominant channel.
-    template: (nsamp, nchan) realigned (ideally denoised) mean template.  Channels
-    below amp_frac of the dominant peak-to-peak carry no reliable timing -> NaN."""
-    T = np.asarray(template, float); p2p = T.max(0) - T.min(0); dom = int(np.argmax(p2p))
-    off = np.full(T.shape[1], np.nan)
-    for ch in range(T.shape[1]):
+def interchannel_offsets(template, amp_frac=0.3, method="trough", up=8, maxlag=None):
+    """Per-channel sub-sample timing (samples) of each channel relative to the dominant
+    channel.  Channels below amp_frac of the dominant peak-to-peak carry no reliable
+    timing -> NaN.  template: (nsamp, nchan) realigned (ideally denoised) mean template.
+
+    method="trough" (default, unchanged): parabolic sub-sample minimum of the trough.
+        Cheap, but the trough sample is jittery at low spike count and on the stderiv
+        waveform (multi-extremum) -- measured split-half noise ~8 samples on a 27-spike
+        cluster, which swamps the genuine sub-sample inter-channel timing.
+    method="xcorr": upsampled cross-correlation LAG of the FULL channel waveform against
+        the dominant channel (a matched filter -- uses the whole shape, not one sample).
+        Far more stable: on g5 the same-neuron split-half noise drops to ~0.1 samples on
+        a RAW template (use raw, not stderiv -- the stderiv trough is noisy), so a real
+        0.26-sample inter-channel difference between two co-located cells becomes a clean
+        2-3 sigma discriminator even at ~30 spikes.  NOTE the lag scale differs from the
+        trough scale, so off_thr must be re-calibrated (~0.2-0.3, not 1.0) when using it."""
+    T = np.asarray(template, float); nt, nc = T.shape
+    p2p = T.max(0) - T.min(0); dom = int(np.argmax(p2p))
+    if method == "xcorr":
+        x = T - T.mean(0); L = nt * int(up)
+        X = np.fft.rfft(x, n=L, axis=0)
+        cc = np.roll(np.fft.irfft(X * np.conj(X[:, dom:dom + 1]), n=L, axis=0), L // 2, axis=0)
+        if maxlag is not None:
+            lo = L // 2 - int(maxlag * up); hi = L // 2 + int(maxlag * up) + 1
+            k = lo + cc[lo:hi].argmax(0)
+        else:
+            k = cc.argmax(0)
+        off = (k - L // 2) / float(up)
+        off[p2p < amp_frac * p2p[dom]] = np.nan
+        return off - off[dom]
+    off = np.full(nc, np.nan)
+    for ch in range(nc):
         if p2p[ch] < amp_frac * p2p[dom]:
             continue
         i = int(np.argmin(T[:, ch]))
-        if 0 < i < T.shape[0] - 1:
+        if 0 < i < nt - 1:
             a, b, c = T[i - 1, ch], T[i, ch], T[i + 1, ch]; dn = a - 2 * b + c
             off[ch] = i + (0.5 * (a - c) / dn if abs(dn) > 1e-9 else 0.0)   # parabolic sub-sample
         else:
