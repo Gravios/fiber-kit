@@ -251,7 +251,7 @@ def main():
     ap.add_argument("--cpos-method", default="stderiv"); ap.add_argument("--cpos-stage", default="refine")
     ap.add_argument("--clu-method", default=None, help="source .clu method (default: mirror --cpos-method)")
     ap.add_argument("--clu-stage", default=None, help="source .clu stage (default: mirror --cpos-stage)")
-    ap.add_argument("--chunk-minutes", type=float, default=12.0)
+    ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     ap.add_argument("--cos-thr", type=float, default=0.85)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")

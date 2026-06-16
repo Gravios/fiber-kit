@@ -683,7 +683,7 @@ def main():
     ap.add_argument("--cpos-method", default="stderiv")
     ap.add_argument("--cpos-stage", default="refine")
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
-    ap.add_argument("--chunk-minutes", type=float, default=12.0)
+    ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     ap.add_argument("--cos-thr", type=float, default=DEFAULT_COS_THR)
     ap.add_argument("--off-thr", type=float, default=DEFAULT_OFF_THR)
     ap.add_argument("--off-n-ref", type=float, default=DEFAULT_OFF_NREF,
@@ -691,7 +691,7 @@ def main():
                          "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
     ap.add_argument("--off-ceil", type=float, default=DEFAULT_OFF_CEIL,
                     help="cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee).")
-    ap.add_argument("--iter", type=int, default=1, dest="n_iter",
+    ap.add_argument("--iter", "--iters", type=int, default=1, dest="n_iter",
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
