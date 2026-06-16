@@ -969,7 +969,7 @@ def main():
                     help="non-normalised median-xcorr above which a peeled bucket is folded (else kept as new)")
     ap.add_argument("--fine-method", choices=["gmm", "fiber", "none"], default="gmm",
                     help="method for the initial fine sort when no --in-clu is given")
-    ap.add_argument("--chunk-minutes", type=float, default=0.0,
+    ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=0.0,
                     help="drift-aware mode: window the session into CORE chunks of this many minutes, "
                          "refine each in its own whitened frame, and link fibers across windows by "
                          "overlap-anchor; 0 = single whole-session pass (assumes stationary)")

@@ -910,7 +910,7 @@ def main():
                     "(or <session>/<session>.yaml) for channels/sr/nChannels; "
                     "CLI flags override the YAML.")
     sy.add_session_args(ap)
-    ap.add_argument("--chunk-min", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
+    ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")
     ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)

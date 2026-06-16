@@ -395,7 +395,7 @@ def main():
                     help="comma list of feature spaces to refresh from .fil (default: standard + "
                          "stderiv if present).  Each is re-derived from the re-extracted raw window: "
                          "standard=raw, stderiv=SDIFF_ALLPAIRS+temporal-diff, then projected onto its .pca")
-    ap.add_argument("--out-tag", default="",
+    ap.add_argument("--out-tag", "--out-stage", default="",
                     help="stage tag for committed outputs (default: empty -> overwrite the canonical "
                          ".res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). "
                          "Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned")
