@@ -40,12 +40,43 @@ try:
 except ImportError:
     import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
 
+try:
+    from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
+except ImportError:
+    from fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
+
+# cfiber shape gate: affine-invariant (rotation+scale+translation invariant) Fourier
+# descriptors of the per-cluster template's complex channel-loop.  Used by gate='cfiber'
+# as the SHAPE term in place of mutual-centred template cosine — invariant by construction
+# rather than only after centring, so it merges cross-energy-band fragments (the bent
+# energy-extreme case) without loosening anything.  Offset + depth gates still apply.
+_CFIBER_MODES = (2, 3, 4, -1, -2, -3)
+_CFIBER_PRE, _CFIBER_POST = 10, 12
+
+
+def _cfiber_win(nsamp, peak):
+    p = int(peak) if peak is not None else nsamp // 2
+    return slice(max(0, p - _CFIBER_PRE), min(nsamp, p + _CFIBER_POST))
+
+
+def _cfiber_shapes(templates, win):
+    """templates (M,nsamp,nchan) -> (M,ndesc) affine-invariant shape descriptors."""
+    t = np.asarray(templates, float)
+    if t.ndim == 2:
+        t = t[None]
+    nch = t.shape[2]
+    Z = _cf_loop(t, _cf_angles(nch), win)
+    S, _, _, _ = _cf_shape(Z, _CFIBER_MODES)
+    return np.asarray(S, float)
+
 DEFAULT_COS_THR = 0.85
 DEFAULT_OFF_THR = 1.0
 DEFAULT_OFF_NREF = None   # SNR-adaptive offset gate: spike count at which off_thr applies as-is
 DEFAULT_OFF_CEIL = 2.0    #   (None -> flat off_thr).  See _off_thr_eff / the g5 offset<->CCG calibration.
 DEFAULT_DEPTH_GATE = 35.0   # um; the energy ladder's depth spread (spatial fiber)
 DEFAULT_MIN_N = 12          # fragments below this are too noisy to sign reliably
+_SIG_CAP_DEFAULT = None     # --sig-cap: subsample spikes for the MEAN template (memory) if set;
+                            #   None = use every spike (original behaviour, unchanged for the giants)
 
 
 def _offset_rms(o1, o2):
@@ -98,7 +129,8 @@ def kernel_twosample(Xp, Xq, kind="kcov"):
 
 def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_MIN_N,
                      reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA,
-                     feats=None, feat_dim=12, feat_n=80, feat_seed=0, realign_lohi=None):
+                     feats=None, feat_dim=12, feat_n=80, feat_seed=0, realign_lohi=None,
+                     peak=None, sig_cap=_SIG_CAP_DEFAULT):
     """Per-cluster stderiv signature for matching.
 
     spkD     : (nspk, nsamp, nchan) int16 stderiv waveforms (array or memmap).
@@ -128,21 +160,32 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         s = rng.choice(len(Wf), min(len(Wf), 100000), replace=False)   # spike (drop the energy axis the
         mu_w = Wf[s].mean(0)                                            # cosine gate also discards), so an
         Vt = np.linalg.svd(Wf[s] - mu_w, full_matrices=False)[2][:feat_dim]   # energy ladder stays one unit
-    ids, T, O, X, Y, Z, A, CH, TM, NS, FT = ([] for _ in range(11))
+    ids, T, O, X, Y, Z, A, CH, TM, NS, FT, NULL = ([] for _ in range(12))
     for k, c in enumerate(uq):
         c = int(c)
         if c in reserve or c not in pos:
             continue
         idx = order[st[k]:en[k]]
-        if len(idx) < min_n:
+        n_true = len(idx)
+        if n_true < min_n:
             continue
+        if sig_cap and n_true > sig_cap:   # subsample for the MEAN template/offset only; mean unchanged within noise
+            idx = np.random.default_rng(feat_seed + c).choice(idx, sig_cap, replace=False)
         al = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[idx].astype(float), *(realign_lohi or ())), sigma))
         tmpl = al.mean(0)
         x0, y0, z0, amp = pos[c]
         tm = float(np.mean(t_mid_s[idx]))
         ids.append(c); T.append(tmpl); O.append(fg.interchannel_offsets(tmpl))
         X.append(x0); Y.append(y0); Z.append(z0); A.append(abs(amp))
-        CH.append(int(tm / 60.0 // chunk_min)); TM.append(tm); NS.append(len(idx))
+        CH.append(int(tm / 60.0 // chunk_min)); TM.append(tm); NS.append(n_true)
+        if feats == "cfiber":                  # self-calibration: same-fragment split-half shape distance
+            _w = _cfiber_win(al.shape[1], peak); _h = len(al) // 2
+            if _h >= 6:
+                _sa = _cfiber_shapes(al[:_h].mean(0), _w)[0]
+                _sb = _cfiber_shapes(al[_h:].mean(0), _w)[0]
+                NULL.append(float(np.linalg.norm(_sa - _sb)))
+            else:
+                NULL.append(np.nan)
         if Vt is not None:
             ridx = idx if len(idx) <= feat_n else np.random.default_rng(feat_seed + c).choice(idx, feat_n, replace=False)
             sp = np.asarray(spkD[ridx], np.float32).reshape(len(ridx), -1)
@@ -154,12 +197,15 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
                t_mid=np.array(TM), n=np.array(NS, int))
     if Vt is not None:
         out["feat"] = np.array(FT, dtype=object)
+    if feats == "cfiber":
+        out["shape_null"] = np.array(NULL, float)
     return out
 
 
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
-                     off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL):
+                     off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
+                     cfiber_thr=None, cfiber_win=None):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -182,6 +228,10 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
     use_kernel = gate in ("mmd", "kcov")
+    use_cfiber = gate == "cfiber"
+    if use_cfiber:
+        Scf = _cfiber_shapes(sig["template"], cfiber_win)   # (M,ndesc) affine-invariant
+        cthr = float(cfiber_thr) if cfiber_thr is not None else np.inf
     if use_kernel:
         if "feat" not in sig:
             raise ValueError("gate='%s' needs sig['feat'] -- call build_signatures(..., feats='wave')" % gate)
@@ -205,7 +255,14 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 i, j = ix[a], ix[b]
                 if abs(Y[i] - Y[j]) > depth_gate:           # depth gate first (cheap prefilter)
                     continue
-                if use_kernel:
+                if use_cfiber:
+                    if C[a, b] < cos_thr:                   # cosine recall prefilter: combine the
+                        continue                            # fiber (centred-cosine) and cfiber
+                    sd = float(np.linalg.norm(Scf[i] - Scf[j]))   # (affine-invariant) shape signals --
+                    if sd > cthr:                           # both must agree (precision), plus offset+depth
+                        continue
+                    strength = cthr - sd
+                elif use_kernel:
                     if C[a, b] < cos_thr:                   # cosine is the cheap recall prefilter;
                         continue                            # the kernel test is the precision filter
                     s = kernel_twosample(feat[i], feat[j], gate)
@@ -396,12 +453,26 @@ def main():
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
-    ap.add_argument("--gate", choices=("cosine", "mmd", "kcov"), default="cosine",
+    ap.add_argument("--gate", choices=("cosine", "mmd", "kcov", "cfiber"), default="cosine",
                     help="fragment-merge test: 'cosine' (mean template, default & recommended). "
+                         "'cfiber' uses the affine-invariant (rotation+scale) shape descriptor of the "
+                         "template's complex channel-loop instead of mutual-centred cosine — invariant "
+                         "by construction, so it merges cross-energy-band fragments without loosening; "
+                         "offset + depth gates still apply.  "
                          "'mmd'/'kcov' are kernel two-sample tests (precision filter on cosine-passing "
                          "pairs); NOTE they OVER-SPLIT as a grouping gate (they separate a neuron's own "
                          "energy/SNR sub-populations) -- exposed for experimentation on unit-vs-unit "
                          "discrimination, not for routine grouping")
+    ap.add_argument("--cfiber-thr", type=float, default=None,
+                    help="gate='cfiber' shape-distance threshold; default None self-calibrates from "
+                         "per-fragment split-half nulls at --cfiber-q.")
+    ap.add_argument("--cfiber-q", type=float, default=0.90,
+                    help="quantile of the same-fragment split-half shape null used as the cfiber gate "
+                         "threshold when --cfiber-thr is omitted (default 0.90).")
+    ap.add_argument("--sig-cap", type=int, default=_SIG_CAP_DEFAULT,
+                    help="cap spikes per cluster used to build the MEAN template/offset (memory guard for "
+                         "very high-rate units; true spike count is kept for the SNR-adaptive gate). "
+                         "Omit for no cap (default). ~8000 keeps templates within noise of the full mean.")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_intrachunk)")
@@ -424,13 +495,20 @@ def main():
            for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
 
     _m = fl.build_masks(nsamp, cfg.peak)                  # peak-relative realign window for this nSamples
+    feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
                            chunk_min=a.chunk_minutes, min_n=a.min_n,
-                           feats="wave" if a.gate != "cosine" else None,
+                           feats=feats, peak=cfg.peak, sig_cap=a.sig_cap,
                            realign_lohi=(_m.realign_lo, _m.realign_hi))
+    cfiber_win = _cfiber_win(nsamp, cfg.peak); cfiber_thr = a.cfiber_thr
+    if a.gate == "cfiber" and cfiber_thr is None:
+        nulls = sig.get("shape_null", np.array([])); nulls = nulls[np.isfinite(nulls)]
+        cfiber_thr = float(np.quantile(nulls, a.cfiber_q)) if nulls.size else np.inf
+        print(f"[intrachunk] cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f} "
+              f"(split-half null q={a.cfiber_q}, n={nulls.size})")
     label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                              off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
-                             gate=a.gate)
+                             gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
