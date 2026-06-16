@@ -1,73 +1,90 @@
 #!/usr/bin/env bash
-# fiber-kit pipeline for one electrode group, with the three new patches wired in:
-#   0077  fiber_geometry  robust xcorr-lag interchannel_offsets (used internally by 0078)
-#   0078  fiber-refine    --fold-off-thr : inter-channel TIMING veto on the contaminant-fold
-#                         (keeps small timing-distinct cells like 294/295 from being shattered)
-#   0079  fiber-session   --cfiber-gate  : affine-invariant cfiber shape veto on fragment merges
+# fiber-kit pipeline for one electrode group.  Args verified against main HEAD (4075890),
+# which already contains all of: 0074-0076 (intrachunk cfiber/dynamic/ms), 0077 (robust
+# interchannel_offsets), 0078 (--fold-off-thr), 0079 (--cfiber-gate), 0080 (--refrac-ceiling),
+# 0081 (--split-var-mult).  No patches to apply -- they are upstream.
 #
-# Apply the patches first (on a clean clone):
-#   git am 0077-fiber_geometry-robust-xcorr-offsets.patch \
-#          0078-fiber-refine-fold-timing-veto.patch \
-#          0079-fiber-session-cfiber-gate.patch
+# Fixes vs the previous (broken) script:
+#   * fiber-session  uses --fine-method (NOT --method) for the algorithm.
+#   * fiber-realign  has NO --clu-method and NO --align-method xcorr.  Valid align methods are
+#                    {klusters,template,centroid}.  Input clu is --clu <path>.  CRUCIAL: do NOT
+#                    pass --out-variant realign -- realign reads the INPUT .spk from that variant,
+#                    so it would look for .spk.realign.N and fail.  Run it as an in-place commit
+#                    (the realign IS the commit): variant is inferred from the clu name (stderiv).
+#   * fiber-cpos     localizes from the RAW/standard spk (never .spkD); --spk-method standard.
+#   * fiber-refine   input is --in-clu; output stage is --out-variant (NOT --out-stage).
+#   * cpos is run AFTER refine, on the refine clu, so its positions are keyed to the SAME clu
+#     fiber-intrachunk/-link read (fixes the stale-position mismatch).
 set -euo pipefail
 
 # ============================ session config ============================
-SESS=sirotaA-jg-000005-20120312     # base name; expects $SESS.yaml/.fil/.spk.* in $DIR
-ELEC=5                              # electrode / shank group
-DIR=/data/testing/kke/fiber-0.27.1/$SESS
+SESS=sirotaA-jg-000005-20120312
+ELEC=5
+DIR=/data/testing/kke/fiber-0.27/$SESS
 cd "$DIR"
 
-# ===================== the important NEW knobs ==========================
-FOLD_OFF_THR=0.22   # 0078 (samples): same-cell ~0.11, distinct co-located cells ~0.26,
-                    #   so 0.20-0.25 vetoes the 294/295 fold. Empty string = off (old behaviour).
-CFIBER_Q=0.90       # 0079: quantile of the within-fiber cfiber null used as the veto threshold
-SPLIT_VAR_MULT=1.5  # 0081: only split clusters whose top-3 feature variance > this x median (curator trigger)
-REFRAC_CEILING=1.0  # 0080: reject a merge whose combined train 2ms-ISI viol exceeds this %% (high-rate backstop)
+# ===================== the NEW knobs (all upstream) =====================
+CFIBER_Q=0.90        # 0079 fiber-session: within-fiber cfiber-null quantile for the shape veto
+FOLD_OFF_THR=0.22    # 0078 fiber-refine : timing veto on the contaminant-fold (samples; 0.20-0.25)
+SPLIT_VAR_MULT=1.5   # 0081 fiber-refine : only split clusters with top-3 feat-var > this x median
+REFRAC_CEILING=1.0   # 0080 fiber-intrachunk: reject a merge whose combined 2ms-ISI viol exceeds this %
 
 # ====================== 1. initial over-clustering ======================
-# --cfiber-gate adds the shape veto to the Block-A fragment merges (precision).
+# Produces <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv.<ELEC>).  --method is the extraction/feature
+# tag (stderiv); --fine-method is the clustering algorithm.
 fiber-session "$SESS" "$ELEC" \
-    --method rkk --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
+    --method stderiv --fine-method rkk \
+    --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
     --cfiber-gate --cfiber-q "$CFIBER_Q" \
-    --dipsplit --out stderiv
+    --dipsplit
 
-# ====================== 2. realign spikes ===============================
-# rigid channel-summed xcorr realign; re-extracts the .spk/.spkD in the aligned frame.
+# ====================== 2. realign (in-place commit) ====================
+# Reads .spk.stderiv.<ELEC> (variant inferred from the clu name), Klusters-style per-spike align,
+# re-extracts the raw + stderiv .spk/.fet from .fil, commits aligned .res/.clu/.spk in place.
+# NO --out-variant / --out-tag  ->  overwrites the canonical files (the realign is the commit).
 fiber-realign "$SESS" "$ELEC" \
-    --clu-method stderiv --align-method xcorr --reextract --refeaturize \
-    --out-variant realign
+    --clu "$SESS.clu.stderiv.$ELEC" \
+    --align-method klusters --reextract --refeaturize \
+    --variants standard,stderiv
 
-# ====================== 3. positions (cpos) =============================
-# IMPORTANT: cpos must be keyed to the SAME clu the merge tools read (avoids the
-# stale-position mismatch). Point --clu-stage at the stage you just produced.
+# ====================== 3. refine (split + fold gates) ==================
+# --in-clu is the aligned canonical clu; --out-variant names the output stage (-> .clu.stderiv.<ELEC>.refine).
+# --split-var-mult (curator variance trigger) + --fold-off-thr (timing veto on the contaminant fold).
+fiber-refine "$SESS" "$ELEC" \
+    --in-clu "$SESS.clu.stderiv.$ELEC" \
+    --out-method stderiv --out-variant refine \
+    --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
+    --fold-off-thr "$FOLD_OFF_THR" \
+    --chunk-minutes 12
+
+# ====================== 4. positions ON THE REFINE CLU ==================
+# Run cpos AFTER refine so positions key to the clu the merge tools read (no stale-cpos mismatch).
+# cpos localizes from the RAW/standard .spk (re-extracted in step 2), never the stderiv .spkD.
 fiber-cpos "$SESS" "$ELEC" \
-    --spk-method stderiv --clu-method stderiv --clu-stage realign \
+    --clu-method stderiv --clu-stage refine \
+    --spk-method standard \
     --out-method stderiv --out-stage refine
 
-# ====================== 4. refine  (TIMING VETO ON) =====================
-# --fold-off-thr is the fix: a small group is NOT folded into an amplitude/shape
-# look-alike if their robust inter-channel offset profiles differ by > this.
-fiber-refine "$SESS" "$ELEC" \
-    --fold-off-thr "$FOLD_OFF_THR" \
-    --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" --chunk-minutes 12 \
-    --out-method stderiv --out-variant refine
-
 # ====================== 5. within-chunk merge ===========================
-# emits the per-chunk unit signatures (.units.npz) that fiber-link consumes.
+# --refrac-ceiling rejects merges whose combined train inflates the 2ms refractory violation
+# (backstop for high-rate over-merges).  Emits the .units.npz for linking.
 fiber-intrachunk "$SESS" "$ELEC" \
-    --clu-stage refine --cpos-stage refine \
-    --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 --refrac-ceiling "$REFRAC_CEILING" \
+    --clu-method stderiv --clu-stage refine \
+    --cpos-method stderiv --cpos-stage refine \
+    --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
+    --refrac-ceiling "$REFRAC_CEILING" \
     --sig-cap 8000 --emit-units \
     --out-stage refine_intrachunk
 
 # ====================== 6. cross-chunk link =============================
-# collapses per-chunk units across chunks -> the ~50-100 tracked neurons.
 UNITS="$SESS.clu.stderiv.$ELEC.refine_intrachunk.units.npz"
 fiber-link "$SESS" "$ELEC" \
+    --clu-method stderiv --clu-stage refine \
+    --cpos-method stderiv --cpos-stage refine \
     --from-units "$UNITS" \
     --cos-thr 0.85 --pos-thr 1.5 --off-thr 1.0 --max-gap 2 \
     --refine-trajectory \
     --out-stage refine_linked
 
 echo "[done] linked clu: $SESS.clu.stderiv.$ELEC.refine_linked"
-echo "       count tracked neurons (units spanning many chunks) to compare against the 50-100 target."
+echo "       count units spanning many chunks and compare against the 50-100 target."
