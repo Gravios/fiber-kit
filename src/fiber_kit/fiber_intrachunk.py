@@ -207,10 +207,24 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
     return out
 
 
+def _isi_viol_union(ta, tb, win_ms=2.0):
+    """Refractory-violation %% of the COMBINED spike train of two fragments (times in seconds):
+    fraction of consecutive inter-spike intervals shorter than win_ms.  Two over-split fragments
+    of ONE neuron form a refractory train when merged (low violation); two DISTINCT cells fire
+    independently, so their union has coincident <win_ms pairs (higher violation).  This is the
+    curator's merge-ACCEPTANCE bar (accepted g5 merges keep this <~0.2%% p90 / <~0.9%% p99).
+    NOTE: blind to sparse pairs that never coincide within win_ms -- complementary to, not a
+    replacement for, the inter-channel offset gate."""
+    t = np.sort(np.concatenate([np.asarray(ta, float), np.asarray(tb, float)]))
+    if len(t) < 3:
+        return 0.0
+    return 100.0 * float(np.mean(np.diff(t) < win_ms / 1000.0))
+
+
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
-                     cfiber_thr=None, cfiber_win=None):
+                     cfiber_thr=None, cfiber_win=None, refrac_ceiling=None):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -250,6 +264,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 nulls.append(kernel_twosample(f[r[:h]], f[r[h:]], gate))
         thr = float(np.quantile(nulls, feat_q)) if nulls else np.inf
     Ncnt = sig.get("n")
+    TIMESarr = sig.get("times")
     label = np.full(len(sig["ids"]), -1, int); nxt = 0
     for ch in np.unique(chunk):
         ix = np.flatnonzero(chunk == ch); n = len(ix)
@@ -281,6 +296,9 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 o = _offset_rms(off[i], off[j])
                 ot = off_thr if (Ncnt is None or off_n_ref is None) else _off_thr_eff(off_thr, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
                 if o <= ot:
+                    if (refrac_ceiling is not None and TIMESarr is not None and
+                            _isi_viol_union(TIMESarr[i], TIMESarr[j]) > refrac_ceiling):
+                        continue       # post-merge refractory ceiling (curator merge-accept bar)
                     edges.append((strength - o, a, b))      # strongest agreement first
         edges.sort(reverse=True)
         par = list(range(n)); mem = {k: [k] for k in range(n)}
@@ -677,6 +695,8 @@ def main():
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
+    ap.add_argument("--refrac-ceiling", type=float, default=None,
+                    help="post-merge refractory ceiling (%% 2ms ISI violation of the COMBINED train): refuse a merge whose union exceeds this. The curator merge-accept bar -- accepted g5 merges keep it <~0.2 (p90)/<~0.9 (p99), so ~1.0 is a safe ceiling. Catches over-merges of well-populated cells; blind to sparse pairs (use the offset gate for those). None (default) = off (complete linkage only).")
     ap.add_argument("--linkage", choices=("complete", "dynamic", "ms"), default="complete",
                     help="'complete' (default): one-shot static-edge complete-linkage clique. "
                          "'dynamic': priority-queue agglomeration that recomputes each node and re-scores "
@@ -780,7 +800,8 @@ def main():
     else:
         label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
-                                 gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win)
+                                 gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
+                                 refrac_ceiling=a.refrac_ceiling)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
