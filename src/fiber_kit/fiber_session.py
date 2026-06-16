@@ -357,13 +357,52 @@ def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
     return out
 
 
+try:
+    from . import fiber_cfiber as fcf
+except ImportError:
+    import fiber_cfiber as fcf
+
+
+def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2, -3)):
+    """Veto candidate fragment-merge edges whose affine-invariant cfiber SHAPE disagrees.
+    cfiber AUC on well-populated g5 units is ~0.998, so a shape mismatch beyond the within-
+    fiber split-half null is strong evidence of two cells.  The veto threshold is CALIBRATED
+    per chunk from that null (quantile q), so it adapts to the chunk's noise rather than a
+    fixed constant.  Edges where either fiber is too small to estimate a stable shape are
+    LEFT ALONE (the gate only vetoes when it is confident).  Returns the filtered edges."""
+    if not edges:
+        return edges
+    theta = fcf.channel_angles(waves.shape[2])
+    mi = np.asarray(mask); win = slice(int(mi.min()), int(mi.max()) + 1)
+    rng = np.random.default_rng(0)
+    def shp(idx):
+        if len(idx) < 6:
+            return None
+        t = fl.realign(waves[idx]).mean(0)
+        z = fcf.complex_loop(t[None], theta, win)[0]
+        s, _, _, _ = fcf.shape_descriptor(z[None], modes)
+        return s[0]
+    nodes = sorted({u for e in edges for u in e})
+    S = {}; nulls = []
+    for u in nodes:
+        ix = np.flatnonzero(fine == u); S[u] = shp(ix)
+        if len(ix) >= 12:
+            pp = rng.permutation(len(ix)); h = len(pp) // 2
+            a = shp(ix[pp[:h]]); b = shp(ix[pp[h:]])
+            if a is not None and b is not None:
+                nulls.append(float(np.linalg.norm(a - b)))
+    thr = float(np.quantile(nulls, q)) if nulls else np.inf
+    return [(i, j) for (i, j) in edges
+            if S.get(i) is None or S.get(j) is None or float(np.linalg.norm(S[i] - S[j])) <= thr]
+
+
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
-                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14,
+                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -516,6 +555,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             T = np.array([g['template'].ravel() for g in geoms]); T = T - T.mean(1, keepdims=True)
             T = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-12); C = T @ T.T
             edges = list(zip(*np.where(np.triu(C, 1) > merge_corr)))
+        if cfiber_gate:
+            edges = _cfiber_edge_filter(edges, fine, waves, mask, q=cfiber_q)
         fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
     # ── Block B: same-neuron grouping by energy-resolved DIRECTION PROFILE d(r).
     #    Direction is the validated same-neuron signal (AUC ~0.98 same-fiber-halves
@@ -880,6 +921,8 @@ def main():
     ap.add_argument("--rkk-realign-iters", type=int, default=2,
                     help="cluster<->realign passes in the rkk realign loop")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
+    ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
+    ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
     ap.add_argument("--merge-method", choices=["template","sliding","profile"], default="template")
     ap.add_argument("--sliding-nwin", type=int, default=14)
     ap.add_argument("--profile-thr", type=float, default=None,
@@ -997,6 +1040,7 @@ def main():
               nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
+              cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
               profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
               deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
