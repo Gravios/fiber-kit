@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.26.0] — installed pipeline driver (`run_fiber_pipeline`)
+- New `scripts/run_fiber_pipeline`, installed on PATH by pip (setup.cfg
+  `[options] scripts`). Stage dispatcher: `run_fiber_pipeline [all | <stage> ...]`
+  where a stage is a tool name (`fiber-refine`, `fiber-cpos`, ...). Requested
+  stages always run in canonical order; unknown names are rejected before any work.
+- Config is env-overridable (the installed script is not hand-edited):
+  `FK_DIR` (default `$PWD`), `FK_SESS` (default basename), `FK_ELEC` (required),
+  plus per-knob `FK_*` for the algorithm/warp thresholds.
+- Encodes the verified call conventions (realign in-place; cpos after refine on the
+  refine clu, from the raw spk) and wires the optional warp knobs (0083-0086),
+  passing them only when set so it still runs on a tree without those patches.
+
 ## [0.25.0] — residual split integrated into fiber-refine (opt-out)
 - `refine()` runs a final residual-split cleanup by default (`fiber_split`): each
   output fiber is split on the residual to its shared d(r) when that lowers
