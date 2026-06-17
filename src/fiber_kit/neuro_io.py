@@ -379,6 +379,32 @@ def write_spk(base, elec, waves, variant="", tag=""):
 
 
 # ── group-wide spike-count edit (dedup propagation) ──────────────────────────
+# Stage tokens (the dotted segments AFTER the electrode) that mark a file as NOT a
+# live per-spike artefact and so must never be edited by a dedup propagation:
+#   * a backup snapshot ('..._bkp')
+#   * a byte-split fragment ('.part.aa', ...)
+#   * a sidecar with its own row semantics ('.units.npz', ...)
+# Dated snapshots ('.06.14.2026.12.35') are caught separately by the all-digit test:
+# a frozen backup of the pre-dedup state has exactly n_orig rows, so the row-count
+# guard alone CANNOT distinguish it from a live file -- the name must.
+_PERSPIKE_SIDECAR = {"npz", "npy", "gz", "zip", "bak", "tmp", "swp", "units"}
+
+
+def _is_live_perspike(stage):
+    """True iff the stage tokens (everything after the electrode) name a live per-spike
+    file -- not a dated/explicit backup, byte-split fragment, or non-binary sidecar."""
+    for tok in stage:
+        if tok.isdigit():                 # dated-snapshot component, e.g. 06.14.2026.12.35
+            return False
+        if tok == "part":                 # byte-split fragment (.part.aa)
+            return False
+        if tok.endswith("bkp"):           # explicit backup (refine_linked_bkp)
+            return False
+        if tok in _PERSPIKE_SIDECAR:      # .units.npz and friends
+            return False
+    return True
+
+
 def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                      types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True):
     """Subset EVERY per-spike file of one spike group to `keep`, in place, so the
@@ -398,12 +424,22 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     bname = os.path.basename(base)
     rewritten = []
     skipped = []
+    excluded = 0
     seen = set()
     for t in types:
         for path in sorted(glob.glob(f"{glob.escape(base)}.{t}.*")):
-            tail = os.path.basename(path)[len(bname) + 1:].split(".")  # <type>[.<variant>].<elec>[.<tag>]
-            if not tail or tail[0] != t or elec not in tail[1:]:
-                continue                                  # group field must match exactly
+            tail = os.path.basename(path)[len(bname) + 1:].split(".")  # <type>[.<variant>].<elec>[.<stage>]
+            if not tail or tail[0] != t:
+                continue
+            # the electrode is the first all-digit token (variants are non-numeric);
+            # everything after it is the stage.  Require an EXACT group match so e.g.
+            # group 5 never picks up group 15, and a stray '5' inside a stage tag.
+            ei = next((i for i in range(1, len(tail)) if tail[i].isdigit()), None)
+            if ei is None or tail[ei] != elec:
+                continue
+            if not _is_live_perspike(tail[ei + 1:]):
+                excluded += 1                          # backup / fragment / sidecar -- never touch
+                continue
             if path in seen:
                 continue
             seen.add(path)
@@ -437,6 +473,8 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                   + ", ".join(os.path.basename(p) for p in rewritten))
         for p, c in skipped:
             print(f"dedup: SKIPPED {os.path.basename(p)} (rows={c}, expected {n_orig})")
+        if excluded:
+            print(f"dedup: left {excluded} backup/fragment/sidecar file(s) untouched")
     return rewritten, skipped
 
 
