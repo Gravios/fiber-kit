@@ -383,8 +383,17 @@ def _drop_tiny(lab, mg):
 
 
 # ── per-iteration statistics ─────────────────────────────────────────────────
+def _amp_profile_corr(ta, tb):
+    """Cross-channel correlation of two templates' per-channel peak-to-peak AMPLITUDE
+    profiles -- the magnitude term of the Omlor-Giese anechoic model (eq. 10)."""
+    a = ta.max(0) - ta.min(0); b = tb.max(0) - tb.min(0)
+    if a.std() < 1e-9 or b.std() < 1e-9:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
-               mode="normalized", warp_thr=None, verbose=True):
+               mode="normalized", warp_thr=None, warp_recall=None, amp_thr=0.7, verbose=True):
     """Contamination-gated agglomerative merge of an over-split sort back down to
     a reasonable count.  Greedily merges the most-similar cluster pair (by median
     waveform: shape-only when mode='normalized' -> merges energy levels of one
@@ -399,9 +408,17 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
         return lab.copy()
     groups = {c: np.flatnonzero(lab == c) for c in u}
     med = {c: _med(groups[c], waves) for c in u}
-    gd = {c: fg.group_delay_profile(med[c]) for c in u} if warp_thr is not None else None
-    def _warp_ok(a, b):   # spatio-temporal WARP coherence on the (clean) median templates
+    gd = ({c: fg.group_delay_profile(med[c]) for c in u}
+          if (warp_thr is not None or warp_recall is not None) else None)
+    def _warp_ok(a, b):   # spatio-temporal WARP coherence gate on the (clean) median templates
         return warp_thr is None or fg.warp_correlation(gd[a], gd[b]) >= warp_thr
+    def _admit(a, b, sim):
+        if sim >= min_sim and _warp_ok(a, b):
+            return True                      # cosine-selected merge (energy levels), warp-gated
+        if (warp_recall is not None and fg.warp_correlation(gd[a], gd[b]) >= warp_recall
+                and _amp_profile_corr(med[a], med[b]) >= amp_thr):
+            return True                      # DRIFT-FRAGMENT recall: low cosine but coherent warp + amplitude
+        return False
     sizes = {c: len(groups[c]) for c in u}
     active = set(u)
     nextid = max(u) + 1
@@ -410,7 +427,7 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
     for i in range(len(u)):
         for j in range(i + 1, len(u)):
             s = simfn(med[u[i]], med[u[j]])
-            if s >= min_sim and _warp_ok(u[i], u[j]):
+            if _admit(u[i], u[j], s):
                 heapq.heappush(heap, (-s, u[i], u[j]))
     nmerge = nrej = 0
     while heap:
@@ -432,14 +449,14 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
             if c == nid:
                 continue
             s = simfn(med[nid], med[c])
-            if s >= min_sim and _warp_ok(nid, c):
+            if _admit(nid, c, s):
                 heapq.heappush(heap, (-s, nid, c))
     out = np.full(len(lab), -1, int)
     for k, c in enumerate(sorted(active)):
         out[groups[c]] = k
     if verbose:
         print(f"merge-back: {len(u)} -> {len(active)} clusters "
-              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim}, warp_thr={warp_thr})")
+              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim}, warp_thr={warp_thr}, warp_recall={warp_recall})")
     return out
 
 
@@ -580,6 +597,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            knn_dims=16, fold_thr=0.9, fold_off_thr=None, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92, merge_warp_thr=None,
+           merge_warp_recall=None, merge_amp_thr=0.7,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            dip_realign=True, rkk_realign=True, rkk_iters=2,
@@ -651,7 +669,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                     break
         if merge_back_enable:
             lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
-                             min_sim=merge_min_sim, mode=merge_mode, warp_thr=merge_warp_thr, verbose=verbose)
+                             min_sim=merge_min_sim, mode=merge_mode, warp_thr=merge_warp_thr,
+                             warp_recall=merge_warp_recall, amp_thr=merge_amp_thr, verbose=verbose)
             st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -930,6 +949,15 @@ def main():
                          "neuron ~0.99, different ~0; it morphs continuously with drift, adjacent-bin change "
                          "~0.004), so ~0.9 is safe -- lower --merge-min-sim and set this to recover the last "
                          "merges without false ones. None (default) = off.")
+    ap.add_argument("--merge-warp-recall", type=float, default=None,
+                    help="DRIFT-FRAGMENT recall path for merge-back: also admit a merge when the median-template "
+                         "group-delay (WARP) correlation >= this AND the per-channel amplitude-profile correlation "
+                         ">= --merge-amp-thr, EVEN IF cosine is low. Drift changes waveform shape (dropping cosine) "
+                         "but preserves the per-channel delay+amplitude structure, so this recovers same-neuron "
+                         "fragments cosine misses (g5 over-clusters: warp>=0.9 & amp>=0.7 recovered 323/395 such "
+                         "merges at >=0.976 precision). Refractory budget remains the final gate. None (default) = off; ~0.9.")
+    ap.add_argument("--merge-amp-thr", type=float, default=0.7,
+                    help="amplitude-profile correlation floor for the --merge-warp-recall path (Omlor-Giese magnitude term)")
     ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
                     help="normalized = merge energy levels (neuron count); amplitude = keep them")
     ap.add_argument("--split-min-corr", type=float, default=0.93,
@@ -1092,6 +1120,7 @@ def main():
                          fold_thr=a.fold_thr, fold_off_thr=a.fold_off_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
                          conv_patience=a.converge_patience, reseed=a.reseed,
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget, merge_warp_thr=a.merge_warp_thr,
+                         merge_warp_recall=a.merge_warp_recall, merge_amp_thr=a.merge_amp_thr,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split)
         glab, nglob, tracks, bundles = refine_chunked(
