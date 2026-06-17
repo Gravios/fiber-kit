@@ -378,6 +378,68 @@ def write_spk(base, elec, waves, variant="", tag=""):
     return write_spk_file(session_path(base, "spk", elec, variant=variant, tag=tag), waves)
 
 
+# ── group-wide spike-count edit (dedup propagation) ──────────────────────────
+def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
+                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True):
+    """Subset EVERY per-spike file of one spike group to `keep`, in place, so the
+    .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a
+    dedup -- across all variants (standard|stderiv|...) and post-group stages.
+
+    A file is rewritten only if its current row count equals `n_orig` (the pre-dedup
+    spike count); files at any other count are left untouched and reported (already
+    deduped, or unrelated/stale geometry).  `keep` is a boolean mask or index array
+    over the original n_orig spikes.  Returns (rewritten_paths, skipped:[(path,rows)]).
+    """
+    import glob
+    import os
+    keep = np.asarray(keep)
+    nkeep = int(keep.sum()) if keep.dtype == bool else len(keep)
+    elec = str(elec)
+    bname = os.path.basename(base)
+    rewritten = []
+    skipped = []
+    seen = set()
+    for t in types:
+        for path in sorted(glob.glob(f"{glob.escape(base)}.{t}.*")):
+            tail = os.path.basename(path)[len(bname) + 1:].split(".")  # <type>[.<variant>].<elec>[.<tag>]
+            if not tail or tail[0] != t or elec not in tail[1:]:
+                continue                                  # group field must match exactly
+            if path in seen:
+                continue
+            seen.add(path)
+            try:
+                if t == "res":
+                    v = read_res_file(path)
+                    if len(v) != n_orig:
+                        skipped.append((path, len(v))); continue
+                    write_res_file(path, v[keep])
+                elif t == "clu":
+                    nclu, ids = read_clu_file(path)
+                    if len(ids) != n_orig:
+                        skipped.append((path, len(ids))); continue
+                    write_clu_file(path, ids[keep], n_clusters=nclu)
+                elif t in ("spk", "spkD"):
+                    w = open_spk_file(path, nsamp, nchan)
+                    if w.shape[0] != n_orig:
+                        skipped.append((path, w.shape[0])); continue
+                    write_spk_file(path, np.asarray(w[keep]))   # materialise the copy before truncating
+                elif t in ("fet", "fetD"):
+                    f = read_fet_file(path)
+                    if not f.ok or f.n_spikes != n_orig:
+                        skipped.append((path, f.n_spikes if f.ok else "unreadable")); continue
+                    write_fet_file(path, f.values[keep])
+                rewritten.append(path)
+            except Exception as e:  # noqa: BLE001 -- one bad file must not abort the sweep
+                skipped.append((path, f"error: {e}"))
+    if verbose:
+        if rewritten:
+            print(f"dedup: rewrote {len(rewritten)} group file(s) to {nkeep} spikes: "
+                  + ", ".join(os.path.basename(p) for p in rewritten))
+        for p, c in skipped:
+            print(f"dedup: SKIPPED {os.path.basename(p)} (rows={c}, expected {n_orig})")
+    return rewritten, skipped
+
+
 # ── .dat / .fil / .lfp (interleaved int16) ───────────────────────────────────
 def open_signal(path, nchan, mode="r"):
     """Memmap an interleaved int16 wideband/LFP file as (nSamples, nchan).
