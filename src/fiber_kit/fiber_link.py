@@ -33,6 +33,42 @@ try:
 except ImportError:
     import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy
 
+try:
+    from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
+except ImportError:
+    from fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
+
+# cfiber shape co-gate: affine-invariant (rotation+scale+translation) Fourier descriptors of each
+# unit template's complex channel-loop.  Drift-invariant by construction (no mutual_center needed),
+# so it complements the cosine gate where amplitude reweighting across chunks hurts cosine.  Used as
+# an OPTIONAL co-gate (not a replacement): a candidate must pass cosine AND, if enabled, cfiber.
+_CFIBER_MODES = (2, 3, 4, -1, -2, -3)
+_CFIBER_PRE, _CFIBER_POST = 10, 12
+
+
+def _cfiber_win(nsamp, peak):
+    p = int(peak) if peak is not None else nsamp // 2
+    return slice(max(0, p - _CFIBER_PRE), min(nsamp, p + _CFIBER_POST))
+
+
+def _cfiber_shapes(templates, win):
+    """templates (M,nsamp,nchan) or (nsamp,nchan) -> (M,ndesc) affine-invariant shape descriptors."""
+    t = np.asarray(templates, float)
+    if t.ndim == 2:
+        t = t[None]
+    Z = _cf_loop(t, _cf_angles(t.shape[2]), win)
+    S, _, _, _ = _cf_shape(Z, _CFIBER_MODES)
+    return np.asarray(S, float)
+
+
+def _cfiber_peak(templates):
+    """Window-centre sample: dominant-channel trough of the mean template (units are mutual_centred,
+    so this is the common trough sample)."""
+    m = np.asarray(templates, float)
+    m = m.mean(0) if m.ndim == 3 else m
+    dom = int(np.argmax(m.max(0) - m.min(0)))
+    return int(np.argmin(m[:, dom]))
+
 
 def masked_cos(ta, tb, mask):
     a = ta[mask].ravel(); b = tb[mask].ravel()
@@ -67,7 +103,8 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.85,
-                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1):
+                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
+                  cfiber_thr=None, cfiber_win=None):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -85,6 +122,7 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.8
     if offsets is None:
         offsets = np.array([fg.interchannel_offsets(t) for t in tc])
     gd = [fg.group_delay_profile(t) for t in tmpl] if warp_thr is not None else None
+    Scf = _cfiber_shapes(np.asarray(tmpl), cfiber_win) if cfiber_thr is not None else None
     sy_ = y0.std() + 1e-9; sx = x0.std() + 1e-9; sz = z0.std() + 1e-9; sa = logA.std() + 1e-9
     links = []; linked_fwd = set()
     for g in range(1, gap + 1):
@@ -102,7 +140,8 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.8
                 if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
                     if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
-                            (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr):
+                            (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr) and \
+                            (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr):
                         links.append((int(ai[v]), int(bi[u]))); linked_fwd.add(int(ai[v]))
     return links
 
@@ -149,7 +188,7 @@ def build_bundles(n_frag, links):
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
-                 chunk_exclusive=True):
+                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -176,9 +215,32 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
     else:
         D = estimate_drift(y0[idx], logA[idx], frag["n"][idx].astype(float), chunk[idx], chunks)
     offs = frag["offset"][idx] if "offset" in frag else None
+    # cfiber shape co-gate: compute affine-invariant descriptors over the linkable templates; self-
+    # calibrate the veto threshold at LINK TIME from the overlap-backbone same-unit pairs (the cross-
+    # chunk analog of intrachunk's within-fragment split-half null) -- NOT inherited from intrachunk,
+    # whose null is per-chunk fragment-level.  Descriptors are computed fresh from the merged-unit
+    # templates here, so they reflect the post-intrachunk clusters (no carried-forward descriptor).
+    cfw = None
+    if cfiber_thr is not None or cfiber_q is not None:
+        cfw = _cfiber_win(frag["template"].shape[1], _cfiber_peak(frag["template"][idx]))
+        if cfiber_thr is None:
+            if seed_links:
+                Sall = _cfiber_shapes(np.asarray(frag["template"]), cfw)
+                d = [float(np.linalg.norm(Sall[int(i)] - Sall[int(j)])) for i, j in seed_links]
+                if len(d) >= 5:
+                    cfiber_thr = float(np.quantile(d, cfiber_q))
+                    print(f"[link] cfiber co-gate self-calibrated: thr={cfiber_thr:.3f} "
+                          f"(q={cfiber_q} of {len(d)} backbone same-unit pairs)")
+                else:
+                    print(f"[link] cfiber co-gate requested but only {len(d)} backbone pairs "
+                          f"(<5) -- disabled; pass --cfiber-thr to force a fixed threshold")
+            else:
+                print("[link] cfiber co-gate needs backbone same-unit pairs to self-calibrate "
+                      "(--from-units) or an explicit --cfiber-thr -- disabled")
     raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                         chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                        off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap)
+                        off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
+                        cfiber_thr=cfiber_thr, cfiber_win=cfw)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
     if seed_links is not None:
@@ -281,6 +343,12 @@ def main():
     ap.add_argument("--traj-ext-min", type=float, default=0.0,
                     help="minutes an attach may extend beyond a bundle's member time span "
                          "(0=interpolation only; ~chunk length allows extrapolation-based extension)")
+    ap.add_argument("--cfiber-thr", type=float, default=None,
+                    help="cfiber shape co-gate: veto a candidate whose affine-invariant cfiber shape "
+                         "distance exceeds this (drift-invariant complement to the cosine gate). Fixed value.")
+    ap.add_argument("--cfiber-q", type=float, default=None,
+                    help="enable the cfiber co-gate with the threshold self-calibrated at link time to this "
+                         "quantile of the overlap-backbone same-unit shape distances (e.g. 0.90; needs --from-units).")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_linked)")
     a = ap.parse_args()
 
@@ -300,7 +368,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -313,7 +381,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)

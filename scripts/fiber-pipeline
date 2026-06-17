@@ -55,6 +55,20 @@ MERGE_WARP_THR="${FK_MERGE_WARP_THR:-}"            # 0084 precision GATE on cosi
 LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
 LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles vs the 0.85 default
 
+# ===================== cfiber shape gate (affine-invariant) ============
+# cfiber = rotation+scale+translation-invariant Fourier descriptor of each unit's complex channel-
+# loop.  Drift-invariant by construction, so it complements/strengthens the (mutual-centre-dependent)
+# cosine shape term.  Real-data (g5 180-210, split-half): cfiber AUC ~0.955 vs cosine ~0.964 overall,
+# but marginally BETTER on the hard look-alike subset (cosine>0.85: 0.867 vs 0.861) -- the regime that
+# matters; its advantage is expected to widen under real cross-chunk drift (untested here).
+#   * intrachunk: cfiber REPLACES the cosine shape term (gate='cfiber'); threshold self-calibrates from
+#     the per-fragment split-half null at INTRA_CFIBER_Q.  Set FK_INTRA_GATE=cosine to revert.
+#   * link: cfiber is an additional CO-GATE (cosine AND cfiber); threshold self-calibrates at link time
+#     from the overlap-backbone same-unit shape distances at LINK_CFIBER_Q.  Empty disables it.
+INTRA_GATE="${FK_INTRA_GATE:-cfiber}"
+INTRA_CFIBER_Q="${FK_INTRA_CFIBER_Q:-0.90}"
+LINK_CFIBER_Q="${FK_LINK_CFIBER_Q:-0.90}"          # empty = link cfiber co-gate off
+
 # ===================== over-split tuning (small-cluster regime) ========
 # Goal: more, CLEANER clusters that separate subtle co-located pairs (footprint-ratio /
 # sub-sample timing), for the over-split -> fiber-intrachunk re-merge strategy.  These lower
@@ -128,6 +142,7 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
         --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
+        --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
         --refrac-ceiling "$REFRAC_CEILING" \
         --sig-cap 8000 --emit-units \
         --out-stage refine_intrachunk
@@ -138,6 +153,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
     local units="$SESS.clu.stderiv.$ELEC.refine_intrachunk.units.npz"
     local warp_args=()
     [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
+    [ -n "$LINK_CFIBER_Q" ] && warp_args+=(--cfiber-q "$LINK_CFIBER_Q")
     fiber-link "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
