@@ -4,19 +4,22 @@
 # Installed on PATH by `pip install fiber-kit` (setup.cfg [options] scripts).
 #
 # USAGE:
-#   run_fiber_pipeline                       # whole pipeline, in canonical order
-#   run_fiber_pipeline all                   # same
-#   run_fiber_pipeline fiber-refine          # one stage
-#   run_fiber_pipeline fiber-cpos fiber-link # several (always run in canonical order)
-#   run_fiber_pipeline -l | --list           # list stages
+#   fiber-pipeline <elec>                        # whole pipeline, in canonical order
+#   fiber-pipeline <elec> all                    # same
+#   fiber-pipeline <elec> fiber-refine           # one stage
+#   fiber-pipeline <elec> fiber-cpos fiber-link  # several (always run in canonical order)
+#   fiber-pipeline -l | --list                   # list stages
+#
+# The electrode group is the FIRST positional argument.  (FK_ELEC is still honoured
+# as a fallback when no leading group is given, for older invocations.)
 #
 # CONFIG (env-overridable; the installed script is not meant to be hand-edited):
 #   FK_DIR    session directory                 (default: current directory)
 #   FK_SESS   session name                      (default: basename of FK_DIR)
-#   FK_ELEC   electrode group number            (REQUIRED to run a stage)
+#   FK_ELEC   electrode group fallback          (used only if no leading <elec> arg)
 #   plus the algorithm/warp knobs below (each FK_*-overridable).
-# e.g.:  FK_ELEC=5 run_fiber_pipeline fiber-refine
-#        cd /data/.../sirotaA-jg-000005-20120312 && FK_ELEC=5 run_fiber_pipeline
+# e.g.:  fiber-pipeline 5 fiber-refine
+#        cd /data/.../sirotaA-jg-000005-20120312 && fiber-pipeline 5
 #
 # Each stage reads the previous stage's output, so a single-stage run assumes the
 # upstream artefacts already exist.  Canonical order:
@@ -124,9 +127,9 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
 
 # ----------------------------- dispatcher -----------------------------------
 usage() {
-    echo "usage: $(basename "$0") [all | <stage> ...]"
+    echo "usage: $(basename "$0") <elec> [all | <stage> ...]"
     echo "stages (canonical order): ${STAGES[*]}"
-    echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename), FK_ELEC (required)"
+    echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
 }
 
 run_stage() {
@@ -143,12 +146,24 @@ run_stage() {
 
 main() {
     # help/list need no config
-    case "${1:-all}" in
+    case "${1:-}" in
         -h|--help) usage; exit 0 ;;
         -l|--list) printf '%s\n' "${STAGES[@]}"; exit 0 ;;
     esac
 
-    # build + validate the requested set (BEFORE any cd, so bad names report cleanly)
+    # electrode group: first positional if numeric, else FK_ELEC fallback
+    local ELEC
+    if [[ "${1:-}" =~ ^[0-9]+$ ]]; then
+        ELEC="$1"; shift
+    else
+        ELEC="${FK_ELEC:-}"
+    fi
+    [ -n "$ELEC" ] || {
+        echo "error: electrode group required as the first argument (e.g. '$(basename "$0") 5'), or set FK_ELEC" >&2
+        usage >&2; exit 2
+    }
+
+    # build + validate the requested stage set (BEFORE any cd, so bad names report cleanly)
     declare -A want=()
     if [ "$#" -eq 0 ] || [ "${1:-}" = "all" ]; then
         for s in "${STAGES[@]}"; do want[$s]=1; done
@@ -160,12 +175,10 @@ main() {
         done
     fi
 
-    # resolve config
-    local DIR SESS ELEC
+    # resolve session config
+    local DIR SESS
     DIR="${FK_DIR:-$PWD}"
     SESS="${FK_SESS:-$(basename "$DIR")}"
-    ELEC="${FK_ELEC:-}"
-    [ -n "$ELEC" ] || { echo "error: set FK_ELEC=<group> (electrode group number)" >&2; exit 2; }
     [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
     cd "$DIR"
 
