@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# ============================================================================
+# fiber-kit pipeline driver, one electrode group, stage-dispatched.
+# Installed on PATH by `pip install fiber-kit` (setup.cfg [options] scripts).
+#
+# USAGE:
+#   run_fiber_pipeline                       # whole pipeline, in canonical order
+#   run_fiber_pipeline all                   # same
+#   run_fiber_pipeline fiber-refine          # one stage
+#   run_fiber_pipeline fiber-cpos fiber-link # several (always run in canonical order)
+#   run_fiber_pipeline -l | --list           # list stages
+#
+# CONFIG (env-overridable; the installed script is not meant to be hand-edited):
+#   FK_DIR    session directory                 (default: current directory)
+#   FK_SESS   session name                      (default: basename of FK_DIR)
+#   FK_ELEC   electrode group number            (REQUIRED to run a stage)
+#   plus the algorithm/warp knobs below (each FK_*-overridable).
+# e.g.:  FK_ELEC=5 run_fiber_pipeline fiber-refine
+#        cd /data/.../sirotaA-jg-000005-20120312 && FK_ELEC=5 run_fiber_pipeline
+#
+# Each stage reads the previous stage's output, so a single-stage run assumes the
+# upstream artefacts already exist.  Canonical order:
+#   fiber-session -> fiber-realign -> fiber-refine -> fiber-cpos -> fiber-intrachunk -> fiber-link
+#
+# Correctness notes baked in (do not "fix"):
+#   * fiber-session uses --fine-method for the algorithm (--method is the feature tag).
+#   * fiber-realign runs as an IN-PLACE commit: NO --out-variant (it reads the INPUT .spk
+#     from that variant, so --out-variant realign would seek .spk.realign.N and fail).
+#   * fiber-cpos localizes from the RAW/standard .spk, never .spkD, and runs AFTER refine
+#     on the refine clu so positions key to the clu the merge tools read.
+#
+# Warp knobs (group-delay / Omlor-Giese) require patches 0083-0086; they are passed only
+# when non-empty, so the script still runs on a tree without them.  Empty = disabled.
+# ============================================================================
+set -euo pipefail
+
+# ===================== algorithm knobs (all env-overridable) ===========
+CFIBER_Q="${FK_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
+FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
+SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
+REFRAC_CEILING="${FK_REFRAC_CEILING:-1.0}" # 0080 fiber-intrachunk: reject merge if combined 2ms-ISI viol > this %
+
+# ===================== warp knobs 0083-0086 (empty = off) ==============
+# 0086 fiber-refine recall: merge drift fragments cosine misses, when median-template group-delay
+# (warp) AND amplitude-profile both agree.  g5: warp>=0.9 & amp>=0.7 recovered 323/395 such merges
+# at >=0.976 precision, refractory-clean.  Aggressive -- calibrate vs fuller curation before production.
+MERGE_WARP_RECALL="${FK_MERGE_WARP_RECALL:-0.9}"   # empty disables the recall path
+MERGE_AMP_THR="${FK_MERGE_AMP_THR:-0.7}"           # amplitude-profile correlation floor for the recall path
+MERGE_WARP_THR="${FK_MERGE_WARP_THR:-}"            # 0084 precision GATE on cosine-selected merges (empty=off)
+# 0085 fiber-link warp co-gate: on g5 did NOT help (precision already saturated; per-chunk templates
+# too noisy) -- off by default.  The linking win was relaxing the cosine prefilter (LINK_COS_THR).
+LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
+LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles vs the 0.85 default
+
+# ============================================================================
+STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
+
+# ------------------------------- stages -------------------------------------
+fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
+    echo "== [1/6] fiber-session =="
+    fiber-session "$SESS" "$ELEC" \
+        --method stderiv --fine-method rkk \
+        --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
+        --cfiber-gate --cfiber-q "$CFIBER_Q" \
+        --dipsplit
+}
+
+fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
+    echo "== [2/6] fiber-realign (in-place commit) =="
+    fiber-realign "$SESS" "$ELEC" \
+        --clu "$SESS.clu.stderiv.$ELEC" \
+        --align-method klusters --reextract --refeaturize \
+        --variants standard,stderiv
+}
+
+fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
+    echo "== [3/6] fiber-refine =="
+    local warp_args=()
+    [ -n "$MERGE_WARP_RECALL" ] && warp_args+=(--merge-warp-recall "$MERGE_WARP_RECALL" --merge-amp-thr "$MERGE_AMP_THR")
+    [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
+    fiber-refine "$SESS" "$ELEC" \
+        --in-clu "$SESS.clu.stderiv.$ELEC" \
+        --out-method stderiv --out-variant refine \
+        --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
+        --fold-off-thr "$FOLD_OFF_THR" \
+        --chunk-minutes 12 \
+        "${warp_args[@]}"
+}
+
+fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk
+    echo "== [4/6] fiber-cpos (on refine clu) =="
+    fiber-cpos "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage refine \
+        --spk-method standard \
+        --out-method stderiv --out-stage refine
+}
+
+fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
+    echo "== [5/6] fiber-intrachunk =="
+    fiber-intrachunk "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage refine \
+        --cpos-method stderiv --cpos-stage refine \
+        --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
+        --refrac-ceiling "$REFRAC_CEILING" \
+        --sig-cap 8000 --emit-units \
+        --out-stage refine_intrachunk
+}
+
+fiber_link() {        # 6. cross-chunk link -> .refine_linked
+    echo "== [6/6] fiber-link =="
+    local units="$SESS.clu.stderiv.$ELEC.refine_intrachunk.units.npz"
+    local warp_args=()
+    [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
+    fiber-link "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage refine \
+        --cpos-method stderiv --cpos-stage refine \
+        --from-units "$units" \
+        --cos-thr "$LINK_COS_THR" --pos-thr 1.5 --off-thr 1.0 --max-gap 2 \
+        --refine-trajectory \
+        "${warp_args[@]}" \
+        --out-stage refine_linked
+    echo "[done] linked clu: $SESS.clu.stderiv.$ELEC.refine_linked"
+}
+
+# ----------------------------- dispatcher -----------------------------------
+usage() {
+    echo "usage: $(basename "$0") [all | <stage> ...]"
+    echo "stages (canonical order): ${STAGES[*]}"
+    echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename), FK_ELEC (required)"
+}
+
+run_stage() {
+    case "$1" in
+        fiber-session)    fiber_session    ;;
+        fiber-realign)    fiber_realign    ;;
+        fiber-refine)     fiber_refine     ;;
+        fiber-cpos)       fiber_cpos       ;;
+        fiber-intrachunk) fiber_intrachunk ;;
+        fiber-link)       fiber_link       ;;
+        *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
+    esac
+}
+
+main() {
+    # help/list need no config
+    case "${1:-all}" in
+        -h|--help) usage; exit 0 ;;
+        -l|--list) printf '%s\n' "${STAGES[@]}"; exit 0 ;;
+    esac
+
+    # build + validate the requested set (BEFORE any cd, so bad names report cleanly)
+    declare -A want=()
+    if [ "$#" -eq 0 ] || [ "${1:-}" = "all" ]; then
+        for s in "${STAGES[@]}"; do want[$s]=1; done
+    else
+        for a in "$@"; do
+            local ok=0; for s in "${STAGES[@]}"; do [ "$a" = "$s" ] && ok=1; done
+            [ "$ok" = 1 ] || { echo "unknown stage: $a" >&2; usage >&2; exit 2; }
+            want[$a]=1
+        done
+    fi
+
+    # resolve config
+    local DIR SESS ELEC
+    DIR="${FK_DIR:-$PWD}"
+    SESS="${FK_SESS:-$(basename "$DIR")}"
+    ELEC="${FK_ELEC:-}"
+    [ -n "$ELEC" ] || { echo "error: set FK_ELEC=<group> (electrode group number)" >&2; exit 2; }
+    [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
+    cd "$DIR"
+
+    # run in canonical order, regardless of the order requested
+    for s in "${STAGES[@]}"; do
+        if [ -n "${want[$s]:-}" ]; then run_stage "$s"; fi
+    done
+}
+
+main "$@"
