@@ -55,6 +55,26 @@ MERGE_WARP_THR="${FK_MERGE_WARP_THR:-}"            # 0084 precision GATE on cosi
 LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
 LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles vs the 0.85 default
 
+# ===================== over-split tuning (small-cluster regime) ========
+# Goal: more, CLEANER clusters that separate subtle co-located pairs (footprint-ratio /
+# sub-sample timing), for the over-split -> fiber-intrachunk re-merge strategy.  These lower
+# the SIZE gates and sharpen alignment/features while leaving the STATISTICAL accept gates
+# (dip test, BIC) largely intact -- so splits track real structure, not noise.
+# STARTING POINTS from code-reading + reasoning, NOT a validated sweep: check resulting cluster
+# count / purity and back off if over-fragmenting (raise REFINE_LARGE / DIP_MIN, lower DIP_ALPHA).
+REFINE_LARGE="${FK_REFINE_LARGE:-150}"             # refine splits only clusters >= this (stock 800 skips
+                                                   #   every 60-700-spike unit -> subtle pairs never split)
+REFINE_MIN_GROUP="${FK_REFINE_MIN_GROUP:-30}"      # min spikes per split piece in refine (stock 40)
+REFINE_MERGE_MIN_SIM="${FK_REFINE_MERGE_MIN_SIM:-0.96}" # slacker merge-back (stock 0.92): keep over-splits
+                                                   #   for fiber-intrachunk to adjudicate locally
+DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
+DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
+                                                   #   statistical (>0.05 starts splitting on noise)
+DIP_MIN="${FK_DIP_MIN:-30}"                         # session min cluster size to bisect (stock 40)
+INCLUSION_K="${FK_INCLUSION_K:-2.5}"                # session per-fiber radius median+k*MAD (stock 3.0): purer cores
+FEATURE_ALIGN="${FK_FEATURE_ALIGN:-xcorr}"          # sub-sample channel-summed align before featurize: the #1
+                                                   #   lever for subtle shapes (misalignment blurs them together)
+
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
 
@@ -65,7 +85,8 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
         --method stderiv --fine-method rkk \
         --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
         --cfiber-gate --cfiber-q "$CFIBER_Q" \
-        --dipsplit
+        --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
+        --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
@@ -84,6 +105,9 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     fiber-refine "$SESS" "$ELEC" \
         --in-clu "$SESS.clu.stderiv.$ELEC" \
         --out-method stderiv --out-stage refine \
+        --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" \
+        --nudge-split --feature-align "$FEATURE_ALIGN" \
+        --merge-min-sim "$REFINE_MERGE_MIN_SIM" \
         --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes 12 \
