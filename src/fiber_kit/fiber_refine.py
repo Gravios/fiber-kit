@@ -914,9 +914,11 @@ def main():
     ap.add_argument("--out-method", default="stderiv",
                     help="feature space written BEFORE the group (standard|stderiv|...); "
                          "refine operates in stderiv space, so default stderiv")
-    ap.add_argument("--out-variant", "--out-stage", dest="out_variant", default="refine",
+    ap.add_argument("--out-stage", dest="out_stage", default="refine",
                     help="fiber STAGE written AFTER the group, e.g. 'refine' -> "
-                         "<base>.clu.<out-method>.<group>.refine  ('' for none)")
+                         "<base>.clu.<out-method>.<group>.refine  ('' for none). "
+                         "(was --out-variant; renamed so --out-variant is free for the "
+                         "feature variant, as in fiber-realign)")
     ap.add_argument("--refr-floor", type=int, default=None,
                     help="imposed detection refractory (samples); default = from yaml")
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
@@ -1126,8 +1128,8 @@ def main():
                                max_gap=a.continuity_max_gap),
             verbose=True)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
-        clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_variant)
-        res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_variant)
+        clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
+        res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)
         print(f"wrote {clu_path}\n      {res_path}")
         if tracks is not None:
             gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
@@ -1163,8 +1165,8 @@ def main():
                         snaps_out=snaps, verbose=True)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
-    clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_variant)
-    res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_variant)
+    clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
+    res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)
     tsv = f"{base}.refine.{elec}.tsv"
     with open(tsv, "w") as f:
         f.write("iter\tnfib\tmedBand\tpct<2\tswBand\tswDup\tenCV\tnbig\trkk\tdip\tiso\tfold\tkept\n")
