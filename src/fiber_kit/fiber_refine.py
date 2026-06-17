@@ -1084,28 +1084,20 @@ def main():
           f"{'input sort '+str(len(np.unique(init[init>=0])))+' clusters' if init is not None else 'no input .clu -> fresh fine sort'}")
 
     if not a.no_dedup and floor > 0:
+        n_orig = len(res)
         ptp = np.ptp(waves.reshape(len(waves), -1), axis=1)
         keep = dedup_spikes(res, ptp, floor)
-        n_dup = len(res) - len(keep)
+        n_dup = n_orig - len(keep)
         n_exact = int((np.diff(np.sort(res)) == 0).sum())
         res = res[keep]; waves = waves[keep]
         if init is not None:
             init = init[keep]
-        print(f"dedup: kept {len(keep)} of {len(keep)+n_dup} "
-              f"({n_dup} removed; {n_exact} exact ISI=0)")
-        if n_dup > 0:                                   # keep .spk/.fet row-aligned with the deduped .res/.clu
-            nio.write_spk(base, elec, spk[keep], variant=a.out_method, tag=a.out_variant)
-            try:
-                fet = nio.read_fet(base, elec)
-            except FileNotFoundError:
-                fet = None
-            if fet is not None and fet.ok and fet.n_spikes == len(keep) + n_dup:
-                nio.write_fet(base, elec, fet.values[keep], variant=a.out_method, tag=a.out_variant)
-                print(f"dedup: rewrote .spk + .fet ({a.out_variant or 'canonical'}) to {len(keep)} spikes")
-            else:
-                have = fet.n_spikes if (fet is not None and fet.ok) else "none"
-                print(f"dedup: rewrote .spk ({a.out_variant or 'canonical'}); .fet NOT updated "
-                      f"(rows={have}, expected {len(keep)+n_dup}) -- update it before loading features")
+        print(f"dedup: kept {len(keep)} of {n_orig} ({n_dup} removed; {n_exact} exact ISI=0)")
+        if n_dup > 0:
+            # a dedup removes physical spikes from the GROUP, so every per-spike file
+            # (res/clu/spk/spkD/fet/fetD, across all variants and stages) must drop the
+            # same rows -- otherwise any later load hits a spike-count mismatch.
+            nio.apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan)
 
     if a.chunk_minutes and a.chunk_minutes > 0:
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
