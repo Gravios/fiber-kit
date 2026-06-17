@@ -244,6 +244,30 @@ def interchannel_offsets(template, amp_frac=0.3, method="trough", up=8, maxlag=N
         off = (k - L // 2) / float(up)
         off[p2p < amp_frac * p2p[dom]] = np.nan
         return off - off[dom]
+    if method == "xcorr_fp":
+        # CORRECT Fourier upsampling.  method "xcorr" zero-pads in the TIME domain (rfft(x, n=L) on an
+        # nt-length signal merely appends zeros -> no interpolation), so its peak sits at the original-
+        # sample lag and the /up shrinks every offset by a factor of `up` (true delay returned at 1/up
+        # scale).  Here the spectrum is zero-padded in the FREQUENCY domain (a real Fourier resample),
+        # so the inverse is interpolated on a 1/up grid and offsets are returned in TRUE samples, plus
+        # a 3-pt parabolic refine for sub-1/up resolution.  Opt-in / non-breaking: "xcorr" is left as
+        # is.  NOTE off_thr must be recalibrated for this scale (~up x the value tuned against "xcorr").
+        x = T - T.mean(0); L = nt * int(up)
+        Xf = np.fft.rfft(x, axis=0)
+        Xp = np.zeros((L // 2 + 1, nc), complex); Xp[:Xf.shape[0]] = Xf      # pad in FREQUENCY -> interpolate
+        xu = np.fft.irfft(Xp, n=L, axis=0) * up
+        Xu = np.fft.rfft(xu, axis=0)
+        cc = np.roll(np.fft.irfft(Xu * np.conj(Xu[:, dom:dom + 1]), n=L, axis=0), L // 2, axis=0)
+        ml = int((maxlag if maxlag is not None else nt // 2) * up)
+        lo = max(L // 2 - ml, 1); hi = min(L // 2 + ml + 1, L - 1)
+        k = lo + cc[lo:hi].argmax(0)
+        r = np.arange(nc); km = (k - 1) % L; kp = (k + 1) % L
+        y0 = cc[km, r]; y1 = cc[k, r]; y2 = cc[kp, r]; den = y0 - 2 * y1 + y2
+        d = (k - L // 2).astype(float)
+        d += np.where(np.abs(den) > 1e-9, 0.5 * (y0 - y2) / den, 0.0).clip(-0.5, 0.5)
+        off = d / float(up)
+        off[p2p < amp_frac * p2p[dom]] = np.nan
+        return off - off[dom]
     off = np.full(nc, np.nan)
     for ch in range(nc):
         if p2p[ch] < amp_frac * p2p[dom]:
