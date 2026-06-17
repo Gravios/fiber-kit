@@ -69,11 +69,14 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.85,
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
-    inter-channel offset.  Templates are mutual-centred first, so a constant whole-cluster
-    time-shift between two chunks cannot fail the cosine gate (centring is idempotent -- a
-    no-op when they are already centred, e.g. fiber-intrachunk units).  The offset RMS
-    co-gate is the drift-robust differentiator that vetoes a co-located different unit that
-    happens to share gross shape; off_thr<=0 disables it.
+    inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
+    dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
+    between two chunks before the cosine gate (verified on real g5: a 2-3 sample offset that drops the
+    RAW template cosine to ~0.5-0.75 reads ~1.0 after mutual_center; centring alone, i.e. DC removal,
+    does NOT do this -- mutual_center's trough re-alignment does).  The alignment is integer-sample, so
+    a sub-sample residual (<=0.5 samp) can remain, but there the cosine still sits >0.98, far above any
+    usable gate.  The offset RMS co-gate is the drift-robust differentiator that vetoes a co-located
+    different unit that happens to share gross shape; off_thr<=0 disables it.
 
     gap>1 also matches across a skipped chunk (c -> c+2), but only for source units that
     found NO link at a smaller gap -- bridging single-chunk dropouts without competing with

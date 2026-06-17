@@ -194,6 +194,13 @@ def cross_spectrum_match(temp_a, temp_b, sr=32552.0, band=(300.0, 9000.0), amp_f
     FULL-window templates -- do not truncate the tails, the phase lives there.  `coherence` is only
     APPROXIMATELY invariant to amplitude-reweighting drift (the magnitude weighting absorbs moderate
     reweighting).  Returns CrossSpecMatch(coherence, delay); coherence is the same-neuron scalar.
+
+    REAL-DATA CAVEAT (g5 180-210 min, split-half SAME vs cross-cluster DIFFERENT): as a same-vs-
+    different gate this UNDERPERFORMS plain cosine -- coherence AUC ~0.88 vs cosine ~0.98, because real
+    co-located different units share enough per-channel phase structure that coherence stays high
+    (DIFFERENT median ~0.94, poorly specific).  The synthetic edge appears only on shape-matched /
+    timing-different pairs.  Keep this as a shift-invariant utility, NOT as a replacement for the
+    cosine identity gate.
     """
     A = np.asarray(temp_a, float); B = np.asarray(temp_b, float); nt, nc = A.shape
     FA = np.fft.rfft(A - A.mean(0), axis=0); FB = np.fft.rfft(B - B.mean(0), axis=0)
@@ -212,6 +219,31 @@ def cross_spectrum_match(temp_a, temp_b, sr=32552.0, band=(300.0, 9000.0), amp_f
     fbar = float((fr[m] * np.abs(FA[m, dom])).sum() / (np.abs(FA[m, dom]).sum() + 1e-12))
     delay = float(np.angle(D[dom]) / (2 * np.pi * fbar) * sr) if fbar > 0 else float("nan")
     return CrossSpecMatch(float(np.abs(R)), delay)
+
+
+def temporal_offset(ta, tb, mask=None, maxlag=6):
+    """Global sub-sample temporal offset (samples) of template `tb` relative to `ta`: the lag that,
+    applied to tb (tb -> tb shifted by +offset), best aligns it to ta.  Channel-summed cross-
+    correlation (matched filter over the whole footprint) with a 3-pt parabolic sub-sample refine --
+    the accurate estimator for a single GLOBAL shift (sharper than the band-collapsed phase of
+    cross_spectrum_match, which biases low for multi-sample shifts).  Intended for align-at-merge:
+    once cross_spectrum_match.coherence confirms two fragments are the same unit despite an offset,
+    this gives the value to shift one onto the other before combining.  mask: optional (T,C) bool to
+    restrict to footprint channels."""
+    A = np.asarray(ta, float); B = np.asarray(tb, float); T = A.shape[0]
+    if mask is not None:
+        A = np.where(mask, A, 0.0); B = np.where(mask, B, 0.0)
+    A = A - A.mean(0); B = B - B.mean(0)
+    xc = np.fft.irfft(np.fft.rfft(A, axis=0) * np.conj(np.fft.rfft(B, axis=0)), n=T, axis=0).real.sum(1)
+    xc = np.roll(xc, T // 2)                                   # zero lag at T//2
+    lag0 = T // 2
+    lo = max(lag0 - maxlag, 1); hi = min(lag0 + maxlag + 1, T - 1)
+    k = lo + int(np.argmax(xc[lo:hi]))
+    d = float(k - lag0)
+    y0, y1, y2 = xc[k - 1], xc[k], xc[k + 1]; den = y0 - 2 * y1 + y2
+    if abs(den) > 1e-9:
+        d += float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
+    return d
 
 
 def interchannel_offsets(template, amp_frac=0.3, method="trough", up=8, maxlag=None):
