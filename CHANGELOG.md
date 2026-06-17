@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.27.0] — pipeline driver: positional electrode + rename to `fiber-pipeline`
+- `scripts/run_fiber_pipeline` renamed to `scripts/fiber-pipeline` (installed on PATH
+  under the new name). The electrode group is now the FIRST positional argument:
+  `fiber-pipeline <elec> [all | <stage> ...]`, e.g. `fiber-pipeline 5 fiber-refine`.
+  `FK_ELEC` is retained as a fallback when no leading group is given.
+- fiber-refine: `--out-variant` renamed to `--out-stage` (it is the output STAGE tag;
+  `--out-variant` is reserved for the feature variant everywhere, as in fiber-realign).
+- neuro_io.apply_spike_keep: dedup propagation no longer edits backups (dated snapshots,
+  `*_bkp`), byte-split fragments (`.part.*`), or sidecars (`.units.npz`); electrode is
+  matched exactly as the first numeric token (fixes a latent cross-group match).
+
 ## [0.26.0] — installed pipeline driver (`run_fiber_pipeline`)
 - New `scripts/run_fiber_pipeline`, installed on PATH by pip (setup.cfg
   `[options] scripts`). Stage dispatcher: `run_fiber_pipeline [all | <stage> ...]`
