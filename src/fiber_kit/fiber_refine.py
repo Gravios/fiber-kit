@@ -384,7 +384,7 @@ def _drop_tiny(lab, mg):
 
 # ── per-iteration statistics ─────────────────────────────────────────────────
 def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
-               mode="normalized", verbose=True):
+               mode="normalized", warp_thr=None, verbose=True):
     """Contamination-gated agglomerative merge of an over-split sort back down to
     a reasonable count.  Greedily merges the most-similar cluster pair (by median
     waveform: shape-only when mode='normalized' -> merges energy levels of one
@@ -399,6 +399,9 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
         return lab.copy()
     groups = {c: np.flatnonzero(lab == c) for c in u}
     med = {c: _med(groups[c], waves) for c in u}
+    gd = {c: fg.group_delay_profile(med[c]) for c in u} if warp_thr is not None else None
+    def _warp_ok(a, b):   # spatio-temporal WARP coherence on the (clean) median templates
+        return warp_thr is None or fg.warp_correlation(gd[a], gd[b]) >= warp_thr
     sizes = {c: len(groups[c]) for c in u}
     active = set(u)
     nextid = max(u) + 1
@@ -407,7 +410,7 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
     for i in range(len(u)):
         for j in range(i + 1, len(u)):
             s = simfn(med[u[i]], med[u[j]])
-            if s >= min_sim:
+            if s >= min_sim and _warp_ok(u[i], u[j]):
                 heapq.heappush(heap, (-s, u[i], u[j]))
     nmerge = nrej = 0
     while heap:
@@ -422,19 +425,21 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
         groups[nid] = midx
         sizes[nid] = sizes[a] + sizes[b]
         med[nid] = (sizes[a] * med[a] + sizes[b] * med[b]) / sizes[nid]   # cheap merged template
+        if gd is not None:
+            gd[nid] = fg.group_delay_profile(med[nid])
         active.add(nid); nmerge += 1
         for c in active:
             if c == nid:
                 continue
             s = simfn(med[nid], med[c])
-            if s >= min_sim:
+            if s >= min_sim and _warp_ok(nid, c):
                 heapq.heappush(heap, (-s, nid, c))
     out = np.full(len(lab), -1, int)
     for k, c in enumerate(sorted(active)):
         out[groups[c]] = k
     if verbose:
         print(f"merge-back: {len(u)} -> {len(active)} clusters "
-              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim})")
+              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim}, warp_thr={warp_thr})")
     return out
 
 
@@ -574,7 +579,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            knn_k=20, knn_thr=0.3, knn_minref=50, knn_minnew=30,
            knn_dims=16, fold_thr=0.9, fold_off_thr=None, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
-           merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92,
+           merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92, merge_warp_thr=None,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            dip_realign=True, rkk_realign=True, rkk_iters=2,
@@ -646,7 +651,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                     break
         if merge_back_enable:
             lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
-                             min_sim=merge_min_sim, mode=merge_mode, verbose=verbose)
+                             min_sim=merge_min_sim, mode=merge_mode, warp_thr=merge_warp_thr, verbose=verbose)
             st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -918,6 +923,13 @@ def main():
                     help="max merged-cluster [floor,window) band%% to accept a merge")
     ap.add_argument("--merge-min-sim", type=float, default=0.92,
                     help="min median-waveform similarity to consider a merge")
+    ap.add_argument("--merge-warp-thr", type=float, default=None,
+                    help="final-merge WARP gate (Omlor-Giese group delay): require the cross-channel "
+                         "correlation of the two clusters' median-template group-delay profiles >= this. "
+                         "On clean well-populated clusters the warp is a very clean signature (g5: same "
+                         "neuron ~0.99, different ~0; it morphs continuously with drift, adjacent-bin change "
+                         "~0.004), so ~0.9 is safe -- lower --merge-min-sim and set this to recover the last "
+                         "merges without false ones. None (default) = off.")
     ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
                     help="normalized = merge energy levels (neuron count); amplitude = keep them")
     ap.add_argument("--split-min-corr", type=float, default=0.93,
@@ -1079,7 +1091,7 @@ def main():
                          knn_minref=a.knn_minref, knn_minnew=a.knn_minnew, knn_dims=a.knn_dims,
                          fold_thr=a.fold_thr, fold_off_thr=a.fold_off_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
                          conv_patience=a.converge_patience, reseed=a.reseed,
-                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
+                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget, merge_warp_thr=a.merge_warp_thr,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split)
         glab, nglob, tracks, bundles = refine_chunked(
