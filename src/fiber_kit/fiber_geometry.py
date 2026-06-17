@@ -136,6 +136,40 @@ def geo_veto(curve_i, curve_j, mu, P, thr=DEFAULT_GEO_THR):
 DEFAULT_OFF_THR = 1.8          # samples RMS; STRICT primary gate (drift-robust)
 DEFAULT_GEO_THR_BACKBONE = 2.5 # amplitude footprint is drift-FRAGILE -> loose secondary on anchored links
 
+def group_delay_profile(template, sr=32552.0, band=(300.0, 9000.0), amp_frac=0.3):
+    """Per-channel GROUP DELAY (samples, relative to the dominant channel) of a template, from the
+    cross-spectrum phase slope:  gd_c = -d/domega arg(F[c] * conj(F[ref])).  This is the per-channel
+    delay ('warp') of the Omlor-Giese anechoic mixing model x_c(t)=alpha_c*s(t-tau_c) -- a neuron's
+    octrode footprint is one delayed source, so gd_c is its spatial-temporal signature.  Uses the
+    whole phase spectrum, so it is steadier than a single trough/lag.  Channels below amp_frac of the
+    dominant peak-to-peak carry no reliable phase -> NaN.  Best on RAW templates."""
+    T = np.asarray(template, float); nt, nc = T.shape
+    F = np.fft.rfft(T - T.mean(0), axis=0); fr = np.fft.rfftfreq(nt, 1.0 / sr); w = 2 * np.pi * fr
+    p2p = T.max(0) - T.min(0); ref = int(np.argmax(p2p))
+    m = (fr >= band[0]) & (fr <= band[1]) & (np.abs(F[:, ref]) > 1e-9)
+    gd = np.full(nc, np.nan)
+    if m.sum() < 3:
+        return gd
+    for c in range(nc):
+        if p2p[c] < amp_frac * p2p[ref]:
+            continue
+        X = F[:, c] * np.conj(F[:, ref]); ph = np.unwrap(np.angle(X[m]))
+        gd[c] = -np.polyfit(w[m], ph, 1, w=np.sqrt(np.abs(X[m]) + 1e-12))[0] * sr
+    return gd - gd[ref]
+
+
+def warp_correlation(gd_a, gd_b):
+    """Cross-channel Pearson correlation of two group-delay profiles.  ~1 when the per-channel delay
+    structure matches (same neuron -- a fixed geometric signature, drift-robust); low/incoherent for
+    two different co-located cells.  Complements cosine: it catches high-cosine look-alikes (validated
+    on g5: same-neuron ~0.93, high-cosine-different ~0.67), so a relaxed cosine + warp gate recovers
+    the last few real merges without the false ones."""
+    m = ~np.isnan(gd_a) & ~np.isnan(gd_b)
+    if m.sum() < 3 or np.std(gd_a[m]) < 1e-6 or np.std(gd_b[m]) < 1e-6:
+        return 0.0
+    return float(np.corrcoef(gd_a[m], gd_b[m])[0, 1])
+
+
 def interchannel_offsets(template, amp_frac=0.3, method="trough", up=8, maxlag=None):
     """Per-channel sub-sample timing (samples) of each channel relative to the dominant
     channel.  Channels below amp_frac of the dominant peak-to-peak carry no reliable

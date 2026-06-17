@@ -224,7 +224,7 @@ def _isi_viol_union(ta, tb, win_ms=2.0):
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
-                     cfiber_thr=None, cfiber_win=None, refrac_ceiling=None):
+                     cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -244,6 +244,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
            not collapsing fragments.  Left available and off by default for that experiment;
            do not enable for routine grouping.  Depth and offset gates apply in every mode."""
     T = sig["template"].reshape(len(sig["ids"]), -1)
+    GD = [fg.group_delay_profile(sig["template"][k]) for k in range(len(sig["ids"]))] if warp_thr is not None else None
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
     use_kernel = gate in ("mmd", "kcov")
@@ -293,6 +294,8 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                     if C[a, b] < cos_thr:
                         continue
                     strength = C[a, b]
+                if warp_thr is not None and fg.warp_correlation(GD[i], GD[j]) < warp_thr:
+                    continue          # group-delay (warp) coherence gate: reject incoherent inter-channel timing
                 o = _offset_rms(off[i], off[j])
                 ot = off_thr if (Ncnt is None or off_n_ref is None) else _off_thr_eff(off_thr, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
                 if o <= ot:
@@ -697,6 +700,8 @@ def main():
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
     ap.add_argument("--refrac-ceiling", type=float, default=None,
                     help="post-merge refractory ceiling (%% 2ms ISI violation of the COMBINED train): refuse a merge whose union exceeds this. The curator merge-accept bar -- accepted g5 merges keep it <~0.2 (p90)/<~0.9 (p99), so ~1.0 is a safe ceiling. Catches over-merges of well-populated cells; blind to sparse pairs (use the offset gate for those). None (default) = off (complete linkage only).")
+    ap.add_argument("--warp-thr", type=float, default=None,
+                    help="group-delay (spatio-temporal WARP) coherence gate, per Omlor-Giese anechoic mixing: require the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this for a merge. Same-neuron warps are coherent across channels, different co-located cells anti-correlate (g5: same ~+0.5 small / ~+0.93 well-populated, 294-vs-295 -0.52). The group-delay estimate is NOISY at low spike count, so use a LOW threshold (~0.3) to avoid vetoing small same-cell merges; the separation is much cleaner on well-populated clusters. Use WITH a relaxed --cos-thr to recover the last few merges. None (default) = off; calibrate on curated merges.")
     ap.add_argument("--linkage", choices=("complete", "dynamic", "ms"), default="complete",
                     help="'complete' (default): one-shot static-edge complete-linkage clique. "
                          "'dynamic': priority-queue agglomeration that recomputes each node and re-scores "
@@ -801,7 +806,7 @@ def main():
         label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
-                                 refrac_ceiling=a.refrac_ceiling)
+                                 refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr)
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
