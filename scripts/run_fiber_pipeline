@@ -80,7 +80,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
     fiber-refine "$SESS" "$ELEC" \
         --in-clu "$SESS.clu.stderiv.$ELEC" \
-        --out-method stderiv --out-variant refine \
+        --out-method stderiv --out-stage refine \
         --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes 12 \
