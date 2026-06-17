@@ -67,7 +67,7 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.85,
-                  pos_thr=1.5, off_thr=1.0, offsets=None, gap=1):
+                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual-centred first, so a constant whole-cluster
     time-shift between two chunks cannot fail the cosine gate (centring is idempotent -- a
@@ -81,6 +81,7 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.8
     tc = np.array([fg.mutual_center(t) for t in tmpl])
     if offsets is None:
         offsets = np.array([fg.interchannel_offsets(t) for t in tc])
+    gd = [fg.group_delay_profile(t) for t in tmpl] if warp_thr is not None else None
     sy_ = y0.std() + 1e-9; sx = x0.std() + 1e-9; sz = z0.std() + 1e-9; sa = logA.std() + 1e-9
     links = []; linked_fwd = set()
     for g in range(1, gap + 1):
@@ -97,7 +98,8 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.8
                 dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
                 if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
                     if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
-                            (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr):
+                            (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
+                            (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr):
                         links.append((int(ai[v]), int(bi[u]))); linked_fwd.add(int(ai[v]))
     return links
 
@@ -141,7 +143,7 @@ def build_bundles(n_frag, links):
     return list(groups.values())
 
 
-def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0,
+def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True):
@@ -173,7 +175,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
     offs = frag["offset"][idx] if "offset" in frag else None
     raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                         chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                        off_thr=off_thr, offsets=offs, gap=gap)
+                        off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
     if seed_links is not None:
@@ -255,6 +257,13 @@ def main():
     ap.add_argument("--cos-thr", type=float, default=0.85)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
+    ap.add_argument("--warp-thr", type=float, default=None,
+                    help="spatio-temporal WARP continuity co-gate (Omlor-Giese group delay): require the "
+                         "cross-channel correlation of two candidates' per-channel group-delay profiles >= this "
+                         "to link them. A neuron's warp morphs CONTINUOUSLY with drift (g5: adjacent-chunk "
+                         "change ~0.004) while different co-located cells anti-correlate (260x separation), so "
+                         "this vetoes false links that share gross shape. None (default) = off; ~0.9 is safe on "
+                         "the clean per-chunk unit templates the linker sees.")
     ap.add_argument("--max-gap", type=int, default=2, help="max chunk skip for the fingerprint pass (2 bridges single-chunk dropouts)")
     ap.add_argument("--max-resid", type=float, default=0.08)
     ap.add_argument("--min-n", type=int, default=20)
@@ -285,7 +294,7 @@ def main():
         seed = z["backbone"].tolist() if "backbone" in z.files and len(z["backbone"]) else None
         drift = (dict(zip(z["drift_chunks"].tolist(), z["drift_um"].tolist()))
                  if "drift_um" in z.files else None)
-        R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
+        R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash)
@@ -298,7 +307,7 @@ def main():
         if "t_mid" not in z.files:
             raise SystemExit(f"[link] {tbl} has no 't_mid' -- re-run fiber-cpos to stamp time")
         frag = {k: z[k] for k in z.files if k != "cols"}
-        R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr,
+        R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash)
