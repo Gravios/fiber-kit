@@ -88,6 +88,16 @@ DIP_MIN="${FK_DIP_MIN:-30}"                         # session min cluster size t
 INCLUSION_K="${FK_INCLUSION_K:-2.5}"                # session per-fiber radius median+k*MAD (stock 3.0): purer cores
 FEATURE_ALIGN="${FK_FEATURE_ALIGN:-xcorr}"          # sub-sample channel-summed align before featurize: the #1
                                                    #   lever for subtle shapes (misalignment blurs them together)
+EBAND="${FK_EBAND:-0}"                              # session energy-band split (1=on): partition each ENERGY-
+                                                   #   CONFOUNDED coarse fiber by log10-energy band, split per band,
+                                                   #   relink by overlap-anchor -- surfaces shape sub-units the drift
+                                                   #   axis masks (off by default; falls back to --fine-method per fiber)
+EBAND_WIDTH="${FK_EBAND_WIDTH:-0.45}"              # band width (decades of energy)
+EBAND_OVERLAP="${FK_EBAND_OVERLAP:-0.2}"           # band overlap (decades) for the overlap-anchor link
+EBAND_CONFOUND="${FK_EBAND_CONFOUND:-0.4}"         # band a fiber only if PC1 R^2 vs log-energy >= this
+EBAND_MIN_SPAN="${FK_EBAND_MIN_SPAN:-0.6}"         # band a fiber only if it spans >= this many decades
+EBAND_LOW_ASSIGN="${FK_EBAND_LOW_ASSIGN:-0}"       # bottom fraction of the energy range made ASSIGNMENT-ONLY
+                                                   #   (noise-floor angle): assign those spikes from the bands above
 
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
@@ -95,12 +105,15 @@ STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fib
 # ------------------------------- stages -------------------------------------
 fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
     echo "== [1/6] fiber-session =="
+    local eband_args=()
+    [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
     fiber-session "$SESS" "$ELEC" \
         --method stderiv --fine-method rkk \
         --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
         --cfiber-gate --cfiber-q "$CFIBER_Q" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
-        --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN"
+        --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN" \
+        "${eband_args[@]}"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)

@@ -192,6 +192,22 @@ def fiber_geom(wsub, res_sub, W, nmean, mask, sr, n_grid=40, chunk_t0=None, chun
                 dir=dirs.astype(np.float32).reshape(n_grid, p))
 
 
+def _bic_gmm(F, max_sub=8, reg=1e-3):
+    """BIC-selected full-covariance GMM on precomputed features F (n,d) -> labels 0..k-1."""
+    N = len(F)
+    if N < 60:
+        return np.zeros(N, int)
+    best = None
+    for k in range(1, max_sub + 1):
+        if k * 3 > N:
+            break
+        g = GaussianMixture(k, covariance_type='full', reg_covar=reg, random_state=0, n_init=2).fit(F)
+        b = g.bic(F)
+        if best is None or b < best[0]:
+            best = (b, k, g)
+    return best[2].predict(F)
+
+
 def gmm_split(wf, pca_k=6, max_sub=8, mask=fl.MASK_FULL, reg=1e-3):
     """BIC-selected Gaussian mixture on PCA of a coarse fiber's realigned waveforms
     (the Python stand-in for KK's CEM split).  Returns sub-labels 0..k-1."""
@@ -199,13 +215,82 @@ def gmm_split(wf, pca_k=6, max_sub=8, mask=fl.MASK_FULL, reg=1e-3):
     if N < 60: return np.zeros(N, int)
     w = fl.realign(wf)[:, mask, :].reshape(N, -1); w = w - w.mean(0)
     U, S, Vt = np.linalg.svd(w, full_matrices=False); F = U[:, :pca_k] * S[:pca_k]
-    best = None
-    for k in range(1, max_sub + 1):
-        if k * 3 > N: break
-        g = GaussianMixture(k, covariance_type='full', reg_covar=reg, random_state=0, n_init=2).fit(F)
-        b = g.bic(F)
-        if best is None or b < best[0]: best = (b, k, g)
-    return best[2].predict(F)
+    return _bic_gmm(F, max_sub=max_sub, reg=reg)
+
+
+def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
+                       min_band=60, confound_thr=0.4, min_span=0.6, low_assign=0.0, reg=1e-3):
+    """Energy-band-partitioned split of ONE coarse fiber (validated on g5).
+
+    A coarse fiber's PC1 of waveform variation is typically energy/drift (it
+    confounds the shape split, burying co-energy sub-units below a drift axis).
+    Partitioning by overlapping log10-energy bands freezes that axis -- within a
+    band the energy PC has ~no variance, so the BIC-GMM splits on SHAPE.
+
+    Design (each choice validated):
+      * features = align + PCA computed GLOBALLY on the whole fiber and REUSED per
+        band; per-band recomputation is noisier (small-N) and loses ~0.07 ARI.
+        The band restriction alone neutralises the energy PC (constant in a band).
+      * clustering = BIC-GMM restricted to each band.
+      * linking = OVERLAP-ANCHOR (shared spikes in the band overlap prove identity,
+        gap-independent); the graph/A* linkage chains on this gapless cloud.
+
+    Returns a list of index arrays into wcf, or None when the fiber is NOT
+    energy-confounded (PC1 R^2 vs log-energy < confound_thr) or spans < min_span
+    decades -- the caller then falls back to the configured whole-fiber split.
+    Energy is raw (un-whitened) masked-window ||x||^2.
+
+    low_assign : fraction of the energy range (from the bottom) treated as
+    ASSIGNMENT-ONLY.  Near the noise floor the direction d=X/||X|| is noise-
+    dominated, so a band's own shape split there is unreliable (measured: lowest-
+    band within-band recovery collapses while the middle bands are clean).  In
+    that floor no mixture is fit; those spikes are assigned to the units the bands
+    above establish (overlap-anchor continuity + nearest-feature fallback).  0.0
+    (default) splits every band independently."""
+    N = len(wcf)
+    if N < 2 * min_band:
+        return None
+    le = np.log10((wcf[:, mask, :].astype(np.float64) ** 2).sum(axis=(1, 2)) + 1e-12)
+    if float(np.ptp(le)) < min_span:
+        return None
+    al = fl.realign(wcf)[:, mask, :].reshape(N, -1); al = al - al.mean(0)
+    U, S, _ = np.linalg.svd(al, full_matrices=False); F = U[:, :pca_k] * S[:pca_k]
+    yh = np.polyval(np.polyfit(le, F[:, 0], 1), le)        # confound gate: is PC1 ~ energy?
+    r2 = 1.0 - ((F[:, 0] - yh) ** 2).sum() / (((F[:, 0] - F[:, 0].mean()) ** 2).sum() + 1e-12)
+    if r2 < confound_thr:
+        return None
+    emin, emax = float(le.min()), float(le.max())
+    lo_cut = emin + max(0.0, low_assign) * (emax - emin)   # below lo_cut: assignment-only (noise-floor angle)
+    edges = list(np.arange(emin, emax, band_w)) + [emax]; nb = len(edges) - 1
+    ext_idx, ext_lab = [], []
+    core_band = np.full(N, -1, int); core_local = np.full(N, -1, int)
+    for b in range(nb):
+        lo, hi = edges[b], edges[b + 1]
+        if hi <= lo_cut:                                   # band entirely inside the floor: no independent split
+            ext_idx.append(np.array([], int)); ext_lab.append(np.array([], int)); continue
+        clo = max(lo, lo_cut)                              # never train/core on floor spikes
+        ei = np.where((le >= clo - overlap) & (le < hi + overlap) & (le >= lo_cut))[0]
+        if len(ei) < min_band:
+            ext_idx.append(np.array([], int)); ext_lab.append(np.array([], int)); continue
+        sub = _bic_gmm(F[ei], max_sub=max_sub, reg=reg)
+        ext_idx.append(ei); ext_lab.append(sub)            # ei = LOCAL indices; overlap spike = same local id in adjacent bands
+        core = (le >= clo) & ((le < hi) if b < nb - 1 else (le <= hi))
+        for j, gi in enumerate(ei):
+            if core[gi]:
+                core_band[gi] = b; core_local[gi] = int(sub[j])
+    gid, _ = link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5)
+    glob = np.array([gid.get((core_band[i], core_local[i]), -1) for i in range(N)])
+    valid = np.unique(glob[glob >= 0])
+    if len(valid) <= 1:
+        return None                                        # nothing gained over whole-fiber
+    remap = {int(g): i for i, g in enumerate(valid)}
+    lab = np.array([remap.get(int(x), -1) for x in glob])
+    un = np.where(lab < 0)[0]                             # assignment-only (le<lo_cut) + too-sparse-band spikes -> nearest unit
+    if len(un):
+        cents = np.array([F[lab == i].mean(0) for i in range(len(valid))])
+        for i in un:
+            lab[i] = int(np.argmin(((cents - F[i]) ** 2).sum(1)))
+    return [np.where(lab == i)[0] for i in range(len(valid))]
 
 
 def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
@@ -399,6 +484,7 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
                        n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
+                       energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
@@ -430,7 +516,13 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             wsplit, _ = _fa.deadapt(wcf, res_abs[cidx], W, nmean, mask, sr, min_corr=deadapt_min_corr)
         else:
             wsplit = wcf
-        if method == "none":
+        groups = None
+        if energy_band:                                # confound-gated energy-band split; None => not confounded, fall through
+            groups = _energy_band_split(wsplit, mask, eband_width, eband_overlap, pca_k, max_sub,
+                                        eband_min_band, eband_confound, eband_min_span, eband_low_assign)
+        if groups is not None:
+            pass
+        elif method == "none":
             groups = [np.arange(len(cidx))]
         elif method == "fiber":
             sub = cluster_chunk(wsplit, W, nmean, min_group=fine_mg, kappa=fine_kappa, dedup_deg=fine_dedup)
@@ -945,6 +1037,13 @@ def main():
     ap.add_argument("--quality-dims", type=int, default=10, help="PCA dims for L-ratio/isolation Mahalanobis")
     ap.add_argument("--pca-k", type=int, default=6); ap.add_argument("--max-sub", type=int, default=8)
     ap.add_argument("--inclusion-k", type=float, default=3.0, help="per-fiber radius = median+k*MAD of residuals; 0 disables")
+    ap.add_argument("--energy-band", action="store_true", help="energy-band split: partition each ENERGY-CONFOUNDED coarse fiber into overlapping log10-energy bands, BIC-GMM per band (global features), relink by overlap-anchor; surfaces shape sub-units the drift axis masks")
+    ap.add_argument("--eband-width", type=float, default=0.45, help="energy-band width in decades (default 0.45)")
+    ap.add_argument("--eband-overlap", type=float, default=0.2, help="energy-band overlap in decades for overlap-anchor linking (default 0.2)")
+    ap.add_argument("--eband-confound", type=float, default=0.4, help="only band a fiber when PC1 R^2 vs log-energy >= this (default 0.4)")
+    ap.add_argument("--eband-min-span", type=float, default=0.6, help="only band a fiber spanning >= this many decades (default 0.6)")
+    ap.add_argument("--eband-min-band", type=int, default=60, help="min spikes per band to cluster (default 60)")
+    ap.add_argument("--eband-low-assign", type=float, default=0.0, help="fraction of the energy range (from the bottom) made ASSIGNMENT-ONLY: in that low-SNR floor the direction is noise, so its spikes are assigned to units from the bands above instead of independently split (default 0.0 = split every band)")
     ap.add_argument("--cone-channel-k", type=float, default=0.0,
                     help="tighten the cone per channel: drop spikes that are residual outliers (>k MAD) "
                          "on the discriminative channels; 0 disables")
@@ -1042,6 +1141,9 @@ def main():
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
               fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
               incl_k=a.inclusion_k, cone_channel_k=a.cone_channel_k,
+              energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
+              eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
+              eband_low_assign=a.eband_low_assign,
               split_var_margin=a.split_var_margin, var_split=a.var_split,
               var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
