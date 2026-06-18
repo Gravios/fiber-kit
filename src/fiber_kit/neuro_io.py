@@ -2,18 +2,16 @@
 #  neuro_io.py — standardized neurosuite-3 on-disk I/O for fiber-kit.
 #
 #  Single source of truth for the NeuroSuite binary formats fiber-kit reads and
-#  writes, so the naming convention, variant resolution, and binary/text auto-
-#  detection match the C++ toolchain exactly instead of being re-implemented
-#  (with hardcoded extension lists) in every script.
+#  writes, so the naming convention and variant resolution match the C++
+#  toolchain exactly instead of being re-implemented (with hardcoded extension
+#  lists) in every script.  All artifacts are binary (see below).
 #
 #  Mirrors:
 #    - src/libneurosuite-core/src/neurosuite/core/neurofileio.{h,cpp}
 #        readClu / writeClu / readRes / writeRes / readFetBinary /
-#        isBinaryClusterRes / readClusterRes / resolveInput / preferDerived /
-#        preferCanonical
+#        readClusterRes / resolveInput / preferDerived / preferCanonical
 #    - src/kiloklustakwik/src/KK_io.cpp
-#        LoadData / LoadClu  (the binary-vs-text first-byte heuristic, and the
-#        pickInputPath → resolveInput .fet/.fetD fallback)
+#        LoadData / LoadClu  (the pickInputPath -> resolveInput .fet/.fetD fallback)
 #
 #  ── Variant-aware naming (NeuroSuite convention) ──────────────────────────────
 #  A per-group typed file (res/clu/fet/spk/pca …) may exist in several
@@ -33,15 +31,13 @@
 #  so it defaults to prefer_derived()  ({"stderiv","D",""}); the .fet reader
 #  defaults to prefer_canonical() to match KlustaKwik's pickInputPath.
 #
-#  ── Binary vs text auto-detection ─────────────────────────────────────────────
-#  Canonical heuristic (NeuroScope / neurofileio::isBinaryClusterRes, KK_io):
-#  a file is binary iff its first byte is not an ASCII digit (0x30–0x39).  For
-#  .res the size-multiple-of-8 test is added.  Caveat (documented upstream): a
-#  binary file whose leading byte happens to fall in 0x30–0x39 — e.g. a .res
-#  whose first timestamp is 48..57 samples, or a binary .fet/.clu header whose
-#  low byte lands there — is misclassified as text.  This matches the C++ side
-#  exactly; fiber-kit only ever writes binary, so it is a non-issue in practice
-#  and is kept identical for cross-tool consistency rather than "improved" here.
+#  ── All artifacts are binary ──────────────────────────────────────────────────
+#  fiber-kit reads and writes .res (int64), .clu (int32 nClusters header + int32
+#  ids) and .fet (int32 header + int64 body) as raw binary only.  The legacy text
+#  format and the first-byte binary/text heuristic have been removed: that
+#  heuristic misclassified a binary file whose header low byte lands in 0x30-0x39
+#  as text (e.g. a 1332-cluster .clu -> first header byte 0x34 = '4'), which broke
+#  reads outright -- it was never the "non-issue in practice" it was assumed to be.
 # ════════════════════════════════════════════════════════════════════════════
 import os
 from collections import namedtuple
@@ -50,7 +46,6 @@ import numpy as np
 
 __all__ = [
     "ResolvedInput", "resolve_input", "prefer_derived", "prefer_canonical",
-    "is_binary_first_byte", "is_binary_cluster_res",
     "read_res_file", "write_res_file", "read_res", "write_res",
     "read_clu_file", "write_clu_file", "read_clu", "write_clu",
     "read_cluster_res",
@@ -121,35 +116,11 @@ def resolve_input(base, type_, group, prefer_variants):
     return ResolvedInput(canonical, "", False, False)
 
 
-# ── binary/text detection (mirrors isBinaryClusterRes / KK_io heuristic) ─────
-def is_binary_first_byte(path):
-    """True iff the first byte of `path` is not an ASCII digit (the KK_io /
-    NeuroScope heuristic).  Used for .clu and .fet standalone detection."""
-    with open(path, "rb") as f:
-        b = f.read(1)
-    if not b:
-        return False
-    return not (0x30 <= b[0] <= 0x39)
-
-
-def is_binary_cluster_res(res_path):
-    """True iff `res_path` is a binary .res: size a non-zero multiple of 8 AND
-    first byte not an ASCII digit.  Exact port of neurofileio::isBinaryClusterRes;
-    the matched .clu is then read in the same format (see read_cluster_res)."""
-    sz = os.path.getsize(res_path)
-    if sz <= 0 or (sz % 8) != 0:
-        return False
-    return is_binary_first_byte(res_path)
-
-
 # ── .res.N ───────────────────────────────────────────────────────────────────
 def read_res_file(path):
-    """Read a .res file (auto-detect binary int64 vs legacy whitespace text).
-    Returns an int64 ndarray of spike timestamps."""
-    if is_binary_cluster_res(path):
-        return np.fromfile(path, dtype=RES_DTYPE).astype(np.int64)
-    # legacy text: one timestamp per line / whitespace-separated
-    return np.loadtxt(path, dtype=np.int64).reshape(-1)
+    """Read a binary .res file (int64 spike timestamps; mirrors
+    neurofileio::writeRes).  Returns an int64 ndarray."""
+    return np.fromfile(path, dtype=RES_DTYPE).astype(np.int64)
 
 
 def write_res_file(path, times):
@@ -195,26 +166,16 @@ def write_res(base, elec, times, variant="", tag=None):
 
 
 # ── .clu.N ───────────────────────────────────────────────────────────────────
-def read_clu_file(path, n_spikes=None, binary=None):
-    """Read a .clu file -> (nClusters, ids:int64 ndarray).
-
-    Auto-detects binary (int32 nClusters header + int32 ids) vs legacy text
-    (count line, then one id per line), mirroring KK::LoadClu.  `binary` forces
-    the format; `n_spikes` is accepted for symmetry with the C++ binary reader
-    (which needs it) but is not required here since the file size determines it.
-    """
-    if binary is None:
-        binary = is_binary_first_byte(path)
-    if binary:
-        raw = np.fromfile(path, dtype=CLU_DTYPE)
-        n_clu = int(raw[0]) if raw.size else 0
-        ids = raw[1:].astype(np.int64)
-        if n_spikes is not None and ids.size != n_spikes:
-            ids = ids[:n_spikes]
-        return n_clu, ids
-    with open(path) as f:
-        n_clu = int(f.readline().split()[0])
-        ids = np.array([int(x) for x in f.read().split()], dtype=np.int64)
+def read_clu_file(path, n_spikes=None):
+    """Read a binary .clu -> (nClusters, ids:int64 ndarray): int32 nClusters
+    header + int32 ids (mirrors neurofileio::writeClu / KK::LoadClu binary path).
+    `n_spikes` truncates the id array for symmetry with the C++ reader; the file
+    size otherwise determines it."""
+    raw = np.fromfile(path, dtype=CLU_DTYPE)
+    n_clu = int(raw[0]) if raw.size else 0
+    ids = raw[1:].astype(np.int64)
+    if n_spikes is not None and ids.size != n_spikes:
+        ids = ids[:n_spikes]
     return n_clu, ids
 
 
@@ -264,19 +225,17 @@ ClusterResData = namedtuple(
 
 
 def read_cluster_res(base, elec, prefer=None):
-    """Read the matched .clu/.res pair, detecting binary-vs-text from the .res
-    and reading the .clu in the same format.  Returns ClusterResData with ok=False
+    """Read the matched binary .clu/.res pair.  Returns ClusterResData with ok=False
     on any open/parse/length mismatch (never raises), mirroring the C++ helper."""
     prefer = prefer or prefer_canonical()
     rr = resolve_input(base, "res", elec, prefer)
     rc = resolve_input(base, "clu", elec, prefer)
     if not (rr.found and rc.found):
         return ClusterResData(0, np.empty(0, np.int64), np.empty(0, np.int64), False, False)
-    binary = is_binary_cluster_res(rr.path)
     times = read_res_file(rr.path)
-    n_clu, ids = read_clu_file(rc.path, binary=binary)
+    n_clu, ids = read_clu_file(rc.path)
     ok = ids.size == times.size
-    return ClusterResData(n_clu, ids, times, binary, ok)
+    return ClusterResData(n_clu, ids, times, True, ok)
 
 
 # ── .fet.N (binary; mirrors KK::LoadData binary path / readFetBinary) ────────
