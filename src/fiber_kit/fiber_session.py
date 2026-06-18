@@ -995,12 +995,20 @@ def main():
                          "adds the trough-position-vs-asymmetry structure to the clustering/linking "
                          "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
                          "the FIBER_ALIGN env var.")
+    ap.add_argument("--subsample", dest="subsample", action=argparse.BooleanOptionalAction, default=None,
+                    help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
+                         "sub-sample (parabolic) refine in the feature build; default leaves the "
+                         "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     if a.feature_align:
         os.environ["FIBER_ALIGN"] = a.feature_align   # reach forked/spawned pool workers
         fl.set_feature_align(a.feature_align)           # this (parent) process
     print(f"[fiber_session] feature alignment: {fl.get_feature_align()}")
+    if a.subsample is not None:
+        os.environ["FIBER_SUBSAMPLE"] = "1" if a.subsample else "0"   # reach forked/spawned pool workers
+        fl.set_realign_subsample(a.subsample)                          # this (parent) process
+    print(f"[fiber_session] realign sub-sample: {fl.realign_subsample()}")
     if a.gpu:
         on = _bk.use_gpu(True)
         print(f"[fiber_session] GPU requested: backend = {_bk.backend_name()}"
