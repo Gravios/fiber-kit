@@ -185,10 +185,52 @@ def build_bundles(n_frag, links):
     return list(groups.values())
 
 
+def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
+    """Global graph linkage via graph_link.spectral_partition, an alternative to the per-pair
+    cogated_links veto stack (mutual-NN position + pos_thr + off_thr + cosine) which leaves
+    high-cosine blocks unmerged when the session geometry/drift differ from the calibration set.
+
+    Builds a discriminative feature per linkable unit -- mutual-centred masked template (+)
+    DRIFT-CORRECTED position (+) logA (+) inter-channel offsets, each block z-scored so pos/offset
+    enter as weights rather than hard vetoes -- runs the self-tuning-sigma affinity + normalized-
+    Laplacian eigengap partition, and returns within-group index pairs in idx-space (exactly like
+    cogated_links) so the downstream seed-link union and bundling are untouched.
+
+    EXPERIMENTAL: the spectral core is validated on g5 (eigengap k in the EV-knee band) but this
+    wiring is not yet integration-tested on a full pipeline run -- validate before trusting."""
+    try:
+        from . import graph_link as gl
+    except ImportError:
+        import graph_link as gl
+    if method != "spectral":
+        raise ValueError("graph linkage method must be 'spectral' (ev needs per-spike features, "
+                         "available only at the fiber-intrachunk stage)")
+    yc = y0[idx] - np.array([D[int(c)] for c in chunk[idx]])            # drift-correct to a common frame
+    tc = np.array([fg.mutual_center(t) for t in frag["template"][idx]])[:, mask, :].reshape(len(idx), -1)
+
+    def _z(a):
+        a = np.asarray(a, float).reshape(len(idx), -1)
+        return (a - a.mean(0)) / (a.std(0) + 1e-9)
+
+    blocks = [_z(tc), _z(np.column_stack([frag["x0"][idx], yc, frag["z0"][idx]])), _z(logA[idx])]
+    if offs is not None:
+        blocks.append(_z(offs))
+    F = np.column_stack(blocks)
+    if len(F) < 4:
+        return []
+    A = gl.discriminative_affinity(F, knn=min(knn, len(F) - 1), self_tuning=True)
+    lab = gl.spectral_partition(A)["labels"]
+    raw = []
+    for g in np.unique(lab):
+        mem = np.flatnonzero(lab == g)
+        raw += [(int(mem[t]), int(mem[t + 1])) for t in range(len(mem) - 1)]    # chain -> union-find group
+    return raw
+
+
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
-                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None):
+                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated"):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -237,10 +279,13 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0
             else:
                 print("[link] cfiber co-gate needs backbone same-unit pairs to self-calibrate "
                       "(--from-units) or an explicit --cfiber-thr -- disabled")
-    raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
-                        chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                        off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
-                        cfiber_thr=cfiber_thr, cfiber_win=cfw)
+    if linkage == "cogated":
+        raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
+                            chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
+                            off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
+                            cfiber_thr=cfiber_thr, cfiber_win=cfw)
+    else:
+        raw = _graph_links(linkage, frag, idx, y0, logA, chunk, D, mask, offs)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
     if seed_links is not None:
@@ -322,6 +367,11 @@ def main():
     ap.add_argument("--cos-thr", type=float, default=0.85)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
+    ap.add_argument("--linkage", choices=["cogated", "spectral"], default="cogated",
+                    help="merge method: 'cogated' (default; per-pair mutual-NN position + offset + "
+                         "cosine veto stack) or 'spectral' (global graph_link affinity + normalized-"
+                         "Laplacian eigengap partition -- transitivity-aware, robust to the per-pair "
+                         "gate miscalibration that leaves high-cosine blocks unmerged). EXPERIMENTAL.")
     ap.add_argument("--warp-thr", type=float, default=None,
                     help="spatio-temporal WARP continuity co-gate (Omlor-Giese group delay): require the "
                          "cross-channel correlation of two candidates' per-channel group-delay profiles >= this "
@@ -368,7 +418,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -381,7 +431,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
