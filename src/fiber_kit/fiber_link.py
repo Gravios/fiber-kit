@@ -102,7 +102,7 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
     return D
 
 
-def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.85,
+def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
                   cfiber_thr=None, cfiber_win=None):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
@@ -227,7 +227,7 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
     return raw
 
 
-def link_session(frag, *, chunk_min=12.0, cos_thr=0.85, pos_thr=1.5, off_thr=1.0, warp_thr=None,
+def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated"):
@@ -364,7 +364,7 @@ def main():
     ap.add_argument("--clu-method", default=None, help="source .clu method (default: mirror --cpos-method)")
     ap.add_argument("--clu-stage", default=None, help="source .clu stage (default: mirror --cpos-stage)")
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
-    ap.add_argument("--cos-thr", type=float, default=0.85)
+    ap.add_argument("--cos-thr", type=float, default=0.975)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
     ap.add_argument("--linkage", choices=["cogated", "spectral"], default="cogated",
