@@ -176,9 +176,10 @@ def get_feature_align():
 # per-spike ~+-0.5-sample jitter that inflates within-unit residual variance.  Because
 # mutual_center applies a single COMMON roll to the whole population, the per-spike sub-sample
 # refine survives it -- so enabling it tightens the features at native sample count, no upsampling.
-# Default OFF -> realign stays byte-identical to before; flip on with FIBER_SUBSAMPLE=1 (so it
-# reaches forked/spawned pool workers), set_realign_subsample(True), or realign(..., subsample=True).
-_REALIGN_SUBSAMPLE = _os.environ.get("FIBER_SUBSAMPLE", "0").strip().lower() in ("1", "true", "yes", "on")
+# Default ON (validated: pooled cosine AUC 0.971 -> 0.985 on real g5, best-or-tied in 4/5 windows).
+# Turn OFF for the legacy integer-grid behaviour with FIBER_SUBSAMPLE=0 (reaches forked/spawned pool
+# workers), set_realign_subsample(False), or realign(..., subsample=False).
+_REALIGN_SUBSAMPLE = _os.environ.get("FIBER_SUBSAMPLE", "1").strip().lower() in ("1", "true", "yes", "on")
 
 
 def set_realign_subsample(on):
@@ -208,8 +209,9 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=N
 
     subsample selects whether the xcorr refine keeps its 3-pt parabolic sub-sample lag (True) or
     snaps to the integer grid (False).  None (the default) follows the FIBER_SUBSAMPLE module lever
-    (set_realign_subsample); that lever defaults to False, so realign is byte-identical to before
-    unless explicitly enabled.  On real g5 across the session, enabling it lifts the split-half
+    (set_realign_subsample); that lever now defaults to True (sub-sample on) -- set FIBER_SUBSAMPLE=0
+    or realign(subsample=False) for the legacy integer-grid behaviour.  On real g5 across the session,
+    sub-sample alignment lifts the split-half
     same/different cosine AUC ~0.97 -> ~0.985 (pooled) at native sample count -- matching or beating
     2x Fourier upsampling without doubling the feature length."""
     sub = _REALIGN_SUBSAMPLE if subsample is None else bool(subsample)
