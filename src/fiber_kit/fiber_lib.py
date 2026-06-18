@@ -170,7 +170,28 @@ def get_feature_align():
     return _FEATURE_ALIGN
 
 
-def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
+# Per-spike SUB-SAMPLE refine for realign().  align_xcorr already estimates a 3-pt parabolic
+# sub-sample lag on top of its integer xcorr peak; realign() historically discarded it
+# (subsample=False), snapping every spike to the integer sample grid.  That quantisation is a
+# per-spike ~+-0.5-sample jitter that inflates within-unit residual variance.  Because
+# mutual_center applies a single COMMON roll to the whole population, the per-spike sub-sample
+# refine survives it -- so enabling it tightens the features at native sample count, no upsampling.
+# Default OFF -> realign stays byte-identical to before; flip on with FIBER_SUBSAMPLE=1 (so it
+# reaches forked/spawned pool workers), set_realign_subsample(True), or realign(..., subsample=True).
+_REALIGN_SUBSAMPLE = _os.environ.get("FIBER_SUBSAMPLE", "0").strip().lower() in ("1", "true", "yes", "on")
+
+
+def set_realign_subsample(on):
+    """Enable/disable realign()'s per-spike sub-sample (parabolic) refine.  See _REALIGN_SUBSAMPLE."""
+    global _REALIGN_SUBSAMPLE
+    _REALIGN_SUBSAMPLE = bool(on)
+
+
+def realign_subsample():
+    return _REALIGN_SUBSAMPLE
+
+
+def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=None):
     """Realign each (nSamp,nCh) spike to a robust cluster reference.
 
     Thin wrapper over align_xcorr (the shared aligner core): FULL multichannel channel-summed
@@ -183,8 +204,16 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median"):
     sub-sample, the returned waveforms are sub-sample (Fourier) aligned rather than exact integer rolls
     -- which is what the feature/template builders that call realign want anyway.  For an exact integer
     roll use align_xcorr(..., init='cold', subsample=False).  `lo`/`hi` are retained for signature
-    compatibility and unused; `maxlag` bounds the refine search."""
-    return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=False)
+    compatibility and unused; `maxlag` bounds the refine search.
+
+    subsample selects whether the xcorr refine keeps its 3-pt parabolic sub-sample lag (True) or
+    snaps to the integer grid (False).  None (the default) follows the FIBER_SUBSAMPLE module lever
+    (set_realign_subsample); that lever defaults to False, so realign is byte-identical to before
+    unless explicitly enabled.  On real g5 across the session, enabling it lifts the split-half
+    same/different cosine AUC ~0.97 -> ~0.985 (pooled) at native sample count -- matching or beating
+    2x Fourier upsampling without doubling the feature length."""
+    sub = _REALIGN_SUBSAMPLE if subsample is None else bool(subsample)
+    return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=sub)
 
 
 def centroid_shift(waves, peak, weight="energy"):
