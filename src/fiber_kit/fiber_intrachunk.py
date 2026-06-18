@@ -346,6 +346,89 @@ def _merge_var(flat_i, vi, ni, flat_j, vj, nj):
     return (ni * vi2 + nj * vj2) / w, m
 
 
+def pre_merge_obvious(sig, *, pre_cos=0.97, off_thr=DEFAULT_OFF_THR, depth_gate=DEFAULT_DEPTH_GATE,
+                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL, sr=32552.0,
+                      var_env_mult=3.0, ccg_thr=1e9, ccg_win_ms=2.0):
+    """Collapse the UNAMBIGUOUS fragment pairs before the dynamic-graph agglomeration.
+
+    Only MUTUAL nearest-neighbour pairs (each is the other's top-cosine partner) at template cosine
+    >= pre_cos -- well above the agglomeration cos_thr -- that also pass the depth and offset gates
+    are merged.  Mutual-NN makes the accepted pairs a disjoint MATCHING (each node has at most one
+    partner), so there is no chaining and no clique handling: every collapsed group is a single pair.
+    Each candidate is then verified against the variance envelope and the CCG temporal veto, the same
+    bar the dynamic edge() applies, so the pre-pass never commits a merge the careful method would
+    reject -- it just front-loads the trivial cases to shrink the node set and stabilise templates
+    before merge-time recompute runs.  Commits without recompute (safe because pre_cos is tight).
+
+    Returns a dense 0-based label over fragment rows (compose with the agglomeration's label)."""
+    M = len(sig["ids"])
+    if M < 2:
+        return np.zeros(M, int)
+    flat = sig["template"].astype(float).reshape(M, -1)
+    var = sig["var"].astype(float); nn = sig["n"].astype(float)
+    yy = sig["y0"].astype(float); off = sig["offset"].astype(float)
+    times = [np.asarray(t, float) for t in sig["times"]]
+    norm = np.linalg.norm(flat, axis=1) + 1e-9
+    C = (flat @ flat.T) / np.outer(norm, norm); np.fill_diagonal(C, -1.0)
+    nbest = np.argmax(C, axis=1)
+    var_env = var_env_mult * float(np.median(var)) if M else np.inf
+    label = np.arange(M); used = np.zeros(M, bool)
+    for i in range(M):
+        if used[i]:
+            continue
+        j = int(nbest[i])
+        if j == i or used[j] or int(nbest[j]) != i:        # mutual-NN -> disjoint matching, no chains
+            continue
+        if C[i, j] < pre_cos or abs(yy[i] - yy[j]) > depth_gate:
+            continue
+        ot = off_thr if (off_n_ref is None) else _off_thr_eff(off_thr, nn[i], nn[j], off_n_ref, off_ceil)
+        if _offset_rms(off[i], off[j]) > ot:
+            continue
+        mv, _ = _merge_var(flat[i], var[i], nn[i], flat[j], var[j], nn[j])
+        if mv > var_env:                                   # same variance envelope as edge()
+            continue
+        if _ccg_refrac(times[i], times[j], sr, ccg_win_ms) > ccg_thr:   # same temporal veto
+            continue
+        label[j] = label[i]; used[i] = used[j] = True
+    _, label = np.unique(label, return_inverse=True)
+    return label
+
+
+def _collapse_sig(sig, label):
+    """Merge fragments sharing a label into super-nodes so the agglomeration can re-run on a reduced
+    node set: n-weighted mean template/offset/position, exact pooled variance via _merge_var, summed
+    counts, unioned spike trains.  Returns a dict of the same shape as build_signatures' output
+    (singleton groups pass through unchanged)."""
+    label = np.asarray(label, int); G = int(label.max()) + 1 if len(label) else 0
+    flat = sig["template"].astype(float).reshape(len(label), -1)
+    tshape = sig["template"].shape[1:]; nall = sig["n"].astype(float)
+    wmean_keys = [k for k in ("offset", "x0", "y0", "z0", "A", "t_mid", "feat") if k in sig]
+    out = {k: [] for k in sig}
+    for g in range(G):
+        mem = np.where(label == g)[0]
+        ns = nall[mem]; ntot = float(ns.sum()); w = ns / ntot
+        cf = flat[mem[0]].copy(); cv = float(sig["var"][mem[0]]); cn = float(ns[0])
+        for m in mem[1:]:
+            cv, cf = _merge_var(cf, cv, cn, flat[m], float(sig["var"][m]), float(nall[m])); cn += float(nall[m])
+        for k in out:
+            if k == "template":   out[k].append(cf.reshape(tshape))
+            elif k == "var":      out[k].append(cv)
+            elif k == "n":        out[k].append(ntot)
+            elif k == "times":    out[k].append(np.sort(np.concatenate([np.asarray(sig["times"][m], float) for m in mem])))
+            elif k in wmean_keys:
+                arr = np.asarray(sig[k], float)[mem]
+                out[k].append((arr * w.reshape(-1, *([1] * (arr.ndim - 1)))).sum(0))
+            else:                 out[k].append(sig[k][mem[0]])   # ids / chunk / shape_null: representative
+    res = {}
+    for k in sig:
+        if k == "times":
+            res[k] = np.array(out[k], dtype=object)
+        else:
+            try:    res[k] = np.array(out[k], dtype=np.asarray(sig[k]).dtype)
+            except Exception:    res[k] = np.array(out[k])
+    return res
+
+
 def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                              depth_gate=DEFAULT_DEPTH_GATE, gate="cosine",
                              cfiber_thr=None, cfiber_win=None,
@@ -716,6 +799,12 @@ def main():
                     help="dynamic linkage: single-unit variance envelope = this * median fragment variance; "
                          "blocks merges that push a unit's spread past it (permits the growth de-fragmentation "
                          "needs, caps over-growth).")
+    ap.add_argument("--pre-merge-cos", type=float, default=0.0,
+                    help="before complete/dynamic agglomeration, collapse the OBVIOUS fragment pairs -- mutual "
+                         "nearest-neighbour template cosine >= this (well above --cos-thr), passing the same "
+                         "depth/offset/variance/CCG gates -- so the careful method runs on a smaller, better-"
+                         "populated node set. Mutual-NN keeps the merges a disjoint matching (no chaining). "
+                         "0.0 (default) = off; try 0.97-0.98. Ignored for --linkage ms (per-spike, no fragments).")
     ap.add_argument("--ccg-thr", type=float, default=1e9,
                     help="dynamic linkage: max cross-CCG refractory ratio to admit a merge.  DEFAULT OFF "
                          "(1e9): a simple refractory-dip requirement is WRONG-SIGNED for de-fragmentation -- "
@@ -797,16 +886,28 @@ def main():
         cfiber_thr = float(np.quantile(nulls, a.cfiber_q)) if nulls.size else np.inf
         print(f"[intrachunk] cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f} "
               f"(split-half null q={a.cfiber_q}, n={nulls.size})")
+    pre = None
+    if getattr(a, "pre_merge_cos", 0.0) and a.pre_merge_cos > 0.0:
+        pre = pre_merge_obvious(sig, pre_cos=a.pre_merge_cos, off_thr=a.off_thr, depth_gate=a.depth_gate,
+                                off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, sr=sr,
+                                var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win)
+        sig_run = _collapse_sig(sig, pre)
+        print(f"[intrachunk] pre-merge: {len(sig['ids'])} -> {len(sig_run['ids'])} fragments "
+              f"(obvious mutual-NN cosine >= {a.pre_merge_cos:.3f})")
+    else:
+        sig_run = sig
     if a.linkage == "dynamic":
-        label = group_intrachunk_dynamic(sig, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+        label = group_intrachunk_dynamic(sig_run, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                     off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, gate=a.gate,
                     cfiber_thr=cfiber_thr, cfiber_win=cfiber_win, sr=sr,
                     var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win)
     else:
-        label = group_intrachunk_iter(sig, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
+        label = group_intrachunk_iter(sig_run, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
                                  refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr)
+    if pre is not None:
+        label = np.asarray(label)[pre]                    # super-node label -> per original fragment
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)

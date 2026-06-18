@@ -42,6 +42,7 @@ CFIBER_Q="${FK_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfi
 FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
 SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
 REFRAC_CEILING="${FK_REFRAC_CEILING:-1.0}" # 0080 fiber-intrachunk: reject merge if combined 2ms-ISI viol > this %
+PRE_MERGE_COS="${FK_PRE_MERGE_COS:-0}"   # fiber-intrachunk: pre-collapse obvious mutual-NN pairs at cosine>=this before agglomeration (0=off; try 0.97)
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
 # 0086 fiber-refine recall: merge drift fragments cosine misses, when median-template group-delay
@@ -157,6 +158,7 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
         --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
         --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
         --refrac-ceiling "$REFRAC_CEILING" \
+        --pre-merge-cos "$PRE_MERGE_COS" \
         --sig-cap 8000 --emit-units \
         --out-stage refine_intrachunk
 }
