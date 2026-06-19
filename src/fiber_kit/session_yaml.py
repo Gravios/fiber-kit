@@ -227,6 +227,17 @@ def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=T
     return ap
 
 
+def spike_groups(session):
+    """The 1-based spike-group ids in <session>.yaml -- one per spikeDetection.channelGroups entry,
+    matching the CLI (group g indexes channelGroups[g-1]).  [] if the session has none."""
+    path = find_session_yaml(session)
+    if not path:
+        return []
+    doc = _safe_load(path) or {}
+    groups = (doc.get("spikeDetection", {}) or {}).get("channelGroups", []) or []
+    return list(range(1, len(groups) + 1))
+
+
 def program_parameters(session, program):
     """Flatten <session>.yaml programs[program].parameters into {name: value}, or {} if absent.
     The ndmanager convention: a program's parameters live in the session parameter file's `programs:` list,
