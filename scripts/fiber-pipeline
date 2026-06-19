@@ -43,6 +43,7 @@ FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on t
 SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
 REFRAC_CEILING="${FK_REFRAC_CEILING:-1.0}" # 0080 fiber-intrachunk: reject merge if combined 2ms-ISI viol > this %
 PRE_MERGE_COS="${FK_PRE_MERGE_COS:-0}"   # fiber-intrachunk: pre-collapse obvious mutual-NN pairs at cosine>=this before agglomeration (0=off; try 0.97)
+DEDUP_STRICT="${FK_DEDUP_STRICT:-1}"     # fiber-refine: 1=ERROR if a dedup leaves a live per-spike file misaligned (stale); 0=skip+continue
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
 # 0086 fiber-refine recall: merge drift fragments cosine misses, when median-template group-delay
@@ -137,6 +138,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --nudge-split --feature-align "$FEATURE_ALIGN" \
         --merge-min-sim "$REFINE_MERGE_MIN_SIM" \
         --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
+        $( [ "$DEDUP_STRICT" = "1" ] && echo --dedup-strict || echo --no-dedup-strict ) \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes 12 \
         "${warp_args[@]}"

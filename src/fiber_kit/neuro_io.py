@@ -365,16 +365,23 @@ def _is_live_perspike(stage):
 
 
 def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
-                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True):
-    """Subset EVERY per-spike file of one spike group to `keep`, in place, so the
-    .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a
-    dedup -- across all variants (standard|stderiv|...) and post-group stages.
+                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True):
+    """Subset EVERY live per-spike file of one spike group to `keep`, in place, so the
+    .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a dedup --
+    across all variants (standard|stderiv|...) and post-group stages.
 
-    A file is rewritten only if its current row count equals `n_orig` (the pre-dedup
-    spike count); files at any other count are left untouched and reported (already
-    deduped, or unrelated/stale geometry).  `keep` is a boolean mask or index array
-    over the original n_orig spikes.  Returns (rewritten_paths, skipped:[(path,rows)]).
-    """
+    All per-spike files are BINARY; .clu/.res are read here directly with their fixed binary
+    dtype (CLU_DTYPE int32 header+ids, RES_DTYPE int64), never via a text/binary heuristic, so a
+    binary file whose header byte happens to be an ASCII digit (e.g. nClusters=1590 -> leading
+    byte 0x36 '6') is never mis-parsed as text.
+
+    A live file at the original count `n_orig` is rewritten.  A file already at the post-dedup
+    count `nkeep` is left untouched (idempotent re-run).  A live file at ANY OTHER count is
+    STALE/misaligned -- its rows do not correspond 1:1 to this spike set, so it cannot be subset
+    by `keep`; with strict=True (default) this raises (naming the files) rather than silently
+    leaving the group half-deduped, so the stale files can be regenerated or removed and the run
+    re-tried.  Pass strict=False to skip them and proceed.  `keep` is a boolean mask or index
+    array over the original n_orig spikes.  Returns (rewritten_paths, skipped:[(path, rows)])."""
     import glob
     import os
     keep = np.asarray(keep)
@@ -382,7 +389,8 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     elec = str(elec)
     bname = os.path.basename(base)
     rewritten = []
-    skipped = []
+    done = []                                              # already at the deduped count (idempotent)
+    orphans = []                                           # stale / misaligned live files
     excluded = 0
     seen = set()
     for t in types:
@@ -390,51 +398,59 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             tail = os.path.basename(path)[len(bname) + 1:].split(".")  # <type>[.<variant>].<elec>[.<stage>]
             if not tail or tail[0] != t:
                 continue
-            # the electrode is the first all-digit token (variants are non-numeric);
-            # everything after it is the stage.  Require an EXACT group match so e.g.
-            # group 5 never picks up group 15, and a stray '5' inside a stage tag.
+            # the electrode is the first all-digit token (variants are non-numeric); everything
+            # after it is the stage.  Require an EXACT group match so group 5 never picks up 15.
             ei = next((i for i in range(1, len(tail)) if tail[i].isdigit()), None)
             if ei is None or tail[ei] != elec:
                 continue
             if not _is_live_perspike(tail[ei + 1:]):
-                excluded += 1                          # backup / fragment / sidecar -- never touch
+                excluded += 1                              # backup / fragment / sidecar -- never touch
                 continue
             if path in seen:
                 continue
             seen.add(path)
             try:
+                rows = None
                 if t == "res":
-                    v = read_res_file(path)
-                    if len(v) != n_orig:
-                        skipped.append((path, len(v))); continue
-                    write_res_file(path, v[keep])
+                    raw = np.fromfile(path, dtype=RES_DTYPE); rows = raw.size       # binary, fixed dtype
+                    if rows == n_orig:
+                        write_res_file(path, raw[keep]); rewritten.append(path); continue
                 elif t == "clu":
-                    nclu, ids = read_clu_file(path)
-                    if len(ids) != n_orig:
-                        skipped.append((path, len(ids))); continue
-                    write_clu_file(path, ids[keep], n_clusters=nclu)
+                    raw = np.fromfile(path, dtype=CLU_DTYPE); rows = max(raw.size - 1, 0)  # int32 header + ids
+                    if rows == n_orig:
+                        write_clu_file(path, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
+                        rewritten.append(path); continue
                 elif t in ("spk", "spkD"):
-                    w = open_spk_file(path, nsamp, nchan)
-                    if w.shape[0] != n_orig:
-                        skipped.append((path, w.shape[0])); continue
-                    write_spk_file(path, np.asarray(w[keep]))   # materialise the copy before truncating
+                    w = open_spk_file(path, nsamp, nchan); rows = w.shape[0]
+                    if rows == n_orig:
+                        write_spk_file(path, np.asarray(w[keep])); rewritten.append(path); continue  # materialise before truncate
                 elif t in ("fet", "fetD"):
-                    f = read_fet_file(path)
-                    if not f.ok or f.n_spikes != n_orig:
-                        skipped.append((path, f.n_spikes if f.ok else "unreadable")); continue
-                    write_fet_file(path, f.values[keep])
-                rewritten.append(path)
-            except Exception as e:  # noqa: BLE001 -- one bad file must not abort the sweep
-                skipped.append((path, f"error: {e}"))
+                    f = read_fet_file(path); rows = f.n_spikes if f.ok else "unreadable"
+                    if f.ok and rows == n_orig:
+                        write_fet_file(path, f.values[keep]); rewritten.append(path); continue
+                else:
+                    continue
+                (done if rows == nkeep else orphans).append((path, rows))
+            except Exception as e:  # noqa: BLE001 -- one bad file must not abort the sweep silently
+                orphans.append((path, f"error: {e}"))
     if verbose:
         if rewritten:
             print(f"dedup: rewrote {len(rewritten)} group file(s) to {nkeep} spikes: "
                   + ", ".join(os.path.basename(p) for p in rewritten))
-        for p, c in skipped:
-            print(f"dedup: SKIPPED {os.path.basename(p)} (rows={c}, expected {n_orig})")
+        for p, c in done:
+            print(f"dedup: already deduped, left {os.path.basename(p)} (rows={c})")
+        for p, c in orphans:
+            print(f"dedup: STALE/misaligned {os.path.basename(p)} (rows={c}, expected {n_orig} or {nkeep})")
         if excluded:
             print(f"dedup: left {excluded} backup/fragment/sidecar file(s) untouched")
-    return rewritten, skipped
+    if orphans and strict:
+        names = ", ".join(os.path.basename(p) for p, _ in orphans)
+        raise RuntimeError(
+            f"dedup: {len(orphans)} live per-spike file(s) of group {elec} are misaligned "
+            f"(rows != {n_orig} and != {nkeep}) and cannot be subset by the keep-mask: {names}. "
+            f"These are stale from an earlier run -- regenerate or remove them and re-run "
+            f"(or pass --no-dedup-strict / strict=False to skip them).")
+    return rewritten, done + orphans
 
 
 # ── .dat / .fil / .lfp (interleaved int16) ───────────────────────────────────
