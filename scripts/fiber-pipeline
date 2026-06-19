@@ -38,8 +38,8 @@
 set -euo pipefail
 
 # ---------- optional YAML config (sets the FK_* knobs the block below reads) --------------
-# fiber-kit.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs (a default is shipped
-# alongside this script; copy it into your working directory and edit).  Precedence:
+# fiber-kit.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs.  Run `fiber-kit-init` to
+# drop a template into the current directory, then edit it.  Precedence:
 #     exported FK_* env var   >   $FK_CONFIG yaml   >   built-in default in the block below.
 # Absent file => built-in defaults (identical to the pre-config behaviour).  An empty YAML value
 # ("") means "use the built-in default".  $FK_CONFIG defaults to fiber-kit.yaml in the current
