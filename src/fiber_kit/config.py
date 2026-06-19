@@ -99,13 +99,6 @@ class StageConfig:
             out.append(f"{prefix}{f.name}: {sv}".ljust(30) + f"  # {f.metadata.get('help', '')}")
         return "\n".join(out)
 
-    @classmethod
-    def session_block(cls, stage, profile="recommended"):
-        """The fiber_kit.<stage> block to paste into a <session>.yaml, generated from metadata."""
-        body = cls.to_yaml(prefix="    ", profile=profile)
-        return f"fiber_kit:\n  {stage}:\n{body}\n"
-
-
 @dataclass
 class IntrachunkConfig(StageConfig):
     """Tunable knobs for fiber-intrachunk (the within-chunk merge). Structural data-flow flags
@@ -135,15 +128,47 @@ class IntrachunkConfig(StageConfig):
     sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int, recommended=8000)
 
 
-def session_config_main(argv=None):
-    """fiber-kit-session-config -- print the fiber_kit.<stage> block to paste into a <session>.yaml."""
-    import argparse
-    p = argparse.ArgumentParser(
-        prog="fiber-kit-session-config",
-        description="Emit the fiber_kit.<stage> YAML block for a <session>.yaml (default: the recommended "
-                    "pipeline profile -- the values fiber-pipeline uses via `--profile recommended`).")
-    p.add_argument("--profile", choices=("default", "recommended"), default="recommended",
-                   help="'recommended' (default) emits the tuned pipeline values; 'default' the library baseline")
-    a = p.parse_args(argv)
-    print(IntrachunkConfig.session_block("intrachunk", profile=a.profile))
-    return 0
+class Plugin:
+    """An ndmanager plugin: an ordered list of (stage, StageConfig) pairs whose union of knobs forms one
+    `ndm_<name>` program.  The typed config is the single source of truth for the CLI, the `--ndm-describe`
+    schema, the session.yaml `programs:` entry, and the readback (session_yaml.pipeline_section)."""
+    name = None            # the ndm command, e.g. "ndm_fiber-kit"
+    stages = ()            # ((stage_key, StageConfig_subclass), ...)
+    help = ""
+
+    @classmethod
+    def _items(cls, profile):
+        for stage, sc in cls.stages:
+            for f in _dc_fields(sc):
+                v = f.metadata.get("recommended", f.default) if profile == "recommended" else f.default
+                yield stage, f, v
+
+    @classmethod
+    def describe(cls, profile="recommended"):
+        """The NDManager program description, as the YAML `program:` mapping that DescriptionYamlReader
+        parses (name / help / parameters:[{name,value,status}]).  This is the --ndm-describe payload and
+        the single source of truth for the GUI editor.  Knobs flatten <stage>.<knob>."""
+        import yaml
+        params = [{"name": "%s.%s" % (stage, f.name),
+                   "value": ("" if v is None else v),
+                   "status": "Optional"}
+                  for stage, f, v in cls._items(profile)]
+        doc = {"program": {"name": cls.name, "help": cls.help, "parameters": params}}
+        return yaml.safe_dump(doc, sort_keys=False, default_flow_style=False)
+
+    @classmethod
+    def programs_entry(cls, profile="recommended"):
+        """The session.yaml `programs:` list entry to paste in (flattened <stage>.<knob> parameters)."""
+        rows = []
+        for stage, f, v in cls._items(profile):
+            sv = "''" if v is None else v
+            rows.append("  - {name: %s.%s, value: %s, status: Optional}" % (stage, f.name, sv))
+        return "- name: %s\n  parameters:\n%s\n" % (cls.name, "\n".join(rows))
+
+
+class FiberKitPlugin(Plugin):
+    name = "ndm_fiber-kit"
+    stages = (("intrachunk", IntrachunkConfig),)
+    help = ("fiber-kit drift-stable spike-sorting pipeline (standalone CLI: fiber-pipeline). Parameters are\n"
+            "flattened as <stage>.<knob>; only the intrachunk stage is typed so far -- the others use\n"
+            "fiber-pipeline's --profile/env defaults until they are converted to StageConfig.")
