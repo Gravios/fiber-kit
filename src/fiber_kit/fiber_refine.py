@@ -1039,6 +1039,12 @@ def main():
                          "adds the trough-position-vs-asymmetry structure to the clustering/linking "
                          "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
                          "the FIBER_ALIGN env var.")
+    ap.add_argument("--dedup-strict", dest="dedup_strict", action=argparse.BooleanOptionalAction, default=True,
+                    help="when a dedup removes spikes, every live per-spike file of the group must be "
+                         "subset too. --dedup-strict (default) ERRORS if a live file is misaligned (a "
+                         "row count that is neither the pre- nor post-dedup count -- a stale leftover that "
+                         "cannot be subset), naming it so it can be regenerated/removed. --no-dedup-strict "
+                         "skips such files and proceeds.")
     ap.add_argument("--subsample", dest="subsample", action=argparse.BooleanOptionalAction, default=None,
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
@@ -1107,7 +1113,7 @@ def main():
             # a dedup removes physical spikes from the GROUP, so every per-spike file
             # (res/clu/spk/spkD/fet/fetD, across all variants and stages) must drop the
             # same rows -- otherwise any later load hits a spike-count mismatch.
-            nio.apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan)
+            nio.apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan, strict=a.dedup_strict)
 
     if a.chunk_minutes and a.chunk_minutes > 0:
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
