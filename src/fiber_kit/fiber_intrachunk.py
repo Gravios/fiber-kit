@@ -837,6 +837,10 @@ def main():
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     IntrachunkConfig.add_arguments(ap)        # gate/threshold knobs (CLI > env > <session>.yaml > default)
+    ap.add_argument("--profile", choices=("default", "recommended"), default="default",
+                    help="fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: "
+                         "'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, "
+                         "pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline.")
     ap.add_argument("--off-n-ref", type=float, default=DEFAULT_OFF_NREF,
                     help="SNR-adaptive offset gate: spike count at which --off-thr applies as-is; "
                          "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
@@ -872,7 +876,7 @@ def main():
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
     isec = sy.pipeline_section(a.session, "intrachunk")             # <session>.yaml fiber_kit.intrachunk
-    IntrachunkConfig.resolve(a, os.environ, isec).apply_to(a)       # CLI > env > session.yaml > field default
+    IntrachunkConfig.resolve(a, os.environ, isec, profile=a.profile).apply_to(a)   # CLI > env > <session>.yaml > profile
     base = cfg.base; elec = a.group; sr = float(cfg.sr)
     nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method

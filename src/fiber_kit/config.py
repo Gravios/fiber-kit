@@ -18,9 +18,15 @@ import argparse
 from dataclasses import dataclass, field, fields as _dc_fields
 
 
-def knob(default, help="", *, env=None, choices=None, type=float, cli=None):
-    """A config field: `default` plus metadata (help/env/choices/type/cli-flag-name)."""
-    return field(default=default, metadata=dict(help=help, env=env, choices=choices, type=type, cli=cli))
+_UNSET = object()
+
+
+def knob(default, help="", *, env=None, choices=None, type=float, cli=None, recommended=_UNSET):
+    """A config field: `default` plus metadata. `recommended` is the value the 'pipeline' profile uses
+    when nothing higher-priority is set (defaults to `default` when not given)."""
+    rec = default if recommended is _UNSET else recommended
+    return field(default=default, metadata=dict(help=help, env=env, choices=choices, type=type,
+                                                cli=cli, recommended=rec))
 
 
 class StageConfig:
@@ -49,13 +55,15 @@ class StageConfig:
         return t(v)
 
     @classmethod
-    def resolve(cls, args=None, env=None, section=None):
+    def resolve(cls, args=None, env=None, section=None, profile="default"):
         """Build an instance with precedence CLI > env > session-section > default.
 
         args    : the parsed argparse namespace (flags use default=SUPPRESS, so an attribute is
                   present iff the user gave it).  None => skip the CLI layer.
         env     : os.environ-like mapping; a field's env metadata names its FK_* var.
         section : the session.yaml fiber_kit.<stage> dict; keys may be the field name OR its FK_* env name.
+        profile : final fallback when a knob is unset everywhere -- "recommended" uses the pipeline
+                  profile baked into the field metadata, anything else uses the plain field default.
         """
         env = env or {}
         section = section or {}
@@ -71,7 +79,7 @@ class StageConfig:
             elif ev and section.get(ev, "") not in (None, ""):     # tolerate FK_* keys in the yaml section
                 vals[f.name] = cls._coerce(f, section[ev])
             else:
-                vals[f.name] = f.default
+                vals[f.name] = f.metadata.get("recommended", f.default) if profile == "recommended" else f.default
         return cls(**vals)
 
     def apply_to(self, args):
@@ -81,14 +89,21 @@ class StageConfig:
         return args
 
     @classmethod
-    def to_yaml(cls, prefix=""):
-        """Emit a commented YAML block of the defaults — the YAML template, generated from metadata."""
+    def to_yaml(cls, prefix="", profile="default"):
+        """Emit a commented YAML block, generated from metadata. profile='recommended' emits the pipeline
+        profile values, otherwise the plain field defaults."""
         out = []
         for f in _dc_fields(cls):
-            v = f.default
+            v = f.metadata.get("recommended", f.default) if profile == "recommended" else f.default
             sv = '""' if v is None else v
             out.append(f"{prefix}{f.name}: {sv}".ljust(30) + f"  # {f.metadata.get('help', '')}")
         return "\n".join(out)
+
+    @classmethod
+    def session_block(cls, stage, profile="recommended"):
+        """The fiber_kit.<stage> block to paste into a <session>.yaml, generated from metadata."""
+        body = cls.to_yaml(prefix="    ", profile=profile)
+        return f"fiber_kit:\n  {stage}:\n{body}\n"
 
 
 @dataclass
@@ -96,16 +111,16 @@ class IntrachunkConfig(StageConfig):
     """Tunable knobs for fiber-intrachunk (the within-chunk merge). Structural data-flow flags
     (--cpos-*, --clu-*, --out-stage, --emit-units) are NOT here — they are the file-naming contract."""
     gate: str = knob("cosine", "shape gate: cosine|mmd|kcov|cfiber",
-                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber"), type=str)
+                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber"), type=str, recommended="cfiber")
     cos_thr: float = knob(0.85, "cosine recall prefilter", env="FK_INTRA_COS_THR")
     off_thr: float = knob(1.0, "inter-channel offset RMS gate (samples)", env="FK_INTRA_OFF_THR")
     depth_gate: float = knob(35.0, "depth gate (um)", env="FK_INTRA_DEPTH_GATE")
     amp_gate: float = knob(0.0, "absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x (0=off)",
-                           env="FK_INTRA_AMP_GATE")
+                           env="FK_INTRA_AMP_GATE", recommended=1.10)
     refrac_ceiling: float = knob(None, "reject merge if combined 2ms-ISI violation > this percent (empty=off)",
-                                 env="FK_REFRAC_CEILING")
+                                 env="FK_REFRAC_CEILING", recommended=1.0)
     pre_merge_cos: float = knob(0.0, "pre-collapse obvious mutual-NN pairs at cosine>=this (0=off)",
-                                env="FK_PRE_MERGE_COS")
+                                env="FK_PRE_MERGE_COS", recommended=0.97)
     linkage: str = knob("complete", "complete|dynamic|ms",
                         env="FK_INTRA_LINKAGE", choices=("complete", "dynamic", "ms"), type=str)
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
@@ -117,4 +132,18 @@ class IntrachunkConfig(StageConfig):
                             env="FK_CFIBER_NULL", choices=("order", "energy"), type=str)
     cfiber_thr_floor: float = knob(0.0, "absolute floor on the self-calibrated cfiber threshold (0=off)",
                                    env="FK_CFIBER_THR_FLOOR")
-    sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int)
+    sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int, recommended=8000)
+
+
+def session_config_main(argv=None):
+    """fiber-kit-session-config -- print the fiber_kit.<stage> block to paste into a <session>.yaml."""
+    import argparse
+    p = argparse.ArgumentParser(
+        prog="fiber-kit-session-config",
+        description="Emit the fiber_kit.<stage> YAML block for a <session>.yaml (default: the recommended "
+                    "pipeline profile -- the values fiber-pipeline uses via `--profile recommended`).")
+    p.add_argument("--profile", choices=("default", "recommended"), default="recommended",
+                   help="'recommended' (default) emits the tuned pipeline values; 'default' the library baseline")
+    a = p.parse_args(argv)
+    print(IntrachunkConfig.session_block("intrachunk", profile=a.profile))
+    return 0

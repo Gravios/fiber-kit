@@ -79,27 +79,10 @@ fi
 CFIBER_Q="${FK_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
 FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
 SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
-REFRAC_CEILING="${FK_REFRAC_CEILING:-1.0}" # 0080 fiber-intrachunk: reject merge if combined 2ms-ISI viol > this %
-PRE_MERGE_COS="${FK_PRE_MERGE_COS:-0}"   # fiber-intrachunk: pre-collapse obvious mutual-NN pairs at cosine>=this before agglomeration (0=off; try 0.97)
-# fiber-intrachunk merge-time best-lag template registration.  The per-spike aligner registers each
-# fragment to ITS OWN median, so two same-unit fragment templates can sit a sample or two apart -- a
-# residual the zero-lag merge cosine reads as low similarity (2 samples -> ~0.57).  ALIGN_LAG>0 scores
-# the cosine (and, in linkage=dynamic, the variance) at the best lag.  ALIGN_LAG is the half-window in
-# NATIVE samples (6 at the native rate); ALIGN_UPSAMPLE is the 'subsampling rate' -- a cubic-spline
-# upsampling factor so the window is ALIGN_LAG*ALIGN_UPSAMPLE interpolated bins (physical search stays
-# +-ALIGN_LAG native samples, finer-than-parabolic).  0 disables (exact previous behaviour).
-ALIGN_LAG="${FK_ALIGN_LAG:-6}"
-ALIGN_UPSAMPLE="${FK_ALIGN_UPSAMPLE:-1}"
-# Linkage: 'complete' (default) one-shot static-edge clique -- gets the lag-TOLERANT cosine GATE.
-# 'dynamic' is sequential agglomeration that re-templates per merge; ONLY there does the merged template
-# get RE-REGISTERED after every pairwise merge (the "align after every merge" path -- complete linkage
-# cannot re-template by construction).  'ms' = unified merge+split.
-INTRA_LINKAGE="${FK_INTRA_LINKAGE:-complete}"
-# Absolute log-amplitude (energy) gate -- refuse a "same shape, very different energy" merge that the
-# amplitude-invariant cosine/cfiber gates cannot catch.  Natural-log units; 0 = off.  Intra: ln(3)=1.1
-# (3x) allows the within-chunk energy ladder the merger collapses, rejects wider; link: looser, A is a
-# drift-stable anchor so a large cross-chunk energy jump is suspect but real drift varies it somewhat.
-INTRA_AMP_GATE="${FK_INTRA_AMP_GATE:-0}"
+# fiber-intrachunk tuning now lives in the per-session <session>.yaml `fiber_kit.intrachunk` section
+# (config.py IntrachunkConfig).  The pipeline passes `--profile recommended` (the tuned baseline);
+# that block, an exported FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* env
+# var, or a direct --flag override it.  `fiber-kit-session-config` emits a starter block.
 DEDUP_STRICT="${FK_DEDUP_STRICT:-1}"     # fiber-refine: 1=ERROR if a dedup leaves a live per-spike file misaligned (stale); 0=skip+continue
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
@@ -124,10 +107,6 @@ LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles 
 #     the per-fragment split-half null at INTRA_CFIBER_Q.  Set FK_INTRA_GATE=cosine to revert.
 #   * link: cfiber is an additional CO-GATE (cosine AND cfiber); threshold self-calibrates at link time
 #     from the overlap-backbone same-unit shape distances at LINK_CFIBER_Q.  Empty disables it.
-INTRA_GATE="${FK_INTRA_GATE:-cfiber}"
-INTRA_CFIBER_Q="${FK_INTRA_CFIBER_Q:-0.90}"
-CFIBER_NULL="${FK_CFIBER_NULL:-order}"          # fiber-intrachunk: cfiber split-half null basis (order|energy); energy widens it on clean data
-CFIBER_THR_FLOOR="${FK_CFIBER_THR_FLOOR:-0}"   # fiber-intrachunk: absolute floor on the self-calibrated cfiber threshold (0=off)
 LINK_CFIBER_Q="${FK_LINK_CFIBER_Q:-0.90}"          # empty = link cfiber co-gate off
 LINK_AMP_GATE="${FK_LINK_AMP_GATE:-0}"             # absolute log-amplitude gate (natural log; 0 = off)
 
@@ -168,10 +147,6 @@ SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # fiber-session coars
 SESSION_MERGE_CORR="${FK_SESSION_MERGE_CORR:-0.90}"       # fiber-session coarse merge correlation
 REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
 REFINE_CHUNK_MINUTES="${FK_REFINE_CHUNK_MINUTES:-12}"     # fiber-refine chunk length (min)
-INTRA_COS_THR="${FK_INTRA_COS_THR:-0.85}"                 # fiber-intrachunk cosine recall prefilter
-INTRA_OFF_THR="${FK_INTRA_OFF_THR:-1.0}"                  # fiber-intrachunk inter-channel offset RMS gate
-INTRA_DEPTH_GATE="${FK_INTRA_DEPTH_GATE:-35}"             # fiber-intrachunk depth gate (um)
-INTRA_SIG_CAP="${FK_INTRA_SIG_CAP:-8000}"                 # fiber-intrachunk per-fragment spikes for the mean template
 LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
 LINK_OFF_THR="${FK_LINK_OFF_THR:-1.0}"                    # fiber-link inter-channel offset gate
 LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk gap to bridge
@@ -232,15 +207,7 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
     fiber-intrachunk "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
-        --cos-thr "$INTRA_COS_THR" --off-thr "$INTRA_OFF_THR" --depth-gate "$INTRA_DEPTH_GATE" \
-        --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
-        --cfiber-null "$CFIBER_NULL" --cfiber-thr-floor "$CFIBER_THR_FLOOR" \
-        --amp-gate "$INTRA_AMP_GATE" \
-        --linkage "$INTRA_LINKAGE" \
-        --align-lag "$ALIGN_LAG" --align-upsample "$ALIGN_UPSAMPLE" \
-        --refrac-ceiling "$REFRAC_CEILING" \
-        --pre-merge-cos "$PRE_MERGE_COS" \
-        --sig-cap "$INTRA_SIG_CAP" --emit-units \
+        --profile recommended --emit-units \
         --out-stage refine_intrachunk
 }
 
