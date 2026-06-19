@@ -1045,6 +1045,11 @@ def main():
                          "row count that is neither the pre- nor post-dedup count -- a stale leftover that "
                          "cannot be subset), naming it so it can be regenerated/removed. --no-dedup-strict "
                          "skips such files and proceeds.")
+    ap.add_argument("--dedup-stale", choices=("error", "skip", "quarantine"), default=None,
+                    help="policy for stale leftover per-spike files at a third row count (neither pre- nor "
+                         "post-dedup): error (block; = --dedup-strict), skip (leave them; = --no-dedup-strict), "
+                         "or quarantine (rename each aside as <file>.stalebkp and proceed). "
+                         "Default follows --dedup-strict.")
     ap.add_argument("--subsample", dest="subsample", action=argparse.BooleanOptionalAction, default=None,
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
@@ -1113,7 +1118,7 @@ def main():
             # a dedup removes physical spikes from the GROUP, so every per-spike file
             # (res/clu/spk/spkD/fet/fetD, across all variants and stages) must drop the
             # same rows -- otherwise any later load hits a spike-count mismatch.
-            nio.apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan, strict=a.dedup_strict)
+            nio.apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan, strict=a.dedup_strict, stale=a.dedup_stale)
 
     if a.chunk_minutes and a.chunk_minutes > 0:
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,

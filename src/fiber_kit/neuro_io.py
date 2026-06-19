@@ -365,7 +365,8 @@ def _is_live_perspike(stage):
 
 
 def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
-                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True):
+                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True,
+                     stale=None):
     """Subset EVERY live per-spike file of one spike group to `keep`, in place, so the
     .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a dedup --
     across all variants (standard|stderiv|...) and post-group stages.
@@ -380,12 +381,14 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     STALE/misaligned -- its rows do not correspond 1:1 to this spike set, so it cannot be subset
     by `keep`; with strict=True (default) this raises (naming the files) rather than silently
     leaving the group half-deduped, so the stale files can be regenerated or removed and the run
-    re-tried.  Pass strict=False to skip them and proceed.  `keep` is a boolean mask or index
+    re-tried.  Pass strict=False to skip them and proceed, or stale='quarantine' to rename each
+    orphan aside as <file>.stalebkp (excluded from the live set) and proceed non-destructively.  `keep` is a boolean mask or index
     array over the original n_orig spikes.  Returns (rewritten_paths, skipped:[(path, rows)])."""
     import glob
     import os
     keep = np.asarray(keep)
     nkeep = int(keep.sum()) if keep.dtype == bool else len(keep)
+    policy = stale if stale in ("error", "skip", "quarantine") else ("error" if strict else "skip")
     elec = str(elec)
     bname = os.path.basename(base)
     rewritten = []
@@ -439,17 +442,34 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                   + ", ".join(os.path.basename(p) for p in rewritten))
         for p, c in done:
             print(f"dedup: already deduped, left {os.path.basename(p)} (rows={c})")
-        for p, c in orphans:
-            print(f"dedup: STALE/misaligned {os.path.basename(p)} (rows={c}, expected {n_orig} or {nkeep})")
         if excluded:
             print(f"dedup: left {excluded} backup/fragment/sidecar file(s) untouched")
-    if orphans and strict:
+    # stale orphans: a live file whose rows are neither n_orig nor nkeep cannot be subset by `keep`.
+    if orphans and policy == "quarantine":
+        moved = []
+        for p, c in orphans:
+            dst = p + ".stalebkp"                 # excluded from _is_live_perspike(): never re-globbed live
+            try:
+                os.replace(p, dst)
+            except OSError as e:
+                raise RuntimeError(f"dedup: could not quarantine stale {os.path.basename(p)}: {e} "
+                                   f"(would otherwise leave group {elec} half-deduped)")
+            moved.append((dst, c))
+        if verbose:
+            for dst, c in moved:
+                print(f"dedup: quarantined stale {os.path.basename(dst)[:-9]} (rows={c}) "
+                      f"-> {os.path.basename(dst)}")
+        orphans = []
+    elif verbose:
+        for p, c in orphans:
+            print(f"dedup: STALE/misaligned {os.path.basename(p)} (rows={c}, expected {n_orig} or {nkeep})")
+    if orphans and policy == "error":
         names = ", ".join(os.path.basename(p) for p, _ in orphans)
         raise RuntimeError(
             f"dedup: {len(orphans)} live per-spike file(s) of group {elec} are misaligned "
             f"(rows != {n_orig} and != {nkeep}) and cannot be subset by the keep-mask: {names}. "
-            f"These are stale from an earlier run -- regenerate or remove them and re-run "
-            f"(or pass --no-dedup-strict / strict=False to skip them).")
+            f"These are stale from an earlier run -- regenerate, remove, or quarantine them and re-run "
+            f"(--dedup-stale quarantine moves them aside as <file>.stalebkp; --no-dedup-strict skips them).")
     return rewritten, done + orphans
 
 
