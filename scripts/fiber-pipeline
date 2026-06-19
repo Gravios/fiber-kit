@@ -43,6 +43,20 @@ FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on t
 SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
 REFRAC_CEILING="${FK_REFRAC_CEILING:-1.0}" # 0080 fiber-intrachunk: reject merge if combined 2ms-ISI viol > this %
 PRE_MERGE_COS="${FK_PRE_MERGE_COS:-0}"   # fiber-intrachunk: pre-collapse obvious mutual-NN pairs at cosine>=this before agglomeration (0=off; try 0.97)
+# fiber-intrachunk merge-time best-lag template registration.  The per-spike aligner registers each
+# fragment to ITS OWN median, so two same-unit fragment templates can sit a sample or two apart -- a
+# residual the zero-lag merge cosine reads as low similarity (2 samples -> ~0.57).  ALIGN_LAG>0 scores
+# the cosine (and, in linkage=dynamic, the variance) at the best lag.  ALIGN_LAG is the half-window in
+# NATIVE samples (6 at the native rate); ALIGN_UPSAMPLE is the 'subsampling rate' -- a cubic-spline
+# upsampling factor so the window is ALIGN_LAG*ALIGN_UPSAMPLE interpolated bins (physical search stays
+# +-ALIGN_LAG native samples, finer-than-parabolic).  0 disables (exact previous behaviour).
+ALIGN_LAG="${FK_ALIGN_LAG:-6}"
+ALIGN_UPSAMPLE="${FK_ALIGN_UPSAMPLE:-1}"
+# Linkage: 'complete' (default) one-shot static-edge clique -- gets the lag-TOLERANT cosine GATE.
+# 'dynamic' is sequential agglomeration that re-templates per merge; ONLY there does the merged template
+# get RE-REGISTERED after every pairwise merge (the "align after every merge" path -- complete linkage
+# cannot re-template by construction).  'ms' = unified merge+split.
+INTRA_LINKAGE="${FK_INTRA_LINKAGE:-complete}"
 DEDUP_STRICT="${FK_DEDUP_STRICT:-1}"     # fiber-refine: 1=ERROR if a dedup leaves a live per-spike file misaligned (stale); 0=skip+continue
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
@@ -162,6 +176,8 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
         --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
         --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
         --cfiber-null "$CFIBER_NULL" --cfiber-thr-floor "$CFIBER_THR_FLOOR" \
+        --linkage "$INTRA_LINKAGE" \
+        --align-lag "$ALIGN_LAG" --align-upsample "$ALIGN_UPSAMPLE" \
         --refrac-ceiling "$REFRAC_CEILING" \
         --pre-merge-cos "$PRE_MERGE_COS" \
         --sig-cap 8000 --emit-units \

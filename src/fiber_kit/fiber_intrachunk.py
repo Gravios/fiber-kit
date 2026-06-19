@@ -227,10 +227,50 @@ def _isi_viol_union(ta, tb, win_ms=2.0):
     return 100.0 * float(np.mean(np.diff(t) < win_ms / 1000.0))
 
 
+DEFAULT_ALIGN_LAG = 6        # native-sample lag search half-window for merge-time re-registration
+                             # (align_xcorr / interchannel_offsets convention); scaled by --align-upsample
+
+
+def _register(Ti, Tj, maxlag, upsample=1):
+    """Best-lag registration of template Tj onto Ti (both (nsamp,nchan)).
+
+    Channel-summed matched-filter lag (the raw-correlation criterion align_xcorr's per-spike aligner
+    uses) over |lag| <= maxlag NATIVE samples -- searched on an `upsample`x cubic-spline grid
+    (window = maxlag*upsample interpolated bins, mirroring interchannel_offsets' maxlag*up) when
+    upsample>1, else native samples with a 3-point parabolic sub-sample refine.  The detected lag is
+    undone by an exact circular Fourier shift of the native Tj.  Returns (Tj_registered, lag_native,
+    cos_at_lag): cos_at_lag is the lag-tolerant template cosine, recovering same-unit pairs whose
+    medians sit at slightly different absolute sample positions -- the per-fragment-independent aligner
+    registers each fragment to ITS OWN median, leaving a residual inter-template offset the zero-lag
+    cosine cannot see (a 2-sample residual drops a self-cosine to ~0.57)."""
+    ns = Ti.shape[0]
+    if upsample > 1:
+        try:
+            from .fiber_realign import _upsample_spline
+        except ImportError:
+            from fiber_realign import _upsample_spline
+        Ai = _upsample_spline(Ti[None], upsample)[0]; Aj = _upsample_spline(Tj[None], upsample)[0]
+        L = Ai.shape[0]; ml = int(round(maxlag * upsample))
+    else:
+        Ai = Ti; Aj = Tj; L = ns; ml = int(round(maxlag))
+    xc = np.fft.irfft(np.fft.rfft(Aj, axis=0) * np.conj(np.fft.rfft(Ai, axis=0)), n=L, axis=0).real.sum(1)
+    lagax = ((np.arange(L) + L // 2) % L) - L // 2
+    k = int(np.argmax(np.where(np.abs(lagax) <= ml, xc, -np.inf))); d = float(lagax[k])
+    y0, y1, y2 = xc[(k - 1) % L], xc[k], xc[(k + 1) % L]; den = y0 - 2 * y1 + y2
+    if abs(den) > 1e-9:
+        d += float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
+    lag = d / upsample
+    f = np.fft.fftfreq(ns)
+    Tjs = np.fft.ifft(np.fft.fft(Tj, axis=0) * np.exp(2j * np.pi * f[:, None] * lag), axis=0).real
+    a = Ti.ravel(); b = Tjs.ravel()
+    return Tjs, lag, float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+
 def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
-                     cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None):
+                     cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None,
+                     align_lag=0, align_upsample=1):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -282,24 +322,28 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 i, j = ix[a], ix[b]
                 if abs(Y[i] - Y[j]) > depth_gate:           # depth gate first (cheap prefilter)
                     continue
-                if use_cfiber:
-                    if C[a, b] < cos_thr:                   # cosine recall prefilter: combine the
+                ceff = C[a, b]                              # zero-lag cosine; if it falls short only
+                if ceff < cos_thr and align_lag > 0:        # because the two medians sit at slightly
+                    _, _, ceff = _register(sig["template"][i], sig["template"][j],   # different absolute
+                                           align_lag, align_upsample)                # sample positions,
+                if use_cfiber:                              # recover it at best lag (|lag|<=align_lag*up)
+                    if ceff < cos_thr:                      # cosine recall prefilter: combine the
                         continue                            # fiber (centred-cosine) and cfiber
                     sd = float(np.linalg.norm(Scf[i] - Scf[j]))   # (affine-invariant) shape signals --
                     if sd > cthr:                           # both must agree (precision), plus offset+depth
                         continue
                     strength = cthr - sd
                 elif use_kernel:
-                    if C[a, b] < cos_thr:                   # cosine is the cheap recall prefilter;
+                    if ceff < cos_thr:                      # cosine is the cheap recall prefilter;
                         continue                            # the kernel test is the precision filter
                     s = kernel_twosample(feat[i], feat[j], gate)
                     if s > thr:
                         continue
                     strength = thr - s                      # smaller divergence -> stronger
                 else:
-                    if C[a, b] < cos_thr:
+                    if ceff < cos_thr:
                         continue
-                    strength = C[a, b]
+                    strength = ceff
                 if warp_thr is not None and fg.warp_correlation(GD[i], GD[j]) < warp_thr:
                     continue          # group-delay (warp) coherence gate: reject incoherent inter-channel timing
                 o = _offset_rms(off[i], off[j])
@@ -439,7 +483,8 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
                              depth_gate=DEFAULT_DEPTH_GATE, gate="cosine",
                              cfiber_thr=None, cfiber_win=None,
                              off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
-                             sr=32552.0, var_env_mult=3.0, ccg_thr=1e9, ccg_win_ms=2.0):
+                             sr=32552.0, var_env_mult=3.0, ccg_thr=1e9, ccg_win_ms=2.0,
+                             align_lag=0, align_upsample=1):
     """Dynamic-graph agglomeration (priority queue with merge-time recompute), the alternative to
     the one-shot static-edge complete-linkage in group_intrachunk.  Candidate merges are scored by
     spatial agreement, but every candidate is RE-EVALUATED against the CURRENT (possibly already
@@ -479,6 +524,8 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
         if abs(yy[i] - yy[j]) > depth_gate:
             return None
         c = float(flat[i] @ flat[j] / (np.linalg.norm(flat[i]) * np.linalg.norm(flat[j]) + 1e-9))
+        if c < cos_thr and align_lag > 0:                  # recover a same-unit pair whose medians sit
+            _, _, c = _register(T[i], T[j], align_lag, align_upsample)   # at slightly different positions
         if c < cos_thr:
             return None
         if use_cfiber:
@@ -512,8 +559,12 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
             if edge(i, j) is None:                     # RE-EVALUATE on current (possibly merged) state
                 continue
             w = nn[i] + nn[j]
-            mv, _ = _merge_var(flat[i], var[i], nn[i], flat[j], var[j], nn[j])
-            T[i] = (T[i] * nn[i] + T[j] * nn[j]) / w; flat[i] = T[i].reshape(-1)
+            Tj = T[j]
+            if align_lag > 0:                              # align AFTER every pairwise merge: re-register
+                Tj, _, _ = _register(T[i], T[j], align_lag, align_upsample)   # Tj onto Ti before combining
+            flatj = Tj.reshape(-1)                         # so the merged template stays sharp instead of
+            mv, _ = _merge_var(flat[i], var[i], nn[i], flatj, var[j], nn[j])  # smearing two shifted medians
+            T[i] = (T[i] * nn[i] + Tj * nn[j]) / w; flat[i] = T[i].reshape(-1)
             off[i] = fg.interchannel_offsets(T[i]); yy[i] = (yy[i] * nn[i] + yy[j] * nn[j]) / w
             var[i] = mv; nn[i] = w; times[i] = np.sort(np.concatenate([times[i], times[j]]))
             shape_cache.pop(i, None); active.discard(j); label[j] = i
@@ -846,6 +897,20 @@ def main():
                     help="absolute lower bound on the self-calibrated cfiber threshold (0 = off). A blunt "
                          "backstop for the deflation above: keeps the gate from ratcheting shut when fragments "
                          "are very clean. Ignored when --cfiber-thr is given explicitly.")
+    ap.add_argument("--align-lag", type=int, default=DEFAULT_ALIGN_LAG,
+                    help="merge-time best-lag template registration: half-window in NATIVE samples for the "
+                         "channel-summed matched-filter lag search (default 6).  The per-spike aligner "
+                         "registers each fragment to its OWN median, so two same-unit fragment templates can "
+                         "sit a sample or two apart -- a residual the zero-lag merge cosine reads as low "
+                         "similarity (2 samples -> ~0.57).  With align-lag>0 the cosine gate scores at the "
+                         "best lag (recall) and, in --linkage dynamic, the merged template is re-registered "
+                         "after every pairwise merge instead of weighted-averaged (kept sharp).  0 disables "
+                         "(exact previous behaviour).")
+    ap.add_argument("--align-upsample", type=int, default=1,
+                    help="cubic-spline upsampling factor for the align-lag search (the 'subsampling rate'): "
+                         "the window becomes align_lag*upsample interpolated bins so the PHYSICAL search "
+                         "stays +-align_lag native samples at finer-than-parabolic resolution. 1 (default) = "
+                         "native grid + parabolic sub-sample.")
     ap.add_argument("--sig-cap", type=int, default=_SIG_CAP_DEFAULT,
                     help="cap spikes per cluster used to build the MEAN template/offset (memory guard for "
                          "very high-rate units; true spike count is kept for the SNR-adaptive gate). "
@@ -920,12 +985,14 @@ def main():
         label = group_intrachunk_dynamic(sig_run, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                     off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, gate=a.gate,
                     cfiber_thr=cfiber_thr, cfiber_win=cfiber_win, sr=sr,
-                    var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win)
+                    var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win,
+                    align_lag=a.align_lag, align_upsample=a.align_upsample)
     else:
         label = group_intrachunk_iter(sig_run, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
-                                 refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr)
+                                 refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr,
+                                 align_lag=a.align_lag, align_upsample=a.align_upsample)
     if pre is not None:
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
