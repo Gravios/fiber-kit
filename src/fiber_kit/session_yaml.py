@@ -227,6 +227,19 @@ def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=T
     return ap
 
 
+def pipeline_section(session, stage):
+    """Return the `fiber_kit.<stage>` mapping from <session>.yaml -- the per-session pipeline knobs that
+    travel with the session (the ndmanager-plugins convention: a program's parameters live in the session
+    parameter file).  Keys may be knob names (gate, cos_thr, ...) or their FK_* env names.  {} if absent."""
+    path = find_session_yaml(session)
+    if not path:
+        return {}
+    doc = _safe_load(path) or {}
+    fk = doc.get("fiber_kit") or doc.get("fiber-kit") or {}
+    sec = fk.get(stage) if isinstance(fk, dict) else None
+    return sec if isinstance(sec, dict) else {}
+
+
 def resolve_session_params(session, group, channels=None, ntotal=None, nchan=None,
                            nsamp=None, sr=None, require=("channels", "ntotal"), verbose=True):
     """Resolve run parameters from <session>.yaml with CLI overrides taking
