@@ -669,7 +669,6 @@ def dynamic_merge_split(realigned, times, init_label, mask, *, sr=32552.0,
             sub = [mem[lab == 0], mem[lab == 1]]
             vmax = max(float(((F[s] - F[s].mean(0)) ** 2).sum(1).mean()) for s in sub)
             ssub = P if len(P) <= 4000 else P[np.random.default_rng(0).choice(len(P), 4000, replace=False)]
-            lsub = lab if len(P) <= 4000 else lab[:len(ssub)]
             sil = silhouette_score(ssub, lab[:len(ssub)]) if len(np.unique(lab[:len(ssub)])) > 1 else 0.0
             if sil >= split_min_sil and vmax < split_var_drop * nd["var"]:   # separable AND variance drops => mixture
                 del nodes[i]; active.discard(i)
