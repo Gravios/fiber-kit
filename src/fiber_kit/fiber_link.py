@@ -104,7 +104,7 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
-                  cfiber_thr=None, cfiber_win=None):
+                  cfiber_thr=None, cfiber_win=None, amp_gate=0.0):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -139,6 +139,7 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                 dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
                 if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
                     if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
+                            (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
                             (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr) and \
                             (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr):
@@ -230,7 +231,7 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
-                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated"):
+                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -283,7 +284,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
         raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                             chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
                             off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
-                            cfiber_thr=cfiber_thr, cfiber_win=cfw)
+                            cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate)
     else:
         raw = _graph_links(linkage, frag, idx, y0, logA, chunk, D, mask, offs)
     nraw = len(raw)
@@ -367,6 +368,13 @@ def main():
     ap.add_argument("--cos-thr", type=float, default=0.975)
     ap.add_argument("--pos-thr", type=float, default=1.5)
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
+    ap.add_argument("--amp-gate", type=float, default=0.0,
+                    help="absolute log-amplitude gate (natural-log units): veto a cross-chunk link whose two "
+                         "fragments differ in log-energy by more than this (0 = off, default). A is treated as "
+                         "a drift-stable anchor, so a large energy jump between linked fragments is suspect; the "
+                         "cosine/cfiber co-gates are amplitude-invariant and cannot catch it, and logA is "
+                         "otherwise only one standardized term in the pos_thr fingerprint. This is an absolute, "
+                         "un-pooled cap.")
     ap.add_argument("--linkage", choices=["cogated", "spectral"], default="cogated",
                     help="merge method: 'cogated' (default; per-pair mutual-NN position + offset + "
                          "cosine veto stack) or 'spectral' (global graph_link affinity + normalized-"
@@ -418,7 +426,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -431,7 +439,7 @@ def main():
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)

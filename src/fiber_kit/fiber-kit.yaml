@@ -52,7 +52,7 @@ FK_INTRA_GATE:          cfiber  # shape gate: cfiber (affine-invariant) | cosine
 FK_INTRA_CFIBER_Q:      0.90    # cfiber self-calibration quantile
 FK_CFIBER_NULL:         order   # cfiber split-half null basis: order | energy (energy widens on clean data)
 FK_CFIBER_THR_FLOOR:    0       # absolute floor on the self-calibrated cfiber threshold (0 = off)
-FK_INTRA_LINKAGE:       complete# complete | dynamic (dynamic = per-merge re-registration) | ms
+FK_INTRA_LINKAGE:       complete  # complete | dynamic (per-merge re-registration) | ms
 FK_ALIGN_LAG:           6       # merge-time best-lag half-window, NATIVE samples (0 = off; g5 knee ~2)
 FK_ALIGN_UPSAMPLE:      1        # 'subsampling rate': cubic-spline factor; window = lag*upsample bins
 FK_REFRAC_CEILING:      1.0     # reject merge if combined 2ms-ISI violation > this %
@@ -60,6 +60,7 @@ FK_PRE_MERGE_COS:       0.97    # pre-collapse obvious mutual-NN pairs at cosine
 FK_INTRA_COS_THR:       0.85    # cosine recall prefilter
 FK_INTRA_OFF_THR:       1.0     # inter-channel offset RMS gate
 FK_INTRA_DEPTH_GATE:    35      # depth gate (um)
+FK_INTRA_AMP_GATE:      1.10    # absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x cap (0=off)
 FK_INTRA_SIG_CAP:       8000    # per-fragment spikes for the mean template
 
 # ----- fiber-link : cross-chunk link ---------------------------------------
@@ -69,3 +70,4 @@ FK_LINK_WARP_THR:       ""      # warp co-gate (empty = off; did not help on g5)
 FK_LINK_POS_THR:        1.5     # position gate
 FK_LINK_OFF_THR:        1.0     # inter-channel offset gate
 FK_LINK_MAX_GAP:        2       # max chunk gap to bridge
+FK_LINK_AMP_GATE:       1.39    # absolute log-amplitude gate, natural log; ln(4)=1.39 -> 4x cap (0=off; tune vs curation)
