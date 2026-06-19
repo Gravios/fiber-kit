@@ -37,6 +37,44 @@
 # ============================================================================
 set -euo pipefail
 
+# ---------- optional YAML config (sets the FK_* knobs the block below reads) --------------
+# fiber-pipeline.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs (a default is shipped
+# alongside this script; copy it into the session dir and edit).  Precedence:
+#     exported FK_* env var   >   $FK_CONFIG yaml   >   built-in default in the block below.
+# Absent file => built-in defaults (identical to the pre-config behaviour).  An empty YAML value
+# ("") means "use the built-in default".  $FK_CONFIG defaults to fiber-pipeline.yaml in the
+# session dir (FK_DIR, or $PWD).
+FK_CONFIG="${FK_CONFIG:-${FK_DIR:-$PWD}/fiber-pipeline.yaml}"
+if [ -f "$FK_CONFIG" ]; then
+    _cfg="$(python3 - "$FK_CONFIG" <<'PYCFG'
+import sys, shlex
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("fiber-pipeline: PyYAML not installed; ignoring %s\n" % sys.argv[1]); sys.exit(0)
+try:
+    with open(sys.argv[1]) as fh:
+        d = yaml.safe_load(fh) or {}
+except Exception as e:
+    sys.stderr.write("fiber-pipeline: cannot read %s: %s\n" % (sys.argv[1], e)); sys.exit(1)
+if not isinstance(d, dict):
+    sys.stderr.write("fiber-pipeline: %s is not a flat key:value mapping\n" % sys.argv[1]); sys.exit(1)
+for k, v in d.items():
+    if not (isinstance(k, str) and k.startswith("FK_") and k.replace("_", "").isalnum()):
+        sys.stderr.write("fiber-pipeline: skipping non-FK_/odd key %r\n" % (k,)); continue
+    if isinstance(v, bool):            v = "1" if v else "0"
+    elif v is None:                    v = ""
+    elif isinstance(v, (int, float, str)): v = str(v)
+    else:
+        sys.stderr.write("fiber-pipeline: skipping non-scalar %s\n" % k); continue
+    # assign ONLY if the FK_* env var is UNSET, so an exported override (even empty) still wins;
+    # shlex.quote keeps empty -> '' (a true empty string, not the literal two-char ''):
+    print('if [ -z "${%s+x}" ]; then %s=%s; export %s; fi' % (k, k, shlex.quote(v), k))
+PYCFG
+)" || { echo "fiber-pipeline: failed to parse $FK_CONFIG" >&2; exit 1; }
+    eval "$_cfg"
+fi
+
 # ===================== algorithm knobs (all env-overridable) ===========
 CFIBER_Q="${FK_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
 FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
@@ -117,6 +155,21 @@ EBAND_MIN_SPAN="${FK_EBAND_MIN_SPAN:-0.6}"         # band a fiber only if it spa
 EBAND_LOW_ASSIGN="${FK_EBAND_LOW_ASSIGN:-0}"       # bottom fraction of the energy range made ASSIGNMENT-ONLY
                                                    #   (noise-floor angle): assign those spikes from the bands above
 
+# ===================== stage gates (previously hardcoded, now exposed) ==
+SESSION_FINE_METHOD="${FK_SESSION_FINE_METHOD:-rkk}"      # fiber-session per-fiber fine clusterer
+SESSION_CHUNK_MIN="${FK_SESSION_CHUNK_MIN:-12}"           # fiber-session chunk length (min)
+SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # fiber-session coarse merge method
+SESSION_MERGE_CORR="${FK_SESSION_MERGE_CORR:-0.90}"       # fiber-session coarse merge correlation
+REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
+REFINE_CHUNK_MINUTES="${FK_REFINE_CHUNK_MINUTES:-12}"     # fiber-refine chunk length (min)
+INTRA_COS_THR="${FK_INTRA_COS_THR:-0.85}"                 # fiber-intrachunk cosine recall prefilter
+INTRA_OFF_THR="${FK_INTRA_OFF_THR:-1.0}"                  # fiber-intrachunk inter-channel offset RMS gate
+INTRA_DEPTH_GATE="${FK_INTRA_DEPTH_GATE:-35}"             # fiber-intrachunk depth gate (um)
+INTRA_SIG_CAP="${FK_INTRA_SIG_CAP:-8000}"                 # fiber-intrachunk per-fragment spikes for the mean template
+LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
+LINK_OFF_THR="${FK_LINK_OFF_THR:-1.0}"                    # fiber-link inter-channel offset gate
+LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk gap to bridge
+
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
 
@@ -126,8 +179,8 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     local eband_args=()
     [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
     fiber-session "$SESS" "$ELEC" \
-        --method stderiv --fine-method rkk \
-        --chunk-min 12 --merge-method sliding --merge-corr 0.90 \
+        --method stderiv --fine-method "$SESSION_FINE_METHOD" \
+        --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --cfiber-gate --cfiber-q "$CFIBER_Q" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN" \
@@ -153,10 +206,10 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
         --merge-min-sim "$REFINE_MERGE_MIN_SIM" \
-        --split-min-corr 0.93 --split-var-mult "$SPLIT_VAR_MULT" \
+        --split-min-corr "$REFINE_SPLIT_MIN_CORR" --split-var-mult "$SPLIT_VAR_MULT" \
         $( [ "$DEDUP_STRICT" = "1" ] && echo --dedup-strict || echo --no-dedup-strict ) \
         --fold-off-thr "$FOLD_OFF_THR" \
-        --chunk-minutes 12 \
+        --chunk-minutes "$REFINE_CHUNK_MINUTES" \
         "${warp_args[@]}"
 }
 
@@ -173,14 +226,14 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
     fiber-intrachunk "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
-        --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
+        --cos-thr "$INTRA_COS_THR" --off-thr "$INTRA_OFF_THR" --depth-gate "$INTRA_DEPTH_GATE" \
         --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
         --cfiber-null "$CFIBER_NULL" --cfiber-thr-floor "$CFIBER_THR_FLOOR" \
         --linkage "$INTRA_LINKAGE" \
         --align-lag "$ALIGN_LAG" --align-upsample "$ALIGN_UPSAMPLE" \
         --refrac-ceiling "$REFRAC_CEILING" \
         --pre-merge-cos "$PRE_MERGE_COS" \
-        --sig-cap 8000 --emit-units \
+        --sig-cap "$INTRA_SIG_CAP" --emit-units \
         --out-stage refine_intrachunk
 }
 
@@ -194,7 +247,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
         --from-units "$units" \
-        --cos-thr "$LINK_COS_THR" --pos-thr 1.5 --off-thr 1.0 --max-gap 2 \
+        --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
         --refine-trajectory \
         "${warp_args[@]}" \
         --out-stage refine_linked
