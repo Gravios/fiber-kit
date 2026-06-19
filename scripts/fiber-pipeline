@@ -171,7 +171,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
         --cfiber-gate --cfiber-q "$CFIBER_Q" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN" \
-        "${eband_args[@]}"
+        "${eband_args[@]}" "$@"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
@@ -179,7 +179,7 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
     fiber-realign "$SESS" "$ELEC" \
         --clu "$SESS.clu.stderiv.$ELEC" \
         --align-method klusters --reextract --refeaturize \
-        --variants standard,stderiv
+        --variants standard,stderiv "$@"
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
@@ -197,7 +197,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
-        "${warp_args[@]}"
+        "${warp_args[@]}" "$@"
 }
 
 fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk
@@ -205,7 +205,7 @@ fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard sp
     fiber-cpos "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage refine \
         --spk-method standard \
-        --out-method stderiv --out-stage refine
+        --out-method stderiv --out-stage refine "$@"
 }
 
 fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
@@ -214,7 +214,7 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
         --clu-method stderiv --clu-stage refine \
         --cpos-method stderiv --cpos-stage refine \
         --profile recommended --emit-units \
-        --out-stage refine_intrachunk
+        --out-stage refine_intrachunk "$@"
 }
 
 fiber_link() {        # 6. cross-chunk link -> .refine_linked
@@ -231,25 +231,31 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --amp-gate "$LINK_AMP_GATE" \
         --refine-trajectory \
         "${warp_args[@]}" \
-        --out-stage refine_linked
+        --out-stage refine_linked "$@"
     echo "[done] linked clu: $SESS.clu.stderiv.$ELEC.refine_linked"
 }
 
 # ----------------------------- dispatcher -----------------------------------
 usage() {
     echo "usage: $(basename "$0") <elec> [all | <stage> ...]"
+    echo "       $(basename "$0") <elec> <stage> [<arg> ...]   # one stage; args after it override pipeline defaults"
     echo "stages (canonical order): ${STAGES[*]}"
+    echo "override example: $(basename "$0") 5 fiber-intrachunk --gate cosine --amp-gate 1.3"
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
 }
 
 run_stage() {
+    # forward the command-line override args (set in main) to the selected stage only; argparse is
+    # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
+    local -a ov=()
+    [ "$1" = "${OVERRIDE_STAGE:-}" ] && ov=("${OVERRIDE_ARGS[@]}")
     case "$1" in
-        fiber-session)    fiber_session    ;;
-        fiber-realign)    fiber_realign    ;;
-        fiber-refine)     fiber_refine     ;;
-        fiber-cpos)       fiber_cpos       ;;
-        fiber-intrachunk) fiber_intrachunk ;;
-        fiber-link)       fiber_link       ;;
+        fiber-session)    fiber_session    "${ov[@]}" ;;
+        fiber-realign)    fiber_realign    "${ov[@]}" ;;
+        fiber-refine)     fiber_refine     "${ov[@]}" ;;
+        fiber-cpos)       fiber_cpos       "${ov[@]}" ;;
+        fiber-intrachunk) fiber_intrachunk "${ov[@]}" ;;
+        fiber-link)       fiber_link       "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -273,16 +279,32 @@ main() {
         usage >&2; exit 2
     }
 
-    # build + validate the requested stage set (BEFORE any cd, so bad names report cleanly)
+    # build the requested stage set, then optional per-stage override args (BEFORE any cd, so bad
+    # names report cleanly).  The first token after the stage name(s) that is NOT a stage name begins
+    # override args, passed through to fiber-<stage> -- only when exactly one stage is selected.
     declare -A want=()
+    local OVERRIDE_STAGE=""
+    local -a OVERRIDE_ARGS=()
     if [ "$#" -eq 0 ] || [ "${1:-}" = "all" ]; then
         for s in "${STAGES[@]}"; do want[$s]=1; done
     else
+        local in_ov=0
         for a in "$@"; do
-            local ok=0; for s in "${STAGES[@]}"; do [ "$a" = "$s" ] && ok=1; done
-            [ "$ok" = 1 ] || { echo "unknown stage: $a" >&2; usage >&2; exit 2; }
-            want[$a]=1
+            if [ "$in_ov" = 0 ]; then
+                local ok=0; for s in "${STAGES[@]}"; do [ "$a" = "$s" ] && ok=1; done
+                if [ "$ok" = 1 ]; then want[$a]=1; else in_ov=1; OVERRIDE_ARGS+=("$a"); fi
+            else
+                OVERRIDE_ARGS+=("$a")
+            fi
         done
+        if [ "${#OVERRIDE_ARGS[@]}" -gt 0 ]; then
+            [ "${#want[@]}" -eq 1 ] || {
+                echo "error: override args (${OVERRIDE_ARGS[*]}) must follow exactly one stage; got ${#want[@]}" >&2
+                echo "       e.g. $(basename "$0") $ELEC fiber-intrachunk --gate cosine --amp-gate 1.3" >&2
+                usage >&2; exit 2
+            }
+            for s in "${!want[@]}"; do OVERRIDE_STAGE="$s"; done
+        fi
     fi
 
     # resolve session config
