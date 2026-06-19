@@ -270,7 +270,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
                      cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None,
-                     align_lag=0, align_upsample=1):
+                     align_lag=0, align_upsample=1, amp_gate=0.0):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -293,6 +293,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
     GD = [fg.group_delay_profile(sig["template"][k]) for k in range(len(sig["ids"]))] if warp_thr is not None else None
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
+    logA = np.log(np.clip(sig["A"], 1, None))           # absolute log-amplitude gate (energy distance)
     use_kernel = gate in ("mmd", "kcov")
     use_cfiber = gate == "cfiber"
     if use_cfiber:
@@ -322,6 +323,8 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 i, j = ix[a], ix[b]
                 if abs(Y[i] - Y[j]) > depth_gate:           # depth gate first (cheap prefilter)
                     continue
+                if amp_gate > 0 and abs(logA[i] - logA[j]) > amp_gate:   # absolute energy gate: same shape
+                    continue                                # but too far apart in amplitude => not one unit
                 ceff = C[a, b]                              # zero-lag cosine; if it falls short only
                 if ceff < cos_thr and align_lag > 0:        # because the two medians sit at slightly
                     _, _, ceff = _register(sig["template"][i], sig["template"][j],   # different absolute
@@ -484,7 +487,7 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
                              cfiber_thr=None, cfiber_win=None,
                              off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
                              sr=32552.0, var_env_mult=3.0, ccg_thr=1e9, ccg_win_ms=2.0,
-                             align_lag=0, align_upsample=1):
+                             align_lag=0, align_upsample=1, amp_gate=0.0):
     """Dynamic-graph agglomeration (priority queue with merge-time recompute), the alternative to
     the one-shot static-edge complete-linkage in group_intrachunk.  Candidate merges are scored by
     spatial agreement, but every candidate is RE-EVALUATED against the CURRENT (possibly already
@@ -509,6 +512,7 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
     flat = T.reshape(M, -1).copy()
     var = sig["var"].astype(float).copy(); nn = sig["n"].astype(float).copy()
     yy = sig["y0"].astype(float).copy(); off = sig["offset"].astype(float).copy()
+    AA = sig["A"].astype(float).copy()                  # merge-updated amplitude for the energy gate
     times = [np.asarray(t, float) for t in sig["times"]]; chunk = sig["chunk"]
     use_cfiber = gate == "cfiber"
     cthr = float(cfiber_thr) if (use_cfiber and cfiber_thr is not None) else np.inf
@@ -523,6 +527,8 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
     def edge(i, j):                                    # admission on CURRENT state -> strength or None
         if abs(yy[i] - yy[j]) > depth_gate:
             return None
+        if amp_gate > 0 and abs(np.log(max(AA[i], 1.0)) - np.log(max(AA[j], 1.0))) > amp_gate:
+            return None                                # absolute energy gate (same shape, too far in amplitude)
         c = float(flat[i] @ flat[j] / (np.linalg.norm(flat[i]) * np.linalg.norm(flat[j]) + 1e-9))
         if c < cos_thr and align_lag > 0:                  # recover a same-unit pair whose medians sit
             _, _, c = _register(T[i], T[j], align_lag, align_upsample)   # at slightly different positions
@@ -566,6 +572,7 @@ def group_intrachunk_dynamic(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OF
             mv, _ = _merge_var(flat[i], var[i], nn[i], flatj, var[j], nn[j])  # smearing two shifted medians
             T[i] = (T[i] * nn[i] + Tj * nn[j]) / w; flat[i] = T[i].reshape(-1)
             off[i] = fg.interchannel_offsets(T[i]); yy[i] = (yy[i] * nn[i] + yy[j] * nn[j]) / w
+            AA[i] = (AA[i] * nn[i] + AA[j] * nn[j]) / w   # update amplitude before nn[i] is overwritten
             var[i] = mv; nn[i] = w; times[i] = np.sort(np.concatenate([times[i], times[j]]))
             shape_cache.pop(i, None); active.discard(j); label[j] = i
             for k in active:
@@ -837,6 +844,12 @@ def main():
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
+    ap.add_argument("--amp-gate", type=float, default=0.0,
+                    help="absolute log-amplitude gate (natural-log units): refuse a merge whose two "
+                         "fragments differ in log-energy by more than this (0 = off, default). The shape "
+                         "gates (cosine, cfiber) are amplitude-invariant by design, so a same-shape pair at "
+                         "very different energy passes them; this caps the energy distance. ln(3)~=1.1 allows "
+                         "the ~3x within-chunk energy ladder the merger collapses, rejects wider.")
     ap.add_argument("--refrac-ceiling", type=float, default=None,
                     help="post-merge refractory ceiling (%% 2ms ISI violation of the COMBINED train): refuse a merge whose union exceeds this. The curator merge-accept bar -- accepted g5 merges keep it <~0.2 (p90)/<~0.9 (p99), so ~1.0 is a safe ceiling. Catches over-merges of well-populated cells; blind to sparse pairs (use the offset gate for those). None (default) = off (complete linkage only).")
     ap.add_argument("--warp-thr", type=float, default=None,
@@ -985,13 +998,13 @@ def main():
                     off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, gate=a.gate,
                     cfiber_thr=cfiber_thr, cfiber_win=cfiber_win, sr=sr,
                     var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win,
-                    align_lag=a.align_lag, align_upsample=a.align_upsample)
+                    align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)
     else:
         label = group_intrachunk_iter(sig_run, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
                                  refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr,
-                                 align_lag=a.align_lag, align_upsample=a.align_upsample)
+                                 align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)
     if pre is not None:
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
