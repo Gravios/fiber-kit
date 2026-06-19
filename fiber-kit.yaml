@@ -1,8 +1,9 @@
 # ============================================================================
-#  fiber-pipeline.yaml  —  tuning config for scripts/fiber-pipeline
+#  fiber-kit.yaml  —  tuning config for scripts/fiber-pipeline
 #
 #  A FLAT mapping of FK_* knobs.  scripts/fiber-pipeline loads the file found at
-#  $FK_CONFIG (default: fiber-pipeline.yaml in the session dir, i.e. FK_DIR/$PWD).
+#  $FK_CONFIG (default: fiber-kit.yaml in the current working directory where the
+#  pipeline is run).
 #  Copy this template next to a session and edit; it is the single surface for
 #  every tunable pipeline argument.
 #
@@ -26,12 +27,12 @@ FK_SESSION_CHUNK_MIN:   12      # chunk length (min)
 FK_SESSION_MERGE_METHOD: sliding
 FK_SESSION_MERGE_CORR:  0.90    # coarse merge correlation
 # energy-band split (surfaces shape sub-units the drift axis masks); off by default
-FK_EBAND:               0       # 1 = on  (you likely want this on)
+FK_EBAND:               1       # 1 = on  (validated working value)
 FK_EBAND_WIDTH:         0.45    # band width (decades of energy)
 FK_EBAND_OVERLAP:       0.2     # band overlap (decades) for the overlap-anchor relink
 FK_EBAND_CONFOUND:      0.4     # band a fiber only if PC1 R^2 vs log-energy >= this
 FK_EBAND_MIN_SPAN:      0.6     # band a fiber only if it spans >= this many decades
-FK_EBAND_LOW_ASSIGN:    0       # bottom energy fraction made assignment-only (noise-floor)
+FK_EBAND_LOW_ASSIGN:    0.2     # bottom energy fraction made assignment-only (noise-floor)
 
 # ----- fiber-refine : split + fold gates + merge-back ----------------------
 FK_REFINE_LARGE:        150     # split only clusters >= this many spikes
@@ -55,7 +56,7 @@ FK_INTRA_LINKAGE:       complete# complete | dynamic (dynamic = per-merge re-reg
 FK_ALIGN_LAG:           6       # merge-time best-lag half-window, NATIVE samples (0 = off; g5 knee ~2)
 FK_ALIGN_UPSAMPLE:      1        # 'subsampling rate': cubic-spline factor; window = lag*upsample bins
 FK_REFRAC_CEILING:      1.0     # reject merge if combined 2ms-ISI violation > this %
-FK_PRE_MERGE_COS:       0       # pre-collapse obvious mutual-NN pairs at cosine>=this (0 = off; try 0.97)
+FK_PRE_MERGE_COS:       0.97    # pre-collapse obvious mutual-NN pairs at cosine>=this (0 = off)
 FK_INTRA_COS_THR:       0.85    # cosine recall prefilter
 FK_INTRA_OFF_THR:       1.0     # inter-channel offset RMS gate
 FK_INTRA_DEPTH_GATE:    35      # depth gate (um)

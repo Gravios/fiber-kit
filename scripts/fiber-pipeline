@@ -38,13 +38,13 @@
 set -euo pipefail
 
 # ---------- optional YAML config (sets the FK_* knobs the block below reads) --------------
-# fiber-pipeline.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs (a default is shipped
-# alongside this script; copy it into the session dir and edit).  Precedence:
+# fiber-kit.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs (a default is shipped
+# alongside this script; copy it into your working directory and edit).  Precedence:
 #     exported FK_* env var   >   $FK_CONFIG yaml   >   built-in default in the block below.
 # Absent file => built-in defaults (identical to the pre-config behaviour).  An empty YAML value
-# ("") means "use the built-in default".  $FK_CONFIG defaults to fiber-pipeline.yaml in the
-# session dir (FK_DIR, or $PWD).
-FK_CONFIG="${FK_CONFIG:-${FK_DIR:-$PWD}/fiber-pipeline.yaml}"
+# ("") means "use the built-in default".  $FK_CONFIG defaults to fiber-kit.yaml in the current
+# working directory (where the pipeline is run); set FK_CONFIG to point elsewhere.
+FK_CONFIG="${FK_CONFIG:-$PWD/fiber-kit.yaml}"
 if [ -f "$FK_CONFIG" ]; then
     _cfg="$(python3 - "$FK_CONFIG" <<'PYCFG'
 import sys, shlex
