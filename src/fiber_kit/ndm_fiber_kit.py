@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""ndm_fiber-kit -- fiber-kit as an ndmanager plugin (ndm plugin protocol v1).
+
+Run:        ndm_fiber-kit <session>.yaml <group> [stages...]
+            Translates the ndmanager <session>.yaml convention to fiber-pipeline (FK_DIR/FK_SESS + group)
+            and execs it; each stage reads its knobs from the session yaml programs[ndm_fiber-kit] entry.
+Protocol:   ndm_fiber-kit --ndm-describe [--format xml]   NDManager program: schema (YAML; the source of truth)
+            ndm_fiber-kit --ndm-programs                   the session.yaml `programs:` entry to paste in
+            ndm_fiber-kit --ndm-version                    protocol + plugin version
+"""
+import os
+import sys
+
+try:
+    from .config import FiberKitPlugin
+except ImportError:
+    from config import FiberKitPlugin
+
+PROTOCOL = "1"
+
+
+def _version():
+    try:
+        from importlib.metadata import version, PackageNotFoundError
+        try:
+            return version("fiber-kit")
+        except PackageNotFoundError:
+            return "0+unknown"
+    except Exception:
+        return "0+unknown"
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "--ndm-describe":
+        fmt = "yaml"
+        if "--format" in argv:
+            i = argv.index("--format")
+            fmt = argv[i + 1] if i + 1 < len(argv) else "yaml"
+        if fmt != "yaml":
+            sys.stderr.write("ndm_fiber-kit: only --format yaml is supported\n")
+            return 2
+        sys.stdout.write(FiberKitPlugin.describe())
+        return 0
+    if argv and argv[0] == "--ndm-programs":
+        sys.stdout.write(FiberKitPlugin.programs_entry())
+        return 0
+    if argv and argv[0] == "--ndm-version":
+        sys.stdout.write("ndm-plugin-protocol %s\nfiber-kit %s\n" % (PROTOCOL, _version()))
+        return 0
+    if not argv or argv[0] in ("-h", "--help"):
+        sys.stderr.write(__doc__)
+        return 0 if argv[:1] in (["-h"], ["--help"]) else 2
+
+    session = argv[0]
+    rest = argv[1:]
+    p = os.path.abspath(session)
+    d = os.path.dirname(p) or "."
+    base = os.path.basename(p)
+    for ext in (".yaml", ".yml"):
+        if base.endswith(ext):
+            base = base[:-len(ext)]
+            break
+    env = dict(os.environ, FK_DIR=d, FK_SESS=base)
+    try:
+        os.execvpe("fiber-pipeline", ["fiber-pipeline", *rest], env)
+    except FileNotFoundError:
+        sys.stderr.write("ndm_fiber-kit: 'fiber-pipeline' not found on PATH (is fiber-kit installed?)\n")
+        return 127
+
+
+if __name__ == "__main__":
+    sys.exit(main())

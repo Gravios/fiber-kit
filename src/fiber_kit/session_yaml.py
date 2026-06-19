@@ -227,17 +227,30 @@ def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=T
     return ap
 
 
-def pipeline_section(session, stage):
-    """Return the `fiber_kit.<stage>` mapping from <session>.yaml -- the per-session pipeline knobs that
-    travel with the session (the ndmanager-plugins convention: a program's parameters live in the session
-    parameter file).  Keys may be knob names (gate, cos_thr, ...) or their FK_* env names.  {} if absent."""
+def program_parameters(session, program):
+    """Flatten <session>.yaml programs[program].parameters into {name: value}, or {} if absent.
+    The ndmanager convention: a program's parameters live in the session parameter file's `programs:` list,
+    each entry `{name: <prog>, parameters: [{name, value, status}, ...]}`."""
     path = find_session_yaml(session)
     if not path:
         return {}
     doc = _safe_load(path) or {}
-    fk = doc.get("fiber_kit") or doc.get("fiber-kit") or {}
-    sec = fk.get(stage) if isinstance(fk, dict) else None
-    return sec if isinstance(sec, dict) else {}
+    for entry in (doc.get("programs") or []):
+        if isinstance(entry, dict) and entry.get("name") == program:
+            out = {}
+            for p in (entry.get("parameters") or []):
+                if isinstance(p, dict) and "name" in p:
+                    out[p["name"]] = p.get("value")
+            return out
+    return {}
+
+
+def pipeline_section(session, stage, program="ndm_fiber-kit"):
+    """The <stage>.* slice of programs[program] (stage prefix stripped) -- one pipeline stage's per-session
+    knobs.  e.g. programs[ndm_fiber-kit] {intrachunk.gate: cfiber} -> {gate: cfiber}.  {} if absent."""
+    flat = program_parameters(session, program)
+    pre = stage + "."
+    return {k[len(pre):]: v for k, v in flat.items() if isinstance(k, str) and k.startswith(pre)}
 
 
 def resolve_session_params(session, group, channels=None, ntotal=None, nchan=None,
