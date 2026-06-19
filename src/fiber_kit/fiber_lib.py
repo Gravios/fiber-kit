@@ -319,7 +319,9 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
         if subsample:
             r = xp.arange(n); km = (k - 1) % T; kp = (k + 1) % T
             y0 = xc[r, km]; y1 = xc[r, k]; y2 = xc[r, kp]; den = y0 - 2 * y1 + y2
-            d += xp.where(xp.abs(den) > 1e-9, 0.5 * (y0 - y2) / den, 0.0).clip(-0.5, 0.5)
+            ok = xp.abs(den) > 1e-9                       # parabolic vertex only where the peak is curved
+            dsafe = xp.where(ok, den, 1.0)                # keep the divide finite: where() evaluates both arms,
+            d += xp.where(ok, 0.5 * (y0 - y2) / dsafe, 0.0).clip(-0.5, 0.5)   # so /den would warn on flat triples
         total += d
         cur = xp.fft.ifft(FW * xp.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
     cur = _bk.asnumpy(cur); total = _bk.asnumpy(total)
