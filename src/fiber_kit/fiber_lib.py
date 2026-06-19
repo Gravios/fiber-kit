@@ -234,7 +234,6 @@ def centroid_shift(waves, peak, weight="energy"):
 
     Returns sh (N,) float32 signed shift in samples; applying a circular roll of -sh lands the centroid
     on `peak`.  Backend-aware: runs on GPU when backend.gpu_enabled() (CuPy), numpy otherwise."""
-    xp = _bk.xp()
     W = _bk.asarray(np.asarray(waves, float)); T = W.shape[1]
     pos = _centroid_pos(W, weight)                            # backend array, centroid sample in [0,T)
     sh = peak - pos
