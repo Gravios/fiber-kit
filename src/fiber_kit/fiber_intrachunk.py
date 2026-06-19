@@ -33,12 +33,15 @@
 #  merged).  Same neuron in different chunks keeps DIFFERENT ids here by design.
 # ─────────────────────────────────────────────────────────────────────────────
 import argparse
+import os
 import numpy as np
 
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    from .config import IntrachunkConfig
 except ImportError:
     import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    from config import IntrachunkConfig
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -833,8 +836,7 @@ def main():
     ap.add_argument("--cpos-stage", default="refine")
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
-    ap.add_argument("--cos-thr", type=float, default=DEFAULT_COS_THR)
-    ap.add_argument("--off-thr", type=float, default=DEFAULT_OFF_THR)
+    IntrachunkConfig.add_arguments(ap)        # gate/threshold knobs (CLI > env > <session>.yaml > default)
     ap.add_argument("--off-n-ref", type=float, default=DEFAULT_OFF_NREF,
                     help="SNR-adaptive offset gate: spike count at which --off-thr applies as-is; "
                          "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
@@ -843,37 +845,14 @@ def main():
     ap.add_argument("--iter", "--iters", type=int, default=1, dest="n_iter",
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
-    ap.add_argument("--depth-gate", type=float, default=DEFAULT_DEPTH_GATE)
-    ap.add_argument("--amp-gate", type=float, default=0.0,
-                    help="absolute log-amplitude gate (natural-log units): refuse a merge whose two "
-                         "fragments differ in log-energy by more than this (0 = off, default). The shape "
-                         "gates (cosine, cfiber) are amplitude-invariant by design, so a same-shape pair at "
-                         "very different energy passes them; this caps the energy distance. ln(3)~=1.1 allows "
-                         "the ~3x within-chunk energy ladder the merger collapses, rejects wider.")
-    ap.add_argument("--refrac-ceiling", type=float, default=None,
-                    help="post-merge refractory ceiling (%% 2ms ISI violation of the COMBINED train): refuse a merge whose union exceeds this. The curator merge-accept bar -- accepted g5 merges keep it <~0.2 (p90)/<~0.9 (p99), so ~1.0 is a safe ceiling. Catches over-merges of well-populated cells; blind to sparse pairs (use the offset gate for those). None (default) = off (complete linkage only).")
     ap.add_argument("--warp-thr", type=float, default=None,
                     help="group-delay (spatio-temporal WARP) coherence gate, per Omlor-Giese anechoic mixing: require the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this for a merge. Same-neuron warps are coherent across channels, different co-located cells anti-correlate (g5: same ~+0.5 small / ~+0.93 well-populated, 294-vs-295 -0.52). The group-delay estimate is NOISY at low spike count, so use a LOW threshold (~0.3) to avoid vetoing small same-cell merges; the separation is much cleaner on well-populated clusters. Use WITH a relaxed --cos-thr to recover the last few merges. None (default) = off; calibrate on curated merges.")
-    ap.add_argument("--linkage", choices=("complete", "dynamic", "ms"), default="complete",
-                    help="'complete' (default): one-shot static-edge complete-linkage clique. "
-                         "'dynamic': priority-queue agglomeration that recomputes each node and re-scores "
-                         "its edges as merges occur (fixes the static-graph over-merge), with a variance "
-                         "envelope (--var-env-mult) and a temporal cross-CCG gate (--ccg-thr). "
-                         "'ms': unified dynamic-graph MERGE+SPLIT -- merge confident-clean (low residual "
-                         "variance + good shape) first, then KNN/PCA-split the high-variance mixtures, with "
-                         "split products re-entering the merge queue, on one live graph (per-spike output).")
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
                     help="dynamic linkage: single-unit variance envelope = this * median fragment variance; "
                          "blocks merges that push a unit's spread past it (permits the growth de-fragmentation "
                          "needs, caps over-growth).")
-    ap.add_argument("--pre-merge-cos", type=float, default=0.0,
-                    help="before complete/dynamic agglomeration, collapse the OBVIOUS fragment pairs -- mutual "
-                         "nearest-neighbour template cosine >= this (well above --cos-thr), passing the same "
-                         "depth/offset/variance/CCG gates -- so the careful method runs on a smaller, better-"
-                         "populated node set. Mutual-NN keeps the merges a disjoint matching (no chaining). "
-                         "0.0 (default) = off; try 0.97-0.98. Ignored for --linkage ms (per-spike, no fragments).")
     ap.add_argument("--ccg-thr", type=float, default=1e9,
                     help="dynamic linkage: max cross-CCG refractory ratio to admit a merge.  DEFAULT OFF "
                          "(1e9): a simple refractory-dip requirement is WRONG-SIGNED for de-fragmentation -- "
@@ -882,51 +861,9 @@ def main():
                          "a dip, so a low threshold rejects true merges (g5: collapses 1243->1850).  Left as "
                          "scaffolding; a correct temporal term needs duplicate-coincidence vs distinct-co-activity.")
     ap.add_argument("--ccg-win", type=float, default=2.0, help="dynamic linkage: cross-CCG refractory half-window (ms).")
-    ap.add_argument("--gate", choices=("cosine", "mmd", "kcov", "cfiber"), default="cosine",
-                    help="fragment-merge test: 'cosine' (mean template, default & recommended). "
-                         "'cfiber' uses the affine-invariant (rotation+scale) shape descriptor of the "
-                         "template's complex channel-loop instead of mutual-centred cosine — invariant "
-                         "by construction, so it merges cross-energy-band fragments without loosening; "
-                         "offset + depth gates still apply.  "
-                         "'mmd'/'kcov' are kernel two-sample tests (precision filter on cosine-passing "
-                         "pairs); NOTE they OVER-SPLIT as a grouping gate (they separate a neuron's own "
-                         "energy/SNR sub-populations) -- exposed for experimentation on unit-vs-unit "
-                         "discrimination, not for routine grouping")
     ap.add_argument("--cfiber-thr", type=float, default=None,
                     help="gate='cfiber' shape-distance threshold; default None self-calibrates from "
                          "per-fragment split-half nulls at --cfiber-q.")
-    ap.add_argument("--cfiber-q", type=float, default=0.90,
-                    help="quantile of the same-fragment split-half shape null used as the cfiber gate "
-                         "threshold when --cfiber-thr is omitted (default 0.90).")
-    ap.add_argument("--cfiber-null", choices=("order", "energy"), default="order",
-                    help="how each fragment's split-half shape null is built. 'order' (default) splits the "
-                         "spikes first-half/second-half in read order -> reflects within-fragment noise, which "
-                         "COLLAPSES as clusters get cleaner (deflating the threshold so fewer merge). 'energy' "
-                         "splits low-energy-half vs high-energy-half -> the null reflects the within-unit shape "
-                         "change across its own energy range, the variation an across-band same-unit merge must "
-                         "tolerate, so the gate stays appropriately permissive on clean data.")
-    ap.add_argument("--cfiber-thr-floor", type=float, default=0.0,
-                    help="absolute lower bound on the self-calibrated cfiber threshold (0 = off). A blunt "
-                         "backstop for the deflation above: keeps the gate from ratcheting shut when fragments "
-                         "are very clean. Ignored when --cfiber-thr is given explicitly.")
-    ap.add_argument("--align-lag", type=int, default=DEFAULT_ALIGN_LAG,
-                    help="merge-time best-lag template registration: half-window in NATIVE samples for the "
-                         "channel-summed matched-filter lag search (default 6).  The per-spike aligner "
-                         "registers each fragment to its OWN median, so two same-unit fragment templates can "
-                         "sit a sample or two apart -- a residual the zero-lag merge cosine reads as low "
-                         "similarity (2 samples -> ~0.57).  With align-lag>0 the cosine gate scores at the "
-                         "best lag (recall) and, in --linkage dynamic, the merged template is re-registered "
-                         "after every pairwise merge instead of weighted-averaged (kept sharp).  0 disables "
-                         "(exact previous behaviour).")
-    ap.add_argument("--align-upsample", type=int, default=1,
-                    help="cubic-spline upsampling factor for the align-lag search (the 'subsampling rate'): "
-                         "the window becomes align_lag*upsample interpolated bins so the PHYSICAL search "
-                         "stays +-align_lag native samples at finer-than-parabolic resolution. 1 (default) = "
-                         "native grid + parabolic sub-sample.")
-    ap.add_argument("--sig-cap", type=int, default=_SIG_CAP_DEFAULT,
-                    help="cap spikes per cluster used to build the MEAN template/offset (memory guard for "
-                         "very high-rate units; true spike count is kept for the SNR-adaptive gate). "
-                         "Omit for no cap (default). ~8000 keeps templates within noise of the full mean.")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_intrachunk)")
@@ -934,6 +871,8 @@ def main():
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
+    isec = sy.pipeline_section(a.session, "intrachunk")             # <session>.yaml fiber_kit.intrachunk
+    IntrachunkConfig.resolve(a, os.environ, isec).apply_to(a)       # CLI > env > session.yaml > field default
     base = cfg.base; elec = a.group; sr = float(cfg.sr)
     nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
