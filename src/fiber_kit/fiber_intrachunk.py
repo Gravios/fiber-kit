@@ -130,7 +130,7 @@ def kernel_twosample(Xp, Xq, kind="kcov"):
 def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_MIN_N,
                      reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA,
                      feats=None, feat_dim=12, feat_n=80, feat_seed=0, realign_lohi=None,
-                     peak=None, sig_cap=_SIG_CAP_DEFAULT):
+                     peak=None, sig_cap=_SIG_CAP_DEFAULT, cfiber_null="order"):
     """Per-cluster stderiv signature for matching.
 
     spkD     : (nspk, nsamp, nchan) int16 stderiv waveforms (array or memmap).
@@ -185,8 +185,14 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         if feats == "cfiber":                  # self-calibration: same-fragment split-half shape distance
             _w = _cfiber_win(al.shape[1], peak); _h = len(al) // 2
             if _h >= 6:
-                _sa = _cfiber_shapes(al[:_h].mean(0), _w)[0]
-                _sb = _cfiber_shapes(al[_h:].mean(0), _w)[0]
+                if cfiber_null == "energy":    # stratify the halves by spike energy so the null reflects the
+                    _e = (al.reshape(len(al), -1).astype(float) ** 2).sum(1)   # within-unit shape change ACROSS
+                    _o = np.argsort(_e)                                        # energy (the variation an across-
+                    _sa = _cfiber_shapes(al[_o[:_h]].mean(0), _w)[0]           # band same-unit merge must tolerate),
+                    _sb = _cfiber_shapes(al[_o[_h:]].mean(0), _w)[0]           # not just within-band read-order noise
+                else:                          # 'order' (default): first vs second half in read order
+                    _sa = _cfiber_shapes(al[:_h].mean(0), _w)[0]
+                    _sb = _cfiber_shapes(al[_h:].mean(0), _w)[0]
                 NULL.append(float(np.linalg.norm(_sa - _sb)))
             else:
                 NULL.append(np.nan)
@@ -829,6 +835,17 @@ def main():
     ap.add_argument("--cfiber-q", type=float, default=0.90,
                     help="quantile of the same-fragment split-half shape null used as the cfiber gate "
                          "threshold when --cfiber-thr is omitted (default 0.90).")
+    ap.add_argument("--cfiber-null", choices=("order", "energy"), default="order",
+                    help="how each fragment's split-half shape null is built. 'order' (default) splits the "
+                         "spikes first-half/second-half in read order -> reflects within-fragment noise, which "
+                         "COLLAPSES as clusters get cleaner (deflating the threshold so fewer merge). 'energy' "
+                         "splits low-energy-half vs high-energy-half -> the null reflects the within-unit shape "
+                         "change across its own energy range, the variation an across-band same-unit merge must "
+                         "tolerate, so the gate stays appropriately permissive on clean data.")
+    ap.add_argument("--cfiber-thr-floor", type=float, default=0.0,
+                    help="absolute lower bound on the self-calibrated cfiber threshold (0 = off). A blunt "
+                         "backstop for the deflation above: keeps the gate from ratcheting shut when fragments "
+                         "are very clean. Ignored when --cfiber-thr is given explicitly.")
     ap.add_argument("--sig-cap", type=int, default=_SIG_CAP_DEFAULT,
                     help="cap spikes per cluster used to build the MEAN template/offset (memory guard for "
                          "very high-rate units; true spike count is kept for the SNR-adaptive gate). "
@@ -879,13 +896,16 @@ def main():
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
                            chunk_min=a.chunk_minutes, min_n=a.min_n,
                            feats=feats, peak=cfg.peak, sig_cap=a.sig_cap,
-                           realign_lohi=(_m.realign_lo, _m.realign_hi))
+                           realign_lohi=(_m.realign_lo, _m.realign_hi), cfiber_null=a.cfiber_null)
     cfiber_win = _cfiber_win(nsamp, cfg.peak); cfiber_thr = a.cfiber_thr
     if a.gate == "cfiber" and cfiber_thr is None:
         nulls = sig.get("shape_null", np.array([])); nulls = nulls[np.isfinite(nulls)]
         cfiber_thr = float(np.quantile(nulls, a.cfiber_q)) if nulls.size else np.inf
+        floored = max(cfiber_thr, a.cfiber_thr_floor) if a.cfiber_thr_floor > 0 else cfiber_thr
         print(f"[intrachunk] cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f} "
-              f"(split-half null q={a.cfiber_q}, n={nulls.size})")
+              f"(split-half null='{a.cfiber_null}' q={a.cfiber_q}, n={nulls.size})"
+              + (f" -> floored to {floored:.3f}" if floored != cfiber_thr else ""))
+        cfiber_thr = floored
     pre = None
     if getattr(a, "pre_merge_cos", 0.0) and a.pre_merge_cos > 0.0:
         pre = pre_merge_obvious(sig, pre_cos=a.pre_merge_cos, off_thr=a.off_thr, depth_gate=a.depth_gate,

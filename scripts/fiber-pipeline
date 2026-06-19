@@ -69,6 +69,8 @@ LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles 
 #     from the overlap-backbone same-unit shape distances at LINK_CFIBER_Q.  Empty disables it.
 INTRA_GATE="${FK_INTRA_GATE:-cfiber}"
 INTRA_CFIBER_Q="${FK_INTRA_CFIBER_Q:-0.90}"
+CFIBER_NULL="${FK_CFIBER_NULL:-order}"          # fiber-intrachunk: cfiber split-half null basis (order|energy); energy widens it on clean data
+CFIBER_THR_FLOOR="${FK_CFIBER_THR_FLOOR:-0}"   # fiber-intrachunk: absolute floor on the self-calibrated cfiber threshold (0=off)
 LINK_CFIBER_Q="${FK_LINK_CFIBER_Q:-0.90}"          # empty = link cfiber co-gate off
 
 # ===================== over-split tuning (small-cluster regime) ========
@@ -159,6 +161,7 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
         --cpos-method stderiv --cpos-stage refine \
         --cos-thr 0.85 --off-thr 1.0 --depth-gate 35 \
         --gate "$INTRA_GATE" --cfiber-q "$INTRA_CFIBER_Q" \
+        --cfiber-null "$CFIBER_NULL" --cfiber-thr-floor "$CFIBER_THR_FLOOR" \
         --refrac-ceiling "$REFRAC_CEILING" \
         --pre-merge-cos "$PRE_MERGE_COS" \
         --sig-cap 8000 --emit-units \
