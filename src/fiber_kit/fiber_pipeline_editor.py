@@ -261,7 +261,12 @@ def load_plan(path):
         tags = {k: str(st[k]) for k in TAG_FIELDS if k in st and st[k] is not None}
         params = dict(st.get("params") or {})
         args = list(st.get("args") or [])
-        steps.append(PlanStep(stage=st["stage"], tags=tags, params=params, args=args))
+        pos = st.get("pos") or [0.0, 0.0]
+        try:
+            x, y = float(pos[0]), float(pos[1])
+        except (TypeError, ValueError, IndexError):
+            x, y = 0.0, 0.0
+        steps.append(PlanStep(stage=st["stage"], tags=tags, params=params, args=args, x=x, y=y))
     return steps
 
 
@@ -406,6 +411,7 @@ def dump_plan(steps, ordered=True, header=True):
     if yaml is None:
         raise RuntimeError("PyYAML required to write plans (pip install pyyaml)")
     seq = topo_order(steps) if ordered else list(steps)
+    has_layout = any(s.x or s.y for s in steps)              # only record positions once the editor has laid out
     rows = []
     for s in seq:
         d = {"stage": s.stage}
@@ -417,6 +423,8 @@ def dump_plan(steps, ordered=True, header=True):
             d["params"] = dict(s.params)
         if s.args:
             d["args"] = list(s.args)
+        if has_layout:
+            d["pos"] = [int(round(s.x)), int(round(s.y))]    # editor layout; ignored by the runner
         rows.append(d)
     body = yaml.safe_dump({"pipeline": rows}, sort_keys=False, default_flow_style=False, width=120)
     if not header:
@@ -1091,13 +1099,15 @@ def _build_qt():
             except Exception as e:
                 QtWidgets.QMessageBox.critical(self, "Open", "Could not read plan:\n%s" % e); return
             self.path = path
-            auto_layout(self.steps)
+            if not any(s.x or s.y for s in self.steps):  # legacy / hand-written plan with no layout: arrange it
+                auto_layout(self.steps)
             self._clear()
             for s in self.steps:
                 self._add_node(s)
+            for n in self.nodes:                          # place at saved (or just-computed) positions
+                n.setPos(n.step.x, n.step.y)
             self.refresh_edges()
             self.setWindowTitle("fiber-kit pipeline editor — %s" % os.path.basename(path))
-            self.relayout()
             self.statusBar().showMessage("loaded %d steps from %s" % (len(self.steps), path))
 
         def save(self):
