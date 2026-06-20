@@ -92,6 +92,125 @@ CATALOG = {
 STAGES = list(CATALOG)
 
 
+# ── derive each stage's fields from its module's argparse, so the inspector tracks the modules ──
+STAGE_MODULES = {
+    "fiber-session": "fiber_kit.fiber_session",
+    "fiber-realign": "fiber_kit.fiber_realign",
+    "fiber-refine": "fiber_kit.fiber_refine",
+    "fiber-cpos": "fiber_kit.fiber_cpos",
+    "fiber-intrachunk": "fiber_kit.fiber_intrachunk",
+    "fiber-link": "fiber_kit.fiber_link",
+}
+
+# flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
+_STRUCTURAL_FLAGS = {
+    "channels", "ntotal", "nchan", "nsamp", "sr", "peak", "probe", "base", "elec", "session",
+    "dir", "yaml", "verbose", "quiet", "help", "out-clu", "out-res", "out-variant",
+    "in", "in-clu", "out", "clu", "cpos", "spk", "units", "fil", "fil-offset",
+}
+
+
+def _is_structural_flag(flag):
+    return flag in _STRUCTURAL_FLAGS or flag.endswith("-method") or flag.endswith("-stage")
+
+
+class _CaptureParser(Exception):
+    pass
+
+
+def _capture_parser(modname):
+    """Import a stage module and capture its argparse parser WITHOUT running the stage, by intercepting
+    parse_args/parse_known_args -- which every main() calls right after building the parser."""
+    import argparse as _ap
+    import importlib
+    real_pa, real_pk = _ap.ArgumentParser.parse_args, _ap.ArgumentParser.parse_known_args
+    box = {}
+
+    def grab(self, *a, **k):
+        box["p"] = self
+        raise _CaptureParser()
+
+    _ap.ArgumentParser.parse_args = grab
+    _ap.ArgumentParser.parse_known_args = grab
+    try:
+        importlib.import_module(modname).main()
+    except _CaptureParser:
+        pass
+    except SystemExit:
+        pass
+    finally:
+        _ap.ArgumentParser.parse_args = real_pa
+        _ap.ArgumentParser.parse_known_args = real_pk
+    return box.get("p")
+
+
+def introspect_stage(stage):
+    """Tuning flags a stage's module actually exposes (the source of truth), or None if it can't be imported.
+    Valued optionals only; structural plumbing and valueless toggles are dropped.  Each entry carries every
+    alias so the curated overlay can match regardless of which spelling it used."""
+    import argparse as _ap
+    modname = STAGE_MODULES.get(stage)
+    if not modname:
+        return None
+    try:
+        parser = _capture_parser(modname)
+    except Exception:
+        return None
+    if parser is None:
+        return None
+    out = []
+    for a in parser._actions:
+        if not a.option_strings or a.dest == "help" or a.nargs == 0:
+            continue
+        aliases = [s.lstrip("-") for s in a.option_strings]
+        flag = max(aliases, key=len)
+        if _is_structural_flag(flag):
+            continue
+        typ = "choice" if a.choices else {int: "int", float: "float"}.get(a.type, "str")
+        default = a.default
+        if default is None or default == _ap.SUPPRESS:
+            default = ""
+        out.append(dict(flag=flag, aliases=aliases, type=typ, default=default,
+                        help=(a.help or "").strip(), choices=list(a.choices) if a.choices else []))
+    return out
+
+
+_STAGE_PARAMS_CACHE = {}
+
+
+def stage_params(stage):
+    """The inspector's field list for a stage, derived live from its module so flags that are added, renamed
+    or removed track automatically.  Module flags that still match a curated entry keep the curated help and
+    (when the module default is suppressed, as intrachunk's are) the curated default, and are marked
+    'primary' to show first; the rest are 'advanced'.  Falls back to the static curated catalog when the
+    module can't be introspected (e.g. a minimal editor-only environment)."""
+    if stage in _STAGE_PARAMS_CACHE:
+        return _STAGE_PARAMS_CACHE[stage]
+    derived = introspect_stage(stage)
+    if derived is None:
+        result = [dict(p, primary=True) for p in CATALOG[stage]["params"]]
+    else:
+        curated = {p["flag"]: p for p in CATALOG[stage]["params"]}
+        primary, advanced = [], []
+        for d in derived:
+            cm = next((curated[al] for al in d["aliases"] if al in curated), None)
+            entry = dict(flag=d["flag"], type=d["type"], default=d["default"],
+                         help=d["help"], choices=d["choices"])
+            if cm is not None:
+                if (entry["default"] == "" or entry["default"] is None) and cm.get("default") not in (None, ""):
+                    entry["default"] = cm["default"]
+                if cm.get("help"):
+                    entry["help"] = cm["help"]
+                entry["primary"] = True
+                primary.append(entry)
+            else:
+                entry["primary"] = False
+                advanced.append(entry)
+        result = primary + advanced
+    _STAGE_PARAMS_CACHE[stage] = result
+    return result
+
+
 # ───────────────────────────── plan model (Qt-free) ─────────────────────────────
 @dataclass
 class PlanStep:
@@ -504,21 +623,47 @@ def _build_qt():
                 e.setPlaceholderText("(base over-cluster)" if k == "in" else "")
                 e.textChanged.connect(lambda t, kk=k: self._set_tag(kk, t))
                 form.addRow("%s tag" % k, e)
-            # params: tick to include in the plan, with a typed editor
-            if spec["params"]:
+            # params: derived live from the stage's module; tick to include in the plan
+            params = stage_params(node.step.stage)
+            primary = [p for p in params if p.get("primary", True)]
+            advanced = [p for p in params if not p.get("primary", True)]
+            if params:
                 form.addRow(QtWidgets.QLabel("<b>params</b> (ticked = written to plan)"))
-            for pm in spec["params"]:
-                row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
-                cb = QtWidgets.QCheckBox()
-                on = pm["flag"] in node.step.params
-                cb.setChecked(on)
-                ed = self._editor_for(pm, node.step.params.get(pm["flag"], pm["default"]))
-                ed.setEnabled(on)
-                cb.toggled.connect(lambda c, p=pm, e=ed: self._toggle_param(p, e, c))
-                self._wire_editor(pm, ed)
-                h.addWidget(cb); h.addWidget(ed, 1)
-                lab = QtWidgets.QLabel("--%s" % pm["flag"]); lab.setToolTip(pm["help"])
-                form.addRow(lab, row)
+            for pm in primary:
+                self._add_param_row(form, node, pm)
+            if advanced:
+                adv_host = QtWidgets.QWidget()
+                adv_form = QtWidgets.QFormLayout(adv_host)
+                adv_form.setContentsMargins(0, 0, 0, 0)
+                adv_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+                for pm in advanced:
+                    self._add_param_row(adv_form, node, pm)
+                start_open = not primary                  # nothing curated -> show the module's flags outright
+                adv_host.setVisible(start_open)
+                btn = QtWidgets.QToolButton()
+                btn.setStyleSheet("QToolButton{border:none;color:#9cdcff;}")
+                btn.setCheckable(True)
+                btn.setChecked(start_open)
+
+                def _label(on, n=len(advanced)):
+                    return ("\u25be " if on else "\u25b8 ") + "advanced module flags (%d)" % n
+                btn.setText(_label(start_open))
+                btn.toggled.connect(lambda on, b=btn, w=adv_host: (w.setVisible(on), b.setText(_label(on))))
+                form.addRow(btn)
+                form.addRow(adv_host)
+
+        def _add_param_row(self, form, node, pm):
+            row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
+            cb = QtWidgets.QCheckBox()
+            on = pm["flag"] in node.step.params
+            cb.setChecked(on)
+            ed = self._editor_for(pm, node.step.params.get(pm["flag"], pm["default"]))
+            ed.setEnabled(on)
+            cb.toggled.connect(lambda c, p=pm, e=ed: self._toggle_param(p, e, c))
+            self._wire_editor(pm, ed)
+            h.addWidget(cb); h.addWidget(ed, 1)
+            lab = QtWidgets.QLabel("--%s" % pm["flag"]); lab.setToolTip(pm["help"])
+            form.addRow(lab, row)
 
         def _editor_for(self, pm, value):
             if pm["type"] == "choice":
