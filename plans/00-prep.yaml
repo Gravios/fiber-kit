@@ -1,0 +1,6 @@
+# Shared prep — run ONCE.  Over-clusters and realigns in place, producing the base
+# .clu.stderiv.<elec> (+ re-extracted .spk) that every diagnostic branch below starts from.
+#   fiber-pipeline <elec> --plan plans/00-prep.yaml
+pipeline:
+  - {stage: fiber-session, out: ""}
+  - {stage: fiber-realign, in: ""}
