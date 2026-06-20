@@ -178,6 +178,26 @@ def introspect_stage(stage):
 _STAGE_PARAMS_CACHE = {}
 
 
+def stage_accepted_flags(stage):
+    """Every option flag the stage's module accepts (canonical + aliases, structural included), or None if
+    the module can't be imported.  The linter uses this to catch param flags the stage would reject at
+    runtime; introspect_stage's tuning-only filter is too narrow for that."""
+    modname = STAGE_MODULES.get(stage)
+    if not modname:
+        return None
+    try:
+        parser = _capture_parser(modname)
+    except Exception:
+        return None
+    if parser is None:
+        return None
+    flags = set()
+    for a in parser._actions:
+        for s in a.option_strings:
+            flags.add(s.lstrip("-"))
+    return flags
+
+
 def stage_params(stage):
     """The inspector's field list for a stage, derived live from its module so flags that are added, renamed
     or removed track automatically.  Module flags that still match a curated entry keep the curated help and
@@ -311,6 +331,74 @@ def validate(steps):
     except ValueError as e:
         warns.append(str(e))
     return warns
+
+
+def lint(steps):
+    """Static checks on a plan, beyond validate(): returns (errors, warnings).  Errors would break a run
+    (cycle, a param flag the stage rejects, an uncoercible numeric value); warnings are advisory (an input
+    no earlier step produces -- it may exist on disk -- duplicate out tags, modules not importable so flags
+    could not be checked)."""
+    errors, warnings = [], []
+    # structural: reuse validate(), but a dependency cycle is a hard error
+    for w in validate(steps):
+        (errors if "dependency cycle" in w else warnings).append(w)
+    # per-step flag and value checks against the real module CLIs
+    for i, s in enumerate(steps):
+        accepted = stage_accepted_flags(s.stage)
+        if accepted is None:
+            if s.params:
+                warnings.append("step %d (%s): module not importable; param flags not checked" % (i + 1, s.stage))
+            continue
+        types = {}
+        derived = introspect_stage(s.stage) or []
+        for d in derived:
+            for al in d["aliases"]:
+                types[al] = d["type"]
+        for flag, val in s.params.items():
+            if flag not in accepted:
+                errors.append("step %d (%s): unknown flag --%s (the stage would reject it)" % (i + 1, s.stage, flag))
+                continue
+            typ = types.get(flag)
+            if typ in ("int", "float") and str(val).strip() != "":
+                try:
+                    float(val)
+                except (TypeError, ValueError):
+                    errors.append("step %d (%s): --%s expects %s but value is %r"
+                                  % (i + 1, s.stage, flag, typ, val))
+    return errors, warnings
+
+
+def lint_main():
+    import argparse
+    ap = argparse.ArgumentParser(
+        description="Statically check fiber-kit pipeline plans (stage names, tag wiring, cycles, and -- "
+                    "against the real stage modules -- unknown or mistyped param flags).  Exit 1 on errors; "
+                    "with --strict, also on warnings.  Accepts plan files or a fiber-kit.yaml with a "
+                    "'pipeline:' section.")
+    ap.add_argument("plans", nargs="+", help="plan YAML file(s) to lint")
+    ap.add_argument("--strict", action="store_true", help="treat warnings as failures (CI gate)")
+    ap.add_argument("-q", "--quiet", action="store_true", help="print only failures")
+    a = ap.parse_args()
+    import sys
+    rc = 0
+    for path in a.plans:
+        try:
+            steps = load_plan(path)
+        except Exception as e:                                   # noqa: BLE001 - report any load failure as an error
+            print("%s: ERROR could not load plan: %s" % (path, e))
+            rc = 1
+            continue
+        errors, warnings = lint(steps)
+        if errors or warnings or not a.quiet:
+            status = "FAIL" if errors else ("WARN" if warnings else "ok")
+            print("%s: %s (%d steps)" % (path, status, len(steps)))
+        for e in errors:
+            print("  ERROR %s" % e)
+        for w in warnings:
+            print("  warn  %s" % w)
+        if errors or (a.strict and warnings):
+            rc = 1
+    sys.exit(rc)
 
 
 def dump_plan(steps, ordered=True, header=True):
