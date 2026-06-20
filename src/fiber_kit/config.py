@@ -9,9 +9,12 @@
 #  comments that drift from the code.
 #
 #  Resolution precedence (highest first):
-#      explicit CLI flag  >  FK_* env var  >  <session>.yaml fiber_kit.<stage>  >  field default
-#  so a session's tuning lives in its own <session>.yaml (the ndmanager-plugins
-#  convention: a program's parameters travel with the session), while env/CLI stay
+#      explicit CLI flag  >  FK_* env var  >  GLOBAL fiber-kit.yaml  >  <session>.yaml fiber_kit.<stage>  >  field default
+#  The global fiber-kit.yaml (a flat FK_* map at $FK_CONFIG or ./fiber-kit.yaml) OVERRIDES the
+#  per-session tuning when present -- and resolve() auto-loads it, so the override holds on a
+#  direct stage call, not only when run through scripts/fiber-pipeline (which exports it as env).
+#  A session's own tuning still lives in its <session>.yaml (the ndmanager-plugins convention: a
+#  program's parameters travel with the session) for when no global file is present; env/CLI stay
 #  available for one-off sweeps.
 # ─────────────────────────────────────────────────────────────────────────────
 import argparse
@@ -19,6 +22,24 @@ from dataclasses import dataclass, field, fields as _dc_fields
 
 
 _UNSET = object()
+
+
+def load_global_config(path=None):
+    """Load the global fiber-kit.yaml (a FLAT FK_* mapping) that OVERRIDES per-session
+    tuning when present.  Search order: explicit `path`, then $FK_CONFIG, then
+    ./fiber-kit.yaml in the working directory (the same file scripts/fiber-pipeline reads).
+    Returns {} when absent or unreadable, so it is a no-op unless a file is there."""
+    import os
+    p = path or os.environ.get("FK_CONFIG") or os.path.join(os.getcwd(), "fiber-kit.yaml")
+    if not (p and os.path.isfile(p)):
+        return {}
+    try:
+        import yaml
+        with open(p) as fh:
+            d = yaml.safe_load(fh) or {}
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
 
 
 def knob(default, help="", *, env=None, choices=None, type=float, cli=None, recommended=_UNSET):
@@ -55,18 +76,22 @@ class StageConfig:
         return t(v)
 
     @classmethod
-    def resolve(cls, args=None, env=None, section=None, profile="default"):
-        """Build an instance with precedence CLI > env > session-section > default.
+    def resolve(cls, args=None, env=None, section=None, profile="default", global_cfg=None):
+        """Build an instance with precedence CLI > env > GLOBAL fiber-kit.yaml > session-section > default.
 
-        args    : the parsed argparse namespace (flags use default=SUPPRESS, so an attribute is
-                  present iff the user gave it).  None => skip the CLI layer.
-        env     : os.environ-like mapping; a field's env metadata names its FK_* var.
-        section : the session.yaml fiber_kit.<stage> dict; keys may be the field name OR its FK_* env name.
-        profile : final fallback when a knob is unset everywhere -- "recommended" uses the pipeline
-                  profile baked into the field metadata, anything else uses the plain field default.
+        args       : the parsed argparse namespace (flags use default=SUPPRESS, so an attribute is
+                     present iff the user gave it).  None => skip the CLI layer.
+        env        : os.environ-like mapping; a field's env metadata names its FK_* var.
+        section    : the session.yaml fiber_kit.<stage> dict; keys may be the field name OR its FK_* env name.
+        global_cfg : the global fiber-kit.yaml flat FK_* map; OVERRIDES the session section when a key is set.
+                     None => auto-load via load_global_config() ($FK_CONFIG or ./fiber-kit.yaml), so the
+                     override holds on a direct stage call, not only when run through scripts/fiber-pipeline.
+        profile    : final fallback when a knob is unset everywhere -- "recommended" uses the pipeline
+                     profile baked into the field metadata, anything else uses the plain field default.
         """
         env = env or {}
         section = section or {}
+        gcfg = load_global_config() if global_cfg is None else (global_cfg or {})
         vals = {}
         for f in _dc_fields(cls):
             ev = f.metadata.get("env")
@@ -74,6 +99,8 @@ class StageConfig:
                 vals[f.name] = getattr(args, f.name)
             elif ev and env.get(ev, "") != "":
                 vals[f.name] = cls._coerce(f, env[ev])
+            elif ev and gcfg.get(ev, "") not in (None, ""):        # global fiber-kit.yaml overrides the session
+                vals[f.name] = cls._coerce(f, gcfg[ev])
             elif f.name in section and section[f.name] not in (None, ""):
                 vals[f.name] = cls._coerce(f, section[f.name])
             elif ev and section.get(ev, "") not in (None, ""):     # tolerate FK_* keys in the yaml section
