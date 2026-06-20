@@ -46,6 +46,11 @@ def _baseline(W):
     return W - W[:, :6, :].mean(1, keepdims=True)
 
 
+def _trace_var(n, s, q):
+    """Trace of the pooled covariance (sum of per-PC variances) from sufficient stats."""
+    return float(np.sum(q / n - (s / n) ** 2))
+
+
 def template_cosine(a, b):
     a = (a - a[:6].mean(0)).ravel()
     b = (b - b[:6].mean(0)).ravel()
@@ -81,11 +86,15 @@ def _energy_log(tm, theta, win):
 
 
 def defrag(templates, counts, peak, nchan, *, cos_thr=COS_THR, smax=SMAX,
-           amp_gate=AMP_GATE, max_rounds=MAX_ROUND, verbose=True):
+           amp_gate=AMP_GATE, max_rounds=MAX_ROUND, vstats=None, var_allow=None,
+           verbose=True):
     """Mutual-nearest-neighbour merge with template recompute.
 
     templates : dict id -> (nsamp, nchan) mean stderiv template (baseline-subtracted)
     counts    : dict id -> spike count behind that template (for the weighted recompute)
+    vstats    : optional dict id -> (n, s, q) PC-score sufficient stats; when given with
+                var_allow, a merge is also rejected if the merged cluster's PC-variance
+                exceeds var_allow (the curated envelope from fiber-calibrate).
     Returns (root_of, members): root_of maps every input id to its surviving merged
     id; members maps each surviving id to the list of ids folded into it."""
     theta = cf.channel_angles(nchan)
@@ -93,6 +102,8 @@ def defrag(templates, counts, peak, nchan, *, cos_thr=COS_THR, smax=SMAX,
     T = {i: np.asarray(t, float) for i, t in templates.items()}
     C = dict(counts)
     E = {i: _energy_log(T[i], theta, win) for i in T}
+    VS = {i: (vstats[i][0], np.asarray(vstats[i][1], float), np.asarray(vstats[i][2], float))
+          for i in vstats} if (vstats is not None and var_allow is not None) else None
     members = {i: [i] for i in T}
     active = set(T)
     for rnd in range(max_rounds):
@@ -119,13 +130,21 @@ def defrag(templates, counts, peak, nchan, *, cos_thr=COS_THR, smax=SMAX,
                 continue
             if warp_stretch(T[a], T[b], peak) > smax:            # width mismatch -> distinct cell
                 continue
+            if VS is not None:                                   # curated variance budget
+                n2 = VS[a][0] + VS[b][0]; s2 = VS[a][1] + VS[b][1]; q2 = VS[a][2] + VS[b][2]
+                if _trace_var(n2, s2, q2) > var_allow:           # merged cluster too spread for one neuron
+                    continue
             na, nb = C[a], C[b]                                  # merge b into a, recompute template
             T[a] = (T[a] * na + T[b] * nb) / (na + nb)
             C[a] = na + nb
             E[a] = _energy_log(T[a], theta, win)
             members[a] += members[b]
+            if VS is not None:
+                VS[a] = (VS[a][0] + VS[b][0], VS[a][1] + VS[b][1], VS[a][2] + VS[b][2])
             active.discard(b)
             del T[b], C[b], E[b], members[b]
+            if VS is not None:
+                del VS[b]
             used.add(a); used.add(b)
             did = True
         if verbose:
@@ -150,6 +169,12 @@ def main():
     ap.add_argument("--warp-max", type=float, default=SMAX, help="|alpha-1| width gate; above this keep separate (default 0.06)")
     ap.add_argument("--amp-gate", type=float, default=AMP_GATE, help="|delta log|F1|| energy gate (default 1.4, wide)")
     ap.add_argument("--min-cluster", type=int, default=MIN_SPK, help="fragments smaller than this are left untouched")
+    ap.add_argument("--var-budget", default=None,
+                    help="path to a fiber-calibrate .npz; adds a curated PC-variance stopping gate "
+                         "(merge rejected once a merged cluster would be more spread than a real unit)")
+    ap.add_argument("--var-scale", type=float, default=1.0,
+                    help="multiply the loaded variance allowance (dial the operating point: "
+                         ">1 looser/more merging, <1 tighter; floor is conservative, ~1.5-2x reaches the baseline)")
     ap.add_argument("--out-tag", default=None, help="staged .clu stage tag for the merged result (default 'defrag', single token)")
     a = ap.parse_args()
 
@@ -168,8 +193,15 @@ def main():
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
 
     rng = np.random.default_rng(0)
+    var_basis = None; var_allow = None
+    if a.var_budget:
+        cal = np.load(a.var_budget)
+        var_basis = (np.asarray(cal["mu"], float), np.asarray(cal["B"], float))
+        var_allow = float(cal["allow"]) * a.var_scale
+        print(f"variance budget: allow={var_allow:.3e} ({a.var_budget}, scale {a.var_scale})")
     ids = [int(c) for c in np.unique(clu) if c > 1 and int((clu == c).sum()) >= a.min_cluster]
     templates, counts = {}, {}
+    vstats = {} if var_basis is not None else None
     for c in ids:
         idx = np.flatnonzero(clu == c)
         if idx.size > SAMPLE:
@@ -177,10 +209,14 @@ def main():
         W = _baseline(spk[idx].astype(float))
         templates[c] = W.mean(0)
         counts[c] = int(idx.size)
+        if var_basis is not None:
+            F = (W.reshape(len(idx), -1) - var_basis[0]) @ var_basis[1].T
+            vstats[c] = (len(idx), F.sum(0), (F ** 2).sum(0))
     print(f"loaded {len(res)} spikes; {len(ids)} fragments >= {a.min_cluster} spk ({spkpath})")
 
     root_of, members = defrag(templates, counts, peak, nchan,
-                              cos_thr=a.cos_thr, smax=a.warp_max, amp_gate=a.amp_gate)
+                              cos_thr=a.cos_thr, smax=a.warp_max, amp_gate=a.amp_gate,
+                              vstats=vstats, var_allow=var_allow)
     n_merged = len(members)
     largest = max((len(m) for m in members.values()), default=0)
     print(f"defrag: {len(ids)} fragments -> {n_merged} clusters "
