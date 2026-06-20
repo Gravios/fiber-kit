@@ -160,36 +160,54 @@ LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
 
+# ----- modular step plumbing ------------------------------------------------
+# A plan STEP may set these to retarget a stage's input/output clu stage tags, so a stage can be
+# reordered or run more than once with different tags + params (see --plan / --emit-plan):
+#   STEP_IN    input clu stage tag   ('' = the base over-cluster .clu.stderiv.<ELEC>)
+#   STEP_OUT   output clu stage tag
+#   STEP_CPOS  cpos stage tag to read (defaults to STEP_IN)
+#   STEP_UNITS units stage tag for fiber-link (the .units.npz producer)
+#   STEP_SPK   spk feature tag for fiber-cpos localization (raw; default 'standard')
+#   STEP_ARGS  extra per-step flags, appended last so argparse last-wins overrides the knob defaults
+# Unset => the canonical defaults baked into each stage below, so the default pipeline is unchanged.
+_run() {   # run the command, or (dry-run) just print it
+    if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "$@"; printf '\n'
+    else "$@"; fi
+}
+clu_path() {   # $1 = clu stage tag ('' = base over-cluster)
+    if [ -z "${1:-}" ]; then echo "$SESS.clu.stderiv.$ELEC"; else echo "$SESS.clu.stderiv.$ELEC.$1"; fi
+}
+
 # ------------------------------- stages -------------------------------------
 fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
-    echo "== [1/6] fiber-session =="
+    echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-}")) =="
     local eband_args=()
     [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
-    fiber-session "$SESS" "$ELEC" \
+    _run fiber-session "$SESS" "$ELEC" \
         --method stderiv --fine-method "$SESSION_FINE_METHOD" \
         --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --cfiber-gate --cfiber-q "$CFIBER_Q" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN" \
-        "${eband_args[@]}" "$@"
+        "${eband_args[@]}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
-    echo "== [2/6] fiber-realign (in-place commit) =="
-    fiber-realign "$SESS" "$ELEC" \
-        --clu "$SESS.clu.stderiv.$ELEC" \
+    echo "== fiber-realign  (in-place on $(clu_path "${STEP_IN:-}")) =="
+    _run fiber-realign "$SESS" "$ELEC" \
+        --clu "$(clu_path "${STEP_IN:-}")" \
         --align-method klusters --reextract --refeaturize \
-        --variants standard,stderiv "$@"
+        --variants standard,stderiv "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
-    echo "== [3/6] fiber-refine =="
+    echo "== fiber-refine  ($(clu_path "${STEP_IN:-}") -> .${STEP_OUT:-refine}) =="
     local warp_args=()
     [ -n "$MERGE_WARP_RECALL" ] && warp_args+=(--merge-warp-recall "$MERGE_WARP_RECALL" --merge-amp-thr "$MERGE_AMP_THR")
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
-    fiber-refine "$SESS" "$ELEC" \
-        --in-clu "$SESS.clu.stderiv.$ELEC" \
-        --out-method stderiv --out-stage refine \
+    _run fiber-refine "$SESS" "$ELEC" \
+        --in-clu "$(clu_path "${STEP_IN:-}")" \
+        --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
         --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
         --merge-min-sim "$REFINE_MERGE_MIN_SIM" \
@@ -197,48 +215,53 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
-        "${warp_args[@]}" "$@"
+        "${warp_args[@]}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk
-    echo "== [4/6] fiber-cpos (on refine clu) =="
-    fiber-cpos "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage refine \
-        --spk-method standard \
-        --out-method stderiv --out-stage refine "$@"
+    echo "== fiber-cpos  (on .${STEP_IN:-refine}, from raw .spk.${STEP_SPK:-standard}) =="
+    _run fiber-cpos "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --spk-method "${STEP_SPK:-standard}" \
+        --out-method stderiv --out-stage "${STEP_OUT:-refine}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
-    echo "== [5/6] fiber-intrachunk =="
-    fiber-intrachunk "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage refine \
-        --cpos-method stderiv --cpos-stage refine \
+    echo "== fiber-intrachunk  (.${STEP_IN:-refine} -> .${STEP_OUT:-refine_intrachunk}) =="
+    _run fiber-intrachunk "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --profile recommended --emit-units \
-        --out-stage refine_intrachunk "$@"
+        --out-stage "${STEP_OUT:-refine_intrachunk}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_link() {        # 6. cross-chunk link -> .refine_linked
-    echo "== [6/6] fiber-link =="
-    local units="$SESS.clu.stderiv.$ELEC.refine_intrachunk.units.npz"
+    echo "== fiber-link  (.${STEP_IN:-refine} + .${STEP_UNITS:-refine_intrachunk}.units -> .${STEP_OUT:-refine_linked}) =="
+    local units="$(clu_path "${STEP_UNITS:-refine_intrachunk}").units.npz"
     local warp_args=()
     [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
     [ -n "$LINK_CFIBER_Q" ] && warp_args+=(--cfiber-q "$LINK_CFIBER_Q")
-    fiber-link "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage refine \
-        --cpos-method stderiv --cpos-stage refine \
+    _run fiber-link "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --from-units "$units" \
         --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
         --amp-gate "$LINK_AMP_GATE" \
         --refine-trajectory \
         "${warp_args[@]}" \
-        --out-stage refine_linked "$@"
-    echo "[done] linked clu: $SESS.clu.stderiv.$ELEC.refine_linked"
+        --out-stage "${STEP_OUT:-refine_linked}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+    echo "[done] linked clu: $(clu_path "${STEP_OUT:-refine_linked}")"
 }
 
 # ----------------------------- dispatcher -----------------------------------
 usage() {
     echo "usage: $(basename "$0") <elec> [all | <stage> ...]"
     echo "       $(basename "$0") <elec> <stage> [<arg> ...]   # one stage; args after it override pipeline defaults"
+    echo "       $(basename "$0") <elec> --plan <plan.yaml>     # run a custom, reorderable, repeatable step plan"
+    echo "       $(basename "$0") --emit-plan > plan.yaml        # write the canonical plan as an editable template"
+    echo "options: --plan <file>  run an ordered step plan (stages may repeat with different in/out tags+params)"
+    echo "         --dry-run | -n  print the stage commands instead of running them (works with or without --plan)"
+    echo "         --emit-plan     print the canonical plan template ; -l/--list  list stages ; -h/--help"
     echo "stages (canonical order): ${STAGES[*]}"
     echo "override example: $(basename "$0") 5 fiber-intrachunk --gate cosine --amp-gate 1.3"
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
@@ -260,12 +283,128 @@ run_stage() {
     esac
 }
 
+run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling subshell)
+    case "$1" in
+        fiber-session)    fiber_session    ;;
+        fiber-realign)    fiber_realign    ;;
+        fiber-refine)     fiber_refine     ;;
+        fiber-cpos)       fiber_cpos       ;;
+        fiber-intrachunk) fiber_intrachunk ;;
+        fiber-link)       fiber_link       ;;
+        *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
+    esac
+}
+
+# Parse a plan YAML into TAB-delimited normalised steps: stage<TAB>in<TAB>out<TAB>units<TAB>spk<TAB>cpos<TAB>argsquoted
+_plan_parse() {
+    python3 - "$1" <<'PYPLAN'
+import sys, shlex
+try:
+    import yaml
+except ImportError:
+    sys.stderr.write("fiber-pipeline: --plan needs PyYAML (pip install pyyaml)\n"); sys.exit(3)
+try:
+    doc = yaml.safe_load(open(sys.argv[1])) or {}
+except Exception as e:
+    sys.stderr.write("fiber-pipeline: cannot read plan %s: %s\n" % (sys.argv[1], e)); sys.exit(1)
+steps = doc.get("pipeline") if isinstance(doc, dict) else doc
+if not isinstance(steps, list) or not steps:
+    sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-cpos", "fiber-intrachunk", "fiber-link"}
+def field(st, k):
+    v = st.get(k, "")
+    return "" if v is None else str(v)
+rows = []
+for i, st in enumerate(steps):
+    if not isinstance(st, dict):
+        sys.stderr.write("fiber-pipeline: plan step %d is not a mapping\n" % i); sys.exit(1)
+    stage = st.get("stage")
+    if stage not in KNOWN:
+        sys.stderr.write("fiber-pipeline: plan step %d: unknown stage %r (known: %s)\n"
+                         % (i, stage, ", ".join(sorted(KNOWN)))); sys.exit(1)
+    args = []
+    params = st.get("params") or {}
+    if isinstance(params, dict):
+        for k, v in params.items():
+            flag = "--" + str(k).replace("_", "-").lstrip("-")
+            if v is True or v is None or v == "":
+                args.append(flag)                       # bare/boolean flag
+            else:
+                args += [flag, str(v)]
+    extra = st.get("args") or []
+    if isinstance(extra, list):
+        args += [str(a) for a in extra]
+    argq = " ".join(shlex.quote(a) for a in args)
+    rows.append("\x1f".join([stage, field(st, "in"), field(st, "out"),
+                           field(st, "units"), field(st, "spk"), field(st, "cpos"), argq]))
+sys.stdout.write("\n".join(rows))
+PYPLAN
+}
+
+run_plan() {           # run an ordered, possibly-repeating plan of steps
+    local plan="$1"
+    [ -f "$plan" ] || { echo "fiber-pipeline: plan not found: $plan" >&2; exit 2; }
+    local spec; spec="$(_plan_parse "$plan")" || exit $?
+    local n=0 st pin pout punits pspk pcpos pargs
+    while IFS=$'\x1f' read -r st pin pout punits pspk pcpos pargs; do
+        [ -z "$st" ] && continue
+        n=$((n + 1))
+        printf '== [plan %d] %s ==\n' "$n" "$st"
+        (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
+            STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="$punits"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
+            eval "STEP_ARGS=( $pargs )"
+            run_plan_stage "$st"
+        )
+    done <<EOF
+$spec
+EOF
+    [ "$n" -gt 0 ] || { echo "fiber-pipeline: plan produced no steps" >&2; exit 1; }
+}
+
+emit_plan() {          # print the canonical pipeline as an editable plan template
+    cat <<'YAML'
+# fiber-kit pipeline plan.  Steps run IN THIS ORDER; the same stage may appear more than once with
+# different in/out tags and params.  'in'/'out'/'units'/'cpos' are clu STAGE tags ('' = the base
+# over-cluster .clu.stderiv.<elec>).  'params' become --flag value (underscores -> dashes); 'args'
+# are appended verbatim.  Run with:   fiber-pipeline <elec> --plan thisfile.yaml   (add --dry-run to preview).
+pipeline:
+  - {stage: fiber-session,    out: ""}
+  - {stage: fiber-realign,    in: ""}
+  - {stage: fiber-refine,     in: "",      out: refine}
+  - {stage: fiber-cpos,       in: refine,  out: refine, spk: standard}
+  - {stage: fiber-intrachunk, in: refine,  out: refine_intrachunk}
+  - {stage: fiber-link,       in: refine,  units: refine_intrachunk, out: refine_linked}
+
+# Example -- run refine TWICE (coarse pass, then a finer pass) and link off the second:
+#   - {stage: fiber-refine,     in: "",       out: refine,   params: {large: 150}}
+#   - {stage: fiber-refine,     in: refine,   out: refine2,  params: {large: 80, merge-min-sim: 0.94}}
+#   - {stage: fiber-cpos,       in: refine2,  out: refine2}
+#   - {stage: fiber-intrachunk, in: refine2,  out: refine2_intrachunk}
+#   - {stage: fiber-link,       in: refine2,  units: refine2_intrachunk, out: refine2_linked}
+YAML
+}
+
 main() {
-    # help/list need no config
+    # help/list/emit-plan need no config
     case "${1:-}" in
         -h|--help) usage; exit 0 ;;
         -l|--list) printf '%s\n' "${STAGES[@]}"; exit 0 ;;
+        --emit-plan) emit_plan; exit 0 ;;
     esac
+
+    # option scan: pull --dry-run/-n and --plan out of the argument list (anywhere), keep the rest positional
+    local PLAN=""
+    local -a pos=()
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            -n|--dry-run)  FK_DRYRUN=1; export FK_DRYRUN; shift ;;
+            --emit-plan)   emit_plan; exit 0 ;;
+            --plan)        PLAN="${2:-}"; [ -n "$PLAN" ] || { echo "error: --plan needs a file" >&2; exit 2; }; shift 2 ;;
+            --plan=*)      PLAN="${1#--plan=}"; shift ;;
+            *)             pos+=("$1"); shift ;;
+        esac
+    done
+    set -- "${pos[@]+"${pos[@]}"}"
 
     # electrode group: first positional if numeric, else FK_ELEC fallback
     local ELEC
@@ -282,12 +421,14 @@ main() {
     # build the requested stage set, then optional per-stage override args (BEFORE any cd, so bad
     # names report cleanly).  The first token after the stage name(s) that is NOT a stage name begins
     # override args, passed through to fiber-<stage> -- only when exactly one stage is selected.
+    # (Skipped in --plan mode: the plan file defines the steps and their per-step params.)
     declare -A want=()
     local OVERRIDE_STAGE=""
     local -a OVERRIDE_ARGS=()
-    if [ "$#" -eq 0 ] || [ "${1:-}" = "all" ]; then
+    if [ -z "$PLAN" ]; then
+      if [ "$#" -eq 0 ] || [ "${1:-}" = "all" ]; then
         for s in "${STAGES[@]}"; do want[$s]=1; done
-    else
+      else
         local in_ov=0
         for a in "$@"; do
             if [ "$in_ov" = 0 ]; then
@@ -305,6 +446,7 @@ main() {
             }
             for s in "${!want[@]}"; do OVERRIDE_STAGE="$s"; done
         fi
+      fi
     fi
 
     # resolve session config
@@ -313,6 +455,12 @@ main() {
     SESS="${FK_SESS:-$(basename "$DIR")}"
     [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
     cd "$DIR"
+
+    # --plan: run the ordered (possibly-repeating) plan and stop
+    if [ -n "$PLAN" ]; then
+        run_plan "$PLAN"
+        return
+    fi
 
     # run in canonical order, regardless of the order requested
     for s in "${STAGES[@]}"; do
