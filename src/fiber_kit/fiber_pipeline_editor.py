@@ -88,6 +88,10 @@ CATALOG = {
         _p("amp-gate", "float", 1.39, "log-amplitude gate, nat-log; ln4=1.39 -> 4x (0=off)"),
         _p("cfiber-q", "float", 0.90, "cfiber co-gate quantile (0.85-0.95; empty=off)"),
         _p("warp-thr", "str", "", "warp co-gate (empty=off)")]),
+    "fiber-refit": dict(input=True, tags=["in", "out", "cpos"], params=[      # post-curation; not in `all`
+        _p("gate", "choice", "cfiber", "shape descriptor to attach per signature", ["cfiber", "wave", "none"]),
+        _p("chunk-minutes", "int", 12, "per-chunk signature length (min)"),
+        _p("min-n", "int", 12, "min spikes for a per-chunk signature (12-30)")]),
 }
 STAGES = list(CATALOG)
 
@@ -100,6 +104,7 @@ STAGE_MODULES = {
     "fiber-cpos": "fiber_kit.fiber_cpos",
     "fiber-intrachunk": "fiber_kit.fiber_intrachunk",
     "fiber-link": "fiber_kit.fiber_link",
+    "fiber-refit": "fiber_kit.fiber_refit",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
@@ -1019,7 +1024,8 @@ def _build_qt():
             if "out" in CATALOG[stage]["tags"] and not step.tags.get("out"):
                 step.tags["out"] = {"fiber-session": "", "fiber-refine": "refine", "fiber-cpos": "refine",
                                     "fiber-intrachunk": "refine_intrachunk",
-                                    "fiber-link": "refine_linked"}.get(stage, stage.replace("fiber-", ""))
+                                    "fiber-link": "refine_linked",
+                                    "fiber-refit": "curated_refit"}.get(stage, stage.replace("fiber-", ""))
             self.steps.append(step)
             self._add_node(step)
             self.refresh_edges()
