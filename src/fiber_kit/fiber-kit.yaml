@@ -24,6 +24,11 @@
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
 #  Canonical stage order:
 #    fiber-session -> fiber-realign -> fiber-refine -> fiber-cpos -> fiber-intrachunk -> fiber-link
+#
+#  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
+#  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
+#  that plan by default (no --plan needed); an explicit --plan <file> still overrides it.  The FK_* knobs
+#  below remain the tuning surface the plan's stages read.
 # ============================================================================
 
 

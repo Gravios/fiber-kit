@@ -219,6 +219,40 @@ def dump_plan(steps, ordered=True, header=True):
     return head + body
 
 
+PRIMARY_MARKER = "# ---- primary pipeline plan (run by `fiber-pipeline <elec>` when no --plan is given) ----"
+
+
+def _strip_pipeline_block(text):
+    """Remove an existing top-level `pipeline:` block (and our marker comment) from fiber-kit.yaml text,
+    leaving every FK_* line and comment untouched.  A block = the `pipeline:` line plus the following
+    list items ('- ...'), their indented continuations, and blank lines."""
+    lines = text.splitlines(keepends=True)
+    out, i, n = [], 0, len(lines)
+    while i < n:
+        ln = lines[i]
+        if ln.startswith("pipeline:"):
+            i += 1
+            while i < n and (lines[i].strip() == "" or lines[i][:1] in (" ", "\t", "-")):
+                i += 1
+            continue
+        if ln.rstrip("\n") == PRIMARY_MARKER:
+            i += 1
+            continue
+        out.append(ln)
+        i += 1
+    return "".join(out)
+
+
+def embed_plan_in_config(cfg_text, steps):
+    """Return fiber-kit.yaml text with the plan written in as the primary `pipeline:` section, replacing
+    any prior one and preserving the existing FK_* knobs and comments."""
+    body = dump_plan(steps, header=False)            # 'pipeline:\n- ...'
+    base = _strip_pipeline_block(cfg_text or "").rstrip("\n")
+    if base:
+        return base + "\n\n" + PRIMARY_MARKER + "\n" + body
+    return PRIMARY_MARKER + "\n" + body
+
+
 def auto_layout(steps, dx=220.0, dy=130.0):
     """Layered left-to-right layout: column = longest-path depth in the dependency DAG; rows stack
     nodes sharing a column.  Writes x/y onto each step and returns them."""
@@ -590,7 +624,9 @@ def _build_qt():
             act("&New", self.new, "Ctrl+N")
             act("&Open…", self.open_dialog, "Ctrl+O")
             act("&Save", self.save, "Ctrl+S")
-            act("Save &As…", self.save_as, "Ctrl+Shift+S")
+            act("Save Plan &As…", self.save_as, "Ctrl+Shift+S")
+            m.addSeparator()
+            act("Make &Primary (write into fiber-kit.yaml)…", self.make_primary)
             m.addSeparator()
             em = self.menuBar().addMenu("&Edit")
             em.addAction(QtGui.QAction("&Delete node", self, triggered=self.delete_selected, shortcut="Del"))
@@ -735,12 +771,32 @@ def _build_qt():
             self.statusBar().showMessage("saved %s" % self.path)
 
         def save_as(self):
-            p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save plan", self.path or "fiber-plan.yaml",
+            p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save plan as", self.path or "fiber-plan.yaml",
                                                          "YAML (*.yaml *.yml)")
             if p:
                 self.path = p
                 self.setWindowTitle("fiber-kit pipeline editor — %s" % os.path.basename(p))
                 self.save()
+
+        def make_primary(self):
+            try:
+                topo_order(self.steps)                   # refuse to promote a cyclic plan
+            except ValueError as e:
+                QtWidgets.QMessageBox.critical(self, "Make primary", "Plan is not runnable:\n%s" % e); return
+            default = os.environ.get("FK_CONFIG") or os.path.join(
+                os.path.dirname(self.path) if self.path else "", "fiber-kit.yaml") or "fiber-kit.yaml"
+            p, _ = QtWidgets.QFileDialog.getSaveFileName(
+                self, "Make primary — write plan into fiber-kit.yaml (FK_* knobs & comments preserved)",
+                default, "YAML (*.yaml *.yml)")
+            if not p:
+                return
+            cfg = ""
+            if os.path.isfile(p):
+                with open(p) as fh:
+                    cfg = fh.read()
+            with open(p, "w") as fh:
+                fh.write(embed_plan_in_config(cfg, self.steps))
+            self.statusBar().showMessage("wrote primary plan into %s — `fiber-pipeline <elec>` now runs it by default" % p)
 
     return QtWidgets, Editor
 

@@ -60,6 +60,8 @@ except Exception as e:
 if not isinstance(d, dict):
     sys.stderr.write("fiber-pipeline: %s is not a flat key:value mapping\n" % sys.argv[1]); sys.exit(1)
 for k, v in d.items():
+    if k == "pipeline":            # the optional embedded primary plan -- handled separately, not an FK_* knob
+        continue
     if not (isinstance(k, str) and k.startswith("FK_") and k.replace("_", "").isalnum()):
         sys.stderr.write("fiber-pipeline: skipping non-FK_/odd key %r\n" % (k,)); continue
     if isinstance(v, bool):            v = "1" if v else "0"
@@ -262,6 +264,7 @@ usage() {
     echo "options: --plan <file>  run an ordered step plan (stages may repeat with different in/out tags+params)"
     echo "         --dry-run | -n  print the stage commands instead of running them (works with or without --plan)"
     echo "         --emit-plan     print the canonical plan template ; -l/--list  list stages ; -h/--help"
+    echo "primary plan: a 'pipeline:' section embedded in fiber-kit.yaml (\$FK_CONFIG) runs by default when no --plan"
     echo "stages (canonical order): ${STAGES[*]}"
     echo "override example: $(basename "$0") 5 fiber-intrachunk --gate cosine --amp-gate 1.3"
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
@@ -456,7 +459,12 @@ main() {
     [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
     cd "$DIR"
 
-    # --plan: run the ordered (possibly-repeating) plan and stop
+    # --plan: run the ordered (possibly-repeating) plan and stop.  With no --plan, an embedded
+    # `pipeline:` section in $FK_CONFIG (fiber-kit.yaml) is the PRIMARY plan and runs by default.
+    if [ -z "$PLAN" ] && [ -f "$FK_CONFIG" ] && grep -qE '^pipeline:[[:space:]]*$' "$FK_CONFIG"; then
+        PLAN="$FK_CONFIG"
+        echo "fiber-pipeline: running the primary plan embedded in $FK_CONFIG (no --plan given)" >&2
+    fi
     if [ -n "$PLAN" ]; then
         run_plan "$PLAN"
         return
