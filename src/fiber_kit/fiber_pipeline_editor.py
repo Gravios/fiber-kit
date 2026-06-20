@@ -341,6 +341,61 @@ def dump_plan(steps, ordered=True, header=True):
 PRIMARY_MARKER = "# ---- primary pipeline plan (run by `fiber-pipeline <elec>` when no --plan is given) ----"
 
 
+def find_pipeline_exe():
+    """Locate the fiber-pipeline runner: prefer the installed console script, else the scripts/ copy next
+    to this package (so the editor previews correctly from a source checkout too)."""
+    import os
+    import shutil
+    exe = shutil.which("fiber-pipeline")
+    if exe:
+        return [exe]
+    here = os.path.dirname(os.path.abspath(__file__))
+    cand = os.path.normpath(os.path.join(here, "..", "..", "scripts", "fiber-pipeline"))
+    if os.path.isfile(cand):
+        return ["bash", cand]
+    return None
+
+
+def render_dry_run(steps, elec="5", exe=None, timeout=20):
+    """Run the REAL fiber-pipeline in --dry-run on the current plan and return (text, ok).  This shells out
+    to the runner itself -- the preview is exactly what would execute, never a reimplementation that could
+    drift.  Dry-run touches no session files; it runs in a scratch dir with a placeholder session name."""
+    import os
+    import subprocess
+    import tempfile
+    cmd = exe or find_pipeline_exe()
+    if not cmd:
+        return ("fiber-pipeline not found on PATH.\nInstall fiber-kit (pip install -e .) or run the editor "
+                "from a source checkout so scripts/fiber-pipeline is reachable."), False
+    if topo_order is not None:
+        try:
+            topo_order(steps)
+        except ValueError as e:
+            return "plan is not runnable:\n  %s" % e, False
+    tmpd = tempfile.mkdtemp(prefix="fk-preview-")
+    planfile = os.path.join(tmpd, "plan.yaml")
+    try:
+        with open(planfile, "w") as fh:
+            fh.write(dump_plan(steps))
+        env = dict(os.environ, FK_DIR=tmpd, FK_SESS="SESSION")
+        p = subprocess.run(cmd + [str(elec), "--plan", planfile, "--dry-run"],
+                           cwd=tmpd, env=env, capture_output=True, text=True, timeout=timeout)
+        out = p.stdout or ""
+        if p.stderr:
+            out += ("\n" if out else "") + p.stderr
+        return out.rstrip() or "(no output)", p.returncode == 0
+    except subprocess.TimeoutExpired:
+        return "preview timed out after %ds" % timeout, False
+    except Exception as e:                                       # noqa: BLE001 - surface any failure in the pane
+        return "preview failed: %s" % e, False
+    finally:
+        for path in (planfile, tmpd):
+            try:
+                os.remove(path) if os.path.isfile(path) else os.rmdir(path)
+            except OSError:
+                pass
+
+
 def _strip_pipeline_block(text):
     """Remove an existing top-level `pipeline:` block (and our marker comment) from fiber-kit.yaml text,
     leaving every FK_* line and comment untouched.  A block = the `pipeline:` line plus the following
@@ -708,6 +763,7 @@ def _build_qt():
             else:
                 self.node.step.params.pop(pm["flag"], None)
             self.node.update()
+            self.editor.schedule_preview()
 
         def _set_param(self, pm, t):
             if self.node is None or pm["flag"] not in self.node.step.params:
@@ -716,6 +772,7 @@ def _build_qt():
                 self.node.step.params[pm["flag"]] = self._coerce(pm, t)
             except ValueError:
                 pass
+            self.editor.schedule_preview()
 
     class Palette(QtWidgets.QListWidget):
         def __init__(self, editor):
@@ -724,6 +781,32 @@ def _build_qt():
             for s in STAGES:
                 self.addItem(s)
             self.itemDoubleClicked.connect(lambda it: editor.add_stage(it.text()))
+
+    class PreviewDock(QtWidgets.QDockWidget):
+        """Shows the exact command sequence the current plan would run, via the real fiber-pipeline in
+        --dry-run.  Refreshes on demand, and (when 'auto' is on) shortly after each edit."""
+        def __init__(self, editor):
+            super().__init__("Dry-run preview", editor)
+            self.editor = editor
+            w = QtWidgets.QWidget(); v = QtWidgets.QVBoxLayout(w); v.setContentsMargins(4, 4, 4, 4)
+            bar = QtWidgets.QHBoxLayout()
+            bar.addWidget(QtWidgets.QLabel("elec"))
+            self.elec = QtWidgets.QLineEdit("5"); self.elec.setFixedWidth(52)
+            self.elec.setValidator(QtGui.QIntValidator(0, 9999, self))
+            self.elec.textChanged.connect(lambda *_: editor.schedule_preview())
+            bar.addWidget(self.elec)
+            self.auto = QtWidgets.QCheckBox("auto"); self.auto.setChecked(True)
+            bar.addWidget(self.auto)
+            btn = QtWidgets.QPushButton("Refresh"); btn.clicked.connect(editor.run_preview)
+            bar.addWidget(btn); bar.addStretch(1)
+            v.addLayout(bar)
+            self.out = QtWidgets.QPlainTextEdit(); self.out.setReadOnly(True)
+            mono = QtGui.QFont("monospace"); mono.setStyleHint(QtGui.QFont.StyleHint.Monospace)
+            self.out.setFont(mono)
+            self.out.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+            v.addWidget(self.out)
+            self.setWidget(w)
+            self.visibilityChanged.connect(lambda vis: editor.run_preview() if vis else None)
 
     class Editor(QtWidgets.QMainWindow):
         def __init__(self, path=None):
@@ -751,6 +834,12 @@ def _build_qt():
             scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(self.inspector)
             insp.setWidget(scroll)
             self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, insp)
+
+            self.preview = PreviewDock(self)
+            self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.preview)
+            self._preview_timer = QtCore.QTimer(self)
+            self._preview_timer.setSingleShot(True); self._preview_timer.setInterval(450)
+            self._preview_timer.timeout.connect(self.run_preview)
 
             self._menus()
             self.scene.selectionChanged.connect(self._on_sel)
@@ -780,6 +869,7 @@ def _build_qt():
             mm = self.menuBar().addMenu("&Plan")
             mm.addAction(QtGui.QAction("Auto-&layout", self, triggered=self.relayout, shortcut="Ctrl+L"))
             mm.addAction(QtGui.QAction("&Validate", self, triggered=self.do_validate, shortcut="Ctrl+R"))
+            mm.addAction(QtGui.QAction("Dry-run &preview", self, triggered=self.show_preview, shortcut="Ctrl+P"))
 
         # ---- model <-> scene ----
         def _clear(self):
@@ -799,6 +889,24 @@ def _build_qt():
             for src, dst, kind in derive_edges(self.steps):
                 e = EdgeItem(by_index[src], by_index[dst], kind)
                 self.scene.addItem(e); self.edges.append(e)
+            self.schedule_preview()
+
+        def schedule_preview(self):
+            if getattr(self, "preview", None) is not None and self.preview.isVisible() \
+                    and self.preview.auto.isChecked():
+                self._preview_timer.start()
+
+        def run_preview(self):
+            if getattr(self, "preview", None) is None:
+                return
+            elec = self.preview.elec.text() or "5"
+            text, ok = render_dry_run(self.steps, elec=elec)
+            self.preview.out.setPlainText(text)
+            self.preview.out.setStyleSheet("" if ok else "QPlainTextEdit{color:#ffb4b4;}")
+            self.statusBar().showMessage("dry-run preview refreshed" if ok else "dry-run preview: error")
+
+        def show_preview(self):
+            self.preview.show(); self.preview.raise_(); self.run_preview()
 
         def select_node(self, node):
             self.inspector.show_node(node)
