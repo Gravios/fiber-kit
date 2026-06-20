@@ -1,0 +1,675 @@
+#  fiber_pipeline_editor.py — Qt6 (>= 6.8) node-graph editor for fiber-kit pipeline plans.
+#
+#  Edits the scripts/fiber-pipeline `--plan` YAML (an ordered list of steps; stages may repeat and
+#  be reordered).  Layout:
+#     LEFT    palette of pipeline stages (double-click to add a node)
+#     CENTRE  node canvas: each step is a node, connectors wire one step's OUT tag to the next's IN
+#     RIGHT   inspector: edit the selected node's structural tags (in/out/units/cpos/spk) and its
+#             tunable params (only the ones you tick are written to the plan; the rest stay default)
+#  Save writes the plan YAML (in dependency / topological order).
+#
+#  The model core below (catalog, PlanStep, load/dump/topo/validate/auto_layout) is Qt-free and
+#  unit-testable; the PySide6 view is only built when Qt is present.  Run: `fiber-plan-edit [plan.yaml]`.
+
+import sys
+import os
+from dataclasses import dataclass, field
+
+try:
+    import yaml
+except ImportError:                                              # pragma: no cover
+    yaml = None
+
+TAG_FIELDS = ("in", "out", "units", "cpos", "spk")
+
+
+# ───────────────────────────── stage catalog (UI metadata) ─────────────────────────────
+def _intrachunk_params():
+    """Pull the intrachunk knobs straight from the typed IntrachunkConfig so the editor never drifts
+    from the code; fall back to a static list if config.py is unavailable."""
+    try:
+        from dataclasses import fields as _dcf
+        try:
+            from .config import IntrachunkConfig
+        except ImportError:
+            from config import IntrachunkConfig
+        out = []
+        for f in _dcf(IntrachunkConfig):
+            m = f.metadata
+            flag = m.get("cli") or f.name.replace("_", "-")
+            choices = list(m.get("choices") or [])
+            typ = "choice" if choices else {float: "float", int: "int", str: "str"}.get(m.get("type", float), "float")
+            out.append(dict(flag=flag, type=typ, default=("" if f.default is None else f.default),
+                            help=m.get("help", ""), choices=choices))
+        return out
+    except Exception:
+        return [dict(flag="gate", type="choice", default="cfiber", help="shape gate",
+                     choices=["cosine", "mmd", "kcov", "cfiber"]),
+                dict(flag="cos-thr", type="float", default=0.85, help="cosine recall prefilter", choices=[]),
+                dict(flag="amp-gate", type="float", default=1.10, help="log-amplitude gate (nat-log; 0=off)", choices=[])]
+
+
+def _p(flag, typ, default, help, choices=()):
+    return dict(flag=flag, type=typ, default=default, help=help, choices=list(choices))
+
+
+CATALOG = {
+    "fiber-session": dict(input=False, tags=["out"], params=[
+        _p("fine-method", "choice", "rkk", "per-fiber fine clusterer", ["rkk", "kk"]),
+        _p("chunk-min", "int", 12, "chunk length (min); drift << site pitch per chunk"),
+        _p("merge-method", "choice", "sliding", "coarse merge method", ["sliding"]),
+        _p("merge-corr", "float", 0.90, "coarse-fiber template-correlation merge (0.88-0.93)"),
+        _p("cfiber-q", "float", 0.90, "within-fiber cfiber shape-veto quantile (0.85-0.95)"),
+        _p("feature-align", "choice", "xcorr", "sub-sample align before featurize", ["xcorr", "centroid", "off"]),
+        _p("inclusion-k", "float", 2.5, "core radius = median + k*MAD (2.0-3.0; lower=purer)"),
+        _p("dip-dim", "int", 6, "dip-test PCA dims (4-8)"),
+        _p("dip-alpha", "float", 0.02, "dip-test p to bisect (0.01-0.03; >0.05 splits noise)"),
+        _p("dip-min", "int", 30, "min spikes to bisect (30-60)")]),
+    "fiber-realign": dict(input=True, tags=["in"], params=[]),   # in-place; structural only
+    "fiber-refine": dict(input=True, tags=["in", "out"], params=[
+        _p("large", "int", 150, "split only clusters >= this many spikes (100-300)"),
+        _p("min-group", "int", 30, "min spikes per split piece (25-50)"),
+        _p("merge-min-sim", "float", 0.96, "merge-back similarity (0.92-0.97; higher keeps over-splits)"),
+        _p("split-var-mult", "float", 1.5, "split clusters w/ top-3 feat-var > x*median (1.3-2.0)"),
+        _p("split-min-corr", "float", 0.93, "min split-piece internal corr to keep (0.90-0.95)"),
+        _p("chunk-minutes", "int", 12, "refine chunk length (min)"),
+        _p("fold-off-thr", "float", 0.22, "inter-channel-offset fold veto, samples (0.20-0.25)"),
+        _p("dedup-stale", "choice", "quarantine", "stale per-spike file handling", ["quarantine", "error", "skip"]),
+        _p("merge-warp-recall", "float", 0.9, "warp-recall group-delay floor (0.85-0.95; empty=off)"),
+        _p("merge-amp-thr", "float", 0.7, "warp-recall amplitude-profile floor (0.6-0.8)"),
+        _p("merge-warp-thr", "str", "", "warp precision gate on cosine merges (empty=off)")]),
+    "fiber-cpos": dict(input=True, tags=["in", "out", "spk"], params=[]),   # localizes from raw .spk; structural
+    "fiber-intrachunk": dict(input=True, tags=["in", "out", "cpos"], params=_intrachunk_params()),
+    "fiber-link": dict(input=True, tags=["in", "out", "units", "cpos"], params=[
+        _p("cos-thr", "float", 0.75, "cosine prefilter (0.70-0.85; recall)"),
+        _p("pos-thr", "float", 1.5, "position gate (1.0-2.0)"),
+        _p("off-thr", "float", 1.0, "inter-channel offset gate, samples (0.8-1.2)"),
+        _p("max-gap", "int", 2, "max chunk gap to bridge (1-4)"),
+        _p("amp-gate", "float", 1.39, "log-amplitude gate, nat-log; ln4=1.39 -> 4x (0=off)"),
+        _p("cfiber-q", "float", 0.90, "cfiber co-gate quantile (0.85-0.95; empty=off)"),
+        _p("warp-thr", "str", "", "warp co-gate (empty=off)")]),
+}
+STAGES = list(CATALOG)
+
+
+# ───────────────────────────── plan model (Qt-free) ─────────────────────────────
+@dataclass
+class PlanStep:
+    stage: str
+    tags: dict = field(default_factory=dict)        # subset of TAG_FIELDS -> str
+    params: dict = field(default_factory=dict)      # flag -> value
+    args: list = field(default_factory=list)        # raw extra flags, passed through verbatim
+    x: float = 0.0
+    y: float = 0.0
+
+    def tag(self, k):
+        return str(self.tags.get(k, ""))
+
+
+def load_plan(path):
+    """Parse a --plan YAML into a list of PlanStep."""
+    if yaml is None:
+        raise RuntimeError("PyYAML required to read plans (pip install pyyaml)")
+    with open(path) as fh:
+        doc = yaml.safe_load(fh) or {}
+    steps_raw = doc.get("pipeline") if isinstance(doc, dict) else doc
+    if not isinstance(steps_raw, list):
+        raise ValueError("plan has no 'pipeline:' list of steps")
+    steps = []
+    for i, st in enumerate(steps_raw):
+        if not isinstance(st, dict) or st.get("stage") not in CATALOG:
+            raise ValueError("plan step %d: missing or unknown 'stage' (%r)" % (i, st))
+        tags = {k: str(st[k]) for k in TAG_FIELDS if k in st and st[k] is not None}
+        params = dict(st.get("params") or {})
+        args = list(st.get("args") or [])
+        steps.append(PlanStep(stage=st["stage"], tags=tags, params=params, args=args))
+    return steps
+
+
+def derive_edges(steps):
+    """Edges implied by the tag wiring: an edge (src, dst, kind) exists when dst's in/units/cpos tag
+    equals the OUT tag of an earlier step.  '' (base over-cluster) and the session source are not edges."""
+    edges = []
+    for j, dst in enumerate(steps):
+        for kind in ("in", "units", "cpos"):
+            t = dst.tag(kind)
+            if not t:
+                continue
+            src = None                                   # latest earlier producer of this tag
+            for i in range(j - 1, -1, -1):
+                if steps[i].tag("out") == t:
+                    src = i
+                    break
+            if src is not None:
+                edges.append((src, j, kind))
+    return edges
+
+
+def topo_order(steps):
+    """Topological order honouring the tag dependencies, stable on the current list order (so a load
+    -> save round-trip of an already-valid plan is a no-op).  Raises on a dependency cycle."""
+    n = len(steps)
+    deps = {i: set() for i in range(n)}
+    for src, dst, _ in derive_edges(steps):
+        deps[dst].add(src)
+    order, done = [], set()
+    progressed = True
+    while len(done) < n and progressed:
+        progressed = False
+        for i in range(n):                               # stable: lowest current index first
+            if i in done:
+                continue
+            if deps[i] <= done:
+                order.append(steps[i]); done.add(i); progressed = True
+    if len(done) < n:
+        raise ValueError("plan has a dependency cycle among: %s"
+                         % ", ".join(steps[i].stage for i in range(n) if i not in done))
+    return order
+
+
+def validate(steps):
+    """Return a list of human-readable warnings (unproduced inputs, duplicate out tags, etc.)."""
+    warns = []
+    produced = []
+    seen_out = {}
+    for i, s in enumerate(steps):
+        for kind in ("in", "units", "cpos"):
+            t = s.tag(kind)
+            if t and t not in produced:
+                warns.append("step %d (%s): '%s'='%s' is not produced by any earlier step"
+                             % (i + 1, s.stage, kind, t))
+        out = s.tag("out")
+        if "out" in CATALOG[s.stage]["tags"]:
+            inplace = out == s.tag("in")                 # cpos augments the same clu stage (out==in); not a fresh producer
+            if out in seen_out and not inplace:
+                warns.append("step %d (%s): out tag '%s' already produced by step %d (later steps "
+                             "will read the earlier producer)" % (i + 1, s.stage, out, seen_out[out] + 1))
+            seen_out[out] = i
+            if out not in produced:
+                produced.append(out)
+    try:
+        topo_order(steps)
+    except ValueError as e:
+        warns.append(str(e))
+    return warns
+
+
+def dump_plan(steps, ordered=True, header=True):
+    """Serialise to plan YAML text (in topological order by default)."""
+    if yaml is None:
+        raise RuntimeError("PyYAML required to write plans (pip install pyyaml)")
+    seq = topo_order(steps) if ordered else list(steps)
+    rows = []
+    for s in seq:
+        d = {"stage": s.stage}
+        for k in CATALOG[s.stage]["tags"]:               # in/out always (core wiring); units/cpos/spk only if set
+            v = s.tags.get(k, "")
+            if k in ("in", "out") or v != "":
+                d[k] = v
+        if s.params:
+            d["params"] = dict(s.params)
+        if s.args:
+            d["args"] = list(s.args)
+        rows.append(d)
+    body = yaml.safe_dump({"pipeline": rows}, sort_keys=False, default_flow_style=False, width=120)
+    if not header:
+        return body
+    head = ("# fiber-kit pipeline plan (edited by fiber-plan-edit).  Steps run in this order; a stage may\n"
+            "# repeat with different in/out tags and params.  Run:  fiber-pipeline <elec> --plan thisfile.yaml\n")
+    return head + body
+
+
+def auto_layout(steps, dx=220.0, dy=130.0):
+    """Layered left-to-right layout: column = longest-path depth in the dependency DAG; rows stack
+    nodes sharing a column.  Writes x/y onto each step and returns them."""
+    n = len(steps)
+    deps = {i: set() for i in range(n)}
+    for src, dst, _ in derive_edges(steps):
+        deps[dst].add(src)
+    depth = [0] * n
+    for _ in range(n):                                   # relax longest paths
+        for i in range(n):
+            depth[i] = max([0] + [depth[d] + 1 for d in deps[i]])
+    rows_in_col = {}
+    for i in range(n):
+        c = depth[i]
+        r = rows_in_col.get(c, 0)
+        rows_in_col[c] = r + 1
+        steps[i].x = c * dx
+        steps[i].y = r * dy
+    return steps
+
+
+def new_step(stage, x=0.0, y=0.0):
+    tags = {k: "" for k in CATALOG[stage]["tags"]}
+    return PlanStep(stage=stage, tags=tags, x=x, y=y)
+
+
+# ───────────────────────────── Qt view (PySide6 >= 6.8) ─────────────────────────────
+def _require_qt():
+    try:
+        from PySide6 import QtCore
+    except ImportError:
+        sys.exit("fiber-plan-edit needs PySide6 >= 6.8  —  pip install 'PySide6>=6.8'")
+    v = tuple(int(p) for p in QtCore.qVersion().split(".")[:2])
+    if v < (6, 8):
+        sys.exit("fiber-plan-edit needs Qt >= 6.8 (found %s).  Upgrade PySide6." % QtCore.qVersion())
+    return v
+
+
+def _build_qt():
+    from PySide6 import QtCore, QtGui, QtWidgets
+    Qt = QtCore.Qt
+
+    NODE_W, NODE_H, PORT_R = 168.0, 76.0, 6.0
+
+    class EdgeItem(QtWidgets.QGraphicsPathItem):
+        def __init__(self, src_node, dst_node, kind):
+            super().__init__()
+            self.src, self.dst, self.kind = src_node, dst_node, kind
+            self.setZValue(-1)
+            col = {"in": "#6fb1ff", "units": "#ffb86f", "cpos": "#b6f06f"}.get(kind, "#888")
+            self.setPen(QtGui.QPen(QtGui.QColor(col), 2.0))
+            self.update_path()
+
+        def update_path(self):
+            a = self.src.out_port_scene_pos()
+            b = self.dst.in_port_scene_pos()
+            path = QtGui.QPainterPath(a)
+            mx = (a.x() + b.x()) * 0.5
+            path.cubicTo(QtCore.QPointF(mx, a.y()), QtCore.QPointF(mx, b.y()), b)
+            self.setPath(path)
+
+    class NodeItem(QtWidgets.QGraphicsObject):
+        moved = QtCore.Signal()
+
+        def __init__(self, step, editor):
+            super().__init__()
+            self.step, self.editor = step, editor
+            self.setFlags(self.GraphicsItemFlag.ItemIsMovable | self.GraphicsItemFlag.ItemIsSelectable
+                          | self.GraphicsItemFlag.ItemSendsGeometryChanges)
+            self.setPos(step.x, step.y)
+            self.setZValue(1)
+
+        def boundingRect(self):
+            return QtCore.QRectF(0, 0, NODE_W, NODE_H)
+
+        def paint(self, p, opt, w=None):
+            r = self.boundingRect()
+            sel = self.isSelected()
+            p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            p.setPen(QtGui.QPen(QtGui.QColor("#e6c14b" if sel else "#3a3a3a"), 2.0))
+            p.setBrush(QtGui.QColor("#2b2f36"))
+            p.drawRoundedRect(r, 8, 8)
+            p.setBrush(QtGui.QColor("#3a4150"))
+            p.setPen(Qt.PenStyle.NoPen)
+            p.drawRoundedRect(QtCore.QRectF(0, 0, NODE_W, 24), 8, 8)
+            p.setPen(QtGui.QColor("#f0f0f0"))
+            f = p.font(); f.setBold(True); p.setFont(f)
+            p.drawText(QtCore.QRectF(10, 2, NODE_W - 20, 22), Qt.AlignmentFlag.AlignVCenter, self.step.stage)
+            f.setBold(False); p.setFont(f)
+            p.setPen(QtGui.QColor("#a9c7ff"))
+            info = []
+            for k in ("in", "out", "units"):
+                if k in CATALOG[self.step.stage]["tags"]:
+                    info.append("%s:%s" % (k, self.step.tag(k) or "''"))
+            p.drawText(QtCore.QRectF(10, 30, NODE_W - 20, 18), Qt.AlignmentFlag.AlignVCenter, "  ".join(info))
+            np = len(self.step.params)
+            if np:
+                p.setPen(QtGui.QColor("#9fe0a0"))
+                p.drawText(QtCore.QRectF(10, 50, NODE_W - 20, 18), Qt.AlignmentFlag.AlignVCenter,
+                           "%d param%s set" % (np, "" if np == 1 else "s"))
+            # ports
+            p.setPen(Qt.PenStyle.NoPen)
+            if CATALOG[self.step.stage]["input"]:
+                p.setBrush(QtGui.QColor("#6fb1ff"))
+                p.drawEllipse(self._in_port_rect())
+            p.setBrush(QtGui.QColor("#9fe0a0"))
+            p.drawEllipse(self._out_port_rect())
+
+        def _in_port_rect(self):
+            return QtCore.QRectF(-PORT_R, NODE_H / 2 - PORT_R, 2 * PORT_R, 2 * PORT_R)
+
+        def _out_port_rect(self):
+            return QtCore.QRectF(NODE_W - PORT_R, NODE_H / 2 - PORT_R, 2 * PORT_R, 2 * PORT_R)
+
+        def in_port_scene_pos(self):
+            return self.mapToScene(QtCore.QPointF(0, NODE_H / 2))
+
+        def out_port_scene_pos(self):
+            return self.mapToScene(QtCore.QPointF(NODE_W, NODE_H / 2))
+
+        def hit_out_port(self, scene_pos):
+            return self._out_port_rect().adjusted(-4, -4, 4, 4).contains(self.mapFromScene(scene_pos))
+
+        def hit_in_port(self, scene_pos):
+            return (CATALOG[self.step.stage]["input"]
+                    and self._in_port_rect().adjusted(-4, -4, 4, 4).contains(self.mapFromScene(scene_pos)))
+
+        def itemChange(self, change, value):
+            if change == self.GraphicsItemChange.ItemPositionHasChanged:
+                self.step.x, self.step.y = self.pos().x(), self.pos().y()
+                self.editor.refresh_edges()
+            elif change == self.GraphicsItemChange.ItemSelectedHasChanged and value:
+                self.editor.select_node(self)
+            return super().itemChange(change, value)
+
+    class Scene(QtWidgets.QGraphicsScene):
+        def __init__(self, editor):
+            super().__init__()
+            self.editor = editor
+            self.temp_line = None
+            self.temp_src = None
+
+        def mousePressEvent(self, ev):
+            if ev.button() == Qt.MouseButton.LeftButton:
+                for it in self.items(ev.scenePos()):
+                    if isinstance(it, NodeItem) and it.hit_out_port(ev.scenePos()):
+                        self.temp_src = it
+                        self.temp_line = self.addLine(QtCore.QLineF(it.out_port_scene_pos(), ev.scenePos()),
+                                                      QtGui.QPen(QtGui.QColor("#e6c14b"), 2, Qt.PenStyle.DashLine))
+                        self.temp_line.setZValue(5)
+                        return
+            super().mousePressEvent(ev)
+
+        def mouseMoveEvent(self, ev):
+            if self.temp_line is not None:
+                self.temp_line.setLine(QtCore.QLineF(self.temp_src.out_port_scene_pos(), ev.scenePos()))
+                return
+            super().mouseMoveEvent(ev)
+
+        def mouseReleaseEvent(self, ev):
+            if self.temp_line is not None:
+                self.removeItem(self.temp_line)
+                target = None
+                for it in self.items(ev.scenePos()):
+                    if isinstance(it, NodeItem) and it is not self.temp_src and it.hit_in_port(ev.scenePos()):
+                        target = it
+                        break
+                if target is not None:
+                    self.editor.connect_nodes(self.temp_src, target)
+                self.temp_line = None
+                self.temp_src = None
+                return
+            super().mouseReleaseEvent(ev)
+
+    class Inspector(QtWidgets.QWidget):
+        def __init__(self, editor):
+            super().__init__()
+            self.editor = editor
+            self.node = None
+            self.v = QtWidgets.QVBoxLayout(self)
+            self.title = QtWidgets.QLabel("— no node selected —")
+            f = self.title.font(); f.setBold(True); f.setPointSize(f.pointSize() + 1); self.title.setFont(f)
+            self.v.addWidget(self.title)
+            self.form_host = QtWidgets.QWidget()
+            self.v.addWidget(self.form_host)
+            self.v.addStretch(1)
+
+        def show_node(self, node):
+            self.node = node
+            old = self.form_host.layout()
+            if old is not None:
+                QtWidgets.QWidget().setLayout(old)
+            form = QtWidgets.QFormLayout(self.form_host)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+            if node is None:
+                self.title.setText("— no node selected —")
+                return
+            spec = CATALOG[node.step.stage]
+            self.title.setText("%s" % node.step.stage)
+            # structural tags
+            for k in spec["tags"]:
+                e = QtWidgets.QLineEdit(node.step.tags.get(k, ""))
+                e.setPlaceholderText("(base over-cluster)" if k == "in" else "")
+                e.textChanged.connect(lambda t, kk=k: self._set_tag(kk, t))
+                form.addRow("%s tag" % k, e)
+            # params: tick to include in the plan, with a typed editor
+            if spec["params"]:
+                form.addRow(QtWidgets.QLabel("<b>params</b> (ticked = written to plan)"))
+            for pm in spec["params"]:
+                row = QtWidgets.QWidget(); h = QtWidgets.QHBoxLayout(row); h.setContentsMargins(0, 0, 0, 0)
+                cb = QtWidgets.QCheckBox()
+                on = pm["flag"] in node.step.params
+                cb.setChecked(on)
+                ed = self._editor_for(pm, node.step.params.get(pm["flag"], pm["default"]))
+                ed.setEnabled(on)
+                cb.toggled.connect(lambda c, p=pm, e=ed: self._toggle_param(p, e, c))
+                self._wire_editor(pm, ed)
+                h.addWidget(cb); h.addWidget(ed, 1)
+                lab = QtWidgets.QLabel("--%s" % pm["flag"]); lab.setToolTip(pm["help"])
+                form.addRow(lab, row)
+
+        def _editor_for(self, pm, value):
+            if pm["type"] == "choice":
+                c = QtWidgets.QComboBox(); c.addItems([str(x) for x in pm["choices"]])
+                i = c.findText(str(value))
+                if i >= 0:
+                    c.setCurrentIndex(i)
+                return c
+            e = QtWidgets.QLineEdit(str(value))
+            return e
+
+        def _wire_editor(self, pm, ed):
+            if isinstance(ed, QtWidgets.QComboBox):
+                ed.currentTextChanged.connect(lambda t, p=pm: self._set_param(p, t))
+            else:
+                ed.textChanged.connect(lambda t, p=pm: self._set_param(p, t))
+
+        def _coerce(self, pm, t):
+            if pm["type"] == "int":
+                return int(float(t))
+            if pm["type"] == "float":
+                return float(t)
+            return t
+
+        def _set_tag(self, k, t):
+            if self.node is None:
+                return
+            self.node.step.tags[k] = t
+            self.node.update()
+            self.editor.refresh_edges()
+
+        def _toggle_param(self, pm, ed, on):
+            ed.setEnabled(on)
+            if self.node is None:
+                return
+            if on:
+                try:
+                    self.node.step.params[pm["flag"]] = self._coerce(
+                        pm, ed.currentText() if isinstance(ed, QtWidgets.QComboBox) else ed.text())
+                except ValueError:
+                    self.node.step.params[pm["flag"]] = pm["default"]
+            else:
+                self.node.step.params.pop(pm["flag"], None)
+            self.node.update()
+
+        def _set_param(self, pm, t):
+            if self.node is None or pm["flag"] not in self.node.step.params:
+                return
+            try:
+                self.node.step.params[pm["flag"]] = self._coerce(pm, t)
+            except ValueError:
+                pass
+
+    class Palette(QtWidgets.QListWidget):
+        def __init__(self, editor):
+            super().__init__()
+            self.editor = editor
+            for s in STAGES:
+                self.addItem(s)
+            self.itemDoubleClicked.connect(lambda it: editor.add_stage(it.text()))
+
+    class Editor(QtWidgets.QMainWindow):
+        def __init__(self, path=None):
+            super().__init__()
+            self.path = path
+            self.steps = []
+            self.nodes = []
+            self.edges = []
+            self.setWindowTitle("fiber-kit pipeline editor")
+            self.resize(1200, 720)
+
+            self.scene = Scene(self)
+            self.view = QtWidgets.QGraphicsView(self.scene)
+            self.view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+            self.view.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+            self.view.setBackgroundBrush(QtGui.QColor("#202329"))
+            self.setCentralWidget(self.view)
+
+            pal = QtWidgets.QDockWidget("Stages", self)
+            pal.setWidget(Palette(self))
+            self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, pal)
+
+            self.inspector = Inspector(self)
+            insp = QtWidgets.QDockWidget("Inspector", self)
+            scroll = QtWidgets.QScrollArea(); scroll.setWidgetResizable(True); scroll.setWidget(self.inspector)
+            insp.setWidget(scroll)
+            self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, insp)
+
+            self._menus()
+            self.scene.selectionChanged.connect(self._on_sel)
+            if path and os.path.isfile(path):
+                self.load(path)
+            else:
+                self.statusBar().showMessage("new plan — double-click a stage on the left to add it")
+
+        def _menus(self):
+            m = self.menuBar().addMenu("&File")
+            def act(name, slot, sc=None):
+                a = QtGui.QAction(name, self); a.triggered.connect(slot)
+                if sc:
+                    a.setShortcut(sc)
+                m.addAction(a); return a
+            act("&New", self.new, "Ctrl+N")
+            act("&Open…", self.open_dialog, "Ctrl+O")
+            act("&Save", self.save, "Ctrl+S")
+            act("Save &As…", self.save_as, "Ctrl+Shift+S")
+            m.addSeparator()
+            mm = self.menuBar().addMenu("&Plan")
+            mm.addAction(QtGui.QAction("Auto-&layout", self, triggered=self.relayout, shortcut="Ctrl+L"))
+            mm.addAction(QtGui.QAction("&Validate", self, triggered=self.do_validate, shortcut="Ctrl+R"))
+
+        # ---- model <-> scene ----
+        def _clear(self):
+            self.scene.clear(); self.nodes = []; self.edges = []
+
+        def _add_node(self, step):
+            node = NodeItem(step, self)
+            self.scene.addItem(node)
+            self.nodes.append(node)
+            return node
+
+        def refresh_edges(self):
+            for e in self.edges:
+                self.scene.removeItem(e)
+            self.edges = []
+            by_index = {i: self.nodes[i] for i in range(len(self.nodes))}
+            for src, dst, kind in derive_edges(self.steps):
+                e = EdgeItem(by_index[src], by_index[dst], kind)
+                self.scene.addItem(e); self.edges.append(e)
+
+        def select_node(self, node):
+            self.inspector.show_node(node)
+
+        def _on_sel(self):
+            sel = [it for it in self.scene.selectedItems() if isinstance(it, NodeItem)]
+            self.inspector.show_node(sel[0] if len(sel) == 1 else None)
+
+        # ---- actions ----
+        def add_stage(self, stage):
+            c = self.view.mapToScene(self.view.viewport().rect().center())
+            step = new_step(stage, c.x(), c.y())
+            # sensible default out tag so wiring is easy
+            if "out" in CATALOG[stage]["tags"] and not step.tags.get("out"):
+                step.tags["out"] = {"fiber-session": "", "fiber-refine": "refine", "fiber-cpos": "refine",
+                                    "fiber-intrachunk": "refine_intrachunk",
+                                    "fiber-link": "refine_linked"}.get(stage, stage.replace("fiber-", ""))
+            self.steps.append(step)
+            self._add_node(step)
+            self.refresh_edges()
+            self.statusBar().showMessage("added %s" % stage)
+
+        def connect_nodes(self, src_node, dst_node):
+            out = src_node.step.tag("out")
+            dst_node.step.tags["in"] = out
+            dst_node.update()
+            self.refresh_edges()
+            self.inspector.show_node(dst_node)
+            self.statusBar().showMessage("wired %s.out='%s' -> %s.in" % (src_node.step.stage, out, dst_node.step.stage))
+
+        def relayout(self):
+            auto_layout(self.steps)
+            for n in self.nodes:
+                n.setPos(n.step.x, n.step.y)
+            self.refresh_edges()
+            self.view.fitInView(self.scene.itemsBoundingRect().adjusted(-40, -40, 40, 40),
+                                Qt.AspectRatioMode.KeepAspectRatio)
+
+        def do_validate(self):
+            w = validate(self.steps)
+            if not w:
+                QtWidgets.QMessageBox.information(self, "Validate", "Plan looks consistent.")
+            else:
+                QtWidgets.QMessageBox.warning(self, "Validate", "\n".join("• " + x for x in w))
+
+        def new(self):
+            self.path = None; self.steps = []; self._clear()
+            self.setWindowTitle("fiber-kit pipeline editor — (new)")
+            self.statusBar().showMessage("new plan")
+
+        def open_dialog(self):
+            p, _ = QtWidgets.QFileDialog.getOpenFileName(self, "Open plan", "", "YAML (*.yaml *.yml);;All (*)")
+            if p:
+                self.load(p)
+
+        def load(self, path):
+            try:
+                self.steps = load_plan(path)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "Open", "Could not read plan:\n%s" % e); return
+            self.path = path
+            auto_layout(self.steps)
+            self._clear()
+            for s in self.steps:
+                self._add_node(s)
+            self.refresh_edges()
+            self.setWindowTitle("fiber-kit pipeline editor — %s" % os.path.basename(path))
+            self.relayout()
+            self.statusBar().showMessage("loaded %d steps from %s" % (len(self.steps), path))
+
+        def save(self):
+            if not self.path:
+                return self.save_as()
+            try:
+                text = dump_plan(self.steps)
+            except ValueError as e:
+                QtWidgets.QMessageBox.critical(self, "Save", "Cannot serialise plan:\n%s" % e); return
+            with open(self.path, "w") as fh:
+                fh.write(text)
+            self.statusBar().showMessage("saved %s" % self.path)
+
+        def save_as(self):
+            p, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save plan", self.path or "fiber-plan.yaml",
+                                                         "YAML (*.yaml *.yml)")
+            if p:
+                self.path = p
+                self.setWindowTitle("fiber-kit pipeline editor — %s" % os.path.basename(p))
+                self.save()
+
+    return QtWidgets, Editor
+
+
+def main():
+    _require_qt()
+    from PySide6 import QtWidgets
+    _qtw, Editor = _build_qt()
+    app = QtWidgets.QApplication(sys.argv)
+    path = sys.argv[1] if len(sys.argv) > 1 else None
+    win = Editor(path)
+    win.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

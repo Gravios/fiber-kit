@@ -27,6 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 dip = ["diptest>=0.5"]            # enables DipSplit (bimodal cluster splitting)
 viz = ["matplotlib>=3.5", "pyqtgraph>=0.13", "PySide6>=6.4"]  # fiber-view (figures) + fiber-view-gui (rotatable)
+editor = ["PySide6>=6.8", "pyyaml"]  # fiber-plan-edit (node-graph pipeline plan editor; needs Qt >= 6.8)
 gpu = ["cupy-cuda12x>=12.0"]      # optional GPU acceleration of realign/whiten kernels
 
 [project.scripts]
@@ -53,6 +54,7 @@ fiber-calibrate = "fiber_kit.fiber_calibrate:main"
 fiber-view = "fiber_kit.fiber_view:main"
 fiber-view-gui = "fiber_kit.fiber_view_gui:main"
 fiber-view-tour = "fiber_kit.fiber_view:tour_main"
+fiber-plan-edit = "fiber_kit.fiber_pipeline_editor:main"
 fiber-kit-init = "fiber_kit.init_config:main"
 ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 
