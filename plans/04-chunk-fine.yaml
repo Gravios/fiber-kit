@@ -1,0 +1,8 @@
+# CHUNK-FINE — 6-min chunks through refine/intrachunk/link.  Diagnostic: finer drift tracking and more
+# per-chunk fragments; compare link's bridged units and drift trajectory smoothness to baseline (12 min).
+# namespace: c6_
+pipeline:
+  - {stage: fiber-refine,     in: "",        out: c6_refine, params: {chunk-minutes: 6}}
+  - {stage: fiber-cpos,       in: c6_refine, out: c6_refine, spk: standard}
+  - {stage: fiber-intrachunk, in: c6_refine, out: c6_chunk,  params: {chunk-minutes: 6}}
+  - {stage: fiber-link,       in: c6_refine, units: c6_chunk, out: c6_linked, params: {chunk-minutes: 6, max-gap: 3}}

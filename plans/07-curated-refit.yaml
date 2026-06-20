@@ -1,0 +1,7 @@
+# CURATED-REFIT — run AFTER manually curating .clu.stderiv.<elec>.curated in Klusters.  Re-localizes and
+# rebuilds the per-unit/per-chunk fiber model on the curated labels (no regrouping).  Produces positions
+# .cpos...cur and the refreshed .clu.stderiv.<elec>.cur_refit.units.npz for fiber-drift / fiber-qc.
+# namespace: cur_   (rename the 'curated' in-tag if your curated stage uses a different tag)
+pipeline:
+  - {stage: fiber-cpos,  in: curated, out: cur,        spk: standard}
+  - {stage: fiber-refit, in: curated, cpos: cur,       out: cur_refit}

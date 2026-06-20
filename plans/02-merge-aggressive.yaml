@@ -1,0 +1,8 @@
+# MERGE-AGGRESSIVE — lower merge-min-sim so refine merges more readily.  Diagnostic: compare its
+# pairwise PRECISION (fiber-score) to baseline; a drop means the relaxed gate is fusing distinct units.
+# namespace: mg_
+pipeline:
+  - {stage: fiber-refine,     in: "",        out: mg_refine, params: {merge-min-sim: 0.94}}
+  - {stage: fiber-cpos,       in: mg_refine, out: mg_refine, spk: standard}
+  - {stage: fiber-intrachunk, in: mg_refine, out: mg_chunk}
+  - {stage: fiber-link,       in: mg_refine, units: mg_chunk, out: mg_linked}
