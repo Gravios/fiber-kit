@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# ============================================================================
+#  fiber-pipeline-editor -- launch the fiber-kit node-graph pipeline plan editor
+#  (the Qt6 GUI in fiber_kit/fiber_pipeline_editor.py; same as the fiber-plan-edit
+#   console entry, but as a bash launcher next to scripts/fiber-pipeline).
+#
+#  Usage:
+#     fiber-pipeline-editor [plan.yaml]      open the editor (optionally on a plan)
+#     fiber-pipeline-editor --help
+#
+#  Works whether fiber-kit is pip-installed or run from a source checkout: if the
+#  package is not importable, the repo's src/ (next to this script) is added to
+#  PYTHONPATH.  Requires the 'editor' extra (PySide6 >= 6.8):  pip install 'fiber-kit[editor]'
+# ============================================================================
+set -euo pipefail
+
+PYTHON="${FK_PYTHON:-python3}"
+
+# Make fiber_kit importable from a source checkout (scripts/ -> ../src) if it isn't already.
+if ! "$PYTHON" -c 'import fiber_kit' >/dev/null 2>&1; then
+    here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    src="$(cd "$here/.." && pwd)/src"
+    if [ -d "$src/fiber_kit" ]; then
+        export PYTHONPATH="${src}${PYTHONPATH:+:$PYTHONPATH}"
+    fi
+fi
+
+if ! "$PYTHON" -c 'import fiber_kit' >/dev/null 2>&1; then
+    echo "fiber-pipeline-editor: cannot import fiber_kit (install fiber-kit, or run from a checkout)." >&2
+    exit 1
+fi
+
+# Friendly check for the GUI dependency before launching.
+if ! "$PYTHON" -c 'import PySide6' >/dev/null 2>&1; then
+    echo "fiber-pipeline-editor: the editor needs PySide6 >= 6.8." >&2
+    echo "  install it with:  pip install 'fiber-kit[editor]'   (or:  pip install 'PySide6>=6.8')" >&2
+    exit 1
+fi
+
+exec "$PYTHON" -m fiber_kit.fiber_pipeline_editor "$@"
