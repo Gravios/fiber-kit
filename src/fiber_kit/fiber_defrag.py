@@ -1,0 +1,203 @@
+#  fiber_defrag.py — de-fragment an over-clustered sort by warp-gated MNN merge.
+#
+#  An auto sort over-splits each neuron into many drift/amplitude fragments
+#  (g5 180-216 min: ~276 fragments for an expected ~47 neurons).  This pass
+#  reunites them WITHOUT fusing distinct cells, using two gates:
+#
+#    shape : mean-template cosine >= cos_thr (baseline-subtracted, flattened).
+#    width : the time-WARP needed to align the two templates, |alpha-1| <= smax.
+#            Validated on g5 -- the warp stretch separates same-vs-different at
+#            AUC 0.97 AT MATCHED COSINE: fragments of one neuron share a spike
+#            width (alpha ~ 1) and merge; two distinct cells differ in width and
+#            are held apart even when their cosine is high.  This is the lever a
+#            fixed cosine threshold cannot provide (it recovered ~half the
+#            over-merges a low cosine threshold makes on the curated block).
+#
+#  Agglomeration is MUTUAL-NEAREST-NEIGHBOUR with template recompute each round,
+#  not transitive union-find, so a merge never chains a long drift sequence into
+#  one blob (g5: union-find chained 140 fragments into one cluster; MNN caps the
+#  largest merge at 20 and lands 276 -> 121).
+#
+#  Shape-based (drift-naive): templates are compared as given, so it reunites
+#  fragments that are time-local (as over-splits typically are).  For long-range
+#  cross-drift linking, the localize/drift/link stages still apply.  The energy
+#  gate is wide by default (drift moves amplitude); the WIDTH gate is what guards
+#  against over-merge.  Pair this with fiber-contam: defrag -> contamination QC
+#  on the merged result -> split the flagged.
+
+import argparse
+import numpy as np
+
+try:
+    from . import (fiber_session as fs, neuro_io as nio, session_yaml as sy,
+                   fiber_cfiber as cf)
+except ImportError:                                              # script / direct execution
+    import fiber_session as fs, neuro_io as nio, session_yaml as sy, fiber_cfiber as cf
+
+COS_THR   = 0.92    # mean-template cosine at/above this is a merge candidate
+SMAX      = 0.06    # |alpha-1| time-warp at/above this == width mismatch -> keep separate
+AMP_GATE  = 1.40    # |delta log|F1|| above this == too far in energy to be one neuron (wide: drift moves A)
+MIN_SPK   = 40      # fragments smaller than this are left untouched
+SAMPLE    = 3000    # cap spikes used to estimate a fragment template
+MAX_ROUND = 30
+
+
+def _baseline(W):
+    return W - W[:, :6, :].mean(1, keepdims=True)
+
+
+def template_cosine(a, b):
+    a = (a - a[:6].mean(0)).ravel()
+    b = (b - b[:6].mean(0)).ravel()
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-12))
+
+
+def warp_stretch(A, B, peak):
+    """Smallest |alpha-1| over a joint time-stretch + integer-shift search that
+    best aligns B to A.  ~0 for two fragments of one neuron (same width); grows
+    when the two differ in spike width (distinct cells)."""
+    A = A - A[:6].mean(0)
+    B = B - B[:6].mean(0)
+    nsamp = A.shape[0]
+    x = np.arange(float(nsamp))
+    Af = A.ravel()
+    nA = np.linalg.norm(Af) + 1e-12
+    best = (-1.0, 1.0)
+    for al in np.linspace(0.85, 1.18, 30):
+        xs = peak + (x - peak) / al
+        Bw = np.stack([np.interp(x, xs, B[:, c], left=0.0, right=0.0) for c in range(B.shape[1])], 1)
+        for sh in range(-3, 4):
+            bf = np.roll(Bw, sh, 0).ravel()
+            c = float(Af @ bf / (nA * (np.linalg.norm(bf) + 1e-12)))
+            if c > best[0]:
+                best = (c, al)
+    return abs(best[1] - 1.0)
+
+
+def _energy_log(tm, theta, win):
+    z = cf.complex_loop(tm[None], theta, win)
+    _, scale, _, _ = cf.shape_descriptor(z)
+    return float(np.log(max(float(scale[0]), 1.0)))
+
+
+def defrag(templates, counts, peak, nchan, *, cos_thr=COS_THR, smax=SMAX,
+           amp_gate=AMP_GATE, max_rounds=MAX_ROUND, verbose=True):
+    """Mutual-nearest-neighbour merge with template recompute.
+
+    templates : dict id -> (nsamp, nchan) mean stderiv template (baseline-subtracted)
+    counts    : dict id -> spike count behind that template (for the weighted recompute)
+    Returns (root_of, members): root_of maps every input id to its surviving merged
+    id; members maps each surviving id to the list of ids folded into it."""
+    theta = cf.channel_angles(nchan)
+    win = slice(max(0, peak - 12), peak + 14)
+    T = {i: np.asarray(t, float) for i, t in templates.items()}
+    C = dict(counts)
+    E = {i: _energy_log(T[i], theta, win) for i in T}
+    members = {i: [i] for i in T}
+    active = set(T)
+    for rnd in range(max_rounds):
+        al = sorted(active)
+        # vectorised best-partner: cosine matrix over baseline-subtracted, L2-normalised templates
+        M = np.stack([(T[i] - T[i][:6].mean(0)).ravel() for i in al])
+        M /= (np.linalg.norm(M, axis=1, keepdims=True) + 1e-12)
+        Cmat = M @ M.T
+        Evec = np.array([E[i] for i in al])
+        Cmat[np.abs(Evec[:, None] - Evec[None, :]) > amp_gate] = -1.0   # energy gate
+        np.fill_diagonal(Cmat, -1.0)
+        bidx = Cmat.argmax(1)
+        bcos = Cmat[np.arange(len(al)), bidx]
+        best = {al[i]: (al[int(bidx[i])], float(bcos[i])) for i in range(len(al))}
+        used = set()
+        did = False
+        for a in al:
+            if a in used:
+                continue
+            b, cs = best[a]
+            if b is None or b in used or cs < cos_thr:
+                continue
+            if best[b][0] != a:                                  # mutual nearest neighbour only
+                continue
+            if warp_stretch(T[a], T[b], peak) > smax:            # width mismatch -> distinct cell
+                continue
+            na, nb = C[a], C[b]                                  # merge b into a, recompute template
+            T[a] = (T[a] * na + T[b] * nb) / (na + nb)
+            C[a] = na + nb
+            E[a] = _energy_log(T[a], theta, win)
+            members[a] += members[b]
+            active.discard(b)
+            del T[b], C[b], E[b], members[b]
+            used.add(a); used.add(b)
+            did = True
+        if verbose:
+            print(f"  round {rnd + 1}: {len(active)} clusters")
+        if not did:
+            break
+    root_of = {m: r for r in active for m in members[r]}
+    return root_of, members
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="De-fragment an over-clustered sort: reunite a neuron's drift/amplitude "
+                    "fragments by mutual-nearest-neighbour template merging, gated by cosine AND "
+                    "the time-warp (spike width) so distinct same-shape cells are held apart.")
+    sy.add_session_args(ap)
+    ap.add_argument("--clu-method", default="stderiv", help="feature space before the group (default stderiv)")
+    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",
+                    help="fiber stage after the group (default refine; '' = none)")
+    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
+    ap.add_argument("--cos-thr", type=float, default=COS_THR, help="template cosine merge candidate (default 0.92)")
+    ap.add_argument("--warp-max", type=float, default=SMAX, help="|alpha-1| width gate; above this keep separate (default 0.06)")
+    ap.add_argument("--amp-gate", type=float, default=AMP_GATE, help="|delta log|F1|| energy gate (default 1.4, wide)")
+    ap.add_argument("--min-cluster", type=int, default=MIN_SPK, help="fragments smaller than this are left untouched")
+    ap.add_argument("--out-tag", default=None, help="staged .clu stage tag for the merged result (default 'defrag', single token)")
+    a = ap.parse_args()
+
+    cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+    base = cfg["base"]; elec = a.group
+    nchan, nsamp, peak = cfg["nchan"], cfg["nsamp"], cfg["peak"]
+
+    res = fs.read_res(base, elec)
+    if a.in_clu:
+        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
+    else:
+        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    assert spk.shape[0] == len(res) == len(clu), \
+        f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
+
+    rng = np.random.default_rng(0)
+    ids = [int(c) for c in np.unique(clu) if c > 1 and int((clu == c).sum()) >= a.min_cluster]
+    templates, counts = {}, {}
+    for c in ids:
+        idx = np.flatnonzero(clu == c)
+        if idx.size > SAMPLE:
+            idx = idx[rng.permutation(idx.size)[:SAMPLE]]
+        W = _baseline(spk[idx].astype(float))
+        templates[c] = W.mean(0)
+        counts[c] = int(idx.size)
+    print(f"loaded {len(res)} spikes; {len(ids)} fragments >= {a.min_cluster} spk ({spkpath})")
+
+    root_of, members = defrag(templates, counts, peak, nchan,
+                              cos_thr=a.cos_thr, smax=a.warp_max, amp_gate=a.amp_gate)
+    n_merged = len(members)
+    largest = max((len(m) for m in members.values()), default=0)
+    print(f"defrag: {len(ids)} fragments -> {n_merged} clusters "
+          f"(cos>={a.cos_thr}, warp<={a.warp_max}); largest merge {largest} fragments")
+
+    # relabel: every fragment id maps to its surviving root; untouched ids (noise, small) keep their id
+    new = clu.copy()
+    for orig, root in root_of.items():
+        if orig != root:
+            new[clu == orig] = root
+    tag = a.out_tag if a.out_tag else "defrag"
+    nio.write_clu(base, elec, new.astype(np.int64),
+                  n_clusters=int(len(np.unique(new[new > 0]))),
+                  variant=a.clu_method, tag=tag)
+    print(f"wrote .clu.{a.clu_method}.{elec}.{tag}  "
+          f"(then run fiber-contam on it to flag any cells the merge over-reached on)")
+
+
+if __name__ == "__main__":
+    main()
