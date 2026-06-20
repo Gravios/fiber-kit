@@ -161,6 +161,8 @@ LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk
 
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
+CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
+KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}")
 
 # ----- modular step plumbing ------------------------------------------------
 # A plan STEP may set these to retarget a stage's input/output clu stage tags, so a stage can be
@@ -255,6 +257,14 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
     echo "[done] linked clu: $(clu_path "${STEP_OUT:-refine_linked}")"
 }
 
+fiber_refit() {       # post-curation: rebuild the per-unit/per-chunk model from a CURATED clu (no regrouping)
+    echo "== fiber-refit  (curated .${STEP_IN:-curated} + cpos .${STEP_CPOS:-${STEP_IN:-curated}} -> .${STEP_OUT:-${STEP_IN:-curated}_refit}.units) =="
+    _run fiber-refit "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-curated}" \
+        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-curated}}" \
+        --out-stage "${STEP_OUT:-${STEP_IN:-curated}_refit}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 # ----------------------------- dispatcher -----------------------------------
 usage() {
     echo "usage: $(basename "$0") <elec> [all | <stage> ...]"
@@ -266,6 +276,7 @@ usage() {
     echo "         --emit-plan     print the canonical plan template ; -l/--list  list stages ; -h/--help"
     echo "primary plan: a 'pipeline:' section embedded in fiber-kit.yaml (\$FK_CONFIG) runs by default when no --plan"
     echo "stages (canonical order): ${STAGES[*]}"
+    echo "curated stages (run explicitly / in a plan, not in 'all'): ${CURATED_STAGES[*]}"
     echo "override example: $(basename "$0") 5 fiber-intrachunk --gate cosine --amp-gate 1.3"
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
 }
@@ -282,6 +293,7 @@ run_stage() {
         fiber-cpos)       fiber_cpos       "${ov[@]}" ;;
         fiber-intrachunk) fiber_intrachunk "${ov[@]}" ;;
         fiber-link)       fiber_link       "${ov[@]}" ;;
+        fiber-refit)      fiber_refit      "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -294,6 +306,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-cpos)       fiber_cpos       ;;
         fiber-intrachunk) fiber_intrachunk ;;
         fiber-link)       fiber_link       ;;
+        fiber-refit)      fiber_refit      ;;
         *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
     esac
 }
@@ -313,7 +326,7 @@ except Exception as e:
 steps = doc.get("pipeline") if isinstance(doc, dict) else doc
 if not isinstance(steps, list) or not steps:
     sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-cpos", "fiber-intrachunk", "fiber-link"}
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit"}
 def field(st, k):
     v = st.get(k, "")
     return "" if v is None else str(v)
@@ -435,7 +448,7 @@ main() {
         local in_ov=0
         for a in "$@"; do
             if [ "$in_ov" = 0 ]; then
-                local ok=0; for s in "${STAGES[@]}"; do [ "$a" = "$s" ] && ok=1; done
+                local ok=0; for s in "${KNOWN_STAGES[@]}"; do [ "$a" = "$s" ] && ok=1; done
                 if [ "$ok" = 1 ]; then want[$a]=1; else in_ov=1; OVERRIDE_ARGS+=("$a"); fi
             else
                 OVERRIDE_ARGS+=("$a")
@@ -470,8 +483,8 @@ main() {
         return
     fi
 
-    # run in canonical order, regardless of the order requested
-    for s in "${STAGES[@]}"; do
+    # run in canonical order (curated stages last); only those in `want` actually run
+    for s in "${KNOWN_STAGES[@]}"; do
         if [ -n "${want[$s]:-}" ]; then run_stage "$s"; fi
     done
 }
