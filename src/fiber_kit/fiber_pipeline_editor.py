@@ -245,6 +245,16 @@ def new_step(stage, x=0.0, y=0.0):
     return PlanStep(stage=stage, tags=tags, x=x, y=y)
 
 
+def duplicate_step(step):
+    """A copy of a step (same params/tags), nudged in position and given a fresh out tag so it is a
+    distinct producer -- the building block for running a stage twice with different values."""
+    new = PlanStep(stage=step.stage, tags=dict(step.tags), params=dict(step.params),
+                   args=list(step.args), x=step.x + 36.0, y=step.y + 36.0)
+    if new.tags.get("out"):
+        new.tags["out"] = new.tags["out"] + "_copy"
+    return new
+
+
 # ───────────────────────────── Qt view (PySide6 >= 6.8) ─────────────────────────────
 def _require_qt():
     try:
@@ -279,6 +289,18 @@ def _build_qt():
             mx = (a.x() + b.x()) * 0.5
             path.cubicTo(QtCore.QPointF(mx, a.y()), QtCore.QPointF(mx, b.y()), b)
             self.setPath(path)
+
+        def shape(self):                                 # widen the clickable area for right-click removal
+            stroker = QtGui.QPainterPathStroker()
+            stroker.setWidth(10)
+            return stroker.createStroke(self.path())
+
+        def contextMenuEvent(self, event):
+            menu = QtWidgets.QMenu()
+            act = menu.addAction("Remove connection (%s)" % self.kind)
+            if menu.exec(event.screenPos()) is act:
+                self.dst.editor.remove_edge(self)
+            event.accept()
 
     class NodeItem(QtWidgets.QGraphicsObject):
         moved = QtCore.Signal()
@@ -354,6 +376,17 @@ def _build_qt():
                 self.editor.select_node(self)
             return super().itemChange(change, value)
 
+        def contextMenuEvent(self, event):
+            menu = QtWidgets.QMenu()
+            a_dup = menu.addAction("Duplicate node")
+            a_del = menu.addAction("Delete node")
+            chosen = menu.exec(event.screenPos())
+            if chosen is a_del:
+                self.editor.delete_node(self)
+            elif chosen is a_dup:
+                self.editor.duplicate_node(self)
+            event.accept()
+
     class Scene(QtWidgets.QGraphicsScene):
         def __init__(self, editor):
             super().__init__()
@@ -392,6 +425,19 @@ def _build_qt():
                 self.temp_src = None
                 return
             super().mouseReleaseEvent(ev)
+
+        def contextMenuEvent(self, ev):
+            if self.itemAt(ev.scenePos(), QtGui.QTransform()) is not None:
+                super().contextMenuEvent(ev)             # let the node/edge under the cursor handle it
+                return
+            menu = QtWidgets.QMenu()
+            sub = menu.addMenu("Add stage")
+            for s in STAGES:
+                sub.addAction(s)
+            chosen = menu.exec(ev.screenPos())
+            if chosen is not None and chosen.text() in CATALOG:
+                self.editor.add_stage(chosen.text())
+            ev.accept()
 
     class Inspector(QtWidgets.QWidget):
         def __init__(self, editor):
@@ -546,6 +592,10 @@ def _build_qt():
             act("&Save", self.save, "Ctrl+S")
             act("Save &As…", self.save_as, "Ctrl+Shift+S")
             m.addSeparator()
+            em = self.menuBar().addMenu("&Edit")
+            em.addAction(QtGui.QAction("&Delete node", self, triggered=self.delete_selected, shortcut="Del"))
+            em.addAction(QtGui.QAction("Du&plicate node", self, triggered=self._duplicate_selected, shortcut="Ctrl+D"))
+            QtGui.QShortcut(QtGui.QKeySequence(Qt.Key.Key_Backspace), self, activated=self.delete_selected)
             mm = self.menuBar().addMenu("&Plan")
             mm.addAction(QtGui.QAction("Auto-&layout", self, triggered=self.relayout, shortcut="Ctrl+L"))
             mm.addAction(QtGui.QAction("&Validate", self, triggered=self.do_validate, shortcut="Ctrl+R"))
@@ -597,6 +647,41 @@ def _build_qt():
             self.refresh_edges()
             self.inspector.show_node(dst_node)
             self.statusBar().showMessage("wired %s.out='%s' -> %s.in" % (src_node.step.stage, out, dst_node.step.stage))
+
+        def delete_node(self, node):
+            if node not in self.nodes:
+                return
+            self.scene.removeItem(node)
+            self.nodes.remove(node)
+            self.steps.remove(node.step)                 # nodes[i] and steps[i] stay parallel
+            if self.inspector.node is node:
+                self.inspector.show_node(None)
+            self.refresh_edges()
+            self.statusBar().showMessage("deleted %s (downstream tags left intact -- Validate to review)" % node.step.stage)
+
+        def delete_selected(self):
+            for node in [it for it in self.scene.selectedItems() if isinstance(it, NodeItem)]:
+                self.delete_node(node)
+
+        def _duplicate_selected(self):
+            for node in [it for it in self.scene.selectedItems() if isinstance(it, NodeItem)]:
+                self.duplicate_node(node)
+
+        def duplicate_node(self, node):
+            step = duplicate_step(node.step)
+            self.steps.append(step)
+            new = self._add_node(step)
+            self.refresh_edges()
+            new.setSelected(True)
+            self.statusBar().showMessage("duplicated %s -> out='%s'" % (step.stage, step.tags.get("out", "")))
+
+        def remove_edge(self, edge):
+            edge.dst.step.tags[edge.kind] = ""           # edges are derived from tags; clearing the tag drops it
+            edge.dst.update()
+            self.refresh_edges()
+            if self.inspector.node is edge.dst:
+                self.inspector.show_node(edge.dst)
+            self.statusBar().showMessage("removed %s connection into %s" % (edge.kind, edge.dst.step.stage))
 
         def relayout(self):
             auto_layout(self.steps)
