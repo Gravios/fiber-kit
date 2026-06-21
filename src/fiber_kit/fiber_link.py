@@ -195,6 +195,100 @@ def build_bundles(n_frag, links):
     return list(groups.values())
 
 
+def _trace_var(n, s, q):
+    """Trace of the pooled covariance from weighted sufficient stats (same statistic as
+    fiber_defrag/fiber_calibrate: sum of per-dimension variances)."""
+    return float(np.sum(q / n - (s / n) ** 2))
+
+
+def _template_pc_stats(templates, counts, n_pc=12):
+    """Per-fragment template -> a point in a top-`n_pc` PC space of the fragment templates, plus a
+    spike-count weight.  Returns (P (M,k), w (M,)) where a bundle's pooled `_trace_var` over its
+    members' P (weighted by w) measures how far apart the welded fragment SHAPES are -- the quantity
+    single-linkage chaining inflates.  Baseline-subtracted and flattened exactly as defrag's
+    template_cosine so the coordinate matches the rest of the toolchain."""
+    M = np.stack([(np.asarray(t, float) - np.asarray(t, float)[:6].mean(0)).ravel() for t in templates])
+    w = np.asarray(counts, float)
+    Mc = M - M.mean(0)
+    k = int(min(int(n_pc), Mc.shape[0] - 1, Mc.shape[1]))
+    if k < 1:
+        return np.zeros((len(M), 1)), w
+    _, _, Vt = np.linalg.svd(Mc, full_matrices=False)
+    return Mc @ Vt[:k].T, w
+
+
+def _selfcal_var_allow(links, P, w, energy, scale=1.0, top_frac=0.34, pct=95.0):
+    """Self-calibrate the variance boundary from the HIGH-ENERGY backbone, the way the cfiber co-gate
+    self-calibrates from the overlap backbone.  Take the accepted edges whose BOTH endpoints sit in the
+    top `top_frac` of fragment energy (the trusted, well-localized same-unit links), measure each edge's
+    2-fragment template `_trace_var`, and set the boundary to `scale` x its `pct` percentile.  Falls
+    back to all edges if too few high-energy ones exist.  Returns +inf (no gating) when there are no
+    usable edges."""
+    if not links:
+        return np.inf
+    e = np.asarray(energy, float)
+    thr = np.quantile(e, 1.0 - top_frac) if e.size else -np.inf
+
+    def _pair_tv(i, j):
+        n = w[i] + w[j]
+        return _trace_var(n, w[i] * P[i] + w[j] * P[j], w[i] * P[i] ** 2 + w[j] * P[j] ** 2)
+
+    tv = [_pair_tv(i, j) for i, j in links if e[i] >= thr and e[j] >= thr]
+    if len(tv) < 3:
+        tv = [_pair_tv(i, j) for i, j in links]
+    if not tv:
+        return np.inf
+    return float(np.percentile(tv, pct)) * float(scale)
+
+
+def bundles_variance_bounded(n_frag, links, chunk, strength, energy, P, w, var_allow):
+    """Energy-seeded, variance-bounded sibling of bundles_chunk_exclusive (the anti-chaining bundler).
+
+    Same chunk-exclusivity guard, but two changes that target single-linkage over-merge:
+      * ORDER edges high-energy-first -- trusted overlap-backbone seeds (strength=inf) first, then by the
+        weaker endpoint's energy descending (an edge is only as reliable as its faintest fragment, so
+        low-energy bridge edges are demoted to last), strength as the final tiebreak.  The high-energy
+        backbone agglomerates before any confusable low-energy edge competes.
+      * GATE every union by a variance boundary: a merge is refused when the combined bundle's pooled
+        template `_trace_var` exceeds `var_allow` -- i.e. when welding the two bundles would spread the
+        shape past a single neuron's envelope.  This is what stops a high-cosine-but-distinct cross edge
+        (which passes the pairwise cosine gate) from chaining two units that never share a chunk.  Seeds
+        (strength=inf) bypass the variance gate; they are trusted same-unit by construction.
+
+    `P`,`w` are the per-fragment template PC points + weights from _template_pc_stats; `energy` is per
+    fragment (logA).  Returns (bundles, n_blocked)."""
+    e = np.asarray(energy, float)
+
+    def _key(k):
+        i, j = links[k]
+        return (not np.isinf(strength[k]), -min(e[i], e[j]), -strength[k])
+
+    order = sorted(range(len(links)), key=_key)
+    par = list(range(n_frag)); chs = [{int(chunk[i])} for i in range(n_frag)]
+    N = w.astype(float).copy(); S = (w[:, None] * P).astype(float); Q = (w[:, None] * P ** 2).astype(float)
+
+    def find(x):
+        while par[x] != x:
+            par[x] = par[par[x]]; x = par[x]
+        return x
+
+    blocked = 0
+    for k in order:
+        i, j = links[k]; ri, rj = find(i), find(j)
+        if ri == rj or (chs[ri] & chs[rj]):
+            continue
+        n2 = N[ri] + N[rj]; s2 = S[ri] + S[rj]; q2 = Q[ri] + Q[rj]
+        if not np.isinf(strength[k]) and var_allow < np.inf and _trace_var(n2, s2, q2) > var_allow:
+            blocked += 1                                  # variance boundary -> reject (anti-chaining)
+            continue
+        par[rj] = ri; chs[ri] |= chs[rj]
+        N[ri] = n2; S[ri] = s2; Q[ri] = q2
+    groups = {}
+    for i in range(n_frag):
+        groups.setdefault(find(i), []).append(i)
+    return list(groups.values()), blocked
+
+
 def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
     """Global graph linkage via graph_link.spectral_partition, an alternative to the per-pair
     cogated_links veto stack (mutual-NN position + pos_thr + off_thr + cosine) which leaves
@@ -241,7 +335,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
-                 frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0):
+                 frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
+                 bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -311,7 +406,21 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
         strength = [masked_cos(Tt[i], Tt[j], mask) for i, j in links]
         for k in range(nraw, len(links)):       # trusted overlap-backbone seeds win first
             strength[k] = np.inf
-        bundles = bundles_chunk_exclusive(len(y0), links, chunk, strength)
+        if bundle == "varbound":
+            P, w = _template_pc_stats(Tt, frag["n"], n_pc=n_pc)
+            allow = var_allow
+            if allow is None:
+                allow = _selfcal_var_allow(links, P, w, logA, var_scale)
+            elif var_scale != 1.0:
+                allow = float(allow) * float(var_scale)
+            bundles, n_blocked = bundles_variance_bounded(len(y0), links, chunk, strength, logA,
+                                                          P, w, allow)
+            if verbose:
+                src = "self-cal" if var_allow is None else "budget"
+                print(f"[link] varbound bundling: var_allow={allow:.4g} ({src}, scale={var_scale}); "
+                      f"blocked {n_blocked} over-spread merge(s)")
+        else:
+            bundles = bundles_chunk_exclusive(len(y0), links, chunk, strength)
     else:
         bundles = build_bundles(len(y0), links)
     traj_info = None
@@ -395,6 +504,21 @@ def main():
                          "cosine veto stack) or 'spectral' (global graph_link affinity + normalized-"
                          "Laplacian eigengap partition -- transitivity-aware, robust to the per-pair "
                          "gate miscalibration that leaves high-cosine blocks unmerged). EXPERIMENTAL.")
+    ap.add_argument("--bundle", choices=["chunkexcl", "varbound"], default="chunkexcl",
+                    help="cross-chunk bundling: 'chunkexcl' (default; cosine-ordered union-find with the "
+                         "same-chunk-collision guard only) or 'varbound' (energy-seeded, variance-bounded "
+                         "agglomeration -- orders high-energy fragments first and refuses a merge that "
+                         "spreads a bundle's template variance past a single-neuron envelope, stopping the "
+                         "single-linkage chaining where a high-cosine-but-distinct cross edge welds two "
+                         "units that never share a chunk).")
+    ap.add_argument("--var-allow", type=float, default=None,
+                    help="varbound: explicit template PC-variance boundary (default: self-calibrate from "
+                         "the high-energy backbone edges at link time).")
+    ap.add_argument("--var-scale", type=float, default=1.0,
+                    help="varbound: multiply the variance boundary to dial the operating point (>1 merges "
+                         "more, <1 splits more); applies to both the self-calibrated and explicit boundary.")
+    ap.add_argument("--n-pc", type=int, default=12,
+                    help="varbound: number of template principal components defining the variance space.")
     ap.add_argument("--warp-thr", type=float, default=None,
                     help="spatio-temporal WARP continuity co-gate (Omlor-Giese group delay): require the "
                          "cross-channel correlation of two candidates' per-channel group-delay profiles >= this "
@@ -467,6 +591,7 @@ def main():
         times_by_id = {int(uval[k]): np.sort(rr[ufirst[k]:ends[k]]) for k in range(len(uval))}
     _EMPTY = np.empty(0, np.int64)
     ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
+    bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc)
 
     if a.from_units:
         z = np.load(a.from_units, allow_pickle=True)
@@ -480,7 +605,7 @@ def main():
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
-                         frag_times=ft, **ov_kw)
+                         frag_times=ft, **ov_kw, **bundle_kw)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -495,7 +620,7 @@ def main():
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
-                         frag_times=ft, **ov_kw)
+                         frag_times=ft, **ov_kw, **bundle_kw)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
