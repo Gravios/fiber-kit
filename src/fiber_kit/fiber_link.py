@@ -29,9 +29,9 @@ import argparse
 import numpy as np
 
 try:
-    from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy
+    from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc
 except ImportError:
-    import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy
+    import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -408,6 +408,8 @@ def main():
                     help="enable the cfiber co-gate with the threshold self-calibrated at link time to this "
                          "quantile of the overlap-backbone same-unit shape distances (e.g. 0.90; needs --from-units).")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_linked)")
+    ap.add_argument("--gt-clu", default=None, help="ground-truth .clu to score the clustering before vs after linking")
+    ap.add_argument("--gt-res", default=None, help=".res for the ground truth (timestamp alignment if it covers a window)")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=())
@@ -454,6 +456,26 @@ def main():
         print(f"[link] trajectory refine: conflicts {ti['conflicts_before']}->{ti['conflicts_after']}, "
               f"attached {ti['attached']}, evicted {ti['evicted']} (depth tol {ti['depth_tol']:.1f}, feat tol {ti['feat_tol']:.2f})")
     print(f"[link] wrote {out_path}  ({ncl} units)")
+
+    if a.gt_clu:                                                 # measure whether linking improved agreement
+        _, gt = nio.read_clu_file(a.gt_clu)
+        res = nio.read_res(base, elec)
+        if gt.size == len(src):
+            cb, ca, gl = src, newids, gt
+        elif a.gt_res:
+            gres = nio.read_res_file(a.gt_res)
+            cb, gl, _ = fsc.align_by_res(src, res, gt, gres)
+            ca, _, _ = fsc.align_by_res(newids, res, gt, gres)
+        else:
+            print("[link] --gt-clu length differs from .res; pass --gt-res to align by timestamp")
+            return
+        sb = fsc.score(cb, gl); sa = fsc.score(ca, gl)
+        print("[link] ground-truth score (before -> after linking):")
+        print("  ARI            %.4f -> %.4f" % (sb["ari"], sa["ari"]))
+        print("  pairwise prec  %.4f -> %.4f" % (sb["pairwise_precision"], sa["pairwise_precision"]))
+        print("  pairwise recall%.4f -> %.4f" % (sb["pairwise_recall"], sa["pairwise_recall"]))
+        print("  GT units split %d -> %d   |  merged candidates %d -> %d"
+              % (sb["n_gt_split"], sa["n_gt_split"], sb["n_cand_merged"], sa["n_cand_merged"]))
 
 
 if __name__ == "__main__":
