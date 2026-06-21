@@ -29,9 +29,9 @@ import argparse
 import numpy as np
 
 try:
-    from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc
+    from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
 except ImportError:
-    import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc
+    import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -104,7 +104,8 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
-                  cfiber_thr=None, cfiber_win=None, amp_gate=0.0):
+                  cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
+                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -125,6 +126,13 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
     Scf = _cfiber_shapes(np.asarray(tmpl), cfiber_win) if cfiber_thr is not None else None
     sy_ = y0.std() + 1e-9; sx = x0.std() + 1e-9; sz = z0.std() + 1e-9; sa = logA.std() + 1e-9
     links = []; linked_fwd = set()
+
+    def _ov_ok(i, j):                                     # overlap-refractory veto (default off; only ever vetoes)
+        if ov_refrac is None or frag_times is None:
+            return True
+        return cg.overlap_refractory_gate(frag_times[i], frag_times[j], ov_refrac,
+                                          thr=ov_thr, min_exp=ov_min_exp, censor=ov_censor)["verdict"] != "veto"
+
     for g in range(1, gap + 1):
         for k in range(len(chunks) - g):
             ai = np.flatnonzero(chunk == chunks[k]); bi = np.flatnonzero(chunk == chunks[k + g])
@@ -142,7 +150,8 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                             (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
                             (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr) and \
-                            (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr):
+                            (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr) and \
+                            _ov_ok(ai[v], bi[u]):
                         links.append((int(ai[v]), int(bi[u]))); linked_fwd.add(int(ai[v]))
     return links
 
@@ -231,7 +240,8 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
-                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0):
+                 chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
+                 frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -281,11 +291,16 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                 print("[link] cfiber co-gate needs backbone same-unit pairs to self-calibrate "
                       "(--from-units) or an explicit --cfiber-thr -- disabled")
     if linkage == "cogated":
+        ft_sub = [frag_times[int(i)] for i in idx] if (frag_times is not None and ov_refrac is not None) else None
         raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                             chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
                             off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
-                            cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate)
+                            cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate,
+                            frag_times=ft_sub, ov_refrac=ov_refrac, ov_thr=ov_thr,
+                            ov_min_exp=ov_min_exp, ov_censor=ov_censor)
     else:
+        if ov_refrac is not None:
+            print("[link] --overlap-refrac-ms is only wired for the default 'cogated' linkage; ignored here")
         raw = _graph_links(linkage, frag, idx, y0, logA, chunk, D, mask, offs)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
@@ -410,6 +425,20 @@ def main():
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_linked)")
     ap.add_argument("--gt-clu", default=None, help="ground-truth .clu to score the clustering before vs after linking")
     ap.add_argument("--gt-res", default=None, help=".res for the ground truth (timestamp alignment if it covers a window)")
+    ap.add_argument("--overlap-refrac-ms", type=float, default=0.0,
+                    help="DEFAULT OFF. >0 enables a power-aware refractory veto on the chunk-OVERLAP region: "
+                         "a candidate cross-chunk link is vetoed if, in the time window the two fragments share, "
+                         "their spikes coincide at chance level (two neurons) rather than showing a refractory dip "
+                         "(one neuron).  Censors zero-lag duplicate detections; abstains (keeps the link) when "
+                         "underpowered, so it only ever removes well-supported wrong links.  Needs sr + .res; "
+                         "abstains on sparse data (g5).  Only the default 'cogated' linkage is gated.")
+    ap.add_argument("--overlap-refrac-thr", type=float, default=0.3,
+                    help="coincidence ratio above which the overlap test reads 'two neurons' and vetoes (default 0.3)")
+    ap.add_argument("--overlap-censor-ms", type=float, default=0.4,
+                    help="zero-lag censor band for the overlap test -- removes the same-spike duplicate detections "
+                         "that the overlapping chunks make of one neuron (default 0.4 ms)")
+    ap.add_argument("--overlap-min-exp", type=float, default=5.0,
+                    help="min expected overlap-window coincidences to have power; below this the test abstains (default 5)")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=())
@@ -419,16 +448,39 @@ def main():
     out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}_linked" if clu_stage else "linked")
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
+
+    # overlap-refractory gate (default off): build per-source-id spike trains from .res once
+    ov_refrac = None; ov_censor = 0; times_by_id = None
+    if a.overlap_refrac_ms and a.overlap_refrac_ms > 0:
+        sr = cfg.get("sr")
+        if not sr:
+            raise SystemExit("[link] --overlap-refrac-ms needs the sampling rate, but none is in the session yaml")
+        res = np.asarray(nio.read_res(base, elec))
+        if len(res) != len(src):
+            raise SystemExit(f"[link] .res ({len(res)}) and source .clu ({len(src)}) lengths differ; "
+                             "cannot build per-fragment spike trains for the overlap gate")
+        ov_refrac = cg.refrac_samples(a.overlap_refrac_ms, sr)
+        ov_censor = cg.refrac_samples(a.overlap_censor_ms, sr)
+        o = np.argsort(src, kind="stable"); ss = src[o]; rr = res[o]
+        uval, ufirst = np.unique(ss, return_index=True)
+        ends = np.r_[ufirst[1:], len(ss)]
+        times_by_id = {int(uval[k]): np.sort(rr[ufirst[k]:ends[k]]) for k in range(len(uval))}
+    _EMPTY = np.empty(0, np.int64)
+    ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
+
     if a.from_units:
         z = np.load(a.from_units, allow_pickle=True)
         frag = {k: z[k] for k in ("template", "offset", "x0", "y0", "z0", "A", "t_mid", "n")}
         seed = z["backbone"].tolist() if "backbone" in z.files and len(z["backbone"]) else None
         drift = (dict(zip(z["drift_chunks"].tolist(), z["drift_um"].tolist()))
                  if "drift_um" in z.files else None)
+        ft = ([np.sort(np.concatenate([times_by_id.get(int(c), _EMPTY) for c in m])) if len(m) else _EMPTY
+               for m in z["members"]] if times_by_id is not None else None)
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
+                         frag_times=ft, **ov_kw)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -438,10 +490,12 @@ def main():
         if "t_mid" not in z.files:
             raise SystemExit(f"[link] {tbl} has no 't_mid' -- re-run fiber-cpos to stamp time")
         frag = {k: z[k] for k in z.files if k != "cols"}
+        ft = ([times_by_id.get(int(c), _EMPTY) for c in frag["clu"]] if times_by_id is not None else None)
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
-                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate)
+                         chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
+                         frag_times=ft, **ov_kw)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
