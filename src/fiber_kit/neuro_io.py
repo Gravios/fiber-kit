@@ -376,24 +376,54 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     binary file whose header byte happens to be an ASCII digit (e.g. nClusters=1590 -> leading
     byte 0x36 '6') is never mis-parsed as text.
 
-    A live file at the original count `n_orig` is rewritten.  A file already at the post-dedup
-    count `nkeep` is left untouched (idempotent re-run).  A live file at ANY OTHER count is
-    STALE/misaligned -- its rows do not correspond 1:1 to this spike set, so it cannot be subset
-    by `keep`; with strict=True (default) this raises (naming the files) rather than silently
-    leaving the group half-deduped, so the stale files can be regenerated or removed and the run
-    re-tried.  Pass strict=False to skip them and proceed, or stale='quarantine' to rename each
-    orphan aside as <file>.stalebkp (excluded from the live set) and proceed non-destructively.  `keep` is a boolean mask or index
-    array over the original n_orig spikes.  Returns (rewritten_paths, skipped:[(path, rows)])."""
+    The unit of work is the STAGE (the tokens after the electrode: '' = the base over-cluster,
+    'refine' = the refined stage, ...), not the individual file -- a stage's res/clu/spk/fet are one
+    spike set and must move together.  The base stage is the set `keep` is for: its files at `n_orig`
+    are subset to `nkeep`, files already at `nkeep` are left (idempotent).  A STAGED stage that is
+    internally consistent at `n_orig` is likewise subset (so a derived stage like 'refine' gets
+    deduped too, not just the base).  A staged stage at any other count -- or internally inconsistent
+    (e.g. clu at n_orig but spk at a third count, a stale leftover from an earlier extraction) -- is
+    a different/broken spike set that CANNOT be subset by `keep`; the WHOLE stage is handled together
+    so it is never left half-deduped.  By DEFAULT such a stale stage is quarantined aside as
+    <file>.stalebkp (non-destructive; the live group stays consistent and the owning stage regenerates
+    it).  Pass stale='error' to hard-fail, or stale='skip'/--no-dedup-strict to leave it.  `keep` is a
+    boolean mask or index array over the original n_orig spikes.
+    Returns (rewritten_paths, skipped:[(path, rows)])."""
     import glob
     import os
+    from collections import OrderedDict
     keep = np.asarray(keep)
     nkeep = int(keep.sum()) if keep.dtype == bool else len(keep)
-    policy = stale if stale in ("error", "skip", "quarantine") else ("error" if strict else "skip")
+    policy = stale if stale in ("error", "skip", "quarantine") else ("quarantine" if strict else "skip")
     elec = str(elec)
     bname = os.path.basename(base)
-    rewritten = []
-    done = []                                              # already at the deduped count (idempotent)
-    orphans = []                                           # stale / misaligned live files
+
+    def _rows(path, t):                                    # spike-axis length, fixed binary dtype per type
+        if t == "res":
+            return int(np.fromfile(path, dtype=RES_DTYPE).size)
+        if t == "clu":
+            return int(max(np.fromfile(path, dtype=CLU_DTYPE).size - 1, 0))
+        if t in ("spk", "spkD"):
+            return int(open_spk_file(path, nsamp, nchan).shape[0])
+        if t in ("fet", "fetD"):
+            f = read_fet_file(path)
+            return int(f.n_spikes) if f.ok else None
+        return None
+
+    def _subset(path, t):                                  # rewrite path in place, keeping `keep` rows
+        if t == "res":
+            write_res_file(path, np.fromfile(path, dtype=RES_DTYPE)[keep])
+        elif t == "clu":
+            raw = np.fromfile(path, dtype=CLU_DTYPE)
+            write_clu_file(path, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
+        elif t in ("spk", "spkD"):
+            write_spk_file(path, np.asarray(open_spk_file(path, nsamp, nchan)[keep]))   # materialise before truncate
+        elif t in ("fet", "fetD"):
+            write_fet_file(path, read_fet_file(path).values[keep])
+
+    # ── group live per-spike files by stage (variant before the electrode is ignored: standard
+    #    and stderiv are the same spike set per stage) ──
+    stages = OrderedDict()                                 # stage_tuple -> [(path, type)]
     excluded = 0
     seen = set()
     for t in types:
@@ -406,36 +436,50 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             ei = next((i for i in range(1, len(tail)) if tail[i].isdigit()), None)
             if ei is None or tail[ei] != elec:
                 continue
-            if not _is_live_perspike(tail[ei + 1:]):
+            stage = tail[ei + 1:]
+            if not _is_live_perspike(stage):
                 excluded += 1                              # backup / fragment / sidecar -- never touch
                 continue
             if path in seen:
                 continue
             seen.add(path)
+            stages.setdefault(tuple(stage), []).append((path, t))
+
+    rewritten = []
+    done = []                                              # already at the deduped count (idempotent)
+    orphans = []                                           # whole stale/inconsistent stages, file by file
+    for stage, files in stages.items():
+        counts = {}
+        for path, t in files:
             try:
-                rows = None
-                if t == "res":
-                    raw = np.fromfile(path, dtype=RES_DTYPE); rows = raw.size       # binary, fixed dtype
-                    if rows == n_orig:
-                        write_res_file(path, raw[keep]); rewritten.append(path); continue
-                elif t == "clu":
-                    raw = np.fromfile(path, dtype=CLU_DTYPE); rows = max(raw.size - 1, 0)  # int32 header + ids
-                    if rows == n_orig:
-                        write_clu_file(path, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
-                        rewritten.append(path); continue
-                elif t in ("spk", "spkD"):
-                    w = open_spk_file(path, nsamp, nchan); rows = w.shape[0]
-                    if rows == n_orig:
-                        write_spk_file(path, np.asarray(w[keep])); rewritten.append(path); continue  # materialise before truncate
-                elif t in ("fet", "fetD"):
-                    f = read_fet_file(path); rows = f.n_spikes if f.ok else "unreadable"
-                    if f.ok and rows == n_orig:
-                        write_fet_file(path, f.values[keep]); rewritten.append(path); continue
+                counts[(path, t)] = _rows(path, t)
+            except Exception as e:  # noqa: BLE001 -- a single unreadable file marks its stage stale, not aborts
+                counts[(path, t)] = f"error: {e}"
+        vals = set(counts.values())
+        is_base = (len(stage) == 0)
+        if is_base:
+            # the base stage is the set `keep` is for; subset its n_orig files, leave nkeep, orphan the rest
+            for (path, t), c in counts.items():
+                if c == n_orig:
+                    try:
+                        _subset(path, t); rewritten.append(path)
+                    except Exception as e:  # noqa: BLE001
+                        orphans.append((path, f"error: {e}"))
+                elif c == nkeep:
+                    done.append((path, c))
                 else:
-                    continue
-                (done if rows == nkeep else orphans).append((path, rows))
-            except Exception as e:  # noqa: BLE001 -- one bad file must not abort the sweep silently
-                orphans.append((path, f"error: {e}"))
+                    orphans.append((path, c))
+        elif vals == {n_orig}:
+            for (path, t), c in counts.items():            # consistent derived stage -> dedup it too
+                try:
+                    _subset(path, t); rewritten.append(path)
+                except Exception as e:  # noqa: BLE001
+                    orphans.append((path, f"error: {e}"))
+        elif vals == {nkeep}:
+            done.extend((path, c) for (path, t), c in counts.items())
+        else:                                              # stale / inconsistent stage -> whole stage as a unit
+            orphans.extend((path, c) for (path, t), c in counts.items())
+
     if verbose:
         if rewritten:
             print(f"dedup: rewrote {len(rewritten)} group file(s) to {nkeep} spikes: "
@@ -444,7 +488,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             print(f"dedup: already deduped, left {os.path.basename(p)} (rows={c})")
         if excluded:
             print(f"dedup: left {excluded} backup/fragment/sidecar file(s) untouched")
-    # stale orphans: a live file whose rows are neither n_orig nor nkeep cannot be subset by `keep`.
+    # stale stages: their rows do not correspond 1:1 to this spike set, so they cannot be subset by `keep`.
     if orphans and policy == "quarantine":
         moved = []
         for p, c in orphans:

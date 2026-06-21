@@ -1040,15 +1040,16 @@ def main():
                          "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
                          "the FIBER_ALIGN env var.")
     ap.add_argument("--dedup-strict", dest="dedup_strict", action=argparse.BooleanOptionalAction, default=True,
-                    help="when a dedup removes spikes, every live per-spike file of the group must be "
-                         "subset too. --dedup-strict (default) ERRORS if a live file is misaligned (a "
-                         "row count that is neither the pre- nor post-dedup count -- a stale leftover that "
-                         "cannot be subset), naming it so it can be regenerated/removed. --no-dedup-strict "
-                         "skips such files and proceeds.")
+                    help="when a dedup removes spikes, every live per-spike file of the group is subset too. "
+                         "A live file at a third row count (neither pre- nor post-dedup) is a stale leftover "
+                         "from an earlier extraction that CANNOT be subset by this mask; by default it is "
+                         "quarantined aside (.stalebkp) and regenerated. --no-dedup-strict leaves such files "
+                         "in place instead; --dedup-stale error restores a hard failure.")
     ap.add_argument("--dedup-stale", choices=("error", "skip", "quarantine"), default=None,
-                    help="policy for stale leftover per-spike files at a third row count (neither pre- nor "
-                         "post-dedup): error (block; = --dedup-strict), skip (leave them; = --no-dedup-strict), "
-                         "or quarantine (rename each aside as <file>.stalebkp and proceed). "
+                    help="explicit policy for stale leftover per-spike files at a third row count. Default "
+                         "(unset) QUARANTINES them aside as <file>.stalebkp -- non-destructive, leaves the "
+                         "group consistent, and the stage regenerates them. error = hard-fail (old strict "
+                         "behavior); skip = leave them (= --no-dedup-strict). "
                          "Default follows --dedup-strict.")
     ap.add_argument("--subsample", dest="subsample", action=argparse.BooleanOptionalAction, default=None,
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
