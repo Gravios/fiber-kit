@@ -160,6 +160,27 @@ FK_LINK_MAX_GAP:         2        # 2 | 1-4 (chunks).  Max chunk gap a unit may 
 FK_LINK_AMP_GATE:        1.39     # 1.39 | 1.10-1.61 (nat-log; 0=off).  Absolute log-amplitude gate across the WHOLE recording's
                                   #   drift.  ln(4)=1.386 -> <=4x amplitude cap (wider than intrachunk's 3x: more total drift).
 
+# ----- fiber-link : variance-bounded bundling (anti-over-merge, patch 0023) -
+# FIRST-ATTEMPT operating point for the cross-chunk over-merge seen in the linked sorts (e.g. sp_linked):
+# replace the legacy cosine-ordered single-linkage union-find with an energy-seeded, variance-bounded
+# agglomeration.  It seeds bundles from the highest-energy (most reliable) fragments and works inward, and
+# refuses any union that would spread a bundle's template variance past a single-neuron envelope -- so a
+# high-cosine-but-distinct cross edge can no longer chain two units that never share a chunk (the failure
+# the chunk-exclusivity guard alone cannot catch).  NOT a validated sweep: run with the diagnostic GT
+# (fiber-score / diagnose.sh --gt) and dial FK_LINK_VAR_SCALE before trusting the count.
+FK_LINK_BUNDLE:          varbound # varbound | chunkexcl.  varbound = the new anti-chaining bundler (this first attempt);
+                                  #   chunkexcl = the legacy cosine-ordered union-find (set this to revert exactly).
+FK_LINK_VAR_SCALE:       1.0      # 1.0 | 0.7-3.0.  Dial on the self-calibrated variance boundary.  1.0 = the conservative
+                                  #   floor (gate the worst over-spread merges); <1 splits more (tighter, for stubborn
+                                  #   over-merge); >1 merges more (toward the un-gated baseline, ~3x ~ legacy behaviour).
+FK_LINK_N_PC:            12       # 12 | 6-16.  Template principal components defining the variance space the boundary
+                                  #   is measured in (matches the fiber-calibrate/-defrag convention).
+FK_LINK_VAR_ALLOW:       ""       # "" = self-calibrate at link time from the high-energy backbone edges (recommended).
+                                  #   Set an explicit float only to pin the boundary across runs/sessions.
+# Note: the warp co-gate (FK_LINK_WARP_THR) and overlap-refractory veto (--overlap-refrac-ms) are the OTHER
+# new precision methods, left OFF here on purpose -- both are documented no-ops on g5 (warp: precision already
+# saturated; overlap-refractory: g5 too sparse, it abstains).  Enable them on a denser session, not this one.
+
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by
 #  fiber-pipeline; these keys are documentation, the tools take the flags directly).
