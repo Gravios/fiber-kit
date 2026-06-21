@@ -65,6 +65,32 @@ def refractory_gate(t_a, t_b, duration, refrac, thr=0.3, min_exp=5.0, censor=0):
     return dict(verdict=verdict, ratio=r, c_obs=c_obs, c_exp=c_exp, powered=c_exp >= min_exp)
 
 
+def overlap_refractory_gate(t_a, t_b, refrac, thr=0.3, min_exp=5.0, censor=0):
+    """Refractory verdict for a proposed CROSS-CHUNK link, evaluated ONLY on the temporal overlap of
+    the two fragments' spikes.  Cross-chunk fragments normally occupy disjoint time windows (no power),
+    but adjacent chunks OVERLAP: in that window the same neuron's spikes are detected in BOTH chunks.
+    The censor band removes those zero-lag duplicate detections; what remains in (censor, refrac] is
+    the refractory shoulder -- empty for one neuron (a dip -> 'allow'), at chance for two independent
+    neurons (no dip -> 'veto').  The overlap window is taken empirically as the intersection of the two
+    spike-time spans, so it needs no chunk-geometry assumptions; if the fragments do not overlap in time,
+    or too few coincidences are expected, the test has no power and ABSTAINS (never vetoes).  t_a, t_b,
+    refrac and censor are all in samples.  Returns the refractory_gate dict plus ov_lo/ov_hi/n_a/n_b."""
+    t_a = np.asarray(t_a); t_b = np.asarray(t_b)
+    if t_a.size == 0 or t_b.size == 0:
+        return dict(verdict="abstain", ratio=np.nan, c_obs=0, c_exp=0.0, powered=False,
+                    ov_lo=None, ov_hi=None, n_a=0, n_b=0)
+    ov_lo = max(int(t_a.min()), int(t_b.min()))
+    ov_hi = min(int(t_a.max()), int(t_b.max()))
+    if ov_hi <= ov_lo:                                    # disjoint in time -> no power
+        return dict(verdict="abstain", ratio=np.nan, c_obs=0, c_exp=0.0, powered=False,
+                    ov_lo=ov_lo, ov_hi=ov_hi, n_a=0, n_b=0)
+    a = np.sort(t_a[(t_a >= ov_lo) & (t_a <= ov_hi)])
+    b = np.sort(t_b[(t_b >= ov_lo) & (t_b <= ov_hi)])
+    g = refractory_gate(a, b, ov_hi - ov_lo, refrac, thr=thr, min_exp=min_exp, censor=censor)
+    g.update(ov_lo=ov_lo, ov_hi=ov_hi, n_a=int(a.size), n_b=int(b.size))
+    return g
+
+
 def isi_violation_fraction(t, refrac, censor=0):
     """Fraction of consecutive ISIs in (censor, refrac] -- single-train refractory contamination."""
     t = np.asarray(t)
