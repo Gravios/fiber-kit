@@ -159,6 +159,17 @@ LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position 
 LINK_OFF_THR="${FK_LINK_OFF_THR:-1.0}"                    # fiber-link inter-channel offset gate
 LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk gap to bridge
 
+# 0023 fiber-link variance-bounded bundling (anti-chaining over-merge guard).  bundle=varbound seeds
+# agglomeration from the highest-energy fragments and refuses a union that would spread a bundle's
+# template variance past a single-neuron envelope (self-calibrated from the high-energy backbone at link
+# time).  Targets the single-linkage over-merge where a high-cosine-but-distinct cross edge welds two
+# units that never share a chunk (which the chunk-exclusivity guard cannot catch).  Default chunkexcl =
+# the legacy cosine-ordered union-find, so nothing changes unless FK_LINK_BUNDLE is set to varbound.
+LINK_BUNDLE="${FK_LINK_BUNDLE:-chunkexcl}"               # chunkexcl | varbound
+LINK_VAR_SCALE="${FK_LINK_VAR_SCALE:-1.0}"               # varbound: dial the boundary (>1 merge more, <1 split more)
+LINK_N_PC="${FK_LINK_N_PC:-12}"                          # varbound: template PCs defining the variance space
+LINK_VAR_ALLOW="${FK_LINK_VAR_ALLOW:-}"                  # varbound: explicit boundary (empty = self-calibrate)
+
 # ============================================================================
 STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
@@ -245,6 +256,11 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
     local warp_args=()
     [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
     [ -n "$LINK_CFIBER_Q" ] && warp_args+=(--cfiber-q "$LINK_CFIBER_Q")
+    local bundle_args=()
+    if [ -n "$LINK_BUNDLE" ] && [ "$LINK_BUNDLE" != chunkexcl ]; then
+        bundle_args+=(--bundle "$LINK_BUNDLE" --var-scale "$LINK_VAR_SCALE" --n-pc "$LINK_N_PC")
+        [ -n "$LINK_VAR_ALLOW" ] && bundle_args+=(--var-allow "$LINK_VAR_ALLOW")
+    fi
     _run fiber-link "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
         --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
@@ -252,7 +268,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
         --amp-gate "$LINK_AMP_GATE" \
         --refine-trajectory \
-        "${warp_args[@]}" \
+        "${warp_args[@]}" "${bundle_args[@]}" \
         --out-stage "${STEP_OUT:-refine_linked}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
     echo "[done] linked clu: $(clu_path "${STEP_OUT:-refine_linked}")"
 }
