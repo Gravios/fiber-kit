@@ -224,6 +224,23 @@ def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
     return off, ioff
 
 
+def roll_spikes(spk, ioff):
+    """Circularly shift each (T,C) spike window by its integer offset -- the no-.fil commit.
+
+    The realign convention is res_corrected = res + ioff and a window that starts at res-peak, so the
+    re-extracted-at-res_corr window equals new[t] = old[(t+ioff) % T]; this reproduces that by a per-spike
+    circular roll instead of reading the .fil.  Exact for high-pass-filtered .spk windows (the edges are
+    ~zero, so the samples rolled in from the far end carry no signal).  Because the stderiv transform
+    (SDIFF_ALLPAIRS + temporal first-difference) commutes with a circular time shift, rolling the existing
+    stderiv .spk is equivalent (up to the negligible filtered seam) to re-deriving it from a rolled raw
+    window -- so both variants can be committed from the uploaded .spk alone.  `spk` (N,T,C); `ioff` (N,)
+    int.  Returns the rolled array in the input dtype (int16)."""
+    spk = np.asarray(spk)
+    N, T, C = spk.shape
+    sidx = (np.arange(T)[None, :] + np.asarray(ioff, int)[:, None]) % T      # new[t] = old[(t+ioff)%T]
+    return np.take_along_axis(spk, sidx[:, :, None], axis=1)
+
+
 def reextract_from_fil(filmm, gch, res_corr, nsamp, peak, batch=50000):
     """Re-extract each spike's waveform window from the FILTERED signal at its CORRECTED
     timestamp — the real thing, not a circular roll of the old window.  filmm is the
@@ -388,8 +405,14 @@ def main():
                          "(2 = half-sample lags); .res is rounded back to whole samples at save")
     ap.add_argument("--reextract", action="store_true",
                     help="re-extract each spike's window from .fil at the corrected timestamp -> new .spk")
+    ap.add_argument("--shift-spk", dest="shift_spk", action="store_true",
+                    help="commit WITHOUT a .fil: circularly roll the existing .spk of each variant by the "
+                         "per-spike integer offset (valid for high-pass .spk; the stderiv transform commutes "
+                         "with a time shift).  The no-.fil equivalent of --reextract; pair with --refeaturize "
+                         "to reproject the rolled windows onto .pca.  Mutually exclusive with --reextract.")
     ap.add_argument("--refeaturize", action="store_true",
-                    help="reproject the re-extracted windows onto .pca.standard -> new .fet (implies --reextract)")
+                    help="reproject the re-extracted/rolled windows onto .pca.<variant> -> new .fet (implies "
+                         "--reextract, or --shift-spk when that is set)")
     ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
     ap.add_argument("--variants", default=None,
                     help="comma list of feature spaces to refresh from .fil (default: standard + "
@@ -406,8 +429,11 @@ def main():
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
-    need = ("nchan", "nsamp") + (("ntotal", "peak") if (a.reextract or a.refeaturize
-                                                        or a.align_method == "klusters") else ())
+    # peak is needed for the klusters align and any commit; ntotal (the .fil width) is needed ONLY for
+    # the .fil re-extraction path -- --shift-spk rolls the existing .spk, so it never reads the .fil.
+    fil_path = a.reextract or (a.refeaturize and not a.shift_spk)
+    need = ("nchan", "nsamp") + (("ntotal",) if fil_path else ()) \
+        + (("peak",) if (fil_path or a.shift_spk or a.align_method == "klusters") else ())
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, require=need)
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
@@ -432,7 +458,36 @@ def main():
     clu_out = nio.write_clu(base, group, np.asarray(labels, np.int64), variant=out_variant, tag=a.out_tag)
     print(f"[realign] clu (ids unchanged) -> {clu_out}")
 
-    if a.reextract or a.refeaturize:
+    if a.shift_spk:
+        try:
+            from . import fiber_pca as fpca
+        except ImportError:
+            import fiber_pca as fpca
+        if a.reextract:
+            raise SystemExit("[realign] --shift-spk and --reextract are mutually exclusive (one reads the "
+                             ".fil, the other rolls the existing .spk)")
+        if a.variants:
+            want = [v.strip() for v in a.variants.split(",") if v.strip()]
+        else:
+            want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
+        for v in want:
+            try:
+                spk_v, _r = nio.open_spk(base, group, nsamp, nch, prefer=[v])
+            except Exception:
+                print(f"[realign] no .spk for variant '{v}'; skipping"); continue
+            wav = roll_spikes(np.asarray(spk_v[:len(res_corr)]), ioff)        # circular per-spike roll
+            spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
+            print(f"[realign] rolled {len(wav)} {v} spikes by their offset (no .fil) -> {spk_out}")
+            if a.refeaturize:
+                try:
+                    basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
+                                          else [v, "D"])
+                except FileNotFoundError:
+                    print(f"[realign]   no .pca basis for {v}; .fet not written"); continue
+                fet = refeaturize(wav, res_corr, basis)
+                fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
+                print(f"[realign]   re-featurised {v} -> {fet_out}  ({fet.shape[1]} features incl. time)")
+    elif a.reextract or a.refeaturize:
         try:
             from . import fiber_pca as fpca
         except ImportError:
