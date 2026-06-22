@@ -96,6 +96,13 @@ FK_REFINE_MERGE_BUDGET:  1.0      # 1.0 | 0.5-1.0.  Merge-back refractory budget
                                   #   merged unit's [floor,window) contamination stays <= this.  TO REDUCE
                                   #   AGGRESSIVE MERGING lower toward 0.5 (stricter refractory gate) and/or raise
                                   #   MERGE_MIN_SIM toward 0.97; the two gates are AND-ed, so either tightens it.
+FK_REALIGN_AFTER:        "fiber-refine fiber-peel fiber-intrachunk fiber-link"  # stages after which to re-roll each
+                                  #   new group's spikes onto its unit template (Klusters method).  A split/merge across
+                                  #   drift leaves a group's troughs spread; a per-unit realign re-tightens them.  Set ""
+                                  #   to disable.  (fiber-session is already followed by the stage-2 fiber-realign.)
+FK_REALIGN_AFTER_MODE:   shift-spk  # shift-spk | reextract.  shift-spk circular-rolls the existing .spk (no .fil, fast,
+                                  #   validated trough-std 2.00->1.05); reextract re-reads the .fil (recovers samples that
+                                  #   drifted out of the extraction window, at the cost of .fil I/O each step).
 FK_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters whose top-3 feature variance exceeds this x the
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
 FK_REFINE_SPLIT_MIN_CORR: 0.93    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
