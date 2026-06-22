@@ -138,6 +138,13 @@ REFINE_MERGE_BUDGET="${FK_REFINE_MERGE_BUDGET:-1.0}"   # merge-back [floor,windo
                                                    #   is allowed only if the merged unit stays <= this.
                                                    #   Lower (e.g. 0.5) = stricter = less aggressive merging;
                                                    #   pair with a higher MIN_SIM to keep distinct cells apart
+REALIGN_AFTER="${FK_REALIGN_AFTER-fiber-refine fiber-peel fiber-intrachunk fiber-link}"  # stages after which to
+                                                   #   re-roll each new group's spikes onto its unit template
+                                                   #   (Klusters method).  Splits/merges across drift leave a
+                                                   #   group's troughs spread; a per-unit realign re-tightens.
+                                                   #   '' disables.  See FK_REALIGN_AFTER_MODE for how.
+REALIGN_AFTER_MODE="${FK_REALIGN_AFTER_MODE:-shift-spk}"  # shift-spk = circular-roll the existing .spk (no .fil,
+                                                   #   fast, validated) | reextract = re-read the .fil
 DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
 DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
                                                    #   statistical (>0.05 starts splitting on noise)
@@ -233,6 +240,29 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
         --clu "$(clu_path "${STEP_IN:-}")" \
         --align-method klusters --reextract --refeaturize \
         --variants standard,stderiv "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
+stage_out_tag() {     # default output clu tag of a stage in canonical 'all' order (matches each stage's STEP_OUT default)
+    case "$1" in
+        fiber-refine)     echo "refine" ;;
+        fiber-peel)       echo "refine" ;;            # peel relabels .refine in place
+        fiber-intrachunk) echo "refine_intrachunk" ;;
+        fiber-link)       echo "refine_linked" ;;
+        *)                echo "" ;;
+    esac
+}
+
+realign_after() {     # post-step Klusters re-roll: align each just-updated group's spikes to its unit template, in place
+    local tag="$1"; local -a mode_args
+    case "$REALIGN_AFTER_MODE" in
+        reextract) mode_args=(--reextract --refeaturize) ;;
+        *)         mode_args=(--shift-spk --refeaturize) ;;
+    esac
+    echo "== fiber-realign  (post-step Klusters re-roll of .${tag:-base} groups; mode=$REALIGN_AFTER_MODE) =="
+    _run fiber-realign "$SESS" "$ELEC" \
+        --clu "$(clu_path "$tag")" \
+        --align-method klusters "${mode_args[@]}" \
+        --variants standard,stderiv
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
@@ -538,7 +568,12 @@ main() {
 
     # run in canonical order (curated stages last); only those in `want` actually run
     for s in "${KNOWN_STAGES[@]}"; do
-        if [ -n "${want[$s]:-}" ]; then run_stage "$s"; fi
+        if [ -n "${want[$s]:-}" ]; then
+            run_stage "$s"
+            case " $REALIGN_AFTER " in                 # Klusters re-roll spikes into their new groups after the step
+                *" $s "*) realign_after "$(stage_out_tag "$s")" ;;
+            esac
+        fi
     done
 }
 
