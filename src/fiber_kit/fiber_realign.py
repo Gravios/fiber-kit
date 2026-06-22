@@ -426,6 +426,14 @@ def main():
                     help="variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; "
                          "falls back to standard).  There is one .res/.clu under this variant; .spk/.fet "
                          "are written per feature space in --variants (standard raw, stderiv transform)")
+    ap.add_argument("--emit-clu", dest="emit_clu", action="store_true", default=True,
+                    help="re-emit the (label-unchanged) clu next to the committed .res/.spk/.fet so the "
+                         "set opens in Klusters as a unit (default on)")
+    ap.add_argument("--no-emit-clu", dest="emit_clu", action="store_false",
+                    help="do NOT write the clu.  Use when the input --clu is a stage-tagged clu but the "
+                         "outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE "
+                         ".clu.<variant>.<group> with this stage's labels.  The stage clu already exists and "
+                         "its labels are unchanged, so skipping the write keeps the base over-cluster intact.")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args()
@@ -455,8 +463,13 @@ def main():
     # realignment shifts timestamps/waveforms but NOT cluster assignments, so emit the clu unchanged
     # under the same variant+tag -- this completes the .clu/.res/.spk/.fet set Klusters loads together
     # (without it the realigned .res has no matching .clu and the set can't be opened as a unit).
-    clu_out = nio.write_clu(base, group, np.asarray(labels, np.int64), variant=out_variant, tag=a.out_tag)
-    print(f"[realign] clu (ids unchanged) -> {clu_out}")
+    # Skipped under --no-emit-clu: when --clu is stage-tagged but outputs commit canonically, this write
+    # would overwrite the BASE .clu.<variant>.<group> with the stage's labels (the stage clu already exists).
+    if a.emit_clu:
+        clu_out = nio.write_clu(base, group, np.asarray(labels, np.int64), variant=out_variant, tag=a.out_tag)
+        print(f"[realign] clu (ids unchanged) -> {clu_out}")
+    else:
+        print("[realign] clu re-emit skipped (--no-emit-clu): base over-cluster left intact")
 
     if a.shift_spk:
         try:
