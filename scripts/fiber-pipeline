@@ -23,7 +23,7 @@
 #
 # Each stage reads the previous stage's output, so a single-stage run assumes the
 # upstream artefacts already exist.  Canonical order:
-#   fiber-session -> fiber-realign -> fiber-refine -> fiber-cpos -> fiber-intrachunk -> fiber-link
+#   fiber-session -> fiber-realign -> fiber-refine -> fiber-peel -> fiber-cpos -> fiber-intrachunk -> fiber-link
 #
 # Correctness notes baked in (do not "fix"):
 #   * fiber-session uses --fine-method for the algorithm (--method is the feature tag).
@@ -171,7 +171,19 @@ LINK_N_PC="${FK_LINK_N_PC:-12}"                          # varbound: template PC
 LINK_VAR_ALLOW="${FK_LINK_VAR_ALLOW:-}"                  # varbound: explicit boundary (empty = self-calibrate)
 
 # ============================================================================
-STAGES=(fiber-session fiber-realign fiber-refine fiber-cpos fiber-intrachunk fiber-link)
+# 00xx fiber-peel: footprint + refractory confidence-ordered agglomeration of refine fragments.
+#   Merges by amplitude-preserving footprint cosine, gated by the refractory cross-CCG veto
+#   (complementary: footprint blocks the censoring fake-dip, refractory blocks footprint-similar
+#   independents).  In-place relabel on the refine clu; cross-drift identity is left to fiber-link.
+PEEL_FOOT_HI="${FK_PEEL_FOOT_HI:-0.97}"               # anneal start (strict; most-certain merges first)
+PEEL_FOOT_LO="${FK_PEEL_FOOT_LO:-0.90}"               # anneal floor (best g5 result: ARI 0.46 -> 0.68 at 0.90)
+PEEL_REFRAC_MS="${FK_PEEL_REFRAC_MS:-2.0}"            # refractory half-window (ms)
+PEEL_REFRAC_THR="${FK_PEEL_REFRAC_THR:-0.3}"          # coincidence-ratio above which a pair is two cells (veto)
+PEEL_REFRAC_MIN_EXP="${FK_PEEL_REFRAC_MIN_EXP:-5.0}"  # min expected coincidences for the veto to be powered
+PEEL_REFRAC_CENSOR_MS="${FK_PEEL_REFRAC_CENSOR_MS:-0.0}"
+PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragment to participate
+
+STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}")
 
@@ -231,6 +243,17 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
         "${warp_args[@]}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
+fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragments (IN-PLACE relabel on .refine)
+    echo "== fiber-peel  (consolidate .${STEP_IN:-refine} fragments by footprint+refractory, in-place) =="
+    _run fiber-peel "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --out-stage "${STEP_OUT:-${STEP_IN:-refine}}" \
+        --foot-hi "$PEEL_FOOT_HI" --foot-lo "$PEEL_FOOT_LO" \
+        --refrac-ms "$PEEL_REFRAC_MS" --refrac-thr "$PEEL_REFRAC_THR" \
+        --refrac-min-exp "$PEEL_REFRAC_MIN_EXP" --refrac-censor-ms "$PEEL_REFRAC_CENSOR_MS" \
+        --min-n "$PEEL_MIN_N" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk
@@ -306,6 +329,8 @@ run_stage() {
         fiber-session)    fiber_session    "${ov[@]}" ;;
         fiber-realign)    fiber_realign    "${ov[@]}" ;;
         fiber-refine)     fiber_refine     "${ov[@]}" ;;
+        fiber-peel)       fiber_peel       "${ov[@]}" ;;
+
         fiber-cpos)       fiber_cpos       "${ov[@]}" ;;
         fiber-intrachunk) fiber_intrachunk "${ov[@]}" ;;
         fiber-link)       fiber_link       "${ov[@]}" ;;
@@ -319,6 +344,8 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-session)    fiber_session    ;;
         fiber-realign)    fiber_realign    ;;
         fiber-refine)     fiber_refine     ;;
+        fiber-peel)       fiber_peel       ;;
+
         fiber-cpos)       fiber_cpos       ;;
         fiber-intrachunk) fiber_intrachunk ;;
         fiber-link)       fiber_link       ;;
@@ -342,7 +369,7 @@ except Exception as e:
 steps = doc.get("pipeline") if isinstance(doc, dict) else doc
 if not isinstance(steps, list) or not steps:
     sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit"}
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit"}
 def field(st, k):
     v = st.get(k, "")
     return "" if v is None else str(v)

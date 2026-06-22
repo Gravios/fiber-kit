@@ -23,7 +23,7 @@
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
 #  Canonical stage order:
-#    fiber-session -> fiber-realign -> fiber-refine -> fiber-cpos -> fiber-intrachunk -> fiber-link
+#    fiber-session -> fiber-realign -> fiber-refine -> fiber-peel -> fiber-cpos -> fiber-intrachunk -> fiber-link
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -108,6 +108,31 @@ FK_MERGE_AMP_THR:        0.7      # 0.7 | 0.6-0.8.  Amplitude-profile correlatio
                                   #   second of the two Omlor-Giese terms; magnitude eq.10 + group-delay eq.11).
 FK_MERGE_WARP_THR:       ""       # "" = off.  Warp PRECISION gate on cosine-selected merges (reject a cosine merge whose
                                   #   group-delay disagrees).  Tighter precision at some recall cost; tune vs curation.
+
+# ----- fiber-peel : footprint + refractory confidence-ordered agglomeration ------------------
+# Consolidates the over-split fragments refine leaves into cells.  Greedy best-footprint-cosine
+# merge, gated by TWO complementary signals so neither's blind spot leaks through:
+#   * footprint cosine (amplitude-PRESERVING mean waveform -- the stable identity of a non-adapting
+#     cell; scale-invariant shape is useless here) >= the annealed threshold, AND
+#   * the refractory cross-CCG does not veto (powered/ratio-based).
+# The refractory veto blocks footprint-similar but INDEPENDENT cells (two real units at one site);
+# the footprint floor blocks the censoring fake-dip (a dominant cell masks a minority's coincident
+# spikes -> a hole at zero lag that mimics same-cell).  The dominant clean unit (a high-rate
+# interneuron carrying a big share of the spikes) agglomerates first and is peeled out, de-cluttering
+# the pyramidal space.  In-place relabel on the refine clu; cross-DRIFT identity is left to fiber-link.
+# g5 (group 5): ARI 0.46 -> 0.68, 257 fragments -> 90 units.
+FK_PEEL_FOOT_HI:         0.97     # 0.97 | 0.95-0.99.  Anneal START: strictest footprint cosine; the most certain
+                                  #   merges (the interneuron's own fragments, cos ~1.0) fuse first.
+FK_PEEL_FOOT_LO:         0.90     # 0.90 | 0.88-0.95.  Anneal FLOOR: loosest cosine accepted.  Best g5 result at 0.90;
+                                  #   lower re-merges more (recall) but risks fusing same-site distinct cells (lean on
+                                  #   the refractory veto), higher leaves more over-split for intrachunk/link.
+FK_PEEL_REFRAC_MS:       2.0      # 2.0 | 1.5-2.5 (ms).  Refractory half-window for the veto cross-CCG.
+FK_PEEL_REFRAC_THR:      0.3      # 0.3 | 0.2-0.4.  Coincidence ratio (obs/exp) above which the pair is two cells -> veto.
+FK_PEEL_REFRAC_MIN_EXP:  5.0      # 5.0 | 3-10.  Min expected coincidences for the veto to be POWERED; below this it
+                                  #   abstains (merge allowed on footprint alone) -- so it only ever removes a false merge.
+FK_PEEL_REFRAC_CENSOR_MS: 0.0     # 0.0 | 0-0.5 (ms).  Censor window dropping duplicate detections of one spike.
+FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to participate (footprint/CCG reliability).
+
 
 # ----- fiber-intrachunk : within-chunk merge (TYPED; overrides <session>.yaml) -----
 # These FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* keys are the typed
