@@ -29,6 +29,7 @@ is reunited downstream by fiber-link's overlap anchor.  Runs in-place on the clu
 and fiber-cpos without changing any stage's I/O wiring.
 """
 import argparse
+import heapq
 import numpy as np
 
 try:
@@ -72,45 +73,64 @@ def peel_agglomerate(footprints, times, counts, duration, sr, *,
         return []
     refr = cg.refrac_samples(refrac_ms, sr)
     cens = cg.refrac_samples(refrac_censor_ms, sr)
-    foot = [(_unit(np.asarray(f, float) - np.asarray(f, float).mean())) for f in footprints]
+    Fn = np.vstack([_unit(np.asarray(f, float) - np.asarray(f, float).mean())
+                    for f in footprints])           # (n, d) mean-subtracted unit footprints
     tim = [np.asarray(t, np.int64) for t in times]
     cnt = [int(c) for c in counts]
     parent = list(range(n))
-    alive = list(range(n))
+    alive = np.ones(n, bool)
+    ver = [0] * n                                    # footprint version; a merge bumps the survivor's
 
-    def fcos(a, b):
-        return float(foot[a] @ foot[b])
-
+    # Greedy global-best agglomeration via a versioned lazy-deletion heap.  Same
+    # accept/veto decisions and the same ascending-(a,b) tie-break as a full
+    # re-scan, but instead of re-scanning every pair after each merge (O(n^3)) we
+    # pop the global-max live pair from a heap and, on a merge, refresh only the
+    # survivor's row by matvec.  Stale entries (an endpoint merged away, or a
+    # survivor whose footprint version moved on) are skipped on pop.  Cosines are
+    # BLAS, == foot[a] @ foot[b].  Net O(n^2 log n).
     for theta in np.linspace(foot_hi, foot_lo, max(1, anneal_steps)):
+        live = np.flatnonzero(alive)
         blacklist = set()
-        while True:
-            best = None
-            for ii in range(len(alive)):
-                a = alive[ii]
-                for jj in range(ii + 1, len(alive)):
-                    b = alive[jj]
-                    key = (a, b) if a < b else (b, a)
-                    if key in blacklist:
-                        continue
-                    c = fcos(a, b)
-                    if c < theta:
-                        continue
-                    if best is None or c > best[0]:
-                        best = (c, ii, jj, a, b)
-            if best is None:
-                break
-            _, ii, jj, a, b = best
+        heap = []
+        if len(live) >= 2:
+            C = Fn[live] @ Fn[live].T                 # (m, m) all-pairs cosine
+            iu, ju = np.triu_indices(len(live), 1)
+            cu = C[iu, ju]
+            keep = cu >= theta
+            for ia, ib, c in zip(live[iu[keep]], live[ju[keep]], cu[keep]):
+                a, b = int(ia), int(ib)               # a < b (live ascending)
+                heapq.heappush(heap, (-float(c), a, b, ver[a], ver[b]))
+        while heap:
+            negc, a, b, va, vb = heapq.heappop(heap)
+            if not alive[a] or not alive[b]:          # an endpoint already merged away
+                continue
+            if ver[a] != va or ver[b] != vb:          # stale: survivor's footprint changed since push
+                continue
+            if (a, b) in blacklist:
+                continue
             g = cg.refractory_gate(tim[a], tim[b], duration, refr,
                                    thr=refrac_thr, min_exp=refrac_min_exp, censor=cens)
             if g["verdict"] == "veto":            # footprint says merge, refractory says two cells
-                blacklist.add((a, b) if a < b else (b, a))
+                blacklist.add((a, b))
                 continue
-            # accept: count-weighted footprint, merged train, union
-            foot[a] = _unit(foot[a] * cnt[a] + foot[b] * cnt[b])
+            # accept: keep the lower id `a`, count-weighted footprint, union train
+            Fn[a] = _unit(Fn[a] * cnt[a] + Fn[b] * cnt[b])
             tim[a] = np.sort(np.concatenate([tim[a], tim[b]]))
             cnt[a] += cnt[b]
             parent[b] = a
-            alive.pop(jj)
+            alive[b] = False
+            ver[a] += 1
+            others = np.flatnonzero(alive)
+            others = others[others != a]
+            if len(others):                           # refresh only the survivor's pairs (matvec)
+                ck = Fn[others] @ Fn[a]
+                keep = ck >= theta
+                for ik, c in zip(others[keep], ck[keep]):
+                    k = int(ik)
+                    lo, hi = (a, k) if a < k else (k, a)
+                    if (lo, hi) in blacklist:
+                        continue
+                    heapq.heappush(heap, (-float(c), lo, hi, ver[lo], ver[hi]))
 
     def find(x):
         while parent[x] != x:
