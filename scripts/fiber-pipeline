@@ -134,6 +134,10 @@ RKK_DELETE="${FK_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min
                                                    #   residual/artifact bin (use if artifact cluster is bloated)
 REFINE_MERGE_MIN_SIM="${FK_REFINE_MERGE_MIN_SIM:-0.96}" # slacker merge-back (stock 0.92): keep over-splits
                                                    #   for fiber-intrachunk to adjudicate locally
+REFINE_MERGE_BUDGET="${FK_REFINE_MERGE_BUDGET:-1.0}"   # merge-back [floor,window) refractory budget %: a merge
+                                                   #   is allowed only if the merged unit stays <= this.
+                                                   #   Lower (e.g. 0.5) = stricter = less aggressive merging;
+                                                   #   pair with a higher MIN_SIM to keep distinct cells apart
 DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
 DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
                                                    #   statistical (>0.05 starts splitting on noise)
@@ -243,7 +247,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
         --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
-        --merge-min-sim "$REFINE_MERGE_MIN_SIM" \
+        --merge-min-sim "$REFINE_MERGE_MIN_SIM" --merge-budget "$REFINE_MERGE_BUDGET" \
         --split-min-corr "$REFINE_SPLIT_MIN_CORR" --split-var-mult "$SPLIT_VAR_MULT" \
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
