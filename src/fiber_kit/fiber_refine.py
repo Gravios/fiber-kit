@@ -641,7 +641,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
-           rkk_delete=True,
+           rkk_delete=True, drop_min=None,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
            snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
@@ -661,6 +661,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
     steady -- the cleaned fibers seed a better next pass than the raw input."""
     window = int(round(window_ms * sr / 1000.0))
     ctx = Ctx(W, nmean, mask, sr, int(floor), window)
+    drop_eff = min_group if drop_min is None else int(drop_min)   # cluster-KEEP floor, decoupled
+                                                                  # from min_group (the split-PIECE floor)
     if init_labels is None:
         lab, _ = fs.cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr,
                                        method=fine_method, var_split=0.0)
@@ -691,7 +693,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
             F = _gfeat(waves, ctx, knn_dims)
             lab, fo, ke = _knn_apply(lab, F, waves, res_abs, ctx,
                                      knn_k, knn_thr, knn_minref, knn_minnew, fold_thr, split_min_corr, off_thr=fold_off_thr)
-            lab = _drop_tiny(lab, min_group)
+            lab = _drop_tiny(lab, drop_eff)
             tag = f"{p+1}.{it+1}" if reseed else str(it + 1)
             st = _iter_stats(tag, lab, waves, res_abs, ctx)
             st.update(rkk=nr, dip=nd, iso=ni, fold=fo, kept=ke)
@@ -722,7 +724,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
         if reseed:
             # fit new fibers from the merged clusters and REASSIGN every spike by
             # whiteness residual (membership cleanup), then loop back to splitting.
-            lab = _refit_reassign(lab, waves, W, nmean, mask, min_group)
+            lab = _refit_reassign(lab, waves, W, nmean, mask, drop_eff)
             st = _iter_stats(f"{p+1}.reasgn", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -1022,6 +1024,11 @@ def main():
                          "write <base>.geom.<group>.npz tracking each final fiber back through the loop")
     ap.add_argument("--large", type=int, default=800, help="only clusters >= this are split each iter")
     ap.add_argument("--min-group", type=int, default=40)
+    ap.add_argument("--drop-min", type=int, default=None,
+                    help="cluster-KEEP floor: clusters smaller than this are dropped to the artifact bin "
+                         "each iteration.  Decoupled from --min-group (the split-PIECE floor).  Default "
+                         "None = use --min-group (legacy).  Set LOW (e.g. 5) so session's small over-split "
+                         "fragments survive to be stitched by intrachunk instead of being discarded.")
     ap.add_argument("--var-margin", type=float, default=0.05,
                     help="min per-channel residual-variance reduction to accept a gated sub-split")
     ap.add_argument("--brr-tol", type=float, default=0.30,
@@ -1178,7 +1185,7 @@ def main():
 
     if a.chunk_minutes and a.chunk_minutes > 0:
         refine_kw = dict(floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
-                         large=a.large, min_group=a.min_group, var_margin=a.var_margin,
+                         large=a.large, min_group=a.min_group, drop_min=a.drop_min, var_margin=a.var_margin,
                          brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth, split_var_mult=a.split_var_mult,
                          split_min_corr=a.split_min_corr, dip_realign=a.dip_realign,
                          rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, rkk_delete=a.rkk_delete, nudge_split=a.nudge_split,
@@ -1223,7 +1230,7 @@ def main():
     snaps = [] if a.track_geometry else None
     lab, stats = refine(waves, res, W, nmean, mask, sr,
                         floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
-                        large=a.large, min_group=a.min_group,
+                        large=a.large, min_group=a.min_group, drop_min=a.drop_min,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
                         var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr, split_var_mult=a.split_var_mult,
                         dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, rkk_delete=a.rkk_delete,
