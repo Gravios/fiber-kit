@@ -134,6 +134,12 @@ LINK_AMP_GATE="${FK_LINK_AMP_GATE:-0}"             # absolute log-amplitude gate
 REFINE_LARGE="${FK_REFINE_LARGE:-150}"             # refine splits only clusters >= this (stock 800 skips
                                                    #   every 60-700-spike unit -> subtle pairs never split)
 REFINE_MIN_GROUP="${FK_REFINE_MIN_GROUP:-30}"      # min spikes per split piece in refine (stock 40)
+REFINE_DROP_MIN="${FK_REFINE_DROP_MIN:-5}"         # cluster-KEEP floor: a cluster below this is dropped to the
+                                                   #   artifact bin each iteration.  Decoupled from MIN_GROUP (the
+                                                   #   split-PIECE floor): at MIN_GROUP=30 refine discarded session's
+                                                   #   small over-split fragments (8-30 spikes) wholesale.  5 keeps
+                                                   #   real fragments for intrachunk to stitch, sheds only noise; 0 =
+                                                   #   keep everything; set =MIN_GROUP for the old (lossy) behaviour.
 RKK_DELETE="${FK_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min-group sub-clusters during a
                                                    #   split; 0 (--no-rkk-delete) keeps small non-singular
                                                    #   pieces so the cascade stops shedding them to the
@@ -297,7 +303,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
-        --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" \
+        --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" --drop-min "$REFINE_DROP_MIN" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
         --merge-min-sim "$REFINE_MERGE_MIN_SIM" --merge-budget "$REFINE_MERGE_BUDGET" \
         --split-min-corr "$REFINE_SPLIT_MIN_CORR" --split-var-mult "$SPLIT_VAR_MULT" \

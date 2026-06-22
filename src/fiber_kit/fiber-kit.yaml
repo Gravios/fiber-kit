@@ -95,6 +95,12 @@ FK_REFINE_LARGE:         150      # 150 | 100-300.  Split only clusters with >= 
                                   #   estimate sub-structure).  Stock 800 skips most 60-700-spike units -> subtle
                                   #   pairs never split.  Lower = more aggressive splitting.
 FK_REFINE_MIN_GROUP:     30       # 30 | 25-50.  Min spikes per split piece; a piece below this is noise, not a unit.
+FK_REFINE_DROP_MIN:      5        # 5 | 0-30.  Cluster-KEEP floor (decoupled from MIN_GROUP, the split-PIECE floor):
+                                  #   each refine iteration drops clusters SMALLER than this to the artifact bin.  At
+                                  #   MIN_GROUP=30 this discarded session's small over-split fragments (8-30 spikes)
+                                  #   wholesale -- tens of thousands of real spikes lost to artifact.  5 keeps real
+                                  #   fragments for fiber-intrachunk to stitch and sheds only 1-4 spike noise; 0 keeps
+                                  #   everything (nothing dropped); set =MIN_GROUP to restore the old lossy behaviour.
 FK_RKK_DELETE:           1        # 1 | 0/1.  1 = rkk's CEM culls sub-min-group pieces mid-split (they fall through
                                   #   to the residual/artifact bin).  Set 0 (--no-rkk-delete) to keep small,
                                   #   non-singular rkk sub-clusters as real units when too many spikes are landing
