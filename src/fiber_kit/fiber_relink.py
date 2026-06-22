@@ -27,8 +27,10 @@ import numpy as np
 from collections import defaultdict
 try:
     from . import neuro_io as nio
+    from . import fiber_ccg as cg
 except ImportError:
     import neuro_io as nio
+    import fiber_ccg as cg
 
 
 # ── geometry distances on the stored per-fiber summaries ────────────────────
@@ -69,7 +71,7 @@ class _UF:
 
 
 # ── stage 1: within-chunk bundling ──────────────────────────────────────────
-def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96):
+def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96, veto=None):
     """Merge over-split fragments of one neuron inside a chunk.  Uses MUTUAL-BEST
     pairing (not single-linkage connected components) so it cannot chain unrelated
     fibers into a blob: a fiber bundles only with the one partner that is also its
@@ -103,6 +105,8 @@ def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96):
                 if int(np.argmin(D[j])) != i:            # mutual-best only
                     continue
                 if uf.find(reps[i]) != uf.find(reps[j]):
+                    if veto is not None and veto(reps[i], reps[j]):   # refractory CCG veto (powered, no dip = 2 cells)
+                        continue
                     uf.union(reps[i], reps[j]); n_merged += 1; changed = True
         if not changed:
             break
@@ -111,7 +115,7 @@ def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96):
 
 # ── stage 2: cross-chunk geometry matching ──────────────────────────────────
 def link_across_chunks(uf, F, prof_gate=0.18, tdist_gate=0.055, depth_gate=0.12,
-                       q_half=300.0, thr=0.14, margin=0.7, max_gap=2):
+                       q_half=300.0, thr=0.14, margin=0.7, max_gap=2, veto=None):
     """Cross-chunk matching by evolving geometry as ONE-TO-ONE FORWARD CHAINING:
     each fiber may match at most one successor and one predecessor, so units are
     simple chains (one fiber per chunk) that track smooth drift end-to-end — never
@@ -184,6 +188,8 @@ def link_across_chunks(uf, F, prof_gate=0.18, tdist_gate=0.055, depth_gate=0.12,
                 if ra != rb:
                     if rchunks[ra] & rchunks[rb]:              # temporally overlapping -> distinct neurons
                         continue
+                    if veto is not None and veto(a, b):        # refractory CCG veto on the link
+                        continue
                     merged = rchunks[ra] | rchunks[rb]
                     uf.union(a, b); n_links += 1
                     rchunks[uf.find(a)] = merged
@@ -194,10 +200,19 @@ def link_across_chunks(uf, F, prof_gate=0.18, tdist_gate=0.055, depth_gate=0.12,
 # ── driver ───────────────────────────────────────────────────────────────────
 def relink(npz_path, prof_thr=0.10, tcorr_min=0.96, prof_gate=0.18, tdist_gate=0.055,
            depth_gate=0.12, q_half=300.0, thr=0.14, margin=0.7, max_gap=2,
-           consec_guard=0.08, e2e_guard=0.35, verbose=True):
+           consec_guard=0.08, e2e_guard=0.35, clu_path=None, res=None, refrac=0,
+           refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor=0, verbose=True):
     """Returns (row2unit, oldgid2unit, units, report_rows). Seeds the union-find
     with the original gid grouping (preserving every original link), then adds
-    within-chunk bundles and geometry links."""
+    within-chunk bundles and geometry links.
+
+    If refrac>0 (samples) with clu_path+res given, a curation-INDEPENDENT
+    refractory cross-correlogram veto guards every bundle/link decision: a
+    proposed merge whose two spike trains coincide at chance level on their
+    temporal overlap (two distinct neurons, no refractory dip) is BLOCKED, so a
+    geometry/template match alone cannot fuse two co-active cells.  The test is
+    power-aware (overlap_refractory_gate) and ABSTAINS where rates are too low,
+    so it never vetoes blindly -- it only ever removes false linkages."""
     z = np.load(npz_path, allow_pickle=True)
     F = {k: z[k] for k in ('gid', 'chunk', 'grid', 'dir', 'template', 'nspk', 'depth', 'radius')}
     G = len(F['gid'])
@@ -213,8 +228,40 @@ def relink(npz_path, prof_thr=0.10, tcorr_min=0.96, prof_gate=0.18, tdist_gate=0
         else:
             first[g] = r
     n_seed = G - len({uf.find(r) for r in range(G) if F['gid'][r] >= 0})
-    n_bundle = bundle_within_chunk(uf, F, prof_thr, tcorr_min)
-    n_link = link_across_chunks(uf, F, prof_gate, tdist_gate, depth_gate, q_half, thr, margin, max_gap)
+
+    # ── optional refractory veto (curation-independent false-linkage guard) ──
+    n_veto = [0]
+    if refrac and refrac > 0 and clu_path is not None and res is not None:
+        _, clu_ids = nio.read_clu_file(clu_path)
+        clu_ids = np.asarray(clu_ids).ravel()
+        res = np.asarray(res).ravel()
+        rowgid = F['gid'].astype(int)
+        trains = {}
+        for g in np.unique(rowgid[rowgid >= 0]):
+            t = np.sort(res[clu_ids == g + 1].astype(np.int64))   # clu id = gid+1; 0 = noise
+            if t.size:
+                trains[int(g)] = t
+
+        def _comp_times(root):
+            gids = {int(rowgid[r]) for r in range(G) if rowgid[r] >= 0 and uf.find(r) == root}
+            ts = [trains[g] for g in gids if g in trains]
+            return np.sort(np.concatenate(ts)) if ts else np.empty(0, np.int64)
+
+        def veto(a, b):
+            ta = _comp_times(uf.find(a)); tb = _comp_times(uf.find(b))
+            if ta.size == 0 or tb.size == 0:
+                return False
+            g = cg.overlap_refractory_gate(ta, tb, refrac, thr=refrac_thr,
+                                           min_exp=refrac_min_exp, censor=refrac_censor)
+            blocked = (g["verdict"] == "veto")
+            if blocked:
+                n_veto[0] += 1
+            return blocked
+    else:
+        veto = None
+
+    n_bundle = bundle_within_chunk(uf, F, prof_thr, tcorr_min, veto=veto)
+    n_link = link_across_chunks(uf, F, prof_gate, tdist_gate, depth_gate, q_half, thr, margin, max_gap, veto=veto)
 
     # contiguous unit ids
     roots = {}
@@ -251,10 +298,29 @@ def relink(npz_path, prof_thr=0.10, tcorr_min=0.96, prof_gate=0.18, tdist_gate=0
     rep.sort(key=lambda d: -d['n_chunks'])
     if verbose:
         nmc = sum(1 for d in rep if d['n_chunks'] >= 2)
-        print(f"[relink] {G} fibers | seed links={n_seed} + bundles={n_bundle} + geometry links={n_link}")
+        print(f"[relink] {G} fibers | seed links={n_seed} + bundles={n_bundle} + geometry links={n_link}"
+              + (f" | refractory vetoes={n_veto[0]}" if veto is not None else ""))
         print(f"[relink] units: {len(first)} (original) -> {n_units}   multi-chunk units={nmc}   "
               f"suspect(step>{consec_guard})={sum(d['suspect'] for d in rep)}")
     return row2unit, oldgid2unit, n_units, rep
+
+
+def _load_res(path):
+    """Per-spike sample times from a .res: ascii (one int per line) or binary int64/int32.
+    Picks the interpretation that yields a non-negative, non-decreasing array."""
+    def _ok(a):
+        return a.size > 0 and a.min() >= 0 and bool(np.all(np.diff(a) >= 0))
+    try:
+        a = np.loadtxt(path, dtype=np.int64).ravel()
+        if _ok(a):
+            return a
+    except Exception:
+        pass
+    for dt in (np.int64, np.int32):
+        a = np.fromfile(path, dtype=dt)
+        if _ok(a):
+            return a
+    raise ValueError(f"could not parse .res times from {path} (tried ascii, int64, int32)")
 
 
 def rewrite_clu(clu_in, clu_out, oldgid2unit):
@@ -303,10 +369,29 @@ def main():
     ap.add_argument("--thr", type=float, default=0.14);        ap.add_argument("--margin", type=float, default=0.7)
     ap.add_argument("--max-gap", type=int, default=2);         ap.add_argument("--consec-guard", type=float, default=0.08)
     ap.add_argument("--e2e-guard", type=float, default=0.35)
+    ap.add_argument("--refrac-ms", type=float, default=0.0,
+                    help="DEFAULT OFF. >0 enables a curation-independent refractory cross-correlogram "
+                         "veto on every bundle/link: a merge whose two trains coincide at chance level on "
+                         "their temporal overlap (two neurons, no refractory dip) is blocked. Needs --res. "
+                         "Power-aware: ABSTAINS at low firing rates, only ever removes false linkages.")
+    ap.add_argument("--res", default=None, help="per-spike .res (sample times) aligned to --clu; required for --refrac-ms")
+    ap.add_argument("--sr", type=float, default=None, help="sample rate (Hz) for --refrac-ms (e.g. 32552)")
+    ap.add_argument("--refrac-thr", type=float, default=0.3, help="coincidence ratio above which the overlap is 'two neurons' (default 0.3)")
+    ap.add_argument("--refrac-min-exp", type=float, default=5.0, help="min expected coincidences for the test to be powered (default 5)")
+    ap.add_argument("--refrac-censor-ms", type=float, default=0.0, help="censor window (ms) to drop duplicate detections of the same spike (default 0)")
     a = ap.parse_args()
+    res = refrac = censor = None
+    if a.refrac_ms and a.refrac_ms > 0:
+        if not (a.clu and a.res and a.sr):
+            ap.error("--refrac-ms requires --clu, --res and --sr")
+        res = _load_res(a.res)
+        refrac = cg.refrac_samples(a.refrac_ms, a.sr)
+        censor = cg.refrac_samples(a.refrac_censor_ms, a.sr)
     row2unit, oldgid2unit, n_units, rep = relink(
         a.fibers, a.prof_thr, a.tcorr_min, a.prof_gate, a.tdist_gate, a.depth_gate,
-        a.q_half, a.thr, a.margin, a.max_gap, a.consec_guard, a.e2e_guard)
+        a.q_half, a.thr, a.margin, a.max_gap, a.consec_guard, a.e2e_guard,
+        clu_path=a.clu, res=res, refrac=(refrac or 0), refrac_thr=a.refrac_thr,
+        refrac_min_exp=a.refrac_min_exp, refrac_censor=(censor or 0))
     if a.report:
         write_report(rep, a.report); print(f"[relink] report -> {a.report}")
     if a.clu:
