@@ -42,12 +42,13 @@ def _assign(X, mu, icov, logdet, cnt, N):
     return lab, best
 
 
-def _cem(X, lab, reg, N, min_size, pen, npar, max_iter=40):
+def _cem(X, lab, reg, N, min_size, pen, npar, max_iter=40, delete=True):
     prev = None
     for _ in range(max_iter):
         K = lab.max() + 1
         mu, icov, logdet, cnt, ok = _fit(X, lab, K, reg)
-        keep = [c for c in range(K) if ok[c] and cnt[c] >= min_size]
+        keep = [c for c in range(K)
+                if ok[c] and (cnt[c] >= min_size or not delete)]  # delete=False keeps small (non-singular) clusters
         if not keep: break
         lab, best = _assign(X, mu[keep], icov[keep], logdet[keep], cnt[keep], N)
         cost = -best.sum() + 0.5 * pen * npar * len(keep)
@@ -57,7 +58,7 @@ def _cem(X, lab, reg, N, min_size, pen, npar, max_iter=40):
 
 
 def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
-               penalty='bic', max_iter=40, merge_rounds=12, verbose=False):
+               penalty='bic', max_iter=40, merge_rounds=12, verbose=False, delete=True):
     """Returns per-point labels (0-based). Random-seed init, classification-EM,
     BIC-merge.  X: (N, D) features (e.g. PCA of masked waveforms)."""
     rng = np.random.default_rng(seed); N, D = X.shape
@@ -69,7 +70,7 @@ def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
     lab = np.zeros(N, int); best = np.full(N, np.inf)
     for c in range(K0):                                   # nearest random seed
         d = ((X - seeds[c]) ** 2).sum(1); upd = d < best; best[upd] = d[upd]; lab[upd] = c
-    lab = _cem(X, lab, reg, N, min_size, pen, npar, max_iter)
+    lab = _cem(X, lab, reg, N, min_size, pen, npar, max_iter, delete)
     for mr in range(merge_rounds):
         K = lab.max() + 1
         mu, icov, logdet, cnt, ok = _fit(X, lab, K, reg)
@@ -94,7 +95,7 @@ def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
             lab[lab == cb] = ca; used.update((ca, cb)); did += 1
         uniq = np.unique(lab); remap = {u: i for i, u in enumerate(uniq)}
         lab = np.array([remap[u] for u in lab])
-        lab = _cem(X, lab, reg, N, min_size, pen, npar, max_iter)
+        lab = _cem(X, lab, reg, N, min_size, pen, npar, max_iter, delete)
         if verbose: print(f"  merge round {mr}: merged {did}, K={lab.max()+1}")
         if did == 0: break
     return lab

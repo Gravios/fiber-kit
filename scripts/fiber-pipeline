@@ -128,6 +128,10 @@ LINK_AMP_GATE="${FK_LINK_AMP_GATE:-0}"             # absolute log-amplitude gate
 REFINE_LARGE="${FK_REFINE_LARGE:-150}"             # refine splits only clusters >= this (stock 800 skips
                                                    #   every 60-700-spike unit -> subtle pairs never split)
 REFINE_MIN_GROUP="${FK_REFINE_MIN_GROUP:-30}"      # min spikes per split piece in refine (stock 40)
+RKK_DELETE="${FK_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min-group sub-clusters during a
+                                                   #   split; 0 (--no-rkk-delete) keeps small non-singular
+                                                   #   pieces so the cascade stops shedding them to the
+                                                   #   residual/artifact bin (use if artifact cluster is bloated)
 REFINE_MERGE_MIN_SIM="${FK_REFINE_MERGE_MIN_SIM:-0.96}" # slacker merge-back (stock 0.92): keep over-splits
                                                    #   for fiber-intrachunk to adjudicate locally
 DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
@@ -232,6 +236,8 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     local warp_args=()
     [ -n "$MERGE_WARP_RECALL" ] && warp_args+=(--merge-warp-recall "$MERGE_WARP_RECALL" --merge-amp-thr "$MERGE_AMP_THR")
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
+    local rkk_args=()
+    [ "$RKK_DELETE" = "0" ] && rkk_args+=(--no-rkk-delete)
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
@@ -242,7 +248,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
-        "${warp_args[@]}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragments (IN-PLACE relabel on .refine)
