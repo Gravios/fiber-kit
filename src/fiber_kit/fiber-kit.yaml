@@ -127,10 +127,14 @@ FK_DEDUP_STALE:          quarantine  # quarantine | error | skip.  Handling of s
                                   #   from a prior, differently-counted run) a fresh dedup cannot subset.  quarantine
                                   #   renames each aside as <file>.stalebkp (non-destructive, re-runnable); error blocks;
                                   #   skip leaves them.  (Legacy FK_DEDUP_STRICT: 1->error, 0->skip; superseded.)
-FK_MERGE_WARP_RECALL:    0.9      # 0.9 | 0.85-0.95 ("" disables).  Warp-RECALL merge path (Omlor-Giese group-delay,
-                                  #   patch 0086): reunite drift fragments cosine misses when median-template warp >= this
-                                  #   AND amplitude-profile corr >= FK_MERGE_AMP_THR.  g5: recovered 323/395 such merges
-                                  #   at >=0.976 precision, refractory-clean.  Aggressive -- calibrate vs curation.
+FK_MERGE_WARP_RECALL:    ""       # "" = OFF (default).  Warp-RECALL merge path (Omlor-Giese group-delay, patch
+                                  #   0086): reunite drift fragments cosine misses when median-template warp >= this
+                                  #   AND amplitude-profile corr >= FK_MERGE_AMP_THR.  It admits merges BELOW the
+                                  #   cosine floor -- i.e. drift-fragment STITCHING -- and on a full session that
+                                  #   over-merges (~2x extra sub-cosine edges; the g5 0.976 precision does not
+                                  #   generalise).  That reunion is fiber-intrachunk's job (it has the offset/depth/
+                                  #   cfiber/refractory-ceiling gates).  Set 0.9 only if curation shows refine must
+                                  #   reunite drift fragments locally.
 FK_MERGE_AMP_THR:        0.7      # 0.7 | 0.6-0.8.  Amplitude-profile correlation floor for the warp-recall path (the
                                   #   second of the two Omlor-Giese terms; magnitude eq.10 + group-delay eq.11).
 FK_MERGE_WARP_THR:       ""       # "" = off.  Warp PRECISION gate on cosine-selected merges (reject a cosine merge whose
