@@ -101,6 +101,32 @@ def isi_violation_fraction(t, refrac, censor=0):
     return float(viol.sum()) / (t.size - 1)
 
 
+def split_gate(t_a, t_b, duration, refrac, thr=0.3, min_exp=5.0, censor=0):
+    """Curation-INDEPENDENT adjudication of a proposed SPLIT of one cluster into pieces a, b.
+
+    This is the split-side dual of refractory_gate (which judges a proposed MERGE).  A single
+    neuron cannot fire twice within its refractory period, so if a and b are the same cell the
+    cross-correlogram has a dip at zero lag (ratio ~0) and the split is SPURIOUS; if they are two
+    distinct cells they fire independently (ratio ~1) and the split is GENUINE.
+
+    The test only has power when enough coincidences are expected (c_exp >= min_exp), which needs
+    sufficient firing-rate x duration.  At low rates / short windows it ABSTAINS rather than mislead
+    -- in that regime the only powered signal is the waveform, which the caller must fall back on.
+    Because it is timing-based it is INDEPENDENT of the feature/waveform space the split was made in,
+    so it is the one arbiter that does not share the curator's (or the splitter's) blind spots --
+    where it has power.
+
+    Returns dict(verdict in {'genuine','spurious','abstain'}, ratio, c_obs, c_exp, powered)."""
+    c_obs, c_exp, r = refractory_ratio(t_a, t_b, duration, refrac, censor)
+    if c_exp < min_exp:
+        verdict = "abstain"
+    elif r > thr:
+        verdict = "genuine"          # at chance -> two independent cells -> split is real
+    else:
+        verdict = "spurious"         # dip -> refractory-consistent with one cell -> over-split
+    return dict(verdict=verdict, ratio=r, c_obs=c_obs, c_exp=c_exp, powered=c_exp >= min_exp)
+
+
 # ───────────────────────────── standalone QC CLI ─────────────────────────────
 def main():
     import argparse
