@@ -97,7 +97,13 @@ else DEDUP_STALE="quarantine"; fi
 # 0086 fiber-refine recall: merge drift fragments cosine misses, when median-template group-delay
 # (warp) AND amplitude-profile both agree.  g5: warp>=0.9 & amp>=0.7 recovered 323/395 such merges
 # at >=0.976 precision, refractory-clean.  Aggressive -- calibrate vs fuller curation before production.
-MERGE_WARP_RECALL="${FK_MERGE_WARP_RECALL:-0.9}"   # empty disables the recall path
+MERGE_WARP_RECALL="${FK_MERGE_WARP_RECALL:-}"     # empty = OFF (default).  The warp-recall path admits merges
+                                                  #   BELOW the cosine floor (warp+amp coherent) -- that is drift-
+                                                  #   fragment STITCHING and belongs to fiber-intrachunk, which has
+                                                  #   the offset/depth/cfiber/refractory-ceiling precision gates.
+                                                  #   In refine it over-merges (~2x extra sub-cosine edges) once
+                                                  #   session over-clusters.  Set 0.9 only if curation shows refine
+                                                  #   must reunite drift fragments locally.
 MERGE_AMP_THR="${FK_MERGE_AMP_THR:-0.7}"           # amplitude-profile correlation floor for the recall path
 MERGE_WARP_THR="${FK_MERGE_WARP_THR:-}"            # 0084 precision GATE on cosine-selected merges (empty=off)
 # 0085 fiber-link warp co-gate: on g5 did NOT help (precision already saturated; per-chunk templates
