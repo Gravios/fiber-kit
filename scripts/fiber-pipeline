@@ -266,6 +266,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "$tag")" \
         --align-method klusters "${mode_args[@]}" \
+        --no-emit-clu \
         --variants standard,stderiv
 }
 
