@@ -170,8 +170,16 @@ EBAND_LOW_ASSIGN="${FK_EBAND_LOW_ASSIGN:-0}"       # bottom fraction of the ener
 # ===================== stage gates (previously hardcoded, now exposed) ==
 SESSION_FINE_METHOD="${FK_SESSION_FINE_METHOD:-rkk}"      # fiber-session per-fiber fine clusterer
 SESSION_CHUNK_MIN="${FK_SESSION_CHUNK_MIN:-12}"           # fiber-session chunk length (min)
-SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # fiber-session coarse merge method
-SESSION_MERGE_CORR="${FK_SESSION_MERGE_CORR:-0.90}"       # fiber-session coarse merge correlation
+SESSION_RKK_DELETE="${FK_SESSION_RKK_DELETE:-0}"          # 0 = session OVER-clusters (keep small rkk sub-clusters;
+                                                         #   the cull belongs to refine).  1 = cull like refine.
+SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # coarse merge method (inert when MERGE_CORR=0)
+SESSION_MERGE_CORR="${FK_SESSION_MERGE_CORR:-0}"          # 0 = NO session chunk-merge -> intrachunk does the
+                                                         #   stitching (with its refractory gate).  0.90 = old
+                                                         #   sliding merge (premature; the over-merge source).
+SESSION_LINK="${FK_SESSION_LINK:-1}"                     # 1 = assemble a fiber's per-chunk fragments across chunks
+                                                         #   (overlap-anchor; this is fiber SET-UP, not merging).  0 = --no-link
+SESSION_CFIBER_GATE="${FK_SESSION_CFIBER_GATE:-1}"       # 1 = cfiber affine-invariant shape veto on coarse fragment merges
+SESSION_DIPSPLIT="${FK_SESSION_DIPSPLIT:-1}"             # 1 = dip-bimodal split within fibers (over-cluster welds early)
 REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
 REFINE_CHUNK_MINUTES="${FK_REFINE_CHUNK_MINUTES:-12}"     # fiber-refine chunk length (min)
 LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
@@ -229,13 +237,16 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-}")) =="
     local eband_args=()
     [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
+    local sess_args=()
+    [ "$SESSION_RKK_DELETE" = "0" ] && sess_args+=(--no-rkk-delete)        # over-cluster: don't cull (refine's job)
+    [ "$SESSION_LINK" = "0" ]       && sess_args+=(--no-link)
+    [ "$SESSION_CFIBER_GATE" = "1" ] && sess_args+=(--cfiber-gate --cfiber-q "$CFIBER_Q")
+    [ "$SESSION_DIPSPLIT" = "1" ]   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
     _run fiber-session "$SESS" "$ELEC" \
         --method stderiv --fine-method "$SESSION_FINE_METHOD" \
         --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
-        --cfiber-gate --cfiber-q "$CFIBER_Q" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
-        --dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN" \
-        "${eband_args[@]}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        "${sess_args[@]+"${sess_args[@]}"}" "${eband_args[@]+"${eband_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)

@@ -41,9 +41,18 @@ FK_SESSION_FINE_METHOD:  rkk      # rkk | kk.  Per-fiber fine clusterer; rkk = m
 FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.
-FK_SESSION_MERGE_METHOD: sliding  # sliding.  Coarse cross-chunk fiber merge (sliding window over chunks).
-FK_SESSION_MERGE_CORR:   0.90     # 0.90 | 0.88-0.93.  Coarse-fiber template-correlation merge threshold.
-                                  #   Higher = more, smaller coarse fibers (safer for the over-split strategy).
+FK_SESSION_RKK_DELETE:   0        # 0 | 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters
+                                  #   so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old
+                                  #   behaviour; sheds fragments into the artifact bin -- not what session is for).
+FK_SESSION_MERGE_METHOD: sliding  # sliding | template | profile.  Coarse merge method; INERT when MERGE_CORR=0.
+FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk
+                                  #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session
+                                  #   sliding merge (premature: it welds co-active cells before refine can clean).
+FK_SESSION_LINK:         1        # 1 | 0/1.  1 = link a fiber's own per-chunk fragments across chunks (overlap-anchor
+                                  #   backbone -- this is fiber SET-UP, not cross-fiber merging).  0 = --no-link.
+FK_SESSION_CFIBER_GATE:  1        # 1 | 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision).
+FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the
+                                  #   downstream stages have the real cells to stitch, not a pre-merged blob.
 FK_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
                                   #   (affine-invariant Fourier descriptor) distance exceeds the Q-quantile of the
                                   #   fiber's OWN split-half null.  0.90 = tolerate up to the 90th-pct self-jitter.

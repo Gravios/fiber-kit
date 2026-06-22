@@ -350,7 +350,7 @@ def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4
     return out
 
 
-def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2):
+def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True):
     """rkk (CEM) interleaved with per-cluster realignment -- the per-step realign analog for the
     flat KK split.  rkk assigns all spikes in one EM run, so there is no recursive node; instead
     iterate {cluster -> realign EACH cluster to its own median -> re-featurize -> re-cluster}, so
@@ -358,7 +358,7 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2):
     onto the group's dominant peak by the integer fl.realign is otherwise smeared).  Stops early
     when the cluster count is unchanged.  Returns per-spike sub-labels."""
     F = _aligned_pca(waves, mask, dims)                    # whole-group median align + PCA (seed)
-    lab = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42)
+    lab = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
     for _ in range(max(0, iters)):
         Wal = np.array(waves, dtype=float)
         for c in np.unique(lab):                           # realign each cluster to its OWN median
@@ -367,7 +367,7 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2):
                 Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
         w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
         U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
-        new = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42)
+        new = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
         stop = len(np.unique(new)) == len(np.unique(lab))
         lab = new
         if stop:
@@ -492,7 +492,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
-                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
+                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
@@ -535,11 +535,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
         elif method == "rkk":
             if rkk_realign:                                # per-cluster realign EM loop
-                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters)
+                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete)
             else:                                          # legacy: one parent realign, fixed features
                 wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
                 Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
-                sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42)
+                sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42, delete=rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
             sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask)
@@ -1035,6 +1035,11 @@ def main():
                     help="legacy: one parent realign + fixed features for the rkk split")
     ap.add_argument("--rkk-realign-iters", type=int, default=2,
                     help="cluster<->realign passes in the rkk realign loop")
+    ap.add_argument("--rkk-delete", dest="rkk_delete", action="store_true", default=True,
+                    help="rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on)")
+    ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
+                    help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
+                         "to refine; use to stop session shedding fragments into the residual/artifact bin")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
@@ -1180,7 +1185,7 @@ def main():
               var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
               dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
               nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
-              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters,
+              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters, rkk_delete=a.rkk_delete,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
               cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
