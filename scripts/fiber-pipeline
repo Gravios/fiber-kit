@@ -145,6 +145,10 @@ REALIGN_AFTER="${FK_REALIGN_AFTER-fiber-refine fiber-peel fiber-intrachunk fiber
                                                    #   '' disables.  See FK_REALIGN_AFTER_MODE for how.
 REALIGN_AFTER_MODE="${FK_REALIGN_AFTER_MODE:-shift-spk}"  # shift-spk = circular-roll the existing .spk (no .fil,
                                                    #   fast, validated) | reextract = re-read the .fil
+REALIGN_FINAL_MODE="${FK_REALIGN_FINAL_MODE:-reextract}"  # mode for the LAST realign in the run (the one feeding
+                                                   #   curation): reextract re-reads the .fil at the corrected
+                                                   #   times -> cleanest final .spk/.fet (recovers samples drift
+                                                   #   pushed out of the window).  Set = REALIGN_AFTER_MODE to skip.
 DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
 DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
                                                    #   statistical (>0.05 starts splitting on noise)
@@ -253,12 +257,12 @@ stage_out_tag() {     # default output clu tag of a stage in canonical 'all' ord
 }
 
 realign_after() {     # post-step Klusters re-roll: align each just-updated group's spikes to its unit template, in place
-    local tag="$1"; local -a mode_args
-    case "$REALIGN_AFTER_MODE" in
+    local tag="$1"; local mode="${2:-$REALIGN_AFTER_MODE}"; local -a mode_args
+    case "$mode" in
         reextract) mode_args=(--reextract --refeaturize) ;;
         *)         mode_args=(--shift-spk --refeaturize) ;;
     esac
-    echo "== fiber-realign  (post-step Klusters re-roll of .${tag:-base} groups; mode=$REALIGN_AFTER_MODE) =="
+    echo "== fiber-realign  (post-step Klusters re-roll of .${tag:-base} groups; mode=$mode) =="
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "$tag")" \
         --align-method klusters "${mode_args[@]}" \
@@ -566,12 +570,26 @@ main() {
         return
     fi
 
+    # the LAST stage that both runs and triggers a post-step realign gets the final (re-extract) treatment,
+    # so the artefacts handed to curation are a clean .fil re-extraction; earlier ones stay fast (shift-spk).
+    local final_realign=""
+    for s in "${KNOWN_STAGES[@]}"; do
+        [ -n "${want[$s]:-}" ] || continue
+        case " $REALIGN_AFTER " in *" $s "*) final_realign="$s" ;; esac
+    done
+
     # run in canonical order (curated stages last); only those in `want` actually run
     for s in "${KNOWN_STAGES[@]}"; do
         if [ -n "${want[$s]:-}" ]; then
             run_stage "$s"
             case " $REALIGN_AFTER " in                 # Klusters re-roll spikes into their new groups after the step
-                *" $s "*) realign_after "$(stage_out_tag "$s")" ;;
+                *" $s "*)
+                    if [ "$s" = "$final_realign" ]; then
+                        realign_after "$(stage_out_tag "$s")" "$REALIGN_FINAL_MODE"
+                    else
+                        realign_after "$(stage_out_tag "$s")" "$REALIGN_AFTER_MODE"
+                    fi
+                    ;;
             esac
         fi
     done
