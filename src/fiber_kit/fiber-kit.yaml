@@ -53,6 +53,10 @@ FK_SESSION_LINK:         1        # 1 | 0/1.  1 = link a fiber's own per-chunk f
 FK_SESSION_CFIBER_GATE:  1        # 1 | 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision).
 FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the
                                   #   downstream stages have the real cells to stitch, not a pre-merged blob.
+FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fiber inclusion radius by ASSIGNING them to
+                                  #   that fiber (kept in the sort) instead of dropping them to the unsorted/artifact bin.
+                                  #   FK_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
+                                  #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
 FK_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
                                   #   (affine-invariant Fourier descriptor) distance exceeds the Q-quantile of the
                                   #   fiber's OWN split-half null.  0.90 = tolerate up to the 90th-pct self-jitter.

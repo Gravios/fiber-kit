@@ -487,7 +487,7 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
-                       n_grid=40, incl_k=3.0, cone_channel_k=0.0, split_var_margin=0.0,
+                       n_grid=40, incl_k=3.0, incl_assign=False, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
@@ -592,7 +592,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             groups = newg
         for grp in groups:
             if len(grp) < fine_mg: continue
-            sidx = cidx[grp]; rad = float('nan'); rej = 0
+            sidx = cidx[grp]; rad = float('nan'); rej = 0; incl_rej = None
             if incl_k > 0 and len(sidx) >= 20:
                 w_al = fl.realign(waves[sidx])
                 Xg = (w_al[:, mask, :].reshape(len(sidx), -1) - nmean) @ W
@@ -600,6 +600,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 resid = np.linalg.norm(Xg - rr[:, None] * ft.predict_many((grid, D), rr), axis=1)
                 med = float(np.median(resid)); mad = 1.4826 * float(np.median(np.abs(resid - med)))
                 rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum())
+                if incl_assign:
+                    incl_rej = sidx[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
                 sidx = sidx[keep]
                 if len(sidx) < fine_mg: continue
             if cone_channel_k > 0 and len(sidx) >= 40:
@@ -630,6 +632,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     arej = int((~akeep).sum()); sidx = sidx[akeep]
                     if len(sidx) < fine_mg: continue
             fine[sidx] = nid
+            if incl_rej is not None and len(incl_rej):
+                fine[incl_rej] = nid                  # inclusion-tail kept in the sort; geometry below stays on the pure core
             g = fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
             g['coarse'] = int(cf); g['radius_incl'] = rad; g['n_rejected'] = rej
             g['n_adapt_rejected'] = arej
@@ -1074,6 +1078,10 @@ def main():
     ap.add_argument("--quality-dims", type=int, default=10, help="PCA dims for L-ratio/isolation Mahalanobis")
     ap.add_argument("--pca-k", type=int, default=6); ap.add_argument("--max-sub", type=int, default=8)
     ap.add_argument("--inclusion-k", type=float, default=3.0, help="per-fiber radius = median+k*MAD of residuals; 0 disables")
+    ap.add_argument("--incl-assign-rejected", dest="incl_assign", action="store_true", default=False,
+                    help="assign spikes beyond the per-fiber inclusion radius to that fiber (kept in the sort) instead "
+                         "of dropping them to the unsorted bin.  Geometry/templates still use the pure core; this only "
+                         "rescues the good high-amplitude tail spikes the radius would otherwise discard.")
     ap.add_argument("--energy-band", action="store_true", help="energy-band split: partition each ENERGY-CONFOUNDED coarse fiber into overlapping log10-energy bands, BIC-GMM per band (global features), relink by overlap-anchor; surfaces shape sub-units the drift axis masks")
     ap.add_argument("--eband-width", type=float, default=0.45, help="energy-band width in decades (default 0.45)")
     ap.add_argument("--eband-overlap", type=float, default=0.2, help="energy-band overlap in decades for overlap-anchor linking (default 0.2)")
@@ -1177,7 +1185,7 @@ def main():
     meth = "none" if a.no_fine else a.fine_method
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
               fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
-              incl_k=a.inclusion_k, cone_channel_k=a.cone_channel_k,
+              incl_k=a.inclusion_k, incl_assign=a.incl_assign, cone_channel_k=a.cone_channel_k,
               energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
               eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
               eband_low_assign=a.eband_low_assign,
