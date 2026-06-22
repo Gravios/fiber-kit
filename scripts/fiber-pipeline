@@ -192,6 +192,11 @@ SESSION_LINK="${FK_SESSION_LINK:-1}"                     # 1 = assemble a fiber'
                                                          #   (overlap-anchor; this is fiber SET-UP, not merging).  0 = --no-link
 SESSION_CFIBER_GATE="${FK_SESSION_CFIBER_GATE:-1}"       # 1 = cfiber affine-invariant shape veto on coarse fragment merges
 SESSION_DIPSPLIT="${FK_SESSION_DIPSPLIT:-1}"             # 1 = dip-bimodal split within fibers (over-cluster welds early)
+SESSION_INCL_ASSIGN="${FK_SESSION_INCL_ASSIGN:-1}"      # 1 = keep spikes beyond the per-fiber inclusion radius (assign
+                                                         #   them to that fiber) instead of dropping them to the unsorted
+                                                         #   bin.  The radius (FK_INCLUSION_K) still defines the pure core
+                                                         #   for geometry/templates; this just stops good high-amplitude
+                                                         #   tail spikes (~6-7%) being lost to artifact.  0 = legacy drop.
 REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
 REFINE_CHUNK_MINUTES="${FK_REFINE_CHUNK_MINUTES:-12}"     # fiber-refine chunk length (min)
 LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
@@ -254,6 +259,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_LINK" = "0" ]       && sess_args+=(--no-link)
     [ "$SESSION_CFIBER_GATE" = "1" ] && sess_args+=(--cfiber-gate --cfiber-q "$CFIBER_Q")
     [ "$SESSION_DIPSPLIT" = "1" ]   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
+    [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     _run fiber-session "$SESS" "$ELEC" \
         --method stderiv --fine-method "$SESSION_FINE_METHOD" \
         --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
