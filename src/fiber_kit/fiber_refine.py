@@ -46,6 +46,7 @@ try:
     from . import fiber_split as fsp
     from . import fiber_geometry as fg
     from . import backend as _bk
+    from . import fiber_ccg as ccg
     from .klustakwik import klustakwik as _rkk
 except ImportError:                                   # script / flat-layout fallback
     import fiber_lib as fl
@@ -56,6 +57,7 @@ except ImportError:                                   # script / flat-layout fal
     import fiber_split as fsp
     import fiber_geometry as fg
     import backend as _bk
+    import fiber_ccg as ccg
     from klustakwik import klustakwik as _rkk
 
 # scoring context threaded through the helpers: whitener, masked window, rate,
@@ -200,7 +202,8 @@ def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed=N
 
 
 def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
-                 dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True):
+                 dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True,
+                 ccg_refrac_ms=0.0):
     """Try dip-bisection and rkk, gating each; isolate if neither cleans it.
 
     dip_first (default) runs the dip-axis bisection BEFORE rkk.  On GT the welds
@@ -216,10 +219,26 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
     pb = band_pct(res[si], ctx)
     pmed = _med(si, waves) if scorr < 1.0 else None
 
+    def _ccg_ok(fp):
+        # Curation-INDEPENDENT veto: reject a split the refractory cross-correlogram
+        # calls spurious (one neuron) WHERE IT HAS POWER; abstain (keep) otherwise.
+        # The timing test is independent of the waveform space the split was made on,
+        # but only fires at sufficient rate*duration -- at low rates it abstains and
+        # the waveform gates in _gated_partition stand.
+        if not ccg_refrac_ms or ccg_refrac_ms <= 0 or fp is None or len(fp) < 2:
+            return fp
+        refr = ccg.refrac_samples(ccg_refrac_ms, ctx.sr)
+        dur = float(res.max() - res.min())
+        big = sorted(fp, key=len, reverse=True)[:2]
+        ta = np.sort(res[big[0]].astype(np.int64)); tb = np.sort(res[big[1]].astype(np.int64))
+        if ccg.split_gate(ta, tb, dur, refr).get("verdict") == "spurious":
+            return None                                   # powered + refractory dip -> one cell
+        return fp
+
     def _try_rkk():
         sub = (_rkk_realign(si, waves, ctx, 6, 12, mg, rkk_iters) if rkk_realign
                else _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42))
-        return _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr)
+        return _ccg_ok(_gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr))
 
     def _try_dip():
         if not fs._HAVE_DIP:
@@ -231,7 +250,7 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
         sub = np.zeros(len(si), int)
         for k, p in enumerate(pcs):
             sub[p] = k
-        return _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr)
+        return _ccg_ok(_gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr))
 
     order = ((("dip", _try_dip), ("rkk", _try_rkk)) if dip_first
              else (("rkk", _try_rkk), ("dip", _try_dip)))
@@ -252,7 +271,7 @@ def _feat_var_top3(idx, waves, ctx, k=3):
 
 
 def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0,
-               dip_realign=True, rkk_realign=True, rkk_iters=2, var_mult=0.0, dip_first=True,
+               dip_realign=True, rkk_realign=True, rkk_iters=2, var_mult=0.0, dip_first=True, ccg_refrac_ms=0.0,
                nudge=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01):
     out = np.full(len(lab), -1, int)
     nid = 0
@@ -286,7 +305,7 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
             si = idx[p]
             if len(si) >= large:
                 fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr,
-                                       dip_realign, rkk_realign, rkk_iters, dip_first)
+                                       dip_realign, rkk_realign, rkk_iters, dip_first, ccg_refrac_ms)
                 if how == "iso" and nudge and len(si) >= 2 * mg:    # offset-overlay pass on what isolated
                     amp, nch = fs._amp_spread(waves[si], ctx.mask)
                     if amp <= amp_thr and nch >= nudge_min_ch:
@@ -619,7 +638,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_warp_recall=None, merge_amp_thr=0.7,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
-           dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True,
+           dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
            snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
@@ -661,7 +680,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                                                large, min_group, var_margin, brr_tol,
                                                var_peak, var_depth, split_min_corr,
                                                dip_realign, rkk_realign, rkk_iters,
-                                               var_mult=split_var_mult, dip_first=dip_first,
+                                               var_mult=split_var_mult, dip_first=dip_first, ccg_refrac_ms=ccg_refrac_ms,
                                                nudge=nudge_split, nudge_max=nudge_max,
                                                nudge_amp_pct=nudge_amp_pct,
                                                nudge_min_ch=nudge_min_ch, nudge_alpha=nudge_alpha)
@@ -1014,6 +1033,10 @@ def main():
                     help="interleave rkk (CEM) with per-cluster realignment (default on)")
     ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false")
     ap.add_argument("--rkk-realign-iters", dest="rkk_iters", type=int, default=2)
+    ap.add_argument("--ccg-refrac-ms", dest="ccg_refrac_ms", type=float, default=0.0,
+                    help="curation-independent veto: reject a split the refractory cross-correlogram\n"
+                         "calls spurious (one neuron) where it has power; 0 = off. ~1.5 to enable. "
+                         "Abstains (no effect) at low firing rates.")
     ap.add_argument("--rkk-first", dest="dip_first", action="store_false", default=True,
                     help="restore the old cascade order (rkk before dip-bisection); default is "
                          "dip-first, which targets the single high-margin dip axis welds separate on")
@@ -1148,7 +1171,7 @@ def main():
                          large=a.large, min_group=a.min_group, var_margin=a.var_margin,
                          brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth, split_var_mult=a.split_var_mult,
                          split_min_corr=a.split_min_corr, dip_realign=a.dip_realign,
-                         rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, nudge_split=a.nudge_split,
+                         rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, nudge_split=a.nudge_split,
                          nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
                          nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                          knn_k=a.knn_k, knn_thr=a.knn_thr,
@@ -1193,7 +1216,7 @@ def main():
                         large=a.large, min_group=a.min_group,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
                         var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr, split_var_mult=a.split_var_mult,
-                        dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first,
+                        dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms,
                         nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
                         nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
