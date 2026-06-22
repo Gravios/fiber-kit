@@ -103,6 +103,9 @@ FK_REALIGN_AFTER:        "fiber-refine fiber-peel fiber-intrachunk fiber-link"  
 FK_REALIGN_AFTER_MODE:   shift-spk  # shift-spk | reextract.  shift-spk circular-rolls the existing .spk (no .fil, fast,
                                   #   validated trough-std 2.00->1.05); reextract re-reads the .fil (recovers samples that
                                   #   drifted out of the extraction window, at the cost of .fil I/O each step).
+FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the artefacts that go to curation): reextract
+                                  #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
+                                  #   shift-spk to make the final step match the intermediate ones (no .fil read).
 FK_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters whose top-3 feature variance exceeds this x the
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
 FK_REFINE_SPLIT_MIN_CORR: 0.93    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
