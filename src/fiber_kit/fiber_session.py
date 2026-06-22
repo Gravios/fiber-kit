@@ -65,6 +65,10 @@ try:
 except ImportError:
     import backend as _bk
 try:
+    from . import fiber_ccg as cg
+except ImportError:
+    import fiber_ccg as cg
+try:
     import diptest as _diptest
     _HAVE_DIP = True
 except Exception:
@@ -490,6 +494,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
                        rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
+                       refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
                        adapt_clean=False, adapt_z=3.0, adapt_isi_ms=10.0,
@@ -678,7 +683,25 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         if candidates_out is not None:
             candidates_out.extend((ai, bi, d, thr_p) for ai, bi, d in cand)
         if merge_method == "profile" and not emit_candidates:
-            fine, geoms = _apply_edges(fine, geoms, [(ai, bi) for ai, bi, _ in cand],
+            edges = [(ai, bi) for ai, bi, _ in cand]
+            if refrac_ms and refrac_ms > 0 and edges:
+                # curation-INDEPENDENT veto: a profile-merge is PERMANENT (relink/defrag
+                # only ever merge), so block one whose two in-chunk trains coincide at
+                # chance level (two neurons, no refractory dip).  Power-aware: abstains
+                # at low rate, so it only ever removes a false merge.
+                refr = cg.refrac_samples(refrac_ms, sr)
+                cens = cg.refrac_samples(refrac_censor_ms, sr)
+                dur = float(res_abs.max() - res_abs.min()) if len(res_abs) else 0.0
+
+                def _two_cells(ai, bi):
+                    ta = np.sort(res_abs[np.flatnonzero(fine == ai)].astype(np.int64))
+                    tb = np.sort(res_abs[np.flatnonzero(fine == bi)].astype(np.int64))
+                    g = cg.refractory_gate(ta, tb, dur, refr, thr=refrac_thr,
+                                           min_exp=refrac_min_exp, censor=cens)
+                    return g["verdict"] == "veto"
+
+                edges = [(ai, bi) for ai, bi in edges if not _two_cells(ai, bi)]
+            fine, geoms = _apply_edges(fine, geoms, edges,
                                        waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
     # ── nearest-neighbour isolation in the validated direction-profile space:
     #    per fiber, the closest other fiber and that distance (free; reuses the
@@ -1025,6 +1048,15 @@ def main():
                     help="min spikes/fiber to be eligible for a profile merge (trajectory reliability)")
     ap.add_argument("--emit-merge-candidates", action="store_true",
                     help="write proposed same-neuron merges to <base>.merge_candidates.<elec>.tsv WITHOUT merging (curation)")
+    ap.add_argument("--refrac-ms", type=float, default=0.0,
+                    help="DEFAULT OFF. >0 gates each within-chunk profile-merge through a refractory "
+                         "cross-correlogram veto: a merge whose two trains coincide at chance level "
+                         "(two neurons, no dip) is blocked. Profile merges are permanent (relink/defrag "
+                         "only ever merge), so this stops irreversible over-merges at the source. "
+                         "Power-aware: ABSTAINS at low rate, only ever removes a false merge.")
+    ap.add_argument("--refrac-thr", type=float, default=0.3, help="coincidence ratio above which the pair is 'two neurons' (default 0.3)")
+    ap.add_argument("--refrac-min-exp", type=float, default=5.0, help="min expected coincidences for the refractory test to be powered (default 5)")
+    ap.add_argument("--refrac-censor-ms", type=float, default=0.0, help="censor window (ms) dropping duplicate detections of one spike (default 0)")
     ap.add_argument("--deadapt", action="store_true", help="de-adapt (EWMA-tau) RS coarse fibers before splitting")
     ap.add_argument("--deadapt-min-corr", type=float, default=0.2)
     ap.add_argument("--adapt-clean", action="store_true", help="reject high-energy-at-short-ISI spikes on real fast adapters")
@@ -1153,6 +1185,8 @@ def main():
               cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
               profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
+              refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
+              refrac_min_exp=a.refrac_min_exp, refrac_censor_ms=a.refrac_censor_ms,
               deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
               adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
               adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr,
