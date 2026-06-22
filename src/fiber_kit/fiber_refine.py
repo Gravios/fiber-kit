@@ -148,14 +148,14 @@ def _dipsplit_realign(si, waves, ctx, mg, alpha, dim=4, depth=0, maxd=4):
     return out
 
 
-def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2):
+def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2, delete=True):
     """Per-cluster realign rkk (refine side of --rkk-realign): seed with rkk on the cluster's
     aligned features, then iterate {realign EACH sub-cluster to its own median -> re-featurize ->
     re-cluster}, stopping when the count stabilises, so the final CEM runs on consistently
     per-cluster-aligned features.  Returns per-spike sub-labels over si."""
     W = waves[si]
     F = _feats(W, ctx, dims)
-    lab = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42)
+    lab = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42, delete=delete)
     for _ in range(max(0, iters)):
         Wal = np.array(W, dtype=float)
         for c in np.unique(lab):
@@ -164,7 +164,7 @@ def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2):
                 Wal[ix] = fl.align_xcorr(W[ix], ref="median", iters=6, maxlag=6)
         wc = Wal[:, ctx.mask, :].reshape(len(W), -1); wc = wc - wc.mean(0)
         U, S, _ = np.linalg.svd(wc, full_matrices=False); F = U[:, :dims] * S[:dims]
-        new = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42)
+        new = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42, delete=delete)
         stop = len(np.unique(new)) == len(np.unique(lab))
         lab = new
         if stop:
@@ -203,7 +203,7 @@ def _gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed=N
 
 def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
                  dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True,
-                 ccg_refrac_ms=0.0):
+                 ccg_refrac_ms=0.0, rkk_delete=True):
     """Try dip-bisection and rkk, gating each; isolate if neither cleans it.
 
     dip_first (default) runs the dip-axis bisection BEFORE rkk.  On GT the welds
@@ -236,8 +236,8 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
         return fp
 
     def _try_rkk():
-        sub = (_rkk_realign(si, waves, ctx, 6, 12, mg, rkk_iters) if rkk_realign
-               else _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42))
+        sub = (_rkk_realign(si, waves, ctx, 6, 12, mg, rkk_iters, delete=rkk_delete) if rkk_realign
+               else _rkk(_feats(waves[si], ctx, 6), max_clusters=12, min_size=mg, seed=42, delete=rkk_delete))
         return _ccg_ok(_gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr))
 
     def _try_dip():
@@ -272,6 +272,7 @@ def _feat_var_top3(idx, waves, ctx, k=3):
 
 def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdepth, scorr=1.0,
                dip_realign=True, rkk_realign=True, rkk_iters=2, var_mult=0.0, dip_first=True, ccg_refrac_ms=0.0,
+               rkk_delete=True,
                nudge=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01):
     out = np.full(len(lab), -1, int)
     nid = 0
@@ -305,7 +306,8 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
             si = idx[p]
             if len(si) >= large:
                 fp, how = _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr,
-                                       dip_realign, rkk_realign, rkk_iters, dip_first, ccg_refrac_ms)
+                                       dip_realign, rkk_realign, rkk_iters, dip_first, ccg_refrac_ms,
+                                       rkk_delete=rkk_delete)
                 if how == "iso" and nudge and len(si) >= 2 * mg:    # offset-overlay pass on what isolated
                     amp, nch = fs._amp_spread(waves[si], ctx.mask)
                     if amp <= amp_thr and nch >= nudge_min_ch:
@@ -639,6 +641,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
+           rkk_delete=True,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
            snaps_out=None, verbose=True):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
@@ -681,6 +684,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                                                var_peak, var_depth, split_min_corr,
                                                dip_realign, rkk_realign, rkk_iters,
                                                var_mult=split_var_mult, dip_first=dip_first, ccg_refrac_ms=ccg_refrac_ms,
+                                               rkk_delete=rkk_delete,
                                                nudge=nudge_split, nudge_max=nudge_max,
                                                nudge_amp_pct=nudge_amp_pct,
                                                nudge_min_ch=nudge_min_ch, nudge_alpha=nudge_alpha)
@@ -1033,6 +1037,12 @@ def main():
                     help="interleave rkk (CEM) with per-cluster realignment (default on)")
     ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false")
     ap.add_argument("--rkk-realign-iters", dest="rkk_iters", type=int, default=2)
+    ap.add_argument("--rkk-delete", dest="rkk_delete", action="store_true", default=True,
+                    help="rkk (CEM) culls sub-min-group clusters during the split (default on)")
+    ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
+                    help="keep small (non-singular) rkk sub-clusters instead of dissolving them -- "
+                         "stops the size-cull from shedding spikes that the cascade then sends to the "
+                         "residual/artifact bin. Use when too many spikes land in the artifact cluster.")
     ap.add_argument("--ccg-refrac-ms", dest="ccg_refrac_ms", type=float, default=0.0,
                     help="curation-independent veto: reject a split the refractory cross-correlogram\n"
                          "calls spurious (one neuron) where it has power; 0 = off. ~1.5 to enable. "
@@ -1171,7 +1181,7 @@ def main():
                          large=a.large, min_group=a.min_group, var_margin=a.var_margin,
                          brr_tol=a.brr_tol, var_peak=a.var_peak, var_depth=a.var_depth, split_var_mult=a.split_var_mult,
                          split_min_corr=a.split_min_corr, dip_realign=a.dip_realign,
-                         rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, nudge_split=a.nudge_split,
+                         rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, rkk_delete=a.rkk_delete, nudge_split=a.nudge_split,
                          nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
                          nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                          knn_k=a.knn_k, knn_thr=a.knn_thr,
@@ -1216,7 +1226,7 @@ def main():
                         large=a.large, min_group=a.min_group,
                         var_margin=a.var_margin, brr_tol=a.brr_tol,
                         var_peak=a.var_peak, var_depth=a.var_depth, split_min_corr=a.split_min_corr, split_var_mult=a.split_var_mult,
-                        dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms,
+                        dip_realign=a.dip_realign, rkk_realign=a.rkk_realign, rkk_iters=a.rkk_iters, dip_first=a.dip_first, ccg_refrac_ms=a.ccg_refrac_ms, rkk_delete=a.rkk_delete,
                         nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct,
                         nudge_min_ch=a.nudge_min_ch, nudge_alpha=a.nudge_alpha,
                         knn_k=a.knn_k, knn_thr=a.knn_thr, knn_minref=a.knn_minref,
