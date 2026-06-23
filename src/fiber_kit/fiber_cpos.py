@@ -37,6 +37,10 @@ except ImportError:
 
 CPOS_COLS = ("x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank")
 
+_LP = "[fiber_cpos]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=11): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 
 def spk_extractor(spk):
     """Return extract(idx)->(len(idx), nsamp, nchan) RAW waveforms from a pre-extracted
@@ -237,7 +241,7 @@ def main():
     if a.amp_method == "pc1" and amp_basis in ("pca", "auto"):   # prefer the on-disk .pca.standard
         try:
             pca_basis = fpca.read_pca(base, elec)
-            print(f"[cpos] amplitude basis: on-disk {pca_basis['_path']} (PC1 score per channel)")
+            _log(f"amplitude basis: {pca_basis['_path']}  (PC1 per channel)")
         except FileNotFoundError:
             if amp_basis == "pca":
                 raise
@@ -256,9 +260,11 @@ def main():
     p = write_cpos(cp, T)
     pc = write_cluster_table(cp + ".clusters.npz", per)
     nflank = sum(int(r["one_flank"]) for r in per.values())
-    print(f"localized {len(per)}/{len(np.unique(clu[clu>=0]))} clusters from {src} "
-          f"({nflank} edge/one-flank); wrote {p}  and  {pc}")
-    print(f"  cpos columns: {CPOS_COLS}")
+    _log(f"localized {len(per):,}/{len(np.unique(clu[clu>=0])):,} clusters from {src}  ({nflank:,} edge/one-flank)")
+    _det("columns", ", ".join(CPOS_COLS))
+    _log("wrote")
+    _det("cpos", p)
+    _det("clusters", pc)
 
 
 if __name__ == "__main__":
