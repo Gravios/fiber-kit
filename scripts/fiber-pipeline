@@ -140,6 +140,11 @@ REFINE_DROP_MIN="${FK_REFINE_DROP_MIN:-5}"         # cluster-KEEP floor: a clust
                                                    #   small over-split fragments (8-30 spikes) wholesale.  5 keeps
                                                    #   real fragments for intrachunk to stitch, sheds only noise; 0 =
                                                    #   keep everything; set =MIN_GROUP for the old (lossy) behaviour.
+REFINE_DEDUP="${FK_REFINE_DEDUP:-0}"               # 0 = NO spike dedup (default).  The sub-floor dedup pass drops
+                                                   #   ~200-300 near-coincident sub-threshold duplicates, but it
+                                                   #   re-indexes the spike list so the output clu no longer aligns
+                                                   #   1:1 with the canonical .res -- which breaks round-tripping of
+                                                   #   curated clu files.  1 (--dedup) re-enables the pass.
 RKK_DELETE="${FK_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min-group sub-clusters during a
                                                    #   split; 0 (--no-rkk-delete) keeps small non-singular
                                                    #   pieces so the cascade stops shedding them to the
@@ -306,6 +311,8 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
     local rkk_args=()
     [ "$RKK_DELETE" = "0" ] && rkk_args+=(--no-rkk-delete)
+    local dedup_args=()
+    [ "$REFINE_DEDUP" = "1" ] && dedup_args+=(--dedup)      # default off: keep clu aligned to .res for round-trip
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
@@ -316,7 +323,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
-        "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${dedup_args[@]+"${dedup_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragments (IN-PLACE relabel on .refine)
