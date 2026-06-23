@@ -28,6 +28,10 @@
 import argparse
 import numpy as np
 
+_LP = "[fiber_link]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
 except ImportError:
@@ -377,14 +381,13 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                 d = [float(np.linalg.norm(Sall[int(i)] - Sall[int(j)])) for i, j in seed_links]
                 if len(d) >= 5:
                     cfiber_thr = float(np.quantile(d, cfiber_q))
-                    print(f"[link] cfiber co-gate self-calibrated: thr={cfiber_thr:.3f} "
-                          f"(q={cfiber_q} of {len(d)} backbone same-unit pairs)")
+                    _log(f"cfiber co-gate self-calibrated: thr={cfiber_thr:.3f}")
+                    _det("from", f"q={cfiber_q} of {len(d):,} backbone same-unit pairs")
                 else:
-                    print(f"[link] cfiber co-gate requested but only {len(d)} backbone pairs "
-                          f"(<5) -- disabled; pass --cfiber-thr to force a fixed threshold")
+                    _log(f"cfiber co-gate: only {len(d)} backbone pairs (<5), disabled "
+                         "(pass --cfiber-thr to force one)")
             else:
-                print("[link] cfiber co-gate needs backbone same-unit pairs to self-calibrate "
-                      "(--from-units) or an explicit --cfiber-thr -- disabled")
+                _log("cfiber co-gate: needs backbone pairs (--from-units) or --cfiber-thr, disabled")
     if linkage == "cogated":
         ft_sub = [frag_times[int(i)] for i in idx] if (frag_times is not None and ov_refrac is not None) else None
         raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
@@ -395,7 +398,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                             ov_min_exp=ov_min_exp, ov_censor=ov_censor)
     else:
         if ov_refrac is not None:
-            print("[link] --overlap-refrac-ms is only wired for the default 'cogated' linkage; ignored here")
+            _log("--overlap-refrac-ms only wired for 'cogated' linkage; ignored here")
         raw = _graph_links(linkage, frag, idx, y0, logA, chunk, D, mask, offs)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
@@ -417,8 +420,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                                                           P, w, allow)
             if verbose:
                 src = "self-cal" if var_allow is None else "budget"
-                print(f"[link] varbound bundling: var_allow={allow:.4g} ({src}, scale={var_scale}); "
-                      f"blocked {n_blocked} over-spread merge(s)")
+                _log(f"varbound bundling: var_allow={allow:.4g}  ({src}, scale={var_scale})")
+                _det("blocked", f"{n_blocked:,} over-spread merge(s)")
         else:
             bundles = bundles_chunk_exclusive(len(y0), links, chunk, strength)
     else:
@@ -627,14 +630,17 @@ def main():
 
     multi = [b for b in R["bundles"] if len(set(R["chunk"][b])) >= 2]
     Dv = list(R["D"].values())
-    print(f"[link] {int(R['link_mask'].sum())} linkable {'units' if a.from_units else 'fragments'} over "
-          f"{len(R['chunks'])} chunks -> {len(R['links'])} inter-chunk links, {len(multi)} multi-chunk "
-          f"bundles (of {len(R['bundles'])}); drift {min(Dv):.0f}..{max(Dv):.0f}um")
+    _log(f"{int(R['link_mask'].sum()):,} linkable {'units' if a.from_units else 'fragments'} "
+         f"over {len(R['chunks'])} chunks")
+    _det("links", f"{len(R['links']):,} inter-chunk")
+    _det("bundles", f"{len(multi):,} multi-chunk of {len(R['bundles']):,}")
+    _det("drift", f"{min(Dv):.0f}..{max(Dv):.0f} um")
     if R.get("traj_info"):
         ti = R["traj_info"]
-        print(f"[link] trajectory refine: conflicts {ti['conflicts_before']}->{ti['conflicts_after']}, "
-              f"attached {ti['attached']}, evicted {ti['evicted']} (depth tol {ti['depth_tol']:.1f}, feat tol {ti['feat_tol']:.2f})")
-    print(f"[link] wrote {out_path}  ({ncl} units)")
+        _log(f"trajectory refine: conflicts {ti['conflicts_before']} → {ti['conflicts_after']}")
+        _det("", f"attached {ti['attached']} · evicted {ti['evicted']} · "
+                 f"depth tol {ti['depth_tol']:.1f} · feat tol {ti['feat_tol']:.2f}")
+    _log(f"wrote {out_path}   ({ncl:,} units)")
 
     if a.gt_clu:                                                 # measure whether linking improved agreement
         _, gt = nio.read_clu_file(a.gt_clu)
@@ -646,15 +652,15 @@ def main():
             cb, gl, _ = fsc.align_by_res(src, res, gt, gres)
             ca, _, _ = fsc.align_by_res(newids, res, gt, gres)
         else:
-            print("[link] --gt-clu length differs from .res; pass --gt-res to align by timestamp")
+            _log("--gt-clu length differs from .res; pass --gt-res to align by timestamp")
             return
         sb = fsc.score(cb, gl); sa = fsc.score(ca, gl)
-        print("[link] ground-truth score (before -> after linking):")
-        print("  ARI            %.4f -> %.4f" % (sb["ari"], sa["ari"]))
-        print("  pairwise prec  %.4f -> %.4f" % (sb["pairwise_precision"], sa["pairwise_precision"]))
-        print("  pairwise recall%.4f -> %.4f" % (sb["pairwise_recall"], sa["pairwise_recall"]))
-        print("  GT units split %d -> %d   |  merged candidates %d -> %d"
-              % (sb["n_gt_split"], sa["n_gt_split"], sb["n_cand_merged"], sa["n_cand_merged"]))
+        _log("ground-truth score (before → after linking)")
+        _det("ARI", f"{sb['ari']:.4f} → {sa['ari']:.4f}")
+        _det("prec", f"{sb['pairwise_precision']:.4f} → {sa['pairwise_precision']:.4f}")
+        _det("recall", f"{sb['pairwise_recall']:.4f} → {sa['pairwise_recall']:.4f}")
+        _det("GT split", f"{sb['n_gt_split']} → {sa['n_gt_split']}")
+        _det("merged", f"{sb['n_cand_merged']} → {sa['n_cand_merged']}")
 
 
 if __name__ == "__main__":
