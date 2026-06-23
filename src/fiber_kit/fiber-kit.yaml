@@ -105,6 +105,11 @@ FK_REFINE_DROP_MIN:      5        # 5 | 0-30.  Cluster-KEEP floor (decoupled fro
                                   #   wholesale -- tens of thousands of real spikes lost to artifact.  5 keeps real
                                   #   fragments for fiber-intrachunk to stitch and sheds only 1-4 spike noise; 0 keeps
                                   #   everything (nothing dropped); set =MIN_GROUP to restore the old lossy behaviour.
+FK_REFINE_DEDUP:         0        # 0 | 0/1.  0 = do NOT run the sub-floor spike-dedup pass (default).  It drops only
+                                  #   ~200-300 near-coincident sub-threshold duplicate detections, but it RE-INDEXES the
+                                  #   spike list, so the output clu no longer aligns 1:1 with the canonical .res and
+                                  #   round-tripping curated clu files back into the session breaks.  1 (--dedup) re-
+                                  #   enables it (only worth it if those duplicates are actually corrupting templates).
 FK_RKK_DELETE:           1        # 1 | 0/1.  1 = rkk's CEM culls sub-min-group pieces mid-split (they fall through
                                   #   to the residual/artifact bin).  Set 0 (--no-rkk-delete) to keep small,
                                   #   non-singular rkk sub-clusters as real units when too many spikes are landing

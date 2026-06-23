@@ -969,7 +969,11 @@ def main():
                     help="imposed detection refractory (samples); default = from yaml")
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
                     help="biological/ISI-violation window upper bound (ms); contamination is [floor, window)")
-    ap.add_argument("--no-dedup", action="store_true", help="skip the sub-floor dedup pass")
+    ap.add_argument("--dedup", action=argparse.BooleanOptionalAction, default=False,
+                    help="run the sub-floor dedup pass (drops near-coincident sub-threshold duplicate "
+                         "detections, ~200-300 spikes).  OFF by default: dedup re-indexes the spike list so "
+                         "a deduped clu no longer aligns 1:1 with the canonical .res, which breaks round-"
+                         "tripping of curated clu files.  --no-dedup is the explicit off; --dedup re-enables.")
     ap.add_argument("--no-residual-split", dest="residual_split", action="store_false",
                     help="disable the final residual-split cleanup (on by default): each output "
                          "fiber is split on the residual to its shared d(r) when that lowers "
@@ -1169,7 +1173,7 @@ def main():
     _det("realign", "sub-sample" if fl.realign_subsample() else "whole-sample")
     if _gpu_line: _det("GPU", _gpu_line)
 
-    if not a.no_dedup and floor > 0:
+    if a.dedup and floor > 0:
         n_orig = len(res)
         ptp = np.ptp(waves.reshape(len(waves), -1), axis=1)
         keep = dedup_spikes(res, ptp, floor)
