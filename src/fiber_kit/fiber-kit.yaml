@@ -48,8 +48,9 @@ FK_SESSION_MERGE_METHOD: sliding  # sliding | template | profile.  Coarse merge 
 FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk
                                   #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session
                                   #   sliding merge (premature: it welds co-active cells before refine can clean).
-FK_SESSION_LINK:         1        # 1 | 0/1.  1 = link a fiber's own per-chunk fragments across chunks (overlap-anchor
-                                  #   backbone -- this is fiber SET-UP, not cross-fiber merging).  0 = --no-link.
+FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
+                                  #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
+                                  #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).
 FK_SESSION_CFIBER_GATE:  1        # 1 | 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision).
 FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the
                                   #   downstream stages have the real cells to stitch, not a pre-merged blob.
