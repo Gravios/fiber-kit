@@ -20,6 +20,10 @@ import argparse
 
 import numpy as np
 
+_LP = "[fiber_refit]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 try:
     from . import (fiber_intrachunk as ic, fiber_lib as fl, neuro_io as nio,
                    session_yaml as sy, fiber_cpos as cp)
@@ -106,7 +110,7 @@ def main():
         ".res %d / .clu %d / .spk %d mismatch" % (len(res), len(clu), spkD.shape[0])
     res_s = res.astype(float) / sr
     cur_units = [int(c) for c in np.unique(clu) if c > 1]
-    print("curated clu: %d spikes, %d units (excluding reserve 0/1)" % (len(res), len(cur_units)))
+    _log(f"curated clu: {len(res):,} spikes · {len(cur_units):,} units (reserve 0/1 excluded)")
 
     cpos_method = a.cpos_method or a.clu_method
     cpos_stage = a.cpos_stage or a.variant
@@ -124,9 +128,9 @@ def main():
                 pos = {int(r["clu"]): (r["x0"], r["y0"], r["z0"], r["A"]) for r in per} \
                     if isinstance(per, list) else None
         if pos is None:
-            print("note: no cpos positions for the curated stage (looked for cpos '%s/%s'); positions left "
-                  "zero. Run  fiber-cpos %s %s --clu-stage %s  then re-run, or pass --relocalize with a raw "
-                  ".spk." % (cpos_method, cpos_stage, a.session, elec, a.variant))
+            _log(f"note: no cpos positions for stage {cpos_method}/{cpos_stage}; positions left zero")
+            _det("fix", f"run  fiber-cpos {a.session} {elec} --clu-stage {a.variant}  then re-run "
+                        "(or pass --relocalize with a raw .spk)")
             pos = {}
 
     feats = None if a.gate == "none" else ("cfiber" if a.gate == "cfiber" else "wave")
@@ -138,19 +142,20 @@ def main():
     for u in units["curated_unit"]:
         per_unit_chunks[int(u)] = per_unit_chunks.get(int(u), 0) + 1
     spanning = sum(1 for v in per_unit_chunks.values() if v > 1)
-    print("refit: %d curated units -> %d per-chunk signatures over %d chunks (%d units span >1 chunk)"
-          % (len(per_unit_chunks), n_sigs, len(np.unique(units["chunk"])), spanning))
+    _log(f"{len(per_unit_chunks):,} curated units → {n_sigs:,} per-chunk signatures over "
+         f"{len(np.unique(units['chunk']))} chunks")
+    _det("spanning", f"{spanning:,} units span >1 chunk")
     if pos:
         z = units["z0"]
-        print("       depth (z0) range across signatures: %.0f .. %.0f um" % (z.min(), z.max()))
+        _det("depth z0", f"{z.min():.0f} .. {z.max():.0f} um")
 
     out_stage = a.out_stage or ("%s_refit" % a.variant if a.variant else "refit")
     out_base = nio.session_path(base, "clu", elec, variant=a.clu_method, tag=out_stage)
     upath = out_base + ".units.npz"
     np.savez(upath, **{k: v for k, v in units.items() if k != "members"},
              members=np.array(units["members"], dtype=object))
-    print("wrote %s  (%d unit-chunk signatures keyed on the curated labels; for fiber-link / fiber-drift / "
-          "fiber-qc)" % (upath, n_sigs))
+    _log("wrote")
+    _det("units", f"{upath}   ({n_sigs:,} unit-chunk signatures keyed on curated labels)")
 
 
 if __name__ == "__main__":
