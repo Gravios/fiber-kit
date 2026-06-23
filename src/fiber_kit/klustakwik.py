@@ -105,21 +105,34 @@ if __name__ == "__main__":
     # CLI: cluster the whole session (no chunking) on PCA of masked .spkD waveforms.
     import argparse, fiber_lib as fl
     try:
-        from . import neuro_io as nio
+        from . import neuro_io as nio, fiber_pca as fpca
     except ImportError:
-        import neuro_io as nio
+        import neuro_io as nio, fiber_pca as fpca
     ap = argparse.ArgumentParser()
     ap.add_argument("base"); ap.add_argument("elec", type=int)
     ap.add_argument("--nsamp", type=int, default=32); ap.add_argument("--nchan", type=int, default=8)
-    ap.add_argument("--dims", type=int, default=12, help="PCA dims (try 3-6 for lowered-dim runs)")
+    ap.add_argument("--dims", type=int, default=12, help="local-SVD fallback dims when no global basis is found")
+    ap.add_argument("--method", default="standard", help="global-basis variant: standard | stderiv")
+    ap.add_argument("--no-global-basis", action="store_true",
+                    help="ignore the .pca basis and use a per-call local SVD (legacy behaviour)")
     ap.add_argument("--max-clusters", type=int, default=200); ap.add_argument("--min-size", type=int, default=20)
     ap.add_argument("--seed", type=int, default=42); ap.add_argument("--realign", action="store_true")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     mm, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan)
     spk = np.asarray(mm, float)
-    w = (fl.realign(spk) if a.realign else spk)[:, fl.MASK_FULL, :].reshape(len(spk), -1)
-    w = w - w.mean(0); U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :a.dims] * S[:a.dims]
+    # Prefer the GLOBAL ndm_pca basis (shared across chunks/runs; nFeatures+varimax propagate);
+    # fall back to a per-call local SVD only when no basis is available or channels mismatch.
+    basis = None if a.no_global_basis else fpca.read_cluster_basis(a.base, a.elec, a.method)
+    F = fpca.cluster_features(spk, basis, realign=a.realign) if basis is not None else None
+    if F is not None:
+        print(f"[klustakwik] features: global basis '{a.method}' "
+              f"({basis['evec'].shape[0]}ch x {basis['evec'].shape[1]}comp)")
+    else:
+        if basis is not None:
+            print("[klustakwik] basis channel mismatch; falling back to local SVD")
+        F = fpca.local_features(spk, a.dims, mask=fl.MASK_FULL, realign=a.realign)
+        print(f"[klustakwik] features: local SVD-{a.dims}")
     lab = klustakwik(F, max_clusters=a.max_clusters, min_size=a.min_size, seed=a.seed, verbose=True)
     clu = (lab + 1).astype(np.int32)
     out = a.out or f"{a.base}.clu.{a.elec}"

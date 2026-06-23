@@ -132,6 +132,70 @@ def project(windows, basis):
     return out
 
 
+def read_cluster_basis(base, elec, method="standard"):
+    """Resolve and read the GLOBAL per-channel PCA basis used for clustering features
+    (the ndm_pca / process_pca basis).  `method`: 'standard' (raw .pca) or 'stderiv'
+    (.pca.stderiv).  Returns the basis dict (means, evec, recShift, data2use, centered)
+    or None if absent, so callers can fall back to a per-call local SVD.  nComponents and
+    the window come from the basis header (= the session.yaml `nFeatures` the basis was fit
+    with), so regenerating the basis at a different nFeatures (2 -> 4) or with --varimax
+    propagates into clustering without any code change here."""
+    prefer = nio.prefer_standard() if method in (None, "standard") else [method]
+    try:
+        r = nio.resolve_input(base, "pca", elec, prefer)
+    except Exception:
+        return None
+    if not getattr(r, "found", False):
+        return None
+    b = read_pcad(r.path)
+    b["_path"] = r.path
+    return b
+
+
+def cluster_features(spk, basis, *, realign=True):
+    """Project (optionally realigned) waveforms onto the GLOBAL ndm_pca basis, returning
+    (N, nCh*nComp) cluster features in the .fet column order.  This is the shared-basis
+    replacement for a per-call local SVD: one basis across every chunk/run, so features are
+    comparable and a basis change (nFeatures, varimax) propagates.  The stderiv all-pairwise
+    spatial derivative makes the trailing channel linearly dependent, so a basis with exactly
+    one fewer channel than the input drops the trailing channel (process_pca_stderiv's
+    reduction).  Returns None on an unresolvable channel-count mismatch so the caller falls
+    back to local_features()."""
+    try:
+        from . import fiber_lib as fl
+    except ImportError:
+        import fiber_lib as fl
+    w = np.asarray(spk, np.float64)
+    if realign:
+        w = fl.realign(w)
+    nb = basis["evec"].shape[0]
+    if w.shape[2] != nb:
+        if w.shape[2] == nb + 1:
+            w = w[:, :, :nb]                              # stderiv: drop trailing dependent channel
+        else:
+            return None
+    return project(extract_windows(w, int(basis["recShift"]), int(basis["data2use"])), basis)
+
+
+def local_features(spk, dims=12, *, mask=None, realign=True):
+    """Legacy per-call local SVD of the masked window -> top `dims` scores (the historical
+    klustakwik feature path).  The basis is refit on every call, so features are NOT
+    comparable across chunks/runs; used only as the fallback when no global basis exists."""
+    try:
+        from . import fiber_lib as fl
+    except ImportError:
+        import fiber_lib as fl
+    w = np.asarray(spk, np.float64)
+    if realign:
+        w = fl.realign(w)
+    if mask is not None:
+        w = w[:, mask, :]
+    M = w.reshape(len(w), -1)
+    M = M - M.mean(0)
+    U, S, _ = np.linalg.svd(M, full_matrices=False)
+    return U[:, :dims] * S[:dims]
+
+
 def projection_energy(mean_window, basis):
     """Stage-2 metric E = sum_ch sum_k <evec_ch,k, mean_window_ch (- mu if centered)>^2.
     mean_window (data2use, nCh).  Higher E => the mean lies more strongly along the
