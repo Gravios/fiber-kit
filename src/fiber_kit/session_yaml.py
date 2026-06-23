@@ -14,6 +14,10 @@
 import os
 from dataclasses import dataclass
 
+_LP = "\u25b8 session"
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
+def _det(k, v, w=9): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
+
 
 def find_session_yaml(session):
     """Return the path to <session>.yaml (or .yml), or None if not found."""
@@ -277,10 +281,12 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
                    ntotal=info["ntotal"], nchan=info["nchan"], nsamp=info["nsamp"],
                    sr=info["sr"], peak=info["peak"], probe=info.get("probe") or None)
         if verbose:
-            print(f"[session] {yp}: nChannels={info['ntotal']} sr={info['sr']} "
-                  f"group {group} -> {info['nchan']} ch {info['channels']} "
-                  f"nSamples={info['nsamp']} peak={info['peak']}"
-                  + (f" probe={info['probe']}" if info.get("probe") else ""))
+            _log(yp)
+            _det("channels", f"{info['ntotal']} \u00b7 sr {float(info['sr']):,.0f} Hz")
+            _det("group", f"{group} \u2192 {info['nchan']} ch {info['channels']}")
+            _det("samples", f"{info['nsamp']} \u00b7 peak {info['peak']}")
+            for pr in (info.get("probe") or []):
+                _det("probe", pr)
     else:
         base = session.rstrip("/")
         for ext in (".yaml", ".yml"):
@@ -289,7 +295,7 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
         cfg = dict(base=base, yaml=None, group=group, channels=None, ntotal=None,
                    nchan=None, nsamp=32, sr=32552.0, peak=None, probe=None)
         if verbose:
-            print(f"[session] no YAML for '{session}'; using base='{base}' + explicit flags")
+            _log(f"no YAML for '{session}'; using base='{base}' + explicit flags")
 
     # CLI overrides win
     if channels is not None:
@@ -315,6 +321,6 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
         raise SystemExit(f"[session] --channels has {len(cfg['channels'])} entries != nchan={cfg['nchan']}")
     # gentle warning when the mask/offset calibration may not fit
     if verbose and cfg.get("nsamp") not in (None, 32):
-        print(f"[session] note: nSamples={cfg['nsamp']} != 32; session tools rebuild masks/realign "
-              f"window peak-relative via fiber_lib.build_masks(nsamp, peak={cfg['peak']}).")
+        _det("note", f"nSamples {cfg['nsamp']} \u2260 32 \u2192 masks/realign window rebuilt "
+                     f"peak-relative (peak={cfg['peak']})")
     return SessionCfg(**cfg)
