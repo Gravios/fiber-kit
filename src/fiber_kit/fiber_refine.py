@@ -33,6 +33,11 @@ import argparse
 import os
 import time
 import numpy as np
+
+_LP = "[fiber_refine]"
+_IND = " " * (len(_LP) + 1)
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=13): print(f"{_IND}{k:<{w}} {v}")
 from collections import namedtuple
 from sklearn.decomposition import PCA
 from sklearn.neighbors import NearestNeighbors
@@ -495,8 +500,7 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
     for k, c in enumerate(sorted(active)):
         out[groups[c]] = k
     if verbose:
-        print(f"merge-back: {len(u)} -> {len(active)} clusters "
-              f"({nmerge} merges, {nrej} gated; mode={mode}, budget={budget}%, min_sim={min_sim}, warp_thr={warp_thr}, warp_recall={warp_recall})")
+        _log(f"merge-back: {len(u):,} → {len(active):,} clusters  ({nmerge:,} merged · {nrej:,} gated)")
     return out
 
 
@@ -626,7 +630,7 @@ def _residual_refine(lab, X, min_group, margin=0.02, max_depth=4, verbose=False)
             out[idx[sub == ch]] = nxt; nxt += 1
         nsplit += 1
     if verbose and nsplit:
-        print(f"[residual-split] {nsplit} cluster(s) refined -> {nxt} fibers total")
+        _log(f"residual-split: {nsplit:,} cluster(s) refined → {nxt:,} fibers")
     return out, nsplit
 
 
@@ -672,8 +676,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
     if snaps_out is not None:
         snaps_out.append(("fine", lab.copy()))
     if verbose:
-        print(f"contamination window = [{floor/sr*1000:.2f}, {window_ms:.2f}] ms "
-              f"([{int(floor)}, {window}] samples); split_min_corr={split_min_corr}, reseed={reseed}")
+        _log(f"contamination window [{floor/sr*1000:.2f}, {window_ms:.2f}] ms  ·  "
+             f"split_min_corr={split_min_corr} · reseed={reseed}")
         print(_HDR); print(_row(stats[-1]))
     npass = max(1, reseed + 1)
     prev_pass = None
@@ -709,7 +713,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                 stable = stable + 1 if steady else 0
                 if stable >= conv_patience:
                     if verbose:
-                        print(f"[split phase converged at iter {it + 1}]")
+                        _log(f"split phase converged at iter {it + 1}")
                     break
         if merge_back_enable:
             lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
@@ -736,7 +740,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                     and abs(cur[0] - prev_pass[0]) <= conv_tol * max(prev_pass[0], 1)
                     and abs(cur[1] - prev_pass[1]) <= 0.01):
                 if verbose:
-                    print(f"[reseed converged at pass {p + 1}]")
+                    _log(f"reseed converged at pass {p + 1}")
                 break
             prev_pass = cur
     if residual_split:                                    # opt-out final cleanup: clean clusters
@@ -868,7 +872,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         c, ext = ck["c"], ck["ext"]
         if len(ext) < 2 * min_group:
             if verbose:
-                print(f"[chunk {c+1}/{nchunks}] {len(ck['core'])} core ({len(ext)} ext) -> skipped (small)")
+                print(f"{_IND}chunk {c+1:>3}/{nchunks}   {len(ck['core']):>7,} core   →  skipped (small)")
             continue
         s0 = int(res[ext].min()) - nsamp; s1 = int(res[ext].max()) + nsamp + 1
         Wc, nmc, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res[ext], nsamp, mask)
@@ -877,8 +881,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                          init_labels=init_c, min_group=min_group, verbose=False, **refine_kw)
         ext_idx[c] = ext; ext_lab[c] = labc; chunk_W[c] = Wc; chunk_nm[c] = nmc
         if verbose:
-            print(f"[chunk {c+1}/{nchunks}] t={ck['tmin']:.1f}m  {len(ck['core'])} core "
-                  f"({len(ext)} ext) -> {len(np.unique(labc[labc >= 0]))} fibers")
+            print(f"{_IND}chunk {c+1:>3}/{nchunks}  t={ck['tmin']:>5.1f}m   {len(ck['core']):>7,} core   →  {len(np.unique(labc[labc >= 0])):>4} fibers")
     if strict_link:                                        # geometry+timing veto blocks chaining
         gid, nglob = fg.link_chunks_strict(ext_idx, ext_lab, waves, mask, min_anchor=link_min_anchor)
     else:
@@ -888,8 +891,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         ckw = dict(continuity_kw or {})
         gid, ng2 = fs.link_continuity(gid, nglob, depth, sig, **ckw)
         if verbose:
-            print(f"[chunked] continuity fallback: {nglob} -> {ng2} global fibers "
-                  f"(drift-predicted, signature-gated bridging of sparse fibers)")
+            _log(f"continuity fallback: {nglob:,} → {ng2:,} global fibers (drift-predicted, signature-gated)")
         nglob = ng2
     glab = np.full(len(res), -1, int)                       # final label by CORE window
     for ck in chunks:
@@ -900,8 +902,8 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         labs = ext_lab[c][ii]
         glab[core] = [gid.get((c, int(l)), -1) if l >= 0 else -1 for l in labs]
     if verbose:
-        print(f"[chunked] {nglob} global fibers across {nchunks} windows "
-              f"(overlap-anchor linked); {int((glab >= 0).sum())}/{len(glab)} spikes assigned")
+        _log(f"{nglob:,} global fibers across {nchunks} windows (overlap-anchor linked)")
+        _det("assigned", f"{int((glab >= 0).sum()):,}/{len(glab):,} spikes")
     tracks = _chunk_geometry(chunks, glab, waves, chunk_W, chunk_nm, mask) if track_geometry else None
     bundles = _chunk_bundles(chunks, glab, waves, chunk_W, chunk_nm, mask) if make_bundles else None
     return glab, nglob, tracks, bundles
@@ -1121,16 +1123,13 @@ def main():
     if a.feature_align:
         os.environ["FIBER_ALIGN"] = a.feature_align    # reach any spawned workers
         fl.set_feature_align(a.feature_align)            # this process
-    print(f"[fiber_refine] feature alignment: {fl.get_feature_align()}")
     if a.subsample is not None:
         os.environ["FIBER_SUBSAMPLE"] = "1" if a.subsample else "0"    # reach any spawned workers
         fl.set_realign_subsample(a.subsample)                           # this process
-    print(f"[fiber_refine] realign sub-sample: {fl.realign_subsample()}")
-
+    _gpu_line = None
     if a.gpu:
-        on = _bk.use_gpu(True)
-        print(f"[fiber_refine] GPU requested: backend = {_bk.backend_name()}"
-              + ("" if on else " (CuPy/CUDA unavailable -> CPU)"))
+        _on = _bk.use_gpu(True)
+        _gpu_line = _bk.backend_name() + ("" if _on else "  (unavailable -> CPU)")
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
@@ -1142,11 +1141,9 @@ def main():
     floor = a.refr_floor
     if floor is None:
         floor, src = sy.refractory_period_samples(a.session, a.group, sr=sr)
-        print(f"[fiber_refine] imposed refractory = {floor} samples "
-              f"({floor / sr * 1000:.2f} ms) [{src}]")
+        _refr = f"{floor} samples ({floor / sr * 1000:.2f} ms) [{src}]"
     else:
-        print(f"[fiber_refine] imposed refractory = {floor} samples "
-              f"({floor / sr * 1000:.2f} ms) [--refr-floor]")
+        _refr = f"{floor} samples ({floor / sr * 1000:.2f} ms) [--refr-floor]"
 
     t0 = time.time()
     res = fs.read_res(base, elec)
@@ -1164,8 +1161,13 @@ def main():
             init = ids.astype(int) - 1; init[init < 0] = -1
         except FileNotFoundError:
             init = None
-    print(f"loaded {len(res)} spikes ({spkpath}); "
-          f"{'input sort '+str(len(np.unique(init[init>=0])))+' clusters' if init is not None else 'no input .clu -> fresh fine sort'}")
+    _log(f"group {elec} · {len(res):,} spikes")
+    _det("source", spkpath)
+    _det("input", f"{len(np.unique(init[init>=0])):,} clusters" if init is not None else "no input .clu → fresh fine sort")
+    _det("refractory", _refr)
+    _det("feature-align", fl.get_feature_align())
+    _det("realign", "sub-sample" if fl.realign_subsample() else "whole-sample")
+    if _gpu_line: _det("GPU", _gpu_line)
 
     if not a.no_dedup and floor > 0:
         n_orig = len(res)
@@ -1176,7 +1178,7 @@ def main():
         res = res[keep]; waves = waves[keep]
         if init is not None:
             init = init[keep]
-        print(f"dedup: kept {len(keep)} of {n_orig} ({n_dup} removed; {n_exact} exact ISI=0)")
+        _det("dedup", f"kept {len(keep):,} of {n_orig:,}  ({n_dup:,} removed · {n_exact:,} exact ISI=0)")
         if n_dup > 0:
             # a dedup removes physical spikes from the GROUP, so every per-spike file
             # (res/clu/spk/spkD/fet/fetD, across all variants and stages) must drop the
@@ -1212,14 +1214,15 @@ def main():
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
         clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
         res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)
-        print(f"wrote {clu_path}\n      {res_path}")
+        _log("wrote")
+        _det("clu", clu_path); _det("res", res_path)
         if tracks is not None:
             gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
-            print(f"      {gpath}  ({len(tracks)} fibers across windows)")
+            _det("geom", f"{gpath}   ({len(tracks):,} fibers across windows)")
         if bundles is not None:
             bpath = write_bundles(bundles, f"{base}.bundles.{elec}.npz")
-            print(f"      {bpath}  ({len(np.unique(bundles[0]))} bundles)  [view with fiber-view-gui]")
-        print(f"[done] {nglob} global fibers; t={time.time()-t0:.0f}s")
+            _det("bundles", f"{bpath}   ({len(np.unique(bundles[0])):,} bundles) [fiber-view-gui]")
+        _log(f"done · {nglob:,} global fibers · {time.time()-t0:.0f}s")
         return
 
     # whitener from the .fil baseline over the (deduped) spike span
@@ -1256,12 +1259,13 @@ def main():
             f.write(f"{s['it']}\t{s['nfib']}\t{s['medBand']:.3f}\t{s['pct2']:.1f}\t"
                     f"{s['swBand']:.3f}\t{s['swDup']:.3f}\t{s['enCV']:.4f}\t{s['nbig']}\t"
                     f"{s['rkk']}\t{s['dip']}\t{s['iso']}\t{s['fold']}\t{s['kept']}\n")
-    print(f"wrote {clu_path}\n      {res_path}\n      {tsv}")
+    _log("wrote")
+    _det("clu", clu_path); _det("res", res_path); _det("stats", tsv)
     if snaps is not None:
         tracks = geometry_tracks(snaps, waves, W, nmean, mask)
         gpath = write_geometry_tracks(tracks, f"{base}.geom.{elec}.npz")
-        print(f"      {gpath}  ({len(tracks)} fibers x {len(snaps)} snapshots)")
-    print(f"[done] t={time.time()-t0:.0f}s")
+        _det("geom", f"{gpath}   ({len(tracks):,} fibers × {len(snaps)} snapshots)")
+    _log(f"done · {time.time()-t0:.0f}s")
 
 
 if __name__ == "__main__":
