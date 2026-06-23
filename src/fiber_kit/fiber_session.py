@@ -61,6 +61,10 @@ try:
 except ImportError:
     import neuro_io as nio
 try:
+    from . import fiber_pca as _fpca
+except ImportError:
+    import fiber_pca as _fpca
+try:
     from . import backend as _bk
 except ImportError:
     import backend as _bk
@@ -212,13 +216,20 @@ def _bic_gmm(F, max_sub=8, reg=1e-3):
     return best[2].predict(F)
 
 
-def gmm_split(wf, pca_k=6, max_sub=8, mask=fl.MASK_FULL, reg=1e-3):
+def gmm_split(wf, pca_k=6, max_sub=8, mask=fl.MASK_FULL, reg=1e-3, basis=None):
     """BIC-selected Gaussian mixture on PCA of a coarse fiber's realigned waveforms
-    (the Python stand-in for KK's CEM split).  Returns sub-labels 0..k-1."""
+    (the Python stand-in for KK's CEM split).  Returns sub-labels 0..k-1.
+
+    SHAPE features: if a global ndm_pca `basis` is given, the realigned waveforms are
+    projected onto it (shared basis across chunks/runs) instead of a per-call local SVD;
+    falls back to the local SVD when no basis is given or its channels mismatch."""
     N = len(wf)
     if N < 60: return np.zeros(N, int)
-    w = fl.realign(wf)[:, mask, :].reshape(N, -1); w = w - w.mean(0)
-    U, S, Vt = np.linalg.svd(w, full_matrices=False); F = U[:, :pca_k] * S[:pca_k]
+    al = fl.realign(wf)
+    F = _fpca.cluster_features(al, basis, realign=False) if basis is not None else None
+    if F is None:
+        w = al[:, mask, :].reshape(N, -1); w = w - w.mean(0)
+        U, S, Vt = np.linalg.svd(w, full_matrices=False); F = U[:, :pca_k] * S[:pca_k]
     return _bic_gmm(F, max_sub=max_sub, reg=reg)
 
 
@@ -486,7 +497,7 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
 
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
-                       fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
+                       fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
@@ -542,7 +553,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42, delete=rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
-            sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask)
+            sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         if dipsplit and _HAVE_DIP:
             newg = []
@@ -1144,6 +1155,9 @@ def main():
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
+    ap.add_argument("--no-cluster-basis", action="store_true",
+                    help="ignore the global .pca basis for the fine-split shape features and use a "
+                         "per-call local SVD (legacy behaviour)")
     ap.add_argument("--clu-stage", dest="clu_stage", default="",
                     help="post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] "
                          "(default none); e.g. --clu-stage session")
@@ -1205,8 +1219,14 @@ def main():
 
     # ── build per-chunk tasks (small chunks skipped here, serially & cheaply) ──
     meth = "none" if a.no_fine else a.fine_method
+    # SHAPE features for the fine GMM split: the GLOBAL ndm_pca basis (shared across chunks),
+    # so a basis change (nFeatures, varimax) propagates; None -> per-call local SVD fallback.
+    cluster_basis = None if a.no_cluster_basis else _fpca.read_cluster_basis(a.base, a.elec, a.method)
+    if cluster_basis is not None:
+        log(f"fine-split shape features: global basis '{a.method}' "
+            f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
-              fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid,
+              fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
               incl_k=a.inclusion_k, incl_assign=a.incl_assign, cone_channel_k=a.cone_channel_k,
               energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
               eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
