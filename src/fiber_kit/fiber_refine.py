@@ -34,9 +34,9 @@ import os
 import time
 import numpy as np
 
-_LP = "[fiber_refine]"
-_IND = " " * (len(_LP) + 1)
-def _log(m=""): print(f"{_LP} {m}".rstrip())
+_LP = "\u25b8 fiber-refine"
+_IND = " " * (len(_LP) + 3)
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
 def _det(k, v, w=13): print(f"{_IND}{k:<{w}} {v}")
 from collections import namedtuple
 from sklearn.decomposition import PCA

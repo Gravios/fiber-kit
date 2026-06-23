@@ -28,9 +28,9 @@
 import argparse
 import numpy as np
 
-_LP = "[fiber_link]"
-def _log(m=""): print(f"{_LP} {m}".rstrip())
-def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+_LP = "\u25b8 fiber-link"
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
+def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg

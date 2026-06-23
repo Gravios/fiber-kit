@@ -32,9 +32,9 @@ import argparse
 import heapq
 import numpy as np
 
-_LP = "[fiber_peel]"
-def _log(m=""): print(f"{_LP} {m}".rstrip())
-def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+_LP = "\u25b8 fiber-peel"
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
+def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
     from . import neuro_io as nio

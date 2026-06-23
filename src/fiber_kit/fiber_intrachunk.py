@@ -36,9 +36,9 @@ import argparse
 import os
 import numpy as np
 
-_LP = "[fiber_intrachunk]"
-def _log(m=""): print(f"{_LP} {m}".rstrip())
-def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+_LP = "\u25b8 fiber-intrachunk"
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
+def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy

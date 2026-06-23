@@ -37,9 +37,9 @@ except ImportError:
 
 CPOS_COLS = ("x0", "y0", "z0", "A", "dist", "depth_shift", "one_flank")
 
-_LP = "[fiber_cpos]"
-def _log(m=""): print(f"{_LP} {m}".rstrip())
-def _det(k, v, w=11): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+_LP = "\u25b8 fiber-cpos"
+def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
+def _det(k, v, w=11): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 
 def spk_extractor(spk):
