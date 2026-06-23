@@ -487,7 +487,7 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8,
-                       n_grid=40, incl_k=3.0, incl_assign=False, cone_channel_k=0.0, split_var_margin=0.0,
+                       n_grid=40, incl_k=3.0, incl_assign=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
@@ -591,19 +591,24 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     newg.append(grp)
             groups = newg
         for grp in groups:
-            if len(grp) < fine_mg: continue
-            sidx = cidx[grp]; rad = float('nan'); rej = 0; incl_rej = None
+            g0 = len(grp)
+            if g0 < fine_mg:
+                if shed is not None: shed['small_group'] = shed.get('small_group', 0) + g0
+                continue
+            sidx = cidx[grp]; rad = float('nan'); rej = 0; rej_incl = 0; incl_rej = None
             if incl_k > 0 and len(sidx) >= 20:
                 w_al = fl.realign(waves[sidx])
                 Xg = (w_al[:, mask, :].reshape(len(sidx), -1) - nmean) @ W
                 grid, D = ft.trajectory(Xg); rr = np.linalg.norm(Xg, axis=1)
                 resid = np.linalg.norm(Xg - rr[:, None] * ft.predict_many((grid, D), rr), axis=1)
                 med = float(np.median(resid)); mad = 1.4826 * float(np.median(np.abs(resid - med)))
-                rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum())
+                rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum()); rej_incl = rej
                 if incl_assign:
                     incl_rej = sidx[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
                 sidx = sidx[keep]
-                if len(sidx) < fine_mg: continue
+                if len(sidx) < fine_mg:
+                    if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                    continue
             if cone_channel_k > 0 and len(sidx) >= 40:
                 # tighten the cone PER CHANNEL: drop spikes that are residual outliers
                 # on the discriminative (high-residual-variance) channels — peels
@@ -614,8 +619,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     ed = prof['per_spike_channel'][:, disc]
                     cmed = np.median(ed, 0); cmad = 1.4826 * np.median(np.abs(ed - cmed), 0) + 1e-9
                     keep2 = ((ed - cmed) / cmad).max(1) <= cone_channel_k
-                    rej += int((~keep2).sum()); sidx = sidx[keep2]
-                    if len(sidx) < fine_mg: continue
+                    rcone = int((~keep2).sum()); rej += rcone; sidx = sidx[keep2]
+                    if shed is not None: shed['cone'] = shed.get('cone', 0) + rcone
+                    if len(sidx) < fine_mg:
+                        if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                        continue
             arej = 0
             if adapt_clean and len(sidx) >= 40:
                 try:
@@ -630,8 +638,14 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     isi = np.full(len(sidx), 1e9); isi[o[1:]] = np.diff(t[o]) * 1000.0
                     akeep = ~((isi < adapt_isi_ms) & (z > adapt_z))   # high energy at short ISI = impossible
                     arej = int((~akeep).sum()); sidx = sidx[akeep]
-                    if len(sidx) < fine_mg: continue
+                    if shed is not None: shed['adapt'] = shed.get('adapt', 0) + arej
+                    if len(sidx) < fine_mg:
+                        if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                        continue
             fine[sidx] = nid
+            if shed is not None and rej_incl:
+                _k = 'incl_tail_kept' if incl_assign else 'incl_tail_dropped'
+                shed[_k] = shed.get(_k, 0) + rej_incl
             if incl_rej is not None and len(incl_rej):
                 fine[incl_rej] = nid                  # inclusion-tail kept in the sort; geometry below stays on the pure core
             g = fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
@@ -1011,16 +1025,18 @@ def _init_chunk_worker(cfg):
 
 def _process_chunk(task):
     """Cluster one chunk.  task = (c, ext, res_e); returns (c, ext, lab, geoms,
-    cand, ncore).  Reads everything else (memmaps + params) from _CTX."""
+    cand, shed).  Reads everything else (memmaps + params) from _CTX."""
     c, ext, res_e = task
     ctx = _CTX; kw = ctx["cf"]
     waves = np.asarray(ctx["spk"][ext], dtype=float)
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
     W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
     cand = []
+    sd = {}
     lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
-                                    candidates_out=cand, **kw)
-    return c, ext, lab, geoms, cand
+                                    candidates_out=cand, shed=sd, **kw)
+    sd["_unsorted_ext"] = int((lab < 0).sum())
+    return c, ext, lab, geoms, cand, sd
 
 
 def main():
@@ -1220,9 +1236,13 @@ def main():
             print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore} core ({len(ext)} ext) -> 0 fibers (small)"); continue
         tasks.append((c, ext, res[ext]))
 
+    shed_total = {}
+
     def _store(result):
-        c, ext, lab, geoms, cand = result
+        c, ext, lab, geoms, cand, sd = result
         ext_idx[c] = ext; ext_lab[c] = lab; chunk_geoms[c] = geoms; chunk_candidates[c] = cand
+        for k, v in sd.items():
+            shed_total[k] = shed_total.get(k, 0) + int(v)
         print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore_of[c]} core ({len(ext)} ext) -> {len(geoms)} fibers")
 
     jobs = max(1, int(a.jobs))
@@ -1238,6 +1258,29 @@ def main():
                                  initializer=_init_chunk_worker, initargs=(cfg,)) as ex:
             for result in ex.map(_process_chunk, tasks):
                 _store(result)
+
+    # ── measurement: where genuine spikes leave the sort (-1), by cause ──
+    if shed_total:
+        sg = shed_total.get('small_group', 0); sc = shed_total.get('small_core', 0)
+        itk = shed_total.get('incl_tail_kept', 0); itd = shed_total.get('incl_tail_dropped', 0)
+        co = shed_total.get('cone', 0); ad = shed_total.get('adapt', 0)
+        uns = shed_total.get('_unsorted_ext', 0)
+        coarse = max(0, uns - (sg + sc + itd + co + ad))
+        rows = [("small-group skip", sg), ("small-core skip", sc)]
+        if itd: rows.append(("inclusion tail dropped", itd))
+        if co:  rows.append(("cone", co))
+        if ad:  rows.append(("adapt", ad))
+        rows.append(("coarse-unassigned", coarse))
+        lw = max(len(n) for n, _ in rows + [("total", 0)])
+        nw = max(len(f"{v:,}") for _, v in rows + [("", uns)])
+        pad = "                "
+        if itk:
+            print(f"{pad}inclusion tail kept in sort  {itk:>{nw},}   (FK_SESSION_INCL_ASSIGN=1)")
+        print(f"{pad}unsorted spikes by cause  (raw over chunk-ext; bounds the final bin)")
+        for name, val in rows:
+            print(f"{pad}  {name:<{lw}}  {val:>{nw},}")
+        print(f"{pad}  {'─' * (lw + 2 + nw)}")
+        print(f"{pad}  {'total':<{lw}}  {uns:>{nw},}")
 
     if a.no_link:
         gid = {}; n = 0
