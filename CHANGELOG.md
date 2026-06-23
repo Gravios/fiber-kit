@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.30.0] — dipsplit & realign shape features from the global ndm_pca basis
+Extends 0.29.0 (requires it) to the remaining `fiber_session` SHAPE featurizers, so the
+DipSplit and rkk-realign paths cluster on the global basis like gmm/_feats already do.
+- `_aligned_pca(..., basis=None)`: the hub for `_dipsplit_realign` and `_rkk_realign` --
+  still realigns each node to its own median by circular xcorr (unchanged), but projects the
+  aligned waveforms onto the global basis when given (else local SVD).
+- `_dipsplit_realign(..., basis=None)` threads the basis through the recursion;
+  `_rkk_realign(..., basis=None)` uses it for the seed AND the per-iteration re-featurize.
+- `cluster_chunk_fine`'s legacy (non-realign) rkk and dip branches project onto the basis too,
+  so every fine-split feature path is consistent; the basis already arrives via the 0.29.0
+  `basis=` thread, so no new main wiring.
+- The xcorr realignment itself is NOT changed -- only the feature projection moves to the
+  basis. `realign_pca` already took a basis (projection-energy realign) and is untouched.
+- Still LEFT LOCAL (different feature spaces, by design): `_energy_band_split` (PC1=energy
+  confound gate) and `_variance_split` (channel-residual-profile discriminant).
+
 ## [0.29.0] — split-stage shape features from the global ndm_pca basis
 Extends 0.28.0 (requires it) from `klustakwik` to the in-pipeline SHAPE splitters, so the
 fine/refine splits cluster on the shared global basis instead of a per-call local SVD.
