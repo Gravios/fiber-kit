@@ -21,6 +21,10 @@
 import argparse
 import numpy as np
 
+_LP = "[fiber_realign]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 try:
     from . import fiber_session as fs
 except ImportError:
@@ -337,8 +341,8 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
     n = min(len(res), len(labels), spk.shape[0])
     if not (len(res) == len(labels) == spk.shape[0]):
         if verbose:
-            print(f"[realign] WARNING length mismatch res={len(res)} clu={len(labels)} "
-                  f"spk={spk.shape[0]} -> using first {n}")
+            _log(f"WARNING length mismatch: res={len(res):,} clu={len(labels):,} "
+                 f"spk={spk.shape[0]:,} → using first {n:,}")
     res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
     is_std = variant in ("standard", "", None)
     if method == "centroid":
@@ -364,11 +368,10 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
         nz = np.count_nonzero(ioff)
         up = f" upsample={upsample}x" if (method == "klusters" and upsample > 1) else ""
         pk = f" peak={align_peak:.2f}" if align_peak is not None else ""
-        print(f"[realign:{method}{up} variant={variant}{pk}] {spk_path}: {n} spikes, {nclu - 1} units")
-        print(f"[realign] offsets: nonzero={nz} ({100 * nz / n:.1f}%)  "
-              f"mean={off.mean():+.3f}  std={off.std():.3f}  "
-              f"|off|>=1: {100 * np.mean(np.abs(ioff) >= 1):.1f}%  "
-              f"max|off|={int(np.abs(ioff).max())} samp")
+        _log(f"realign {method}{up}  variant={variant or 'canonical'}{pk}")
+        _det("input", f"{n:,} spikes · {nclu - 1:,} units · {spk_path}")
+        _det("offsets", f"{nz:,} nonzero ({100 * nz / n:.1f}%) · mean {off.mean():+.3f} · "
+                        f"std {off.std():.3f} · max {int(np.abs(ioff).max())} samp")
     return res, off, ioff, res_corr, spk, spk_path, labels
 
 
@@ -457,8 +460,9 @@ def main():
     np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
     if a.out_res:                                          # optional extra explicit copy
         nio.write_res_file(a.out_res, res_corr)
-    print(f"[realign] committed timestamps -> {res_out}  (variant={out_variant or 'canonical'}, "
-          f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
+    _log("committed timestamps")
+    _det("res", f"{res_out}   (variant {out_variant or 'canonical'}, "
+                f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
 
     # realignment shifts timestamps/waveforms but NOT cluster assignments, so emit the clu unchanged
     # under the same variant+tag -- this completes the .clu/.res/.spk/.fet set Klusters loads together
@@ -467,9 +471,9 @@ def main():
     # would overwrite the BASE .clu.<variant>.<group> with the stage's labels (the stage clu already exists).
     if a.emit_clu:
         clu_out = nio.write_clu(base, group, np.asarray(labels, np.int64), variant=out_variant, tag=a.out_tag)
-        print(f"[realign] clu (ids unchanged) -> {clu_out}")
+        _det("clu", f"{clu_out}   (ids unchanged)")
     else:
-        print("[realign] clu re-emit skipped (--no-emit-clu): base over-cluster left intact")
+        _det("clu", "re-emit skipped (--no-emit-clu); base over-cluster intact")
 
     if a.shift_spk:
         try:
@@ -487,19 +491,19 @@ def main():
             try:
                 spk_v, _r = nio.open_spk(base, group, nsamp, nch, prefer=[v])
             except Exception:
-                print(f"[realign] no .spk for variant '{v}'; skipping"); continue
+                _log(f"variant '{v}': no .spk, skipping"); continue
             wav = roll_spikes(np.asarray(spk_v[:len(res_corr)]), ioff)        # circular per-spike roll
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
-            print(f"[realign] rolled {len(wav)} {v} spikes by their offset (no .fil) -> {spk_out}")
+            _log(f"rolled {len(wav):,} {v} spikes by offset (no .fil) → {spk_out}")
             if a.refeaturize:
                 try:
                     basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
                                           else [v, "D"])
                 except FileNotFoundError:
-                    print(f"[realign]   no .pca basis for {v}; .fet not written"); continue
+                    _det("fet", f"no .pca basis for {v}; .fet not written"); continue
                 fet = refeaturize(wav, res_corr, basis)
                 fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
-                print(f"[realign]   re-featurised {v} -> {fet_out}  ({fet.shape[1]} features incl. time)")
+                _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
     elif a.reextract or a.refeaturize:
         try:
             from . import fiber_pca as fpca
@@ -521,18 +525,18 @@ def main():
             elif v in ("stderiv", "D"):
                 wav = _stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
             else:
-                print(f"[realign] variant '{v}' has no known waveform transform; skipping"); continue
+                _log(f"variant '{v}': no known waveform transform, skipping"); continue
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
-            print(f"[realign] re-extracted {len(wav)} {v} spikes from {fil} -> {spk_out}")
+            _log(f"re-extracted {len(wav):,} {v} spikes from {fil} → {spk_out}")
             if a.refeaturize:
                 try:
                     basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
                                           else [v, "D"])
                 except FileNotFoundError:
-                    print(f"[realign]   no .pca basis for {v}; .fet not written"); continue
+                    _det("fet", f"no .pca basis for {v}; .fet not written"); continue
                 fet = refeaturize(wav, res_corr, basis)
                 fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
-                print(f"[realign]   re-featurised {v} -> {fet_out}  ({fet.shape[1]} features incl. time)")
+                _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
 
 
 if __name__ == "__main__":
