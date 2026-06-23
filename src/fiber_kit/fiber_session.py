@@ -1161,18 +1161,19 @@ def main():
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
+    def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)
+    def det(k, v, w=13):  print(f"{IND}{k:<{w}} {v}")
     if a.feature_align:
         os.environ["FIBER_ALIGN"] = a.feature_align   # reach forked/spawned pool workers
         fl.set_feature_align(a.feature_align)           # this (parent) process
-    print(f"[fiber_session] feature alignment: {fl.get_feature_align()}")
     if a.subsample is not None:
         os.environ["FIBER_SUBSAMPLE"] = "1" if a.subsample else "0"   # reach forked/spawned pool workers
         fl.set_realign_subsample(a.subsample)                          # this (parent) process
-    print(f"[fiber_session] realign sub-sample: {fl.realign_subsample()}")
+    _gpu_line = None
     if a.gpu:
-        on = _bk.use_gpu(True)
-        print(f"[fiber_session] GPU requested: backend = {_bk.backend_name()}"
-              + ("" if on else " (CuPy/CUDA unavailable -> CPU)"))
+        _on = _bk.use_gpu(True)
+        _gpu_line = _bk.backend_name() + ("" if _on else "  (unavailable -> CPU)")
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
     a.base = cfg["base"]; a.elec = a.group
@@ -1186,9 +1187,14 @@ def main():
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
     assert spk.shape[0] == nspk, f".res {nspk} vs {spkpath} {spk.shape[0]}"
     filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
-    print(f"loaded {nspk} spikes ({spkpath}); .fil {filmm.shape[0]} samples x {a.ntotal} ch")
+    log(f"group {a.elec} \u00b7 {a.method} \u00b7 {nspk:,} spikes")
+    det("source", spkpath)
+    det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
+    det("feature-align", fl.get_feature_align())
+    det("realign", "sub-sample" if fl.realign_subsample() else "whole-sample")
+    if _gpu_line: det("GPU", _gpu_line)
     if a.dipsplit and not _HAVE_DIP:
-        print("  [note] --dipsplit requested but the 'diptest' package is not installed; skipping (pip install diptest)")
+        det("note", "diptest not installed \u2014 --dipsplit skipped")
 
     chunk_s = a.chunk_min * 60.0 * a.sr; ov_s = a.overlap_min * 60.0 * a.sr
     t_min, t_max = int(res.min()), int(res.max())
@@ -1233,7 +1239,7 @@ def main():
         ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s))
         ncore = int(((res[ext] >= lo_s) & (res[ext] < hi_s)).sum()); ncore_of[c] = ncore
         if len(ext) < 2 * a.min_group:
-            print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore} core ({len(ext)} ext) -> 0 fibers (small)"); continue
+            print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore:>7,} core   \u2192  skipped (too few)"); continue
         tasks.append((c, ext, res[ext]))
 
     shed_total = {}
@@ -1243,17 +1249,18 @@ def main():
         ext_idx[c] = ext; ext_lab[c] = lab; chunk_geoms[c] = geoms; chunk_candidates[c] = cand
         for k, v in sd.items():
             shed_total[k] = shed_total.get(k, 0) + int(v)
-        print(f"[fiber_session] chunk {c+1}/{nchunks}: {ncore_of[c]} core ({len(ext)} ext) -> {len(geoms)} fibers")
+        print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore_of[c]:>7,} core   \u2192  {len(geoms):>4} fibers")
 
     jobs = max(1, int(a.jobs))
     if jobs == 1 or len(tasks) <= 1:
+        log(f"clustering {len(tasks)} chunks")
         _init_chunk_worker(cfg)                       # serial: identical to the former inline loop
         for task in tasks:
             _store(_process_chunk(task))
     else:
         from concurrent.futures import ProcessPoolExecutor
         nworkers = min(jobs, len(tasks))
-        print(f"[fiber_session] clustering {len(tasks)} chunks on {nworkers} processes")
+        log(f"clustering {len(tasks)} chunks on {nworkers} processes")
         with ProcessPoolExecutor(max_workers=nworkers,
                                  initializer=_init_chunk_worker, initargs=(cfg,)) as ex:
             for result in ex.map(_process_chunk, tasks):
@@ -1273,14 +1280,13 @@ def main():
         rows.append(("coarse-unassigned", coarse))
         lw = max(len(n) for n, _ in rows + [("total", 0)])
         nw = max(len(f"{v:,}") for _, v in rows + [("", uns)])
-        pad = "                "
         if itk:
-            print(f"{pad}inclusion tail kept in sort  {itk:>{nw},}   (FK_SESSION_INCL_ASSIGN=1)")
-        print(f"{pad}unsorted spikes by cause  (raw over chunk-ext; bounds the final bin)")
+            log(f"inclusion tail kept in sort: {itk:,}")
+        log("unsorted spikes by cause")
         for name, val in rows:
-            print(f"{pad}  {name:<{lw}}  {val:>{nw},}")
-        print(f"{pad}  {'─' * (lw + 2 + nw)}")
-        print(f"{pad}  {'total':<{lw}}  {uns:>{nw},}")
+            det(name, f"{val:>{nw},}", lw)
+        print(f"{IND}{'─' * (lw + 1 + nw)}")
+        det("total", f"{uns:>{nw},}", lw)
 
     if a.no_link:
         gid = {}; n = 0
@@ -1290,7 +1296,8 @@ def main():
     else:
         gid, nglob = link_chunks(ext_idx, ext_lab, min_anchor=a.min_anchor)
         mode = f"overlap-anchor linked (min_anchor={a.min_anchor})"
-    print(f"[fiber_session] {nglob} global fibers across {nchunks} chunks  ({mode})")
+    log(f"{nglob:,} global fibers across {nchunks} chunks")
+    det("linking", mode)
 
     # ── .clu : core spikes -> global id (+1; 0=noise) ──
     labels = np.full(nspk, -1, int)
@@ -1348,8 +1355,9 @@ def main():
         meta_method=a.method, meta_chunk_min=a.chunk_min, meta_overlap_min=a.overlap_min)
     with open(fib_out, "wb") as f:
         np.savez_compressed(f, **arrs)
-    print(f"wrote {clu_out}")
-    print(f"wrote {fib_out}  ({M} fiber-instances, {nglob} global; geometry over time = rows sharing gid)")
+    log("wrote")
+    det("clu", clu_out)
+    det("fibers", f"{fib_out}   ({M:,} instances \u00b7 {nglob:,} global)")
 
     # ── .merge_candidates.<elec>.tsv : proposed same-neuron merges (curation) ──
     if a.emit_merge_candidates or a.merge_method == "profile":
@@ -1362,8 +1370,8 @@ def main():
                     ga = gid.get((c, ai), -1); gb = gid.get((c, bi), -1)
                     f.write(f"{c}\t{ga}\t{gb}\t{ai}\t{bi}\t{d:.4f}\t{thr:.4f}\n"); ncand += 1
         note = "review-only (fibers NOT merged)" if a.emit_merge_candidates else "already applied"
-        print(f"wrote {cand_out}  ({ncand} candidate pairs; gid columns valid in emit mode) [{note}]")
-    print(f"({time.time()-t0:.0f}s)")
+        det("candidates", f"{cand_out}   ({ncand:,} pairs \u00b7 {note})")
+    log(f"done in {time.time()-t0:.0f}s")
 
 
 if __name__ == "__main__":
