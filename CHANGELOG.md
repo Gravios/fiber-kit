@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.28.0] — clustering features from the global ndm_pca basis
+- `fiber_pca.cluster_features(spk, basis)`: project (realigned) waveforms onto the
+  GLOBAL per-channel `.pca`/`.pcaD` basis (the ndm_pca / `process_pca` basis), returning
+  the `.fet` feature space. One shared basis across every chunk/run, so features are
+  comparable and a basis change (`session.yaml` `nFeatures` 2→4, `--varimax`) propagates
+  into clustering with no code change. The stderiv all-pairwise derivative makes the
+  trailing channel dependent, so a basis with one fewer channel than the input drops it
+  (matching `process_pca_stderiv`); an unresolvable channel mismatch returns `None`.
+- `fiber_pca.read_cluster_basis(base, elec, method)`: resolve+read the basis
+  (`standard`|`stderiv`), or `None` when absent.
+- `fiber_pca.local_features(...)`: the legacy per-call local-SVD feature path, factored
+  out as the explicit fallback (its basis is refit per call, so it is NOT comparable
+  across chunks).
+- `klustakwik.py` CLI now clusters on the global basis when present (`--method`,
+  `--no-global-basis`), falling back to local SVD only when no basis is found or channels
+  mismatch. Splitter wiring in `fiber_session`/`fiber_refine` is deferred (each splitter's
+  feature semantics — e.g. `_energy_band_split`'s PC1=energy axis — need per-site handling).
+
 ## [0.27.0] — pipeline driver: positional electrode + rename to `fiber-pipeline`
 - `scripts/run_fiber_pipeline` renamed to `scripts/fiber-pipeline` (installed on PATH
   under the new name). The electrode group is now the FIRST positional argument:
