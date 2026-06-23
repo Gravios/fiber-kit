@@ -32,6 +32,10 @@ import argparse
 import heapq
 import numpy as np
 
+_LP = "[fiber_peel]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 try:
     from . import neuro_io as nio
 except ImportError:
@@ -226,9 +230,10 @@ def main():
     nio.write_clu_file(out_path, out, n_clusters=ncl)
     n_in = len(np.unique(src[src > 1]))
     n_out = len(np.unique(out[out > 1]))
-    print(f"[peel] {n_in} fragments -> {n_out} units ({n_merged} merges) "
-          f"foot[{a.foot_hi:.2f}->{a.foot_lo:.2f}] refrac {a.refrac_ms}ms thr {a.refrac_thr}")
-    print(f"[peel] wrote {out_path}  ({ncl} clusters incl reserve)")
+    _log(f"{n_in:,} fragments → {n_out:,} units  ({n_merged:,} merges)")
+    _det("footprint", f"{a.foot_hi:.2f} → {a.foot_lo:.2f}")
+    _det("refractory", f"{a.refrac_ms} ms · thr {a.refrac_thr}")
+    _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
 
 
 if __name__ == "__main__":
