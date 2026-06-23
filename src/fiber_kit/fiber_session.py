@@ -325,27 +325,36 @@ def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
     return [idx]
 
 
-def _aligned_pca(waves, mask, k):
+def _aligned_pca(waves, mask, k, basis=None):
     """Realign a (sub)cluster to its OWN median by iterated circular cross-correlation
-    (fiber_lib.align_xcorr, the channel-summed sub-sample aligner) and return the top-k PCA scores
-    of the masked, mean-subtracted waveforms.  The integer dominant-channel fl.realign locks a
-    sub-cluster onto the PARENT's peak; re-aligning to this node's own median before featurizing
-    lets a deeper bisection be measured on correct alignment."""
-    w = fl.align_xcorr(waves, ref="median", iters=6, maxlag=6)[:, mask, :].reshape(len(waves), -1)
+    (fiber_lib.align_xcorr, the channel-summed sub-sample aligner) and return SHAPE features.
+    If a global ndm_pca `basis` is given the median-aligned waveforms are projected onto it
+    (shared basis across chunks/nodes); else the top-k scores of a per-call local SVD.  The
+    integer dominant-channel fl.realign locks a sub-cluster onto the PARENT's peak; re-aligning
+    to this node's own median before featurizing lets a deeper bisection be measured on correct
+    alignment.  The xcorr realignment itself is unchanged -- only the feature projection moves to
+    the global basis."""
+    al = fl.align_xcorr(waves, ref="median", iters=6, maxlag=6)
+    if basis is not None:
+        F = _fpca.cluster_features(al, basis, realign=False)
+        if F is not None:
+            return F
+    w = al[:, mask, :].reshape(len(waves), -1)
     w = w - w.mean(0)
     U, S, _ = np.linalg.svd(w, full_matrices=False)
     return U[:, :k] * S[:k]
 
 
-def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4):
+def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4, basis=None):
     """Recursive DipSplit that REALIGNS EACH NODE to its own median before deciding the split:
     the 2-means centroid axis and dip test are recomputed from this sub-cluster's median-aligned
-    PCA (_aligned_pca), so every bisection is judged on its own alignment instead of the parent's
-    (the per-step realign).  Returns a list of index arrays into `waves`."""
+    SHAPE features (_aligned_pca: global ndm_pca basis when given, else local SVD), so every
+    bisection is judged on its own alignment instead of the parent's (the per-step realign).
+    Returns a list of index arrays into `waves`."""
     n = len(waves)
     if not _HAVE_DIP or n < 2 * min_size or depth > maxd:
         return [np.arange(n)]
-    F = _aligned_pca(waves, mask, dim)                      # realign THIS node + featurize
+    F = _aligned_pca(waves, mask, dim, basis=basis)         # realign THIS node + featurize
     km = KMeans(2, n_init=4, random_state=0).fit(F)
     a = np.flatnonzero(km.labels_ == 0); b = np.flatnonzero(km.labels_ == 1)
     if len(a) < min_size or len(b) < min_size:
@@ -356,19 +365,20 @@ def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4
         return [np.arange(n)]
     out = []
     for loc in (a, b):
-        for piece in _dipsplit_realign(waves[loc], mask, dim, min_size, alpha, depth + 1, maxd):
+        for piece in _dipsplit_realign(waves[loc], mask, dim, min_size, alpha, depth + 1, maxd, basis=basis):
             out.append(loc[piece])
     return out
 
 
-def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True):
+def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True, basis=None):
     """rkk (CEM) interleaved with per-cluster realignment -- the per-step realign analog for the
     flat KK split.  rkk assigns all spikes in one EM run, so there is no recursive node; instead
     iterate {cluster -> realign EACH cluster to its own median -> re-featurize -> re-cluster}, so
     the final CEM runs on consistently per-cluster-aligned features (a minority sub-unit locked
-    onto the group's dominant peak by the integer fl.realign is otherwise smeared).  Stops early
+    onto the group's dominant peak by the integer fl.realign is otherwise smeared).  SHAPE features
+    project onto the global ndm_pca basis when given, else a per-call local SVD.  Stops early
     when the cluster count is unchanged.  Returns per-spike sub-labels."""
-    F = _aligned_pca(waves, mask, dims)                    # whole-group median align + PCA (seed)
+    F = _aligned_pca(waves, mask, dims, basis=basis)       # whole-group median align + features (seed)
     lab = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
     for _ in range(max(0, iters)):
         Wal = np.array(waves, dtype=float)
@@ -376,8 +386,10 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
             idx = np.flatnonzero(lab == c)
             if len(idx) >= 8:
                 Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
-        w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
-        U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
+        F = _fpca.cluster_features(Wal, basis, realign=False) if basis is not None else None
+        if F is None:
+            w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
+            U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
         new = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
         stop = len(np.unique(new)) == len(np.unique(lab))
         lab = new
@@ -546,10 +558,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
         elif method == "rkk":
             if rkk_realign:                                # per-cluster realign EM loop
-                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete)
+                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete, basis=basis)
             else:                                          # legacy: one parent realign, fixed features
-                wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
-                Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
+                Fc = _fpca.cluster_features(fl.realign(wsplit), basis, realign=False) if basis is not None else None
+                if Fc is None:
+                    wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
+                    Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
                 sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42, delete=rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
@@ -561,10 +575,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 if len(grp) < 2 * dip_min:
                     newg.append(grp); continue
                 if dip_realign:                      # realign EACH node to its own median (per step)
-                    pieces = _dipsplit_realign(wcf[grp], mask, dip_dim, dip_min, dip_alpha)
+                    pieces = _dipsplit_realign(wcf[grp], mask, dip_dim, dip_min, dip_alpha, basis=basis)
                 else:                                # legacy: one parent realign, fixed features
-                    wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
-                    Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
+                    Fg = _fpca.cluster_features(fl.realign(wcf[grp]), basis, realign=False) if basis is not None else None
+                    if Fg is None:
+                        wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
+                        Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
                     pieces = _dipsplit_rec(Fg, np.arange(len(grp)), dip_min, dip_alpha)
                 newg += [grp[piece] for piece in pieces]
             groups = newg
