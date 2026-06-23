@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.29.0] — split-stage shape features from the global ndm_pca basis
+Extends 0.28.0 (requires it) from `klustakwik` to the in-pipeline SHAPE splitters, so the
+fine/refine splits cluster on the shared global basis instead of a per-call local SVD.
+- `fiber_session.gmm_split(..., basis=None)` and `cluster_chunk_fine(..., basis=None)`:
+  realign as before, then project onto the global basis when given (else local SVD).
+- `fiber_refine`: `Ctx` gains an optional `basis` field (default None); `_feats` and the
+  dipsplit re-featurize loop project the per-cluster-aligned waveforms onto it. `refine()`
+  / `refine_chunked()` take `basis=` and thread it through both the direct and drift-aware
+  paths.
+- Both mains load the basis via `read_cluster_basis` (variant = `--method` / `--out-method`)
+  and expose `--no-cluster-basis` to force the legacy local-SVD path.
+- `_energy_band_split` is LEFT UNTOUCHED: its confound gate needs PC1 to be the local
+  energy/drift axis, which a channel-major global projection does not preserve. Energy and
+  whitener computations everywhere remain local; only the shape features feeding the
+  BIC-GMM / rkk step are swapped.
+
 ## [0.28.0] — clustering features from the global ndm_pca basis
 - `fiber_pca.cluster_features(spk, basis)`: project (realigned) waveforms onto the
   GLOBAL per-channel `.pca`/`.pcaD` basis (the ndm_pca / `process_pca` basis), returning

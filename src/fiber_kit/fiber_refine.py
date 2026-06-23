@@ -48,6 +48,7 @@ try:
     from . import fiber_session as fs
     from . import session_yaml as sy
     from . import neuro_io as nio
+    from . import fiber_pca as _fpca
     from . import fiber_split as fsp
     from . import fiber_geometry as fg
     from . import backend as _bk
@@ -59,6 +60,7 @@ except ImportError:                                   # script / flat-layout fal
     import fiber_session as fs
     import session_yaml as sy
     import neuro_io as nio
+    import fiber_pca as _fpca
     import fiber_split as fsp
     import fiber_geometry as fg
     import backend as _bk
@@ -67,7 +69,8 @@ except ImportError:                                   # script / flat-layout fal
 
 # scoring context threaded through the helpers: whitener, masked window, rate,
 # imposed detection floor (samples) and contamination window upper bound (samples).
-Ctx = namedtuple("Ctx", "W nmean mask sr floor window")
+Ctx = namedtuple("Ctx", "W nmean mask sr floor window basis")
+Ctx.__new__.__defaults__ = (None,)        # `basis`: optional global ndm_pca basis for shape features
 
 
 # ── dedup at the imposed detection refractory ────────────────────────────────
@@ -120,8 +123,13 @@ def _pcv(w, ctx):
 def _feats(w, ctx, d):
     """Low-dim features of a single cluster after iterated circular-xcorr
     alignment to its own median (so within-cluster jitter doesn't masquerade as
-    structure)."""
+    structure).  SHAPE features: if ctx.basis (the global ndm_pca basis) is set, project
+    the aligned waveforms onto it (shared basis across chunks); else local SVD -> top d."""
     al = fl.align_xcorr(w, ref="median", iters=4)
+    if ctx.basis is not None:
+        F = _fpca.cluster_features(al, ctx.basis, realign=False)
+        if F is not None:
+            return F
     wc = al[:, ctx.mask, :].reshape(len(w), -1)
     wc = wc - wc.mean(0)
     U, S, _ = np.linalg.svd(wc, full_matrices=False)
@@ -168,7 +176,9 @@ def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2, delete=True):
             if len(ix) >= 8:
                 Wal[ix] = fl.align_xcorr(W[ix], ref="median", iters=6, maxlag=6)
         wc = Wal[:, ctx.mask, :].reshape(len(W), -1); wc = wc - wc.mean(0)
-        U, S, _ = np.linalg.svd(wc, full_matrices=False); F = U[:, :dims] * S[:dims]
+        F = _fpca.cluster_features(Wal, ctx.basis, realign=False) if ctx.basis is not None else None
+        if F is None:
+            U, S, _ = np.linalg.svd(wc, full_matrices=False); F = U[:, :dims] * S[:dims]
         new = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42, delete=delete)
         stop = len(np.unique(new)) == len(np.unique(lab))
         lab = new
@@ -647,7 +657,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
            rkk_delete=True, drop_min=None,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
-           snaps_out=None, verbose=True):
+           snaps_out=None, verbose=True, basis=None):
     """Iteratively refine a fine sort.  Returns (labels, stats) where labels is
     0-based (-1 = noise) over `waves`/`res_abs` and stats is the per-iteration
     list of dicts.  `init_labels` (0-based, -1 noise) is refined in place; if
@@ -664,12 +674,12 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
     up to `reseed` extra passes, stopping early when the pass leaves nfib/swBand
     steady -- the cleaned fibers seed a better next pass than the raw input."""
     window = int(round(window_ms * sr / 1000.0))
-    ctx = Ctx(W, nmean, mask, sr, int(floor), window)
+    ctx = Ctx(W, nmean, mask, sr, int(floor), window, basis)
     drop_eff = min_group if drop_min is None else int(drop_min)   # cluster-KEEP floor, decoupled
                                                                   # from min_group (the split-PIECE floor)
     if init_labels is None:
         lab, _ = fs.cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr,
-                                       method=fine_method, var_split=0.0)
+                                       method=fine_method, var_split=0.0, basis=basis)
     else:
         lab = np.asarray(init_labels, int).copy()
     stats = [_iter_stats("fine", lab, waves, res_abs, ctx)]
@@ -960,6 +970,9 @@ def main():
     ap.add_argument("--out-method", default="stderiv",
                     help="feature space written BEFORE the group (standard|stderiv|...); "
                          "refine operates in stderiv space, so default stderiv")
+    ap.add_argument("--no-cluster-basis", action="store_true",
+                    help="ignore the global .pca basis for the split-stage shape features and use a "
+                         "per-call local SVD (legacy behaviour)")
     ap.add_argument("--out-stage", dest="out_stage", default="refine",
                     help="fiber STAGE written AFTER the group, e.g. 'refine' -> "
                          "<base>.clu.<out-method>.<group>.refine  ('' for none). "
@@ -1141,6 +1154,9 @@ def main():
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     mask = fl.build_masks(nsamp, cfg["peak"]).full
+    # SHAPE features for the split stages: the GLOBAL ndm_pca basis (shared across chunks);
+    # None -> per-call local SVD fallback.  Variant matches the extracted waveforms (out-method).
+    cluster_basis = None if a.no_cluster_basis else _fpca.read_cluster_basis(base, elec, a.out_method)
 
     floor = a.refr_floor
     if floor is None:
@@ -1204,7 +1220,7 @@ def main():
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget, merge_warp_thr=a.merge_warp_thr,
                          merge_warp_recall=a.merge_warp_recall, merge_amp_thr=a.merge_amp_thr,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
-                         fine_method=a.fine_method, residual_split=a.residual_split)
+                         fine_method=a.fine_method, residual_split=a.residual_split, basis=cluster_basis)
         glab, nglob, tracks, bundles = refine_chunked(
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
@@ -1251,7 +1267,7 @@ def main():
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                         fine_method=a.fine_method, residual_split=a.residual_split,
-                        snaps_out=snaps, verbose=True)
+                        snaps_out=snaps, verbose=True, basis=cluster_basis)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
     clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
