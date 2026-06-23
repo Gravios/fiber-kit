@@ -36,6 +36,10 @@ import argparse
 import os
 import numpy as np
 
+_LP = "[fiber_intrachunk]"
+def _log(m=""): print(f"{_LP} {m}".rstrip())
+def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 1)}{k:<{w}} {v}")
+
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     from .config import IntrachunkConfig
@@ -908,9 +912,9 @@ def main():
         ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         nio.write_clu_file(out_path, out_lab, n_clusters=ncl)
-        print(f"[intrachunk] merge+split over {len(np.unique(chid))} chunks -> "
-              f"{len(np.unique(out_lab[out_lab > 1]))} per-chunk units (per-spike labelling)")
-        print(f"[intrachunk] wrote {out_path}  ({ncl} clusters incl reserve)")
+        _log(f"merge+split over {len(np.unique(chid)):,} chunks → "
+             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (per-spike labelling)")
+        _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
@@ -922,9 +926,9 @@ def main():
         nulls = sig.get("shape_null", np.array([])); nulls = nulls[np.isfinite(nulls)]
         cfiber_thr = float(np.quantile(nulls, a.cfiber_q)) if nulls.size else np.inf
         floored = max(cfiber_thr, a.cfiber_thr_floor) if a.cfiber_thr_floor > 0 else cfiber_thr
-        print(f"[intrachunk] cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f} "
-              f"(split-half null='{a.cfiber_null}' q={a.cfiber_q}, n={nulls.size})"
-              + (f" -> floored to {floored:.3f}" if floored != cfiber_thr else ""))
+        _log(f"cfiber gate: shape_thr self-calibrated to {cfiber_thr:.3f}"
+             + (f" → floored {floored:.3f}" if floored != cfiber_thr else ""))
+        _det("null", f"split-half '{a.cfiber_null}' · q={a.cfiber_q} · n={nulls.size:,}")
         cfiber_thr = floored
     pre = None
     if getattr(a, "pre_merge_cos", 0.0) and a.pre_merge_cos > 0.0:
@@ -932,8 +936,8 @@ def main():
                                 off_n_ref=a.off_n_ref, off_ceil=a.off_ceil, sr=sr,
                                 var_env_mult=a.var_env_mult, ccg_thr=a.ccg_thr, ccg_win_ms=a.ccg_win)
         sig_run = _collapse_sig(sig, pre)
-        print(f"[intrachunk] pre-merge: {len(sig['ids'])} -> {len(sig_run['ids'])} fragments "
-              f"(obvious mutual-NN cosine >= {a.pre_merge_cos:.3f})")
+        _log(f"pre-merge: {len(sig['ids']):,} → {len(sig_run['ids']):,} fragments  "
+             f"(mutual-NN cosine ≥ {a.pre_merge_cos:.3f})")
     else:
         sig_run = sig
     if a.linkage == "dynamic":
@@ -954,9 +958,9 @@ def main():
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, newids, n_clusters=ncl)
     nunits = len(np.unique(label))
-    print(f"[intrachunk] {len(sig['ids'])} signed fragments over "
-          f"{len(np.unique(sig['chunk']))} chunks -> {nunits} per-chunk units")
-    print(f"[intrachunk] wrote {out_path}  ({ncl} clusters incl reserve+singletons)")
+    _log(f"{len(sig['ids']):,} signed fragments over {len(np.unique(sig['chunk']))} chunks "
+         f"→ {nunits:,} per-chunk units")
+    _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve+singletons)")
     if a.emit_units:
         units = aggregate_units(sig, label)
         mspk = member_spike_index(src.astype(np.int64), units["members"])
@@ -968,8 +972,9 @@ def main():
                  members=np.array(units["members"], dtype=object),
                  backbone=np.array(bb, int).reshape(-1, 2),
                  drift_chunks=dch, drift_um=dum)
-        print(f"[intrachunk] wrote {upath}  ({nunits} unit signatures, {len(bb)} overlap-backbone "
-              f"anchors, drift {dum.min():.0f}..{dum.max():.0f}um for fiber-link)")
+        _log("wrote")
+        _det("units", f"{upath}   ({nunits:,} signatures · {len(bb):,} backbone anchors · "
+                      f"drift {dum.min():.0f}..{dum.max():.0f} um)")
 
 
 if __name__ == "__main__":
