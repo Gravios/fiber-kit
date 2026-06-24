@@ -155,6 +155,15 @@ REFINE_MERGE_BUDGET="${FK_REFINE_MERGE_BUDGET:-1.0}"   # merge-back [floor,windo
                                                    #   is allowed only if the merged unit stays <= this.
                                                    #   Lower (e.g. 0.5) = stricter = less aggressive merging;
                                                    #   pair with a higher MIN_SIM to keep distinct cells apart
+AB_RECLAIM="${FK_REFINE_AB_RECLAIM:-0}"            # 1 = opt-in A/B contamination reclaim AFTER merge-back: move a host's
+                                                   #   spikes into a clean DISTINCT donor when realigned shape clearly
+                                                   #   prefers it (refractory-safe, reclaim-only, never spawns clusters).
+                                                   #   Default 0 (off): the weak per-spike stderiv signal also moves clean
+                                                   #   continuum-boundary spikes -- enable deliberately, not blindly.
+AB_DISTINCT="${FK_REFINE_AB_DISTINCT:-0.93}"       # max host-residual/donor template corr to treat as two cells (>= = one)
+AB_ABS="${FK_REFINE_AB_ABS:-0.50}"                 # absolute donor-shape floor a spike must reach (loose noise floor)
+AB_MARGIN="${FK_REFINE_AB_MARGIN:-0.05}"           # donor must beat host by this to move (the precision/recall dial)
+AB_MIN="${FK_REFINE_AB_MIN:-10}"                   # min spikes a donor reclaims from one host to commit the move
 REALIGN_AFTER="${FK_REALIGN_AFTER-fiber-refine fiber-peel fiber-intrachunk fiber-link}"  # stages after which to
                                                    #   re-roll each new group's spikes onto its unit template
                                                    #   (Klusters method).  Splits/merges across drift leave a
@@ -313,6 +322,8 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ "$RKK_DELETE" = "0" ] && rkk_args+=(--no-rkk-delete)
     local dedup_args=()
     [ "$REFINE_DEDUP" = "1" ] && dedup_args+=(--dedup)      # default off: keep clu aligned to .res for round-trip
+    local ab_args=()
+    [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN")  # opt-in contamination reclaim
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
@@ -323,7 +334,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
         --chunk-minutes "$REFINE_CHUNK_MINUTES" \
-        "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${dedup_args[@]+"${dedup_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${dedup_args[@]+"${dedup_args[@]}"}" "${ab_args[@]+"${ab_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragments (IN-PLACE relabel on .refine)
