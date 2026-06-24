@@ -226,7 +226,7 @@ def gmm_split(wf, pca_k=6, max_sub=8, mask=fl.MASK_FULL, reg=1e-3, basis=None):
     N = len(wf)
     if N < 60: return np.zeros(N, int)
     al = fl.realign(wf)
-    F = _fpca.cluster_features(al, basis, realign=False) if basis is not None else None
+    F = _fpca.cluster_features(al, basis, realign=False, dims=pca_k) if basis is not None else None
     if F is None:
         w = al[:, mask, :].reshape(N, -1); w = w - w.mean(0)
         U, S, Vt = np.linalg.svd(w, full_matrices=False); F = U[:, :pca_k] * S[:pca_k]
@@ -336,7 +336,7 @@ def _aligned_pca(waves, mask, k, basis=None):
     the global basis."""
     al = fl.align_xcorr(waves, ref="median", iters=6, maxlag=6)
     if basis is not None:
-        F = _fpca.cluster_features(al, basis, realign=False)
+        F = _fpca.cluster_features(al, basis, realign=False, dims=k)
         if F is not None:
             return F
     w = al[:, mask, :].reshape(len(waves), -1)
@@ -386,7 +386,7 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
             idx = np.flatnonzero(lab == c)
             if len(idx) >= 8:
                 Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
-        F = _fpca.cluster_features(Wal, basis, realign=False) if basis is not None else None
+        F = _fpca.cluster_features(Wal, basis, realign=False, dims=dims) if basis is not None else None
         if F is None:
             w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
             U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
@@ -560,7 +560,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             if rkk_realign:                                # per-cluster realign EM loop
                 sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete, basis=basis)
             else:                                          # legacy: one parent realign, fixed features
-                Fc = _fpca.cluster_features(fl.realign(wsplit), basis, realign=False) if basis is not None else None
+                Fc = _fpca.cluster_features(fl.realign(wsplit), basis, realign=False, dims=rkk_dims) if basis is not None else None
                 if Fc is None:
                     wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
                     Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
@@ -577,7 +577,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 if dip_realign:                      # realign EACH node to its own median (per step)
                     pieces = _dipsplit_realign(wcf[grp], mask, dip_dim, dip_min, dip_alpha, basis=basis)
                 else:                                # legacy: one parent realign, fixed features
-                    Fg = _fpca.cluster_features(fl.realign(wcf[grp]), basis, realign=False) if basis is not None else None
+                    Fg = _fpca.cluster_features(fl.realign(wcf[grp]), basis, realign=False, dims=dip_dim) if basis is not None else None
                     if Fg is None:
                         wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
                         Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]

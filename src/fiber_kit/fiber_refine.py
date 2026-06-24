@@ -127,7 +127,7 @@ def _feats(w, ctx, d):
     the aligned waveforms onto it (shared basis across chunks); else local SVD -> top d."""
     al = fl.align_xcorr(w, ref="median", iters=4)
     if ctx.basis is not None:
-        F = _fpca.cluster_features(al, ctx.basis, realign=False)
+        F = _fpca.cluster_features(al, ctx.basis, realign=False, dims=d)
         if F is not None:
             return F
     wc = al[:, ctx.mask, :].reshape(len(w), -1)
@@ -176,7 +176,7 @@ def _rkk_realign(si, waves, ctx, dims, max_clusters, mg, iters=2, delete=True):
             if len(ix) >= 8:
                 Wal[ix] = fl.align_xcorr(W[ix], ref="median", iters=6, maxlag=6)
         wc = Wal[:, ctx.mask, :].reshape(len(W), -1); wc = wc - wc.mean(0)
-        F = _fpca.cluster_features(Wal, ctx.basis, realign=False) if ctx.basis is not None else None
+        F = _fpca.cluster_features(Wal, ctx.basis, realign=False, dims=dims) if ctx.basis is not None else None
         if F is None:
             U, S, _ = np.linalg.svd(wc, full_matrices=False); F = U[:, :dims] * S[:dims]
         new = _rkk(F, max_clusters=max_clusters, min_size=mg, seed=42, delete=delete)

@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.31.0] — reduce global-basis features to the caller's dims before the CEM
+Fixes the dimensionality mismatch introduced in 0.29/0.30: the channel-major basis
+projection is nCh*nComp wide (14 at nFeatures=2, 28 at nFeatures=4), but it was fed
+straight into klustakwik's full-covariance CEM (and the GMM split), which costs O(D^2)
+params and needs >= D+2 points per cluster -- so the BIC penalty silently over-merged
+(on real g5 data a 1500-spike cluster split into 5 instead of ~12, smallest survivor 148).
+- `fiber_pca.cluster_features(..., dims=None)`: when `dims` is given, reduce the projected
+  features to their top-`dims` SVD scores (mean-centred) -- exactly as `local_features`
+  reduces raw waveforms -- keeping the drift-stable global basis as the feature SPACE while
+  handing the splitter the dimensionality it is tuned for.
+- Every basis->splitter site now passes its existing target dims, IDENTICALLY in
+  fiber-session and fiber-refine (they mirror): gmm_split->pca_k, _aligned_pca->k,
+  _rkk_realign->dims, the cluster_chunk_fine legacy rkk->rkk_dims / dip->dip_dim, and on the
+  refine side _feats->d and _rkk_realign->dims.
+- Result on g5: rkk on basis->6 gives 10 clusters (vs the bug's 5; local SVD-6 gives 12),
+  so resolution is restored and nFeatures 2->4 no longer explodes the CEM parameter count.
+
 ## [0.30.0] — dipsplit & realign shape features from the global ndm_pca basis
 Extends 0.29.0 (requires it) to the remaining `fiber_session` SHAPE featurizers, so the
 DipSplit and rkk-realign paths cluster on the global basis like gmm/_feats already do.
