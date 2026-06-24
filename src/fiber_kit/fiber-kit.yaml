@@ -155,6 +155,24 @@ FK_MERGE_AMP_THR:        0.7      # 0.7 | 0.6-0.8.  Amplitude-profile correlatio
                                   #   second of the two Omlor-Giese terms; magnitude eq.10 + group-delay eq.11).
 FK_MERGE_WARP_THR:       ""       # "" = off.  Warp PRECISION gate on cosine-selected merges (reject a cosine merge whose
                                   #   group-delay disagrees).  Tighter precision at some recall cost; tune vs curation.
+# A/B contamination reclaim (--ab-reclaim).  OPT-IN, runs AFTER merge-back: move a host cluster's spikes into a
+# clean, DISTINCT donor when their realigned peak-window shape clearly prefers the donor (gated on the host
+# RESIDUAL staying distinct + the donor's refractory staying clean; reclaim-only, never spawns clusters).  Recovers
+# a non-co-firing contaminant that is INVISIBLE to the refractory metric (it leaves the host ISI untouched).  Default
+# OFF: per-spike stderiv discrimination is weak (a spike scores ~0.69 to its OWN template vs ~0.65 to a foreign one),
+# so the same gate that reclaims real contamination also moves ~3.8% of already-clean continuum-boundary spikes --
+# enable deliberately (curation, or a known dirty/distinct pair), NOT as a blind automatic pass.
+FK_REFINE_AB_RECLAIM:    0        # 0 | 0/1.  0 = off (default; reproduces current output).  1 = run the reclaim pass.
+FK_REFINE_AB_DISTINCT:   0.93     # 0.93 | 0.90-0.95.  Max host-RESIDUAL/donor template shape-corr to treat them as two
+                                  #   cells; >= this is ONE cell -> merge-back's job, not a reclaim.  Validated knee ~0.93
+                                  #   (recall ~100% below it, collapsing into the continuum above).
+FK_REFINE_AB_ABS:        0.50     # 0.50 | 0.40-0.70.  Absolute donor-shape floor a spike must reach (a loose noise floor
+                                  #   only; the real DECISION is the relative margin below, since a per-spike stderiv corr
+                                  #   tops out ~0.69 even against its own template).
+FK_REFINE_AB_MARGIN:     0.05     # 0.05 | 0.02-0.10.  How much more a spike must match the donor than its host to move --
+                                  #   THE precision/recall dial.  Higher = fewer moves, less false-grab (and less recall);
+                                  #   0.05 gave 0% false-grab on g5 ground-truth injection.  Lower only under curation.
+FK_REFINE_AB_MIN:        10       # 10 | 5-30.  Min spikes a donor must reclaim from one host to commit the move.
 
 # ----- fiber-peel : footprint + refractory confidence-ordered agglomeration ------------------
 # Consolidates the over-split fragments refine leaves into cells.  Greedy best-footprint-cosine
