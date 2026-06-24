@@ -152,7 +152,7 @@ def read_cluster_basis(base, elec, method="standard"):
     return b
 
 
-def cluster_features(spk, basis, *, realign=True):
+def cluster_features(spk, basis, *, realign=True, dims=None):
     """Project (optionally realigned) waveforms onto the GLOBAL ndm_pca basis, returning
     (N, nCh*nComp) cluster features in the .fet column order.  This is the shared-basis
     replacement for a per-call local SVD: one basis across every chunk/run, so features are
@@ -160,7 +160,15 @@ def cluster_features(spk, basis, *, realign=True):
     spatial derivative makes the trailing channel linearly dependent, so a basis with exactly
     one fewer channel than the input drops the trailing channel (process_pca_stderiv's
     reduction).  Returns None on an unresolvable channel-count mismatch so the caller falls
-    back to local_features()."""
+    back to local_features().
+
+    `dims`: if given and < nCh*nComp, reduce the projected features to their top-`dims` SVD
+    scores (mean-centred), exactly as local_features() reduces the raw masked waveforms.  The
+    channel-major projection is nCh*nComp wide (14 at nFeatures=2, 28 at nFeatures=4); feeding
+    that straight into a full-covariance CEM (klustakwik) or GMM costs O(D^2) params and needs
+    >= D+2 points per cluster, which silently over-merges.  Reducing to the caller's target
+    dims keeps the drift-stable global basis as the feature SPACE while handing the splitter the
+    dimensionality it is tuned for.  None (default) keeps the full projection."""
     try:
         from . import fiber_lib as fl
     except ImportError:
@@ -174,7 +182,12 @@ def cluster_features(spk, basis, *, realign=True):
             w = w[:, :, :nb]                              # stderiv: drop trailing dependent channel
         else:
             return None
-    return project(extract_windows(w, int(basis["recShift"]), int(basis["data2use"])), basis)
+    F = project(extract_windows(w, int(basis["recShift"]), int(basis["data2use"])), basis)
+    if dims is not None and 0 < int(dims) < F.shape[1]:
+        Fc = F - F.mean(0)
+        U, S, _ = np.linalg.svd(Fc, full_matrices=False)
+        F = U[:, :int(dims)] * S[:int(dims)]             # top-`dims` PCs of the global-basis features
+    return F
 
 
 def local_features(spk, dims=12, *, mask=None, realign=True):
