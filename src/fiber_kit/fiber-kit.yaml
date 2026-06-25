@@ -182,6 +182,11 @@ FK_REFINE_AB_SIGCAP:     2000     # 2000 | 1000-8000 (0=no cap).  Spikes used to
                                   #   a whole-session merged cluster (tens of thousands of spikes) a ~2000-spike sample
                                   #   matches the full template to ~1e-3 (validated) -- ~38x faster on the big clusters.
                                   #   Matches the intrachunk FK_INTRA_SIG_CAP convention.
+FK_REFINE_AB_JOBS:       1        # 1 | 1-N (threads).  Worker threads for the reclaim's per-cluster template precompute
+                                  #   (the align bottleneck).  Result is IDENTICAL for any value -- templates are sampled
+                                  #   before the parallel work, so it is a pure speedup, not a tuning knob.  Helps in
+                                  #   WHOLE-SESSION mode (big clusters); in chunked mode clusters are small so it barely
+                                  #   matters -- there the lever is FK_CHUNK_JOBS (the per-chunk pool), not this.
 
 # ----- fiber-peel : footprint + refractory confidence-ordered agglomeration ------------------
 # Consolidates the over-split fragments refine leaves into cells.  Greedy best-footprint-cosine

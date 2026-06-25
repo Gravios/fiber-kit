@@ -663,7 +663,7 @@ def _tmpl_scores(WB, tmpl, mask, ml=4):
 
 
 def _ab_reclaim(lab, waves, res, ctx, *, distinct=0.93, abs_thr=0.50, margin=0.05,
-                min_reclaim=10, pair_lo=0.5, clean_band=0.30, band_tol=0.30, sigcap=2000, verbose=True):
+                min_reclaim=10, pair_lo=0.5, clean_band=0.30, band_tol=0.30, sigcap=2000, jobs=1, verbose=True):
     """Targeted A/B contamination reclaim -- the curator's "merge a contaminated cluster onto a
     clean, DISTINCT neighbour and re-sort, and the clean cell pulls its own spikes back" made into
     a pass.  For each host cluster B and each clean donor A (whose template is at least loosely
@@ -695,8 +695,17 @@ def _ab_reclaim(lab, waves, res, ctx, *, distinct=0.93, abs_thr=0.50, margin=0.0
         if sigcap and len(idx) > sigcap:                        #   not its full membership: the iterated align in _med
             return _rng.choice(idx, sigcap, replace=False)      #   is the bottleneck on whole-session merged clusters
         return idx                                              #   (tens of thousands of spikes); a ~2000-spike sample
-    med = {c: _med(_cap(idxof[c]), waves) for c in cl}          # matches the full template to ~1e-3.  Membership/scoring
-    band = {c: band_pct(res[idxof[c]], ctx) for c in cl}        # still use every spike -- only the template is sampled.
+    capidx = {c: _cap(idxof[c]) for c in cl}                    # sample sequentially (deterministic _rng order) so the
+    def _tpl(c):                                                #   template is reproducible and INDEPENDENT of worker count;
+        return c, _med(capidx[c], waves), band_pct(res[idxof[c]], ctx)   # the parallel work below is then pure.
+    if jobs and jobs > 1 and len(cl) > 2:
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=jobs) as _ex:      # _med is numpy/BLAS-heavy (releases the GIL), so threads
+            _tpls = list(_ex.map(_tpl, cl))                     #   parallelise the per-cluster align with no pickling and
+    else:                                                       #   waves stays shared -- the precompute is the bottleneck on
+        _tpls = [_tpl(c) for c in cl]                           #   whole-session sorts (clusters span chunks, so the axis is
+    med = {c: m for c, m, _b in _tpls}                          #   per-CLUSTER, not per-chunk).  Result is jobs-invariant.
+    band = {c: _b for c, m, _b in _tpls}
     moved = pairs = 0
     for B in cl:
         bidx = idxof[B]
@@ -747,7 +756,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_warp_recall=None, merge_amp_thr=0.7,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
-           ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10, ab_sigcap=2000,
+           ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10, ab_sigcap=2000, ab_jobs=1,
            dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
            rkk_delete=True, drop_min=None,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
@@ -831,7 +840,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                 print(_row(st))
         if ab_reclaim:
             lab = _ab_reclaim(lab, waves, res_abs, ctx, distinct=ab_distinct, abs_thr=ab_abs,
-                              margin=ab_margin, min_reclaim=ab_min, sigcap=ab_sigcap, verbose=verbose)
+                              margin=ab_margin, min_reclaim=ab_min, sigcap=ab_sigcap, jobs=ab_jobs, verbose=verbose)
             st = _iter_stats(f"{p+1}.abrcl" if reseed else "abrcl", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -1242,6 +1251,10 @@ def main():
                          "membership/scoring).  A ~2000-spike sample matches the full template to ~1e-3 while "
                          "avoiding the iterated align on whole-session merged clusters (tens of thousands of "
                          "spikes) -- the pass's bottleneck in whole-session mode.  0 = no cap (use all spikes).")
+    ap.add_argument("--ab-jobs", dest="ab_jobs", type=int, default=1,
+                    help="A/B reclaim: worker threads for the per-cluster template precompute (the align bottleneck). "
+                         "Result is identical for any value (templates are sampled before the parallel work). 1 = serial. "
+                         "Helps in WHOLE-SESSION mode (big clusters); in chunked mode clusters are small so it barely matters.")
     ap.add_argument("--rkk-first", dest="dip_first", action="store_false", default=True,
                     help="restore the old cascade order (rkk before dip-bisection); default is "
                          "dip-first, which targets the single high-margin dip axis welds separate on")
@@ -1396,7 +1409,7 @@ def main():
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split,
                          ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
-                         ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap, basis=cluster_basis)
+                         ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap, ab_jobs=a.ab_jobs, basis=cluster_basis)
         glab, nglob, tracks, bundles = refine_chunked(
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
@@ -1444,7 +1457,7 @@ def main():
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                         fine_method=a.fine_method, residual_split=a.residual_split,
                         ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
-                        ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap,
+                        ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap, ab_jobs=a.ab_jobs,
                         snaps_out=snaps, verbose=True, basis=cluster_basis)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
