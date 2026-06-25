@@ -962,11 +962,38 @@ def load_geometry(path):
     return out
 
 
+_RCTX = {}
+
+
+def _init_refine_worker(cfg):
+    """Pool initializer (also run for the serial path): stash the static config and open the
+    .spkD / .fil memmaps once per worker process.  Mirrors fiber_session._init_chunk_worker."""
+    _RCTX.clear(); _RCTX.update(cfg)
+    _RCTX["spk"], _ = fs.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"])
+    _RCTX["filmm"] = nio.open_signal(f'{cfg["base"]}.fil', cfg["ntotal"])
+
+
+def _refine_one_chunk(task):
+    """Refine ONE chunk -- task = (c, ext, res_e, init_e); returns (c, ext, labc, Wc, nmc).
+    Reads the memmaps + params from _RCTX.  Each chunk is independent (its own whitener + refine,
+    written to its own slot), so this runs unchanged whether dispatched serially or across a
+    ProcessPool.  Workers read .spkD from disk -- apply_spike_keep keeps it row-aligned with the
+    in-memory waves even after a dedup, so a worker slice equals waves[ext]."""
+    c, ext, res_e, init_e = task
+    ctx = _RCTX
+    waves_e = np.asarray(ctx["spk"][ext], dtype=float)
+    s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
+    Wc, nmc, _ = fs.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+    labc, _ = refine(waves_e, res_e, Wc, nmc, ctx["mask"], ctx["sr"],
+                     init_labels=init_e, min_group=ctx["min_group"], verbose=False, **ctx["refine_kw"])
+    return c, ext, labc, Wc, nmc
+
+
 def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    chunk_min, overlap_min, *, init=None, refine_kw=None,
                    min_group=40, track_geometry=False, make_bundles=False,
                    strict_link=True, link_min_anchor=20,
-                   link_continuity=False, continuity_kw=None, chpos=None, verbose=True):
+                   link_continuity=False, continuity_kw=None, chpos=None, jobs=1, verbose=True):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
     then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
@@ -977,24 +1004,43 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
     refine_kw = dict(refine_kw or {})
     refine_kw.pop("min_group", None)        # passed explicitly below; avoid double-keyword to refine()
     chunks, nchunks = _chunk_bounds(res, sr, chunk_min, overlap_min)
-    filmm = nio.open_signal(f"{base}.fil", ntotal)
     ext_idx = [np.array([], int)] * nchunks
     ext_lab = [np.array([], int)] * nchunks
     chunk_W = {}; chunk_nm = {}
+    tmin_of = {ck["c"]: ck["tmin"] for ck in chunks}
+    ncore_of = {ck["c"]: len(ck["core"]) for ck in chunks}
+
+    def _store(result):
+        c, ext, labc, Wc, nmc = result
+        ext_idx[c] = ext; ext_lab[c] = labc; chunk_W[c] = Wc; chunk_nm[c] = nmc
+        if verbose:
+            print(f"{_IND}chunk {c+1:>3}/{nchunks}  t={tmin_of[c]:>5.1f}m   {ncore_of[c]:>7,} core   →  {len(np.unique(labc[labc >= 0])):>4} fibers")
+
+    tasks = []                                                  # one task per chunk big enough to refine
     for ck in chunks:
         c, ext = ck["c"], ck["ext"]
         if len(ext) < 2 * min_group:
             if verbose:
-                print(f"{_IND}chunk {c+1:>3}/{nchunks}   {len(ck['core']):>7,} core   →  skipped (small)")
+                print(f"{_IND}chunk {c+1:>3}/{nchunks}   {ncore_of[c]:>7,} core   →  skipped (small)")
             continue
-        s0 = int(res[ext].min()) - nsamp; s1 = int(res[ext].max()) + nsamp + 1
-        Wc, nmc, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res[ext], nsamp, mask)
-        init_c = init[ext] if init is not None else None
-        labc, _ = refine(waves[ext], res[ext], Wc, nmc, mask, sr,
-                         init_labels=init_c, min_group=min_group, verbose=False, **refine_kw)
-        ext_idx[c] = ext; ext_lab[c] = labc; chunk_W[c] = Wc; chunk_nm[c] = nmc
+        tasks.append((c, ext, res[ext], (init[ext] if init is not None else None)))
+
+    cfg = dict(base=base, elec=elec, ntotal=ntotal, nsamp=nsamp, nchan=nchan, gch=gch,
+               mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw)
+    jobs = max(1, int(jobs))
+    if jobs == 1 or len(tasks) <= 1:                            # chunks are independent; serial == the former inline loop
+        _init_refine_worker(cfg)
+        for task in tasks:
+            _store(_refine_one_chunk(task))
+    else:
+        from concurrent.futures import ProcessPoolExecutor
+        nworkers = min(jobs, len(tasks))
         if verbose:
-            print(f"{_IND}chunk {c+1:>3}/{nchunks}  t={ck['tmin']:>5.1f}m   {len(ck['core']):>7,} core   →  {len(np.unique(labc[labc >= 0])):>4} fibers")
+            _log(f"refining {len(tasks)} chunks on {nworkers} processes")
+        with ProcessPoolExecutor(max_workers=nworkers,
+                                 initializer=_init_refine_worker, initargs=(cfg,)) as ex:
+            for result in ex.map(_refine_one_chunk, tasks):     # map preserves task order -> ordered logs
+                _store(result)
     if strict_link:                                        # geometry+timing veto blocks chaining
         gid, nglob = fg.link_chunks_strict(ext_idx, ext_lab, waves, mask, min_anchor=link_min_anchor)
     else:
@@ -1221,6 +1267,11 @@ def main():
                          "overlap-anchor; 0 = single whole-session pass (assumes stationary)")
     ap.add_argument("--chunk-overlap-minutes", type=float, default=1.0,
                     help="overlap between adjacent windows used for overlap-anchor linking (drift-aware mode)")
+    ap.add_argument("--chunk-jobs", dest="chunk_jobs", type=int, default=1,
+                    help="parallel worker PROCESSES over chunks in drift-aware mode (default 1 = serial). "
+                         "Chunks are independent (own whitener + refine), so this is the main speedup for a "
+                         "chunked run; the cross-window link runs serially after.  Workers re-open the .spkD/.fil "
+                         "memmaps, so memory is bounded.  No effect in whole-session mode (--chunk-minutes 0).")
     ap.add_argument("--bundles", action="store_true",
                     help="drift-aware mode: also write <base>.bundles.<group>.npz (per-chunk un-whitened "
                          "template curves per global fiber) for the fiber-view-gui bundle table")
@@ -1350,7 +1401,7 @@ def main():
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
             min_group=a.min_group, track_geometry=a.track_geometry,
-            make_bundles=a.bundles,
+            make_bundles=a.bundles, jobs=a.chunk_jobs,
             strict_link=not a.legacy_link, link_min_anchor=a.min_anchor,
             link_continuity=a.link_continuity,
             continuity_kw=dict(sig_thr=a.continuity_sig_thr, depth_gate=a.continuity_depth_gate,

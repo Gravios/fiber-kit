@@ -215,6 +215,8 @@ SESSION_INCL_ASSIGN="${FK_SESSION_INCL_ASSIGN:-1}"      # 1 = keep spikes beyond
                                                          #   tail spikes (~6-7%) being lost to artifact.  0 = legacy drop.
 REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
 REFINE_CHUNK_MINUTES="${FK_REFINE_CHUNK_MINUTES:-12}"     # fiber-refine chunk length (min)
+REFINE_CHUNK_JOBS="${FK_REFINE_CHUNK_JOBS:-1}"           # parallel worker processes over chunks (drift-aware mode);
+                                                         #   chunks are independent -> the main speedup for a chunked run
 LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
 LINK_OFF_THR="${FK_LINK_OFF_THR:-1.0}"                    # fiber-link inter-channel offset gate
 LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk gap to bridge
@@ -335,7 +337,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
         --split-min-corr "$REFINE_SPLIT_MIN_CORR" --split-var-mult "$SPLIT_VAR_MULT" \
         --dedup-stale "$DEDUP_STALE" \
         --fold-off-thr "$FOLD_OFF_THR" \
-        --chunk-minutes "$REFINE_CHUNK_MINUTES" \
+        --chunk-minutes "$REFINE_CHUNK_MINUTES" --chunk-jobs "$REFINE_CHUNK_JOBS" \
         "${warp_args[@]}" "${rkk_args[@]+"${rkk_args[@]}"}" "${dedup_args[@]+"${dedup_args[@]}"}" "${ab_args[@]+"${ab_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
