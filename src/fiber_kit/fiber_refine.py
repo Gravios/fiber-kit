@@ -663,7 +663,7 @@ def _tmpl_scores(WB, tmpl, mask, ml=4):
 
 
 def _ab_reclaim(lab, waves, res, ctx, *, distinct=0.93, abs_thr=0.50, margin=0.05,
-                min_reclaim=10, pair_lo=0.5, clean_band=0.30, band_tol=0.30, verbose=True):
+                min_reclaim=10, pair_lo=0.5, clean_band=0.30, band_tol=0.30, sigcap=2000, verbose=True):
     """Targeted A/B contamination reclaim -- the curator's "merge a contaminated cluster onto a
     clean, DISTINCT neighbour and re-sort, and the clean cell pulls its own spikes back" made into
     a pass.  For each host cluster B and each clean donor A (whose template is at least loosely
@@ -690,8 +690,13 @@ def _ab_reclaim(lab, waves, res, ctx, *, distinct=0.93, abs_thr=0.50, margin=0.0
     if len(cl) < 2:
         return lab
     idxof = {c: np.flatnonzero(lab == c) for c in cl}
-    med = {c: _med(idxof[c], waves) for c in cl}                 # realigned (own-median) template
-    band = {c: band_pct(res[idxof[c]], ctx) for c in cl}
+    _rng = np.random.default_rng(0)
+    def _cap(idx):                                              # estimate a cluster's median TEMPLATE from a sample,
+        if sigcap and len(idx) > sigcap:                        #   not its full membership: the iterated align in _med
+            return _rng.choice(idx, sigcap, replace=False)      #   is the bottleneck on whole-session merged clusters
+        return idx                                              #   (tens of thousands of spikes); a ~2000-spike sample
+    med = {c: _med(_cap(idxof[c]), waves) for c in cl}          # matches the full template to ~1e-3.  Membership/scoring
+    band = {c: band_pct(res[idxof[c]], ctx) for c in cl}        # still use every spike -- only the template is sampled.
     moved = pairs = 0
     for B in cl:
         bidx = idxof[B]
@@ -716,17 +721,17 @@ def _ab_reclaim(lab, waves, res, ctx, *, distinct=0.93, abs_thr=0.50, margin=0.0
                 continue
             cand = bidx[take]
             resid = bidx[~take]
-            if _ncorr(med[A], _med(resid, waves)) >= distinct:  # host RESIDUAL == donor -> one cell -> merge_back's job
+            if _ncorr(med[A], _med(_cap(resid), waves)) >= distinct:  # host RESIDUAL == donor -> one cell -> merge_back's job
                 continue                                        # (measured on the residual, NOT the contaminated host
             if band_pct(res[np.concatenate([idxof[A], cand])], ctx) > max(band[A], band_tol):
                 continue                                        #  median -- the contamination would inflate that corr)
             lab[cand] = A; moved += len(cand); pairs += 1
             idxof[A] = np.concatenate([idxof[A], cand])
-            med[A] = _med(idxof[A], waves); band[A] = band_pct(res[idxof[A]], ctx)
+            med[A] = _med(_cap(idxof[A]), waves); band[A] = band_pct(res[idxof[A]], ctx)
             keep = ~take; bidx = bidx[keep]; idxof[B] = bidx; WBraw = WBraw[keep]; sB = sB[keep]
             if len(bidx) < 2 * min_reclaim:
                 break
-            med[B] = _med(bidx, waves); sB = _tmpl_scores(WBraw, med[B], ctx.mask, ml=6)
+            med[B] = _med(_cap(bidx), waves); sB = _tmpl_scores(WBraw, med[B], ctx.mask, ml=6)
     if verbose and moved:
         _log(f"a/b reclaim · {moved} foreign spike(s) -> clean donor across {pairs} pair(s)")
     return lab
@@ -742,7 +747,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            merge_warp_recall=None, merge_amp_thr=0.7,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
-           ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10,
+           ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10, ab_sigcap=2000,
            dip_realign=True, rkk_realign=True, rkk_iters=2, dip_first=True, ccg_refrac_ms=0.0,
            rkk_delete=True, drop_min=None,
            nudge_split=False, nudge_max=3, nudge_amp_pct=40.0, nudge_min_ch=4, nudge_alpha=0.01,
@@ -826,7 +831,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
                 print(_row(st))
         if ab_reclaim:
             lab = _ab_reclaim(lab, waves, res_abs, ctx, distinct=ab_distinct, abs_thr=ab_abs,
-                              margin=ab_margin, min_reclaim=ab_min, verbose=verbose)
+                              margin=ab_margin, min_reclaim=ab_min, sigcap=ab_sigcap, verbose=verbose)
             st = _iter_stats(f"{p+1}.abrcl" if reseed else "abrcl", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -1186,6 +1191,11 @@ def main():
                          "(bounds false-grab of the host's own spikes).")
     ap.add_argument("--ab-min", dest="ab_min", type=int, default=10,
                     help="A/B reclaim: minimum spikes a donor must reclaim from one host to commit the move.")
+    ap.add_argument("--ab-sigcap", dest="ab_sigcap", type=int, default=2000,
+                    help="A/B reclaim: cap on spikes used to estimate each cluster's median TEMPLATE (not its "
+                         "membership/scoring).  A ~2000-spike sample matches the full template to ~1e-3 while "
+                         "avoiding the iterated align on whole-session merged clusters (tens of thousands of "
+                         "spikes) -- the pass's bottleneck in whole-session mode.  0 = no cap (use all spikes).")
     ap.add_argument("--rkk-first", dest="dip_first", action="store_false", default=True,
                     help="restore the old cascade order (rkk before dip-bisection); default is "
                          "dip-first, which targets the single high-margin dip axis welds separate on")
@@ -1335,7 +1345,7 @@ def main():
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split,
                          ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
-                         ab_margin=a.ab_margin, ab_min=a.ab_min, basis=cluster_basis)
+                         ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap, basis=cluster_basis)
         glab, nglob, tracks, bundles = refine_chunked(
             waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             a.chunk_minutes, a.chunk_overlap_minutes, init=init, refine_kw=refine_kw,
@@ -1383,7 +1393,7 @@ def main():
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                         fine_method=a.fine_method, residual_split=a.residual_split,
                         ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
-                        ab_margin=a.ab_margin, ab_min=a.ab_min,
+                        ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap,
                         snaps_out=snaps, verbose=True, basis=cluster_basis)
 
     ids = np.where(lab < 0, 0, lab + 1).astype(np.int64)   # 0 = noise, clusters 1..K
