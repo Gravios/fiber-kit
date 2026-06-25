@@ -35,6 +35,7 @@ gpu = ["cupy-cuda12x>=12.0"]      # optional GPU acceleration of realign/whiten 
 fiber-session = "fiber_kit.fiber_session:main"
 fiber-raw-vs-stderiv = "fiber_kit.raw_vs_stderiv:main"
 fiber-validate-merges = "fiber_kit.validate_merge_candidates:main"
+fiber-refiber = "fiber_kit.fiber_refiber:main"
 fiber-relink = "fiber_kit.fiber_relink:main"
 fiber-realign = "fiber_kit.fiber_realign:main"
 fiber-localize = "fiber_kit.fiber_localize:main"
