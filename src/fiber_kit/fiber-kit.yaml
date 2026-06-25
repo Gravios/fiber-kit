@@ -173,6 +173,11 @@ FK_REFINE_AB_MARGIN:     0.05     # 0.05 | 0.02-0.10.  How much more a spike mus
                                   #   THE precision/recall dial.  Higher = fewer moves, less false-grab (and less recall);
                                   #   0.05 gave 0% false-grab on g5 ground-truth injection.  Lower only under curation.
 FK_REFINE_AB_MIN:        10       # 10 | 5-30.  Min spikes a donor must reclaim from one host to commit the move.
+FK_REFINE_AB_SIGCAP:     2000     # 2000 | 1000-8000 (0=no cap).  Spikes used to estimate each cluster's median
+                                  #   TEMPLATE (not membership): the iterated align is the reclaim's bottleneck, and on
+                                  #   a whole-session merged cluster (tens of thousands of spikes) a ~2000-spike sample
+                                  #   matches the full template to ~1e-3 (validated) -- ~38x faster on the big clusters.
+                                  #   Matches the intrachunk FK_INTRA_SIG_CAP convention.
 
 # ----- fiber-peel : footprint + refractory confidence-ordered agglomeration ------------------
 # Consolidates the over-split fragments refine leaves into cells.  Greedy best-footprint-cosine

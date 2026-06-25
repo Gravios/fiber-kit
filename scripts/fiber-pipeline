@@ -164,6 +164,8 @@ AB_DISTINCT="${FK_REFINE_AB_DISTINCT:-0.93}"       # max host-residual/donor tem
 AB_ABS="${FK_REFINE_AB_ABS:-0.50}"                 # absolute donor-shape floor a spike must reach (loose noise floor)
 AB_MARGIN="${FK_REFINE_AB_MARGIN:-0.05}"           # donor must beat host by this to move (the precision/recall dial)
 AB_MIN="${FK_REFINE_AB_MIN:-10}"                   # min spikes a donor reclaims from one host to commit the move
+AB_SIGCAP="${FK_REFINE_AB_SIGCAP:-2000}"           # spikes used to estimate each cluster TEMPLATE (0=all); caps the
+                                                   #   iterated-align bottleneck on whole-session merged clusters
 REALIGN_AFTER="${FK_REALIGN_AFTER-fiber-refine fiber-peel fiber-intrachunk fiber-link}"  # stages after which to
                                                    #   re-roll each new group's spikes onto its unit template
                                                    #   (Klusters method).  Splits/merges across drift leave a
@@ -323,7 +325,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     local dedup_args=()
     [ "$REFINE_DEDUP" = "1" ] && dedup_args+=(--dedup)      # default off: keep clu aligned to .res for round-trip
     local ab_args=()
-    [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN")  # opt-in contamination reclaim
+    [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN" --ab-sigcap "$AB_SIGCAP")  # opt-in contamination reclaim
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
         --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
