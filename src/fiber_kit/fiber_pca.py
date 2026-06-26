@@ -8,21 +8,23 @@
 #  fiber_realign.template_offsets, which already implements Stage 1 (per-spike
 #  cross-correlation alignment to the cluster template, iters=2, max_shift=5).
 #
-#  ── .pca.N / .pcaD.N binary layout (authoritative: process_pca.cpp writer) ──
-#    int32 x5 header :  nCh, data2use, nComp, centered, recShift
+#  ── .pca.N / .pcaD.N binary layout — PCAE (mirror of libneurosuite-core) ──
+#    int32 header   :  magic=0x50434145 ("PCAE"), version,
+#                      nCh, data2use, nComp, recShift, centered,
+#                      [v2+: method, nInputChannels]
 #    nCh   x  data2use            double  : per-channel mean window  (ALL channels)
 #    nCh   x  nComp x data2use    double  : eigenvectors, col-major  (ALL channels)
-#  Means are written UNCONDITIONALLY by process_pca (the `centered` flag governs
-#  whether projection subtracts the mean, NOT whether the means are stored).  NB the
-#  process_alignspikes_pca *reader* instead reads means/evec interleaved per channel
-#  and gates the mean read on `centered`; that disagrees with this writer and would
-#  mis-parse a real centered=0 file -- see read_pcad's note.  This module follows the
-#  WRITER (the file actually on disk), validated by a byte-exact round-trip.
+#  Block-wise (all means, then all eigenvectors) and means written UNCONDITIONALLY
+#  (the `centered` flag governs whether projection subtracts the mean, NOT whether
+#  the means are stored).  This module reads+writes the SAME PCAE format as
+#  neurosuite::core::{loadPca,writePca}; the Method enum below mirrors
+#  neurosuite::core::Method exactly (cross-repo contract).
 #
 #  The projection window is samples [recShift : recShift + data2use] of each spike;
 #  recShift is stored in the header (so the window start is not guessed).
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
+import enum
 import struct
 import numpy as np
 
@@ -31,33 +33,74 @@ try:
 except ImportError:
     import neuro_io as nio, session_yaml as sy
 
-HEADER_FMT = "<5i"          # nCh, data2use, nComp, centered, recShift
-HEADER_SIZE = 20
 
+# ── PCAE format + transform method (mirror of libneurosuite-core/pca_projection.hpp) ──
+PCAE_MAGIC   = 0x50434145          # "PCAE"
+PCAE_VERSION = 2                   # v2 adds method + nInputChannels
+
+
+class Method(enum.IntEnum):
+    """Transform a basis was trained against.  Integer values MUST match
+    neurosuite::core::Method exactly — a basis written by either repo is read by
+    the other.  Flattened (no separate sdiffOrder), so illegal combinations are
+    unrepresentable."""
+    STANDARD          = 0          # raw waveform, no transform
+    SDIFF_FIRST       = 1          # spatial derivative only
+    SDIFF_LAPLACIAN   = 2
+    SDIFF_ALLPAIRS    = 3
+    STDERIV_FIRST     = 4          # spatial derivative + temporal first-difference
+    STDERIV_LAPLACIAN = 5
+    STDERIV_ALLPAIRS  = 6          # canonical
+
+
+def method_tag(m):
+    """Chain-of-custody tag ('standard' / 'sdiff' / 'stderiv') for a Method."""
+    m = Method(m)
+    if m in (Method.SDIFF_FIRST, Method.SDIFF_LAPLACIAN, Method.SDIFF_ALLPAIRS):
+        return "sdiff"
+    if m in (Method.STDERIV_FIRST, Method.STDERIV_LAPLACIAN, Method.STDERIV_ALLPAIRS):
+        return "stderiv"
+    return "standard"
+
+
+def has_temporal_diff(m):
+    """True if the method applies the temporal first-difference (stderiv vs sdiff/raw)."""
+    return Method(m) in (Method.STDERIV_FIRST, Method.STDERIV_LAPLACIAN,
+                         Method.STDERIV_ALLPAIRS)
 
 def read_pcad(path):
-    """Read a neurosuite-3 .pca/.pcaD basis (process_pca writer layout).
+    """Read a neurosuite-3 PCAE .pca/.pcaD basis.
 
-    Returns dict(nCh, data2use, nComp, centered, recShift,
+    Returns dict(nCh, data2use, nComp, centered, recShift, method, nInputChannels,
                  means  (nCh, data2use),
                  evec   (nCh, nComp, data2use)  -- evec[ch,k] is eigenvector k).
-    Means are always read (process_pca writes them unconditionally); a file written
-    by a tool that omits them when centered=0 would be shorter and is detected here."""
+    Header field order matches neurosuite::core (recShift BEFORE centered).  Means
+    are always present (block-wise body).  v1 files (no transform descriptor) load
+    as method=STANDARD, nInputChannels=0."""
     raw = open(path, "rb").read()
-    nCh, data2use, nComp, centered, recShift = struct.unpack(HEADER_FMT, raw[:HEADER_SIZE])
-    body = np.frombuffer(raw, "<f8", offset=HEADER_SIZE)
+    if len(raw) < 8:
+        raise ValueError(f"{path}: too short for a PCAE header")
+    magic, version = struct.unpack("<2i", raw[:8])
+    if magic != PCAE_MAGIC:
+        raise ValueError(f"{path}: not a PCAE file (magic={magic:#x}); regenerate as PCAE")
+    if version not in (1, 2):
+        raise ValueError(f"{path}: unsupported PCAE version {version}")
+    nCh, data2use, nComp, recShift, centered = struct.unpack("<5i", raw[8:28])
+    if version >= 2:
+        method, nInputChannels = struct.unpack("<2i", raw[28:36])
+        off = 36
+    else:
+        method, nInputChannels, off = int(Method.STANDARD), 0, 28
+    body = np.frombuffer(raw, "<f8", offset=off)
     n_means = nCh * data2use
     n_evec = nCh * nComp * data2use
-    if body.size == n_means + n_evec:
-        means = body[:n_means].reshape(nCh, data2use).copy()
-        evec = body[n_means:].reshape(nCh, nComp, data2use).copy()
-    elif body.size == n_evec:                 # means omitted (some writers, centered=0)
-        means = np.zeros((nCh, data2use))
-        evec = body.reshape(nCh, nComp, data2use).copy()
-    else:
+    if body.size != n_means + n_evec:
         raise ValueError(f"{path}: {body.size} doubles != means {n_means} + evec {n_evec}")
+    means = body[:n_means].reshape(nCh, data2use).copy()
+    evec = body[n_means:].reshape(nCh, nComp, data2use).copy()
     return dict(nCh=nCh, data2use=data2use, nComp=nComp, centered=int(centered),
-                recShift=recShift, means=means, evec=evec)
+                recShift=recShift, method=int(method), nInputChannels=int(nInputChannels),
+                means=means, evec=evec)
 
 
 def read_pca(base, elec, prefer=None):
@@ -75,15 +118,23 @@ def read_pca(base, elec, prefer=None):
     return b
 
 
-def write_pcad(path, means, evec, recShift, centered=0):
-    """Write a .pca/.pcaD byte-compatible with process_pca (means-then-evec, col-major
-    eigenvectors).  means (nCh,data2use); evec (nCh,nComp,data2use)."""
+def write_pcad(path, means, evec, recShift, centered=0,
+               method=Method.STANDARD, n_input_channels=0):
+    """Write a PCAE v2 .pca/.pcaD (block-wise means-then-evec, col-major
+    eigenvectors), byte-compatible with neurosuite::core::writePca.
+    means (nCh,data2use); evec (nCh,nComp,data2use).  `method` is the transform the
+    basis was trained against; `n_input_channels` is the raw channel count the
+    transform consumes (0 ⇒ == nCh, i.e. no channel drop)."""
     means = np.ascontiguousarray(means, np.float64)
     evec = np.ascontiguousarray(evec, np.float64)
     nCh, data2use = means.shape
     nComp = evec.shape[1]
+    nin = int(n_input_channels) if int(n_input_channels) > 0 else nCh
     with open(path, "wb") as f:
-        f.write(struct.pack(HEADER_FMT, nCh, data2use, nComp, int(centered), int(recShift)))
+        # header order matches core: magic, version, nCh, data2use, nComp,
+        # recShift, centered, method, nInputChannels
+        f.write(struct.pack("<9i", PCAE_MAGIC, PCAE_VERSION, nCh, data2use, nComp,
+                            int(recShift), int(centered), int(method), nin))
         f.write(means.tobytes())                          # nCh x data2use
         f.write(evec.tobytes())                           # nCh x (nComp x data2use), col-major per ch
     return path
@@ -307,7 +358,9 @@ def main():
     if a.info:
         b = read_pcad(a.info)
         print(f"[pca] {a.info}: nCh={b['nCh']} data2use={b['data2use']} nComp={b['nComp']} "
-              f"centered={b['centered']} recShift={b['recShift']}  "
+              f"centered={b['centered']} recShift={b['recShift']} "
+              f"method={Method(b['method']).name}({method_tag(b['method'])}) "
+              f"nInputChannels={b['nInputChannels']}  "
               f"(evec per-ch orthonormal: {np.allclose(b['evec'][0] @ b['evec'][0].T, np.eye(b['nComp']), atol=1e-6)})")
         return
 
@@ -320,9 +373,16 @@ def main():
     win = extract_windows(spk[:], rec_shift, data2use)
     means, evec = fit_basis(win, nComp=a.ncomp, centered=a.centered)
     out = a.out or nio.session_path(base, "pcaD" if a.stderiv else "pca", elec)
-    write_pcad(out, means, evec, rec_shift, centered=int(a.centered))
+    # Tag the transform.  This fit runs on .spkD (already stderiv-transformed by the
+    # extractor) without dropping a channel, so nInputChannels == nch (no drop).  The
+    # spatial order defaults to the canonical ALLPAIRS; a basis built from a .spkD made
+    # with a different order should carry the matching StderivLaplacian/First instead
+    # (follow-up: read sdiffOrder from the session YAML, as the klusters nudge path does).
+    method = Method.STDERIV_ALLPAIRS if a.stderiv else Method.STANDARD
+    write_pcad(out, means, evec, rec_shift, centered=int(a.centered),
+               method=method, n_input_channels=nch)
     print(f"[pca] fit {len(win)} spikes, {means.shape[0]}ch x {a.ncomp} comp, data2use={data2use}, "
-          f"recShift={rec_shift} -> wrote {out}")
+          f"recShift={rec_shift} method={method.name} -> wrote {out}")
 
 
 if __name__ == "__main__":
