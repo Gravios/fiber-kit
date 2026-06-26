@@ -68,6 +68,19 @@ def has_temporal_diff(m):
     return Method(m) in (Method.STDERIV_FIRST, Method.STDERIV_LAPLACIAN,
                          Method.STDERIV_ALLPAIRS)
 
+
+def spatial_order(m):
+    """Spatial-derivative order a method applies (0=none, 1=first, 2=laplacian,
+    3=allpairs).  Mirrors neurosuite::core::spatialOrder."""
+    m = Method(m)
+    if m in (Method.SDIFF_FIRST, Method.STDERIV_FIRST):
+        return 1
+    if m in (Method.SDIFF_LAPLACIAN, Method.STDERIV_LAPLACIAN):
+        return 2
+    if m in (Method.SDIFF_ALLPAIRS, Method.STDERIV_ALLPAIRS):
+        return 3
+    return 0
+
 def read_pcad(path):
     """Read a neurosuite-3 PCAE .pca/.pcaD basis.
 

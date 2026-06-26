@@ -1,0 +1,21 @@
+# pca_method_vectors.tsv — canonical PCAE transform-method conformance vectors.
+# ONE table, run by every language mirror so the cross-repo Method enum cannot
+# drift (a reordered value silently reinterprets every basis):
+#   C++    : pca_method_conformance_test.cpp   (neurosuite/core/pca_projection.hpp)
+#   Python : test_pca_method_conformance.py    (fiber_kit/fiber_pca.py — fiber-kit repo,
+#            shipping an identical copy of this file)
+#
+# Tab-separated.  Column 1 is the case kind; remaining columns depend on kind.
+#
+#   format  <magic_hex>  <version>
+#   method  <value>  <name>  <spatial_order>  <has_temporal>  <tag>
+#     spatial_order: 0=None 1=First 2=Laplacian 3=AllPairs   has_temporal: 0/1
+#     tag: chain-of-custody method tag (standard | sdiff | stderiv)
+format	0x50434145	2
+method	0	Standard	0	0	standard
+method	1	SdiffFirst	1	0	sdiff
+method	2	SdiffLaplacian	2	0	sdiff
+method	3	SdiffAllPairs	3	0	sdiff
+method	4	StderivFirst	1	1	stderiv
+method	5	StderivLaplacian	2	1	stderiv
+method	6	StderivAllPairs	3	1	stderiv
