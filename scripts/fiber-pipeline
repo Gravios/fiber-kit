@@ -222,6 +222,13 @@ REFINE_CHUNK_JOBS="${FK_REFINE_CHUNK_JOBS:-1}"           # parallel worker proce
 LINK_POS_THR="${FK_LINK_POS_THR:-1.5}"                    # fiber-link position gate
 LINK_OFF_THR="${FK_LINK_OFF_THR:-1.0}"                    # fiber-link inter-channel offset gate
 LINK_MAX_GAP="${FK_LINK_MAX_GAP:-2}"                      # fiber-link max chunk gap to bridge
+# Cross-chunk under-link recovery (sub-sample realign + primary-channel-intersection cosine + energy-tangent
+# guard).  OFF by default so an unedited config reproduces current link behaviour; the recommended operating
+# point is align-lag 6, primary-amp-frac 0.30, and (once fiber-cpos emits per-fragment tangents) tan-thr 0.5.
+LINK_ALIGN_LAG="${FK_LINK_ALIGN_LAG:-0}"                  # sub-sample re-registration half-window (0=off; 6 recommended)
+LINK_ALIGN_UPSAMPLE="${FK_LINK_ALIGN_UPSAMPLE:-4}"        # cubic-spline upsample factor for the align-lag search
+LINK_PRIMARY_AMP_FRAC="${FK_LINK_PRIMARY_AMP_FRAC:-0}"    # cosine over shared primary channels (0=off; 0.30 recommended)
+LINK_TAN_THR="${FK_LINK_TAN_THR:-}"                       # energy-tangent (microfiber) co-gate (empty=off; 0.5 recommended)
 
 # 0023 fiber-link variance-bounded bundling (anti-chaining over-merge guard).  bundle=varbound seeds
 # agglomeration from the highest-energy fragments and refuses a union that would spread a bundle's
@@ -377,6 +384,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
     local warp_args=()
     [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
     [ -n "$LINK_CFIBER_Q" ] && warp_args+=(--cfiber-q "$LINK_CFIBER_Q")
+    [ -n "$LINK_TAN_THR" ] && warp_args+=(--tan-thr "$LINK_TAN_THR")
     local bundle_args=()
     if [ -n "$LINK_BUNDLE" ] && [ "$LINK_BUNDLE" != chunkexcl ]; then
         bundle_args+=(--bundle "$LINK_BUNDLE" --var-scale "$LINK_VAR_SCALE" --n-pc "$LINK_N_PC")
@@ -388,6 +396,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --from-units "$units" \
         --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
         --amp-gate "$LINK_AMP_GATE" \
+        --align-lag "$LINK_ALIGN_LAG" --align-upsample "$LINK_ALIGN_UPSAMPLE" --primary-amp-frac "$LINK_PRIMARY_AMP_FRAC" \
         --refine-trajectory \
         "${warp_args[@]}" "${bundle_args[@]}" \
         --out-stage "${STEP_OUT:-refine_linked}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"

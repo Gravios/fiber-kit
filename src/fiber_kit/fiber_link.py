@@ -42,6 +42,11 @@ try:
 except ImportError:
     from fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
 
+try:                                                  # sub-sample template re-registration (shared with intrachunk)
+    from .fiber_intrachunk import _register as _register_lag
+except ImportError:
+    from fiber_intrachunk import _register as _register_lag
+
 # cfiber shape co-gate: affine-invariant (rotation+scale+translation) Fourier descriptors of each
 # unit template's complex channel-loop.  Drift-invariant by construction (no mutual_center needed),
 # so it complements the cosine gate where amplitude reweighting across chunks hurts cosine.  Used as
@@ -79,6 +84,29 @@ def masked_cos(ta, tb, mask):
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
 
 
+def _primary_mask(ta, tb, smask, frac):
+    """Channels BOTH templates treat as primary (peak-to-peak >= frac * the template's own
+    max p2p) within the sample window `smask` -- the shared signal core.  Restricting the
+    cosine to it drops the near-threshold channels that carry mostly noise and decorrelate a
+    true same-neuron cross-chunk pair (on a g5 octrode, median 5 of 8 channels are shared)."""
+    p1 = ta[smask].max(0) - ta[smask].min(0); p2 = tb[smask].max(0) - tb[smask].min(0)
+    return (p1 >= frac * (p1.max() + 1e-9)) & (p2 >= frac * (p2.max() + 1e-9))
+
+
+def _cos2d(ta, tb, smask, cmask):
+    """Cosine over the intersection of a sample window (smask) and a channel set (cmask)."""
+    a = ta[smask][:, cmask].ravel(); b = tb[smask][:, cmask].ravel()
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+
+def _tan_cos(ta, tb):
+    """Cosine of two energy-direction tangents (high-energy minus low-energy template, flattened)
+    -- the microfiber criterion: a true same-neuron pair shares the DIRECTION its waveform moves
+    with amplitude, an independent confirmation beyond the static mean shape."""
+    a = np.asarray(ta, float).ravel(); b = np.asarray(tb, float).ravel()
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+
 def _offset_rms(o1, o2):
     m = ~np.isnan(o1) & ~np.isnan(o2)
     return float(np.sqrt(np.nanmean((o1[m] - o2[m]) ** 2))) if m.sum() >= 2 else np.inf
@@ -109,6 +137,7 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
                   cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
+                  align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                   frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
@@ -150,9 +179,19 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
             for u in range(len(bi)):
                 dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
                 if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
-                    if masked_cos(tc[ai[v]], tc[bi[u]], mask) >= cos_thr and \
+                    Ti = tc[ai[v]]; Tj = tc[bi[u]]
+                    if align_lag > 0:                                      # sub-sample re-registration:
+                        Tj = _register_lag(Ti, Tj, align_lag, align_upsample)[0]   # recover a same-neuron pair
+                    cmask = (_primary_mask(Ti, Tj, mask, primary_amp_frac)         # whose chunk medians sit a
+                             if primary_amp_frac > 0 else None)                    # fraction of a sample apart
+                    if cmask is not None and int(cmask.sum()) >= 2:               # (the residual integer
+                        shape_cos = _cos2d(Ti, Tj, mask, cmask)                   # mutual_center leaves)
+                    else:
+                        shape_cos = masked_cos(Ti, Tj, mask)                      # full-template fallback
+                    if shape_cos >= cos_thr and \
                             (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
+                            (tan_thr is None or tangents is None or _tan_cos(tangents[ai[v]], tangents[bi[u]]) >= tan_thr) and \
                             (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr) and \
                             (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr) and \
                             _ov_ok(ai[v], bi[u]):
@@ -339,6 +378,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                  max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
+                 align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
                  bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
@@ -394,6 +434,9 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                             chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
                             off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
                             cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate,
+                            align_lag=align_lag, align_upsample=align_upsample,
+                            primary_amp_frac=primary_amp_frac, tan_thr=tan_thr,
+                            tangents=(tangents[idx] if tangents is not None else None),
                             frag_times=ft_sub, ov_refrac=ov_refrac, ov_thr=ov_thr,
                             ov_min_exp=ov_min_exp, ov_censor=ov_censor)
     else:
@@ -502,6 +545,23 @@ def main():
                          "cosine/cfiber co-gates are amplitude-invariant and cannot catch it, and logA is "
                          "otherwise only one standardized term in the pos_thr fingerprint. This is an absolute, "
                          "un-pooled cap.")
+    ap.add_argument("--align-lag", type=int, default=0,
+                    help="sub-sample template re-registration half-window (native samples; 0 = off) applied before "
+                         "the cosine gate. The integer mutual_center leaves a fractional-sample residual that drops "
+                         "a true same-neuron cross-chunk cosine under threshold; re-registering recovers it (g5: "
+                         "+25% of admitted links). Mirrors fiber-intrachunk's --align-lag.")
+    ap.add_argument("--align-upsample", type=int, default=1,
+                    help="cubic-spline upsampling factor for the --align-lag search (1 = native-rate).")
+    ap.add_argument("--primary-amp-frac", type=float, default=0.0,
+                    help="restrict the cosine gate to the channels BOTH fragments treat as primary (peak-to-peak "
+                         ">= this fraction of the template's own max; 0 = off, full template). On an octrode the "
+                         "near-threshold channels carry mostly noise and decorrelate true same-neuron pairs; the "
+                         "intersection (g5 median 5 of 8 channels) lifts those links over threshold. ~0.3.")
+    ap.add_argument("--tan-thr", type=float, default=None,
+                    help="energy-tangent (microfiber) co-gate: require the cosine of the two fragments' energy-"
+                         "direction tangents (high-energy minus low-energy template) >= this. A precision guard on "
+                         "the recall lifted by --primary-amp-frac; needs a per-fragment 'tangent' array in the "
+                         "cpos/units table (emitted by fiber-cpos/-intrachunk). None = off. ~0.5.")
     ap.add_argument("--linkage", choices=["cogated", "spectral"], default="cogated",
                     help="merge method: 'cogated' (default; per-pair mutual-NN position + offset + "
                          "cosine veto stack) or 'spectral' (global graph_link affinity + normalized-"
@@ -604,10 +664,12 @@ def main():
                  if "drift_um" in z.files else None)
         ft = ([np.sort(np.concatenate([times_by_id.get(int(c), _EMPTY) for c in m])) if len(m) else _EMPTY
                for m in z["members"]] if times_by_id is not None else None)
+        tangents = z["tangent"] if "tangent" in z.files else None
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
                          gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
+                         align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
                          frag_times=ft, **ov_kw, **bundle_kw)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
@@ -619,10 +681,12 @@ def main():
             raise SystemExit(f"[link] {tbl} has no 't_mid' -- re-run fiber-cpos to stamp time")
         frag = {k: z[k] for k in z.files if k != "cols"}
         ft = ([times_by_id.get(int(c), _EMPTY) for c in frag["clu"]] if times_by_id is not None else None)
+        tangents = frag.get("tangent")
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
                          gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
+                         align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
                          frag_times=ft, **ov_kw, **bundle_kw)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)

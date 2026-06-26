@@ -86,6 +86,9 @@ CATALOG = {
         _p("off-thr", "float", 1.0, "inter-channel offset gate, samples (0.8-1.2)"),
         _p("max-gap", "int", 2, "max chunk gap to bridge (1-4)"),
         _p("amp-gate", "float", 1.39, "log-amplitude gate, nat-log; ln4=1.39 -> 4x (0=off)"),
+        _p("align-lag", "int", 0, "sub-sample re-registration half-window, samples (0=off; 6 recommended)"),
+        _p("primary-amp-frac", "float", 0.0, "cosine over shared primary channels (0=off; ~0.30 recovers links)"),
+        _p("tan-thr", "str", "", "energy-tangent co-gate (empty=off; ~0.5, needs cpos tangents)"),
         _p("cfiber-q", "float", 0.90, "cfiber co-gate quantile (0.85-0.95; empty=off)"),
         _p("warp-thr", "str", "", "warp co-gate (empty=off)")]),
     "fiber-refit": dict(input=True, tags=["in", "out", "cpos"], params=[      # post-curation; not in `all`
