@@ -31,7 +31,7 @@ the .clp layout matches the loader (clp[c-1] = fiber of child c) and the nesting
 invariant clu == parent_of(clc) holds with no separate purity check.
 
 By default only .clc and .clp are written (the input .clu is left untouched); pass
---write-clu, or a differing --out-tag, to (re)emit the derived .clu as well.
+--write-clu, or a differing --out-stage, to (re)emit the derived .clu as well.
 """
 import argparse
 import os
@@ -83,24 +83,24 @@ def main():
     ap.add_argument("base", help="session base path (no extension)")
     ap.add_argument("group", help="electrode group id")
     ap.add_argument("--variant", default="stderiv", help="feature space (default stderiv)")
-    ap.add_argument("--in-tag", default="refine_linked",
-                    help="stage tag of the input .clu (default refine_linked)")
-    ap.add_argument("--out-tag", default=None,
-                    help="stage tag for the output triple (default: same as --in-tag)")
+    ap.add_argument("--stage", default="refine_linked",
+                    help="pipeline stage of the input .clu (default refine_linked)")
+    ap.add_argument("--out-stage", default=None,
+                    help="pipeline stage for the output triple (default: same as --stage)")
     ap.add_argument("--atoms", default=None,
-                    help="stage tag of a FINER per-spike .clu to use as the atom (.clc) layer; "
+                    help="stage of a FINER per-spike .clu to use as the atom (.clc) layer; "
                          "omit for the identity lift (each fiber = one microfiber)")
     ap.add_argument("--write-clu", action="store_true",
                     help="also (re-)write the derived .clu; by default only .clc/.clp are written "
-                         "(the input .clu is left untouched unless --out-tag differs)")
+                         "(the input .clu is left untouched unless --out-stage differs)")
     ap.add_argument("--no-renumber", action="store_true",
                     help="keep original fiber ids (leave gaps) instead of compacting to consecutive")
     ap.add_argument("--no-backup", action="store_true", help="do not write .bak copies of overwritten files")
     ap.add_argument("--dry-run", action="store_true", help="report only; write nothing")
     a = ap.parse_args()
 
-    out_tag = a.out_tag if a.out_tag is not None else a.in_tag
-    clu_path = nio.session_path(a.base, "clu", a.group, variant=a.variant, tag=a.in_tag)
+    out_stage = a.out_stage if a.out_stage is not None else a.stage
+    clu_path = nio.session_path(a.base, "clu", a.group, variant=a.variant, tag=a.stage)
     _, clu = nio.read_clu_file(clu_path)
     print(f"  read {os.path.basename(clu_path)}  ({clu.size:,} spikes, "
           f"{np.unique(clu[clu > 1]).size} fibers)")
@@ -120,9 +120,9 @@ def main():
     h = FiberHierarchy(child, parent)
     clu_out, clc_out, clp_out = h.refiberize(renumber=not a.no_renumber)
 
-    out = {k: nio.session_path(a.base, k, a.group, variant=a.variant, tag=out_tag)
+    out = {k: nio.session_path(a.base, k, a.group, variant=a.variant, tag=out_stage)
            for k in ("clu", "clc", "clp")}
-    write_clu = a.write_clu or (out_tag != a.in_tag)
+    write_clu = a.write_clu or (out_stage != a.stage)
     targets = [("clc", clc_out), ("clp", clp_out)] + ([("clu", clu_out)] if write_clu else [])
     nfib = np.unique(clu_out[clu_out > 1]).size
     print(f"  -> {nfib} fibers over {len(parent)} children ({child.size:,} spikes)")
