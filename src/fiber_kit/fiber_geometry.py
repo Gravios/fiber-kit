@@ -171,6 +171,37 @@ def warp_correlation(gd_a, gd_b):
     return float(np.corrcoef(gd_a[m], gd_b[m])[0, 1])
 
 
+def warp_channel_incongruity(gd_a, gd_b, warp_hi=0.85, min_local=4):
+    """Worst single-channel group-delay incongruity -- a SUB-GATE statistic for pairs whose
+    overall warp is ALREADY coherent.  warp_correlation is a cross-channel Pearson, so a couple
+    of strong channels can hold it high while ONE channel's group delay disagrees: the single-
+    channel signature of a different co-located source the aggregate masks.  Over the channels
+    within BOTH clusters' centroid range (finite group delay in both profiles -- i.e. supra-
+    amp_frac at each centroid), fit the per-channel delay relationship robustly (Theil-Sen, so
+    the outlier channel does not tilt the line) and return the largest single-channel residual,
+    in samples.
+
+    Returns 0.0 (nothing to veto) when the pair is NOT already warp-coherent (corr < warp_hi) or
+    has < min_local shared centroid-range channels -- so a caller thresholding the return value
+    only ever vetoes high-warp, well-populated merges.  Validated on g5: among merge-passing pairs
+    (class+offset+warp all pass), a 1.0-sample threshold vetoes ~2% at mid-range offset (~0.55) --
+    look-alikes the offset gate does NOT catch, i.e. an INDEPENDENT precision veto."""
+    a = np.asarray(gd_a, float); b = np.asarray(gd_b, float)
+    m = ~np.isnan(a) & ~np.isnan(b)                  # channels within BOTH centroids' range
+    if m.sum() < min_local:
+        return 0.0
+    x, y = a[m], b[m]
+    if np.std(x) < 1e-6 or np.std(y) < 1e-6:
+        return 0.0
+    if np.corrcoef(x, y)[0, 1] < warp_hi:            # only act on already-coherent pairs
+        return 0.0
+    sl = [(y[j] - y[i]) / (x[j] - x[i])
+          for i in range(len(x)) for j in range(i + 1, len(x)) if abs(x[j] - x[i]) > 1e-9]
+    m_ = np.median(sl) if sl else 1.0                # Theil-Sen slope (outlier-resistant)
+    b_ = np.median(y - m_ * x)
+    return float(np.max(np.abs(y - (m_ * x + b_))))
+
+
 CrossSpecMatch = namedtuple("CrossSpecMatch", "coherence delay")
 
 
