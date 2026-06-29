@@ -866,14 +866,6 @@ def main():
     ap.add_argument("--iter", "--iters", type=int, default=1, dest="n_iter",
                     help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
-    ap.add_argument("--warp-thr", type=float, default=None,
-                    help="group-delay (spatio-temporal WARP) coherence gate, per Omlor-Giese anechoic mixing: require the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this for a merge. Same-neuron warps are coherent across channels, different co-located cells anti-correlate (g5: same ~+0.5 small / ~+0.93 well-populated, 294-vs-295 -0.52). The group-delay estimate is NOISY at low spike count, so use a LOW threshold (~0.3) to avoid vetoing small same-cell merges; the separation is much cleaner on well-populated clusters. Use WITH a relaxed --cos-thr to recover the last few merges. None (default) = off; calibrate on curated merges.")
-    ap.add_argument("--warp-resid-thr", type=float, default=None,
-                    help="single-channel warp-incongruity SUB-GATE (layers on the warp gate): among pairs whose overall group-delay (warp) correlation is already coherent (>=0.85), veto the merge if any ONE channel within BOTH clusters' centroid range has a group-delay residual (from the robust Theil-Sen per-channel delay line) > this many samples. warp_correlation is a cross-channel Pearson, so a couple of strong channels can hold it high while one channel betrays a different co-located source; this catches that. g5: ~1.0 vetoes ~2%% of merge-passing pairs at mid-range offset (~0.55), independent of the offset gate. None (default) = off; calibrate on curated merges.")
-    ap.add_argument("--off-thr-int", type=float, default=None,
-                    help="DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have very stable templates -> offset RMS ~0.23 vs ~0.72 pyramidal, so off_thr=1.0 is INERT for them; tighten to ~0.5 to make the offset gate discriminate them. Needs raw .spk for cell-typing. None=off (fall back to --off-thr).")
-    ap.add_argument("--off-thr-pyr", type=float, default=None,
-                    help="DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak). The gate already discriminates these at ~1.0 (median 0.72). Set both --off-thr-int and --off-thr-pyr to enable the dual gate; mixed-type pairs use the stricter of the two. None=off.")
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
