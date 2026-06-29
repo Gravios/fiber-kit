@@ -202,6 +202,23 @@ def warp_channel_incongruity(gd_a, gd_b, warp_hi=0.85, min_local=4):
     return float(np.max(np.abs(y - (m_ * x + b_))))
 
 
+def classify_celltype(raw_template, sr=32552.0, width_thr=0.40):
+    """Putative cell type from a RAW mean template's dominant channel: 'pyr' if the
+    trough-to-peak width >= width_thr ms, else 'int'.  Width is the clean axis on g5
+    (~0.28 ms narrow interneuron vs ~0.61 ms wide pyramidal, bimodal at ~0.4) and agrees
+    86%% with a rate-vs-trough-asymmetry GMM.  Best on RAW templates (the spike shape),
+    NOT stderiv.  Drives the cell-type-aware (dual) offset gate: interneurons fire fast so
+    their mean templates -- and inter-channel offsets -- are very stable (offset RMS ~0.23
+    vs ~0.72 pyramidal), leaving off_thr=1.0 INERT for them; a tighter off_thr (~0.5) makes
+    the gate discriminate fast cells, while pyramidal cells keep ~1.0 where it already works."""
+    T = np.asarray(raw_template, float)
+    dom = int(np.argmax(T.max(0) - T.min(0)))
+    wf = T[:, dom] - np.median(T[:, dom])
+    tr = int(np.argmin(wf))
+    pk = tr + int(np.argmax(wf[tr:])) if tr < len(wf) - 1 else tr
+    return "pyr" if (pk - tr) / sr * 1000.0 >= width_thr else "int"
+
+
 CrossSpecMatch = namedtuple("CrossSpecMatch", "coherence delay")
 
 

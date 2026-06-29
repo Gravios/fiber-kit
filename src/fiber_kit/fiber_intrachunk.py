@@ -137,7 +137,7 @@ def kernel_twosample(Xp, Xq, kind="kcov"):
 def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_MIN_N,
                      reserve=(0, 1), sigma=fg.DEFAULT_SMOOTH_SIGMA,
                      feats=None, feat_dim=12, feat_n=80, feat_seed=0, realign_lohi=None,
-                     peak=None, sig_cap=_SIG_CAP_DEFAULT, cfiber_null="order"):
+                     peak=None, sig_cap=_SIG_CAP_DEFAULT, cfiber_null="order", celltype=None):
     """Per-cluster stderiv signature for matching.
 
     spkD     : (nspk, nsamp, nchan) int16 stderiv waveforms (array or memmap).
@@ -213,6 +213,8 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
                z0=np.array(Z), A=np.array(A), chunk=np.array(CH, int),
                t_mid=np.array(TM), n=np.array(NS, int), var=np.array(VAR, float),
                times=np.array(TIMES, dtype=object))
+    if celltype is not None:                 # dual-gate cell type per surviving fragment (0=pyr,1=int)
+        out["celltype"] = np.array([int(celltype.get(int(c), 0)) for c in ids], int)
     if Vt is not None:
         out["feat"] = np.array(FT, dtype=object)
     if feats == "cfiber":
@@ -277,7 +279,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
                      cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None,
-                     warp_resid_thr=None,
+                     warp_resid_thr=None, off_thr_int=None, off_thr_pyr=None,
                      align_lag=0, align_upsample=1, amp_gate=0.0):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
@@ -301,6 +303,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
     GD = [fg.group_delay_profile(sig["template"][k]) for k in range(len(sig["ids"]))] if (warp_thr is not None or warp_resid_thr is not None) else None
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
+    CTtype = sig.get("celltype")                         # dual-gate cell type (0=pyr,1=int) or None
     logA = np.log(np.clip(sig["A"], 1, None))           # absolute log-amplitude gate (energy distance)
     use_kernel = gate in ("mmd", "kcov")
     use_cfiber = gate == "cfiber"
@@ -360,8 +363,14 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                 if warp_resid_thr is not None and fg.warp_channel_incongruity(GD[i], GD[j]) > warp_resid_thr:
                     continue          # single-channel warp-incongruity sub-gate: a high-warp pair with one
                                       # incongruous centroid-range channel is a different co-located source
+                base_ot = off_thr
+                if CTtype is not None and (off_thr_int is not None or off_thr_pyr is not None):
+                    ti, tj = int(CTtype[i]), int(CTtype[j])  # cell-type-aware (dual) offset gate
+                    oi = off_thr_int if off_thr_int is not None else off_thr
+                    op = off_thr_pyr if off_thr_pyr is not None else off_thr
+                    base_ot = oi if (ti == 1 and tj == 1) else op if (ti == 0 and tj == 0) else min(oi, op)
                 o = _offset_rms(off[i], off[j])
-                ot = off_thr if (Ncnt is None or off_n_ref is None) else _off_thr_eff(off_thr, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
+                ot = base_ot if (Ncnt is None or off_n_ref is None) else _off_thr_eff(base_ot, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
                 if o <= ot:
                     if (refrac_ceiling is not None and TIMESarr is not None and
                             _isi_viol_union(TIMESarr[i], TIMESarr[j]) > refrac_ceiling):
@@ -861,6 +870,10 @@ def main():
                     help="group-delay (spatio-temporal WARP) coherence gate, per Omlor-Giese anechoic mixing: require the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this for a merge. Same-neuron warps are coherent across channels, different co-located cells anti-correlate (g5: same ~+0.5 small / ~+0.93 well-populated, 294-vs-295 -0.52). The group-delay estimate is NOISY at low spike count, so use a LOW threshold (~0.3) to avoid vetoing small same-cell merges; the separation is much cleaner on well-populated clusters. Use WITH a relaxed --cos-thr to recover the last few merges. None (default) = off; calibrate on curated merges.")
     ap.add_argument("--warp-resid-thr", type=float, default=None,
                     help="single-channel warp-incongruity SUB-GATE (layers on the warp gate): among pairs whose overall group-delay (warp) correlation is already coherent (>=0.85), veto the merge if any ONE channel within BOTH clusters' centroid range has a group-delay residual (from the robust Theil-Sen per-channel delay line) > this many samples. warp_correlation is a cross-channel Pearson, so a couple of strong channels can hold it high while one channel betrays a different co-located source; this catches that. g5: ~1.0 vetoes ~2%% of merge-passing pairs at mid-range offset (~0.55), independent of the offset gate. None (default) = off; calibrate on curated merges.")
+    ap.add_argument("--off-thr-int", type=float, default=None,
+                    help="DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have very stable templates -> offset RMS ~0.23 vs ~0.72 pyramidal, so off_thr=1.0 is INERT for them; tighten to ~0.5 to make the offset gate discriminate them. Needs raw .spk for cell-typing. None=off (fall back to --off-thr).")
+    ap.add_argument("--off-thr-pyr", type=float, default=None,
+                    help="DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak). The gate already discriminates these at ~1.0 (median 0.72). Set both --off-thr-int and --off-thr-pyr to enable the dual gate; mixed-type pairs use the stricter of the two. None=off.")
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
@@ -923,8 +936,21 @@ def main():
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
+    celltype = None
+    if a.off_thr_int is not None or a.off_thr_pyr is not None:   # dual gate: classify fragments from RAW templates
+        raw_spk, _ = nio.open_spk(base, elec, nsamp, nch, prefer=["standard"])
+        _src = src.astype(np.int64); _rng = np.random.default_rng(0); celltype = {}
+        for _c in np.unique(_src):
+            if _c <= 1: continue
+            _ci = np.flatnonzero(_src == _c)
+            if len(_ci) < a.min_n: continue
+            if len(_ci) > 2000: _ci = _rng.choice(_ci, 2000, replace=False)
+            _rt = np.asarray(raw_spk[np.sort(_ci)], float).mean(0)
+            celltype[int(_c)] = 1 if fg.classify_celltype(_rt, sr) == "int" else 0
+        _log(f"dual gate: cell-typed {len(celltype)} fragments "
+             f"({sum(v==1 for v in celltype.values())} int / {sum(v==0 for v in celltype.values())} pyr)")
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
-                           chunk_min=a.chunk_minutes, min_n=a.min_n,
+                           chunk_min=a.chunk_minutes, min_n=a.min_n, celltype=celltype,
                            feats=feats, peak=cfg.peak, sig_cap=a.sig_cap,
                            realign_lohi=(_m.realign_lo, _m.realign_hi), cfiber_null=a.cfiber_null)
     cfiber_win = _cfiber_win(nsamp, cfg.peak); cfiber_thr = a.cfiber_thr
@@ -957,6 +983,7 @@ def main():
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
                                  refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr, warp_resid_thr=a.warp_resid_thr,
+                                 off_thr_int=a.off_thr_int, off_thr_pyr=a.off_thr_pyr,
                                  align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)
     if pre is not None:
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
