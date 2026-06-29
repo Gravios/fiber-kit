@@ -635,6 +635,11 @@ def main():
     out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}_linked" if clu_stage else "linked")
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
+    try:                                  # consume the .clu/.clc/.clp triple if the source sort emitted one
+        from .fiber_refiberize import FiberHierarchy
+        hier = FiberHierarchy.load(base, elec, variant=clu_method, tag=clu_stage)
+    except Exception:
+        hier = None                       # flat .clu source (legacy) -> output stays flat
 
     # overlap-refractory gate (default off): build per-source-id spike trains from .res once
     ov_refrac = None; ov_censor = 0; times_by_id = None
@@ -690,7 +695,17 @@ def main():
                          frag_times=ft, **ov_kw, **bundle_kw)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-    nio.write_clu_file(out_path, newids, n_clusters=ncl)
+    if hier is not None:                  # PRESERVE atoms (.clc); re-parent atom -> linked bundle; emit the triple
+        from .fiber_refiberize import FiberHierarchy
+        ch = hier.child                   # each atom is a subset of one bundle, so all its spikes share an id
+        newpar = {}
+        for aid in np.unique(ch[ch > 0]):
+            sp = int(np.flatnonzero(ch == aid)[0]); newpar[int(aid)] = int(newids[sp])
+        FiberHierarchy(ch, newpar).save(base, elec, variant=clu_method, tag=out_stage, backup=False)
+        _log(f"linked hierarchy: {len(newpar)} atoms -> "
+             f"{len(set(newpar.values()))} bundles (.clu/.clc/.clp)")
+    else:
+        nio.write_clu_file(out_path, newids, n_clusters=ncl)
 
     multi = [b for b in R["bundles"] if len(set(R["chunk"][b])) >= 2]
     Dv = list(R["D"].values())
