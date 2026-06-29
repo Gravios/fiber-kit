@@ -17,6 +17,7 @@ except ImportError:                                   # py<3.9 fallback (require
     from importlib_resources import files             # type: ignore
 
 TEMPLATE = "fiber-kit.yaml"
+EXP_TEMPLATE = "fiber-kit-exp.yaml"
 
 
 def main(argv=None):
@@ -27,19 +28,23 @@ def main(argv=None):
                     help="destination path (default: ./fiber-kit.yaml)")
     ap.add_argument("-f", "--force", action="store_true",
                     help="overwrite the destination if it already exists")
+    ap.add_argument("--exp", action="store_true",
+                    help="copy the EXPERIMENTAL template (fiber-kit-exp.yaml: the newest gates "
+                         "turned on) to ./fiber-kit.yaml instead of the production default")
     a = ap.parse_args(argv)
+    src_name = EXP_TEMPLATE if a.exp else TEMPLATE
 
     dst = Path(a.output)
     if dst.exists() and not a.force:
         sys.stderr.write(f"fiber-kit-init: {dst} already exists (use --force to overwrite)\n")
         return 1
     try:
-        text = (files("fiber_kit") / TEMPLATE).read_text(encoding="utf-8")
+        text = (files("fiber_kit") / src_name).read_text(encoding="utf-8")
     except (FileNotFoundError, ModuleNotFoundError, OSError) as e:
-        sys.stderr.write(f"fiber-kit-init: packaged template not found: {e}\n")
+        sys.stderr.write(f"fiber-kit-init: packaged template {src_name} not found: {e}\n")
         return 2
     dst.write_text(text, encoding="utf-8")
-    print(f"fiber-kit-init: wrote {dst} ({len(text.splitlines())} lines). "
+    print(f"fiber-kit-init: wrote {dst} from {src_name} ({len(text.splitlines())} lines). "
           f"Edit it, then run fiber-pipeline from this directory.")
     return 0
 
