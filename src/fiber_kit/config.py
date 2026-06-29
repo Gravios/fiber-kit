@@ -153,6 +153,20 @@ class IntrachunkConfig(StageConfig):
     cfiber_thr_floor: float = knob(0.0, "absolute floor on the self-calibrated cfiber threshold (0=off)",
                                    env="FK_CFIBER_THR_FLOOR")
     sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int, recommended=8000)
+    warp_thr: float = knob(None, "group-delay WARP coherence gate (Omlor-Giese): merge only if the cross-channel "
+                           "correlation of the two fragments' per-channel group-delay profiles >= this. Same-neuron "
+                           "warps cohere; co-located different cells anti-correlate. Group-delay is noisy at low spike "
+                           "count -> use LOW (~0.3). empty=off.", env="FK_INTRA_WARP_THR")
+    warp_resid_thr: float = knob(None, "single-channel warp-incongruity SUB-GATE (layers on warp_thr): among already-"
+                                 "coherent pairs (corr>=0.85), veto if any ONE centroid-range channel's group-delay "
+                                 "residual (Theil-Sen line) > this many samples -- a strong-channel-masked different "
+                                 "source. g5 knee ~1.0. empty=off.", env="FK_INTRA_WARP_RESID_THR")
+    off_thr_int: float = knob(None, "DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-"
+                              "peak). Fast cells have stable offsets (~0.23) so off_thr=1.0 is inert; tighten to ~0.5. "
+                              "Needs raw .spk for cell-typing. empty=off (use off_thr).", env="FK_INTRA_OFF_THR_INT")
+    off_thr_pyr: float = knob(None, "DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak); "
+                              "~1.0. Set BOTH off_thr_int and off_thr_pyr to enable the dual gate; mixed pairs use the "
+                              "stricter. empty=off.", env="FK_INTRA_OFF_THR_PYR")
 
 
 class Plugin:
