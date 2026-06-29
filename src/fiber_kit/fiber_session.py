@@ -1177,6 +1177,10 @@ def main():
     ap.add_argument("--clu-stage", dest="clu_stage", default="",
                     help="post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] "
                          "(default none); e.g. --clu-stage session")
+    ap.add_argument("--emit-hierarchy", dest="emit_hierarchy", action=argparse.BooleanOptionalAction, default=True,
+                    help="emit the .clu/.clc/.clp microfiber triple (atoms = pre-link fine fragments, "
+                         "fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. "
+                         "--no-emit-hierarchy writes just the flat .clu (legacy). Ignored with --out.")
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
@@ -1335,20 +1339,37 @@ def main():
     log(f"{nglob:,} global fibers across {nchunks} chunks")
     det("linking", mode)
 
-    # ── .clu : core spikes -> global id (+1; 0=noise) ──
+    # ── .clu/.clc/.clp : the microfiber hierarchy triple ──
+    # ATOM (.clc) = the pre-link fine fragment (chunk, local label); FIBER (.clu) = the
+    # linked global id; child->parent map (.clp) = atom -> fiber.  The flat .clu is the
+    # derived per-spike fiber layer; .clc/.clp preserve the over-split atoms for curation.
     labels = np.full(nspk, -1, int)
+    child = np.zeros(nspk, np.int64)                      # per-spike atom id (.clc); 0 = noise
+    parent = {}; atom_of = {}; next_atom = 1              # (chunk,local)->atom ; atom->fiber
     for c in range(nchunks):
         if len(ext_idx[c]) == 0: continue
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
         emap = {int(g): int(l) for g, l in zip(ext_idx[c], ext_lab[c])}
         for g in np.flatnonzero((res >= lo_s) & (res < hi_s)):
             l = emap.get(int(g), -1)
-            if l >= 0: labels[g] = gid[(c, l)]
+            if l >= 0:
+                labels[g] = gid[(c, l)]
+                aid = atom_of.get((c, l))
+                if aid is None:
+                    aid = next_atom; next_atom += 1; atom_of[(c, l)] = aid
+                    parent[aid] = gid[(c, l)] + 1          # fiber id (+1; matches the .clu convention)
+                child[g] = aid
     clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
     if a.out:
         clu_out = a.out
         nio.write_clu_file(clu_out, clu)
-    else:                                                 # <base>.clu.<variant>.<elec>[.<stage>]
+    elif a.emit_hierarchy:                                # <base>.{clu,clc,clp}.<variant>.<elec>[.<stage>]
+        from .fiber_refiberize import FiberHierarchy
+        paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant=a.method,
+                                                   tag=a.clu_stage, backup=False)
+        clu_out = paths["clu"]
+        det("hierarchy", f"{len(parent)} atoms -> {len(set(parent.values()))} fibers (.clu/.clc/.clp)")
+    else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
 
     # ── .fibers.<method>.<elec> : per (chunk,fiber) geometry, tagged with gid ──
