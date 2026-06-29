@@ -258,6 +258,32 @@ STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-int
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}")
 
+# One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
+STAGE_SUMMARY=(
+    "initial over-clustering -> deliberately over-split clean fragments (.clu.stderiv + .spk)"
+    "Klusters-style per-spike realign, in-place commit (re-extract raw+stderiv from .fil)"
+    "per-chunk split + fold gates + merge-back -> .refine"
+    "footprint + refractory consolidation of the refine fragments (in-place relabel on .refine)"
+    "per-chunk positions/templates on the refine clu, from the raw/standard .spk"
+    "within-chunk precision merge (depth/shape/warp/offset/refractory) + emit .units.npz"
+    "cross-chunk link across drift (union-find bundles) -> .refine_linked"
+)
+CURATED_SUMMARY=(
+    "post-curation: rebuild the per-unit/per-chunk model from a curated .clu (no regrouping)"
+)
+
+list_stages() {   # -l/--list : short per-stage summary
+    local i
+    echo "fiber-kit pipeline stages (canonical order; 'all' runs these in sequence):"
+    for i in "${!STAGES[@]}"; do
+        printf '  %-18s %s\n' "${STAGES[$i]}" "${STAGE_SUMMARY[$i]}"
+    done
+    echo "post-curation (recognized + plannable, NOT part of 'all'):"
+    for i in "${!CURATED_STAGES[@]}"; do
+        printf '  %-18s %s\n' "${CURATED_STAGES[$i]}" "${CURATED_SUMMARY[$i]}"
+    done
+}
+
 # ----- modular step plumbing ------------------------------------------------
 # A plan STEP may set these to retarget a stage's input/output clu stage tags, so a stage can be
 # reordered or run more than once with different tags + params (see --plan / --emit-plan):
@@ -554,7 +580,7 @@ main() {
     # help/list/emit-plan need no config
     case "${1:-}" in
         -h|--help) usage; exit 0 ;;
-        -l|--list) printf '%s\n' "${STAGES[@]}"; exit 0 ;;
+        -l|--list) list_stages; exit 0 ;;
         --emit-plan) emit_plan; exit 0 ;;
     esac
 
