@@ -72,7 +72,7 @@ ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml"]
+fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml"]
 
 [tool.ruff]
 line-length = 110
