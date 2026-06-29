@@ -159,6 +159,10 @@ FK_MERGE_AMP_THR:        0.7      # 0.7 | 0.6-0.8.  Amplitude-profile correlatio
                                   #   second of the two Omlor-Giese terms; magnitude eq.10 + group-delay eq.11).
 FK_MERGE_WARP_THR:       ""       # "" = off.  Warp PRECISION gate on cosine-selected merges (reject a cosine merge whose
                                   #   group-delay disagrees).  Tighter precision at some recall cost; tune vs curation.
+FK_MERGE_WARP_RESID_THR: 1.0      # 1.0 | 0.75-1.5 ("" off).  Single-channel warp-incongruity SUB-gate on the warp
+                                  #   gate/recall: among coherent-overall pairs, veto if any ONE channel's group-delay
+                                  #   residual (Theil-Sen line) > this many samples (a strong-channel-masked source).
+                                  #   Self-gates at warp >= 0.85 (no-op below).
 # A/B contamination reclaim (--ab-reclaim).  OPT-IN, runs AFTER merge-back: move a host cluster's spikes into a
 # clean, DISTINCT donor when their realigned peak-window shape clearly prefers the donor (gated on the host
 # RESIDUAL staying distinct + the donor's refractory staying clean; reclaim-only, never spawns clusters).  Recovers

@@ -448,7 +448,7 @@ def _amp_profile_corr(ta, tb):
 
 
 def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
-               mode="normalized", warp_thr=None, warp_recall=None, amp_thr=0.7, verbose=True):
+               mode="normalized", warp_thr=None, warp_recall=None, warp_resid_thr=None, amp_thr=0.7, verbose=True):
     """Contamination-gated agglomerative merge of an over-split sort back down to
     a reasonable count.  Greedily merges the most-similar cluster pair (by median
     waveform: shape-only when mode='normalized' -> merges energy levels of one
@@ -464,14 +464,19 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
     groups = {c: np.flatnonzero(lab == c) for c in u}
     med = {c: _med(groups[c], waves) for c in u}
     gd = ({c: fg.group_delay_profile(med[c]) for c in u}
-          if (warp_thr is not None or warp_recall is not None) else None)
+          if (warp_thr is not None or warp_recall is not None or warp_resid_thr is not None) else None)
     def _warp_ok(a, b):   # spatio-temporal WARP coherence gate on the (clean) median templates
         return warp_thr is None or fg.warp_correlation(gd[a], gd[b]) >= warp_thr
+    def _warp_resid_ok(a, b):   # single-channel warp-incongruity SUB-gate (layers on the warp gate/recall):
+        # among coherent-overall pairs, reject when one channel's group-delay residual betrays a different
+        # co-located source; warp_channel_incongruity returns 0.0 when warp < 0.85, so it only acts on
+        # already-coherent pairs and is a no-op below that.
+        return warp_resid_thr is None or fg.warp_channel_incongruity(gd[a], gd[b]) <= warp_resid_thr
     def _admit(a, b, sim):
-        if sim >= min_sim and _warp_ok(a, b):
+        if sim >= min_sim and _warp_ok(a, b) and _warp_resid_ok(a, b):
             return True                      # cosine-selected merge (energy levels), warp-gated
         if (warp_recall is not None and fg.warp_correlation(gd[a], gd[b]) >= warp_recall
-                and _amp_profile_corr(med[a], med[b]) >= amp_thr):
+                and _amp_profile_corr(med[a], med[b]) >= amp_thr and _warp_resid_ok(a, b)):
             return True                      # DRIFT-FRAGMENT recall: low cosine but coherent warp + amplitude
         return False
     sizes = {c: len(groups[c]) for c in u}
@@ -753,7 +758,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            knn_dims=16, fold_thr=0.9, fold_off_thr=None, init_labels=None,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92, merge_warp_thr=None,
-           merge_warp_recall=None, merge_amp_thr=0.7,
+           merge_warp_recall=None, merge_warp_resid_thr=None, merge_amp_thr=0.7,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10, ab_sigcap=2000, ab_jobs=1,
@@ -831,7 +836,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
         if merge_back_enable:
             lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
                              min_sim=merge_min_sim, mode=merge_mode, warp_thr=merge_warp_thr,
-                             warp_recall=merge_warp_recall, amp_thr=merge_amp_thr, verbose=verbose)
+                             warp_recall=merge_warp_recall, warp_resid_thr=merge_warp_resid_thr,
+                             amp_thr=merge_amp_thr, verbose=verbose)
             st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
             stats.append(st)
             if snaps_out is not None:
@@ -1181,6 +1187,14 @@ def main():
                          "merges at >=0.976 precision). Refractory budget remains the final gate. None (default) = off; ~0.9.")
     ap.add_argument("--merge-amp-thr", type=float, default=0.7,
                     help="amplitude-profile correlation floor for the --merge-warp-recall path (Omlor-Giese magnitude term)")
+    ap.add_argument("--merge-warp-resid-thr", type=float, default=None,
+                    help="single-channel warp-incongruity SUB-gate layered on --merge-warp-thr / --merge-warp-recall: "
+                         "among pairs whose overall group-delay (warp) correlation is already coherent (>=0.85), veto "
+                         "the merge if any ONE channel's group-delay residual (robust Theil-Sen per-channel delay line) "
+                         "exceeds this many samples. warp_correlation is a cross-channel Pearson, so a couple of strong "
+                         "channels can hold it high while one channel betrays a different co-located source; this catches "
+                         "that (especially on the low-cosine warp-recall admits). g5: vetoes ~9%% of warp-coherent merge-"
+                         "admissible pairs at ~1.0. None (default) = off.")
     ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
                     help="normalized = merge energy levels (neuron count); amplitude = keep them")
     ap.add_argument("--split-min-corr", type=float, default=0.93,
@@ -1405,7 +1419,7 @@ def main():
                          fold_thr=a.fold_thr, fold_off_thr=a.fold_off_thr, conv_tol=(a.converge_tol if a.converge else 0.0),
                          conv_patience=a.converge_patience, reseed=a.reseed,
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget, merge_warp_thr=a.merge_warp_thr,
-                         merge_warp_recall=a.merge_warp_recall, merge_amp_thr=a.merge_amp_thr,
+                         merge_warp_recall=a.merge_warp_recall, merge_warp_resid_thr=a.merge_warp_resid_thr, merge_amp_thr=a.merge_amp_thr,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split,
                          ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
