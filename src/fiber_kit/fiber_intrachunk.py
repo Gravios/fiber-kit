@@ -277,6 +277,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      depth_gate=DEFAULT_DEPTH_GATE, gate="cosine", feat_q=0.90,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
                      cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None,
+                     warp_resid_thr=None,
                      align_lag=0, align_upsample=1, amp_gate=0.0):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
@@ -297,7 +298,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
            not collapsing fragments.  Left available and off by default for that experiment;
            do not enable for routine grouping.  Depth and offset gates apply in every mode."""
     T = sig["template"].reshape(len(sig["ids"]), -1)
-    GD = [fg.group_delay_profile(sig["template"][k]) for k in range(len(sig["ids"]))] if warp_thr is not None else None
+    GD = [fg.group_delay_profile(sig["template"][k]) for k in range(len(sig["ids"]))] if (warp_thr is not None or warp_resid_thr is not None) else None
     Tn = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-9)
     off, Y, chunk = sig["offset"], sig["y0"], sig["chunk"]
     logA = np.log(np.clip(sig["A"], 1, None))           # absolute log-amplitude gate (energy distance)
@@ -356,6 +357,9 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                     strength = ceff
                 if warp_thr is not None and fg.warp_correlation(GD[i], GD[j]) < warp_thr:
                     continue          # group-delay (warp) coherence gate: reject incoherent inter-channel timing
+                if warp_resid_thr is not None and fg.warp_channel_incongruity(GD[i], GD[j]) > warp_resid_thr:
+                    continue          # single-channel warp-incongruity sub-gate: a high-warp pair with one
+                                      # incongruous centroid-range channel is a different co-located source
                 o = _offset_rms(off[i], off[j])
                 ot = off_thr if (Ncnt is None or off_n_ref is None) else _off_thr_eff(off_thr, Ncnt[i], Ncnt[j], off_n_ref, off_ceil)
                 if o <= ot:
@@ -855,6 +859,8 @@ def main():
                          ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
     ap.add_argument("--warp-thr", type=float, default=None,
                     help="group-delay (spatio-temporal WARP) coherence gate, per Omlor-Giese anechoic mixing: require the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this for a merge. Same-neuron warps are coherent across channels, different co-located cells anti-correlate (g5: same ~+0.5 small / ~+0.93 well-populated, 294-vs-295 -0.52). The group-delay estimate is NOISY at low spike count, so use a LOW threshold (~0.3) to avoid vetoing small same-cell merges; the separation is much cleaner on well-populated clusters. Use WITH a relaxed --cos-thr to recover the last few merges. None (default) = off; calibrate on curated merges.")
+    ap.add_argument("--warp-resid-thr", type=float, default=None,
+                    help="single-channel warp-incongruity SUB-GATE (layers on the warp gate): among pairs whose overall group-delay (warp) correlation is already coherent (>=0.85), veto the merge if any ONE channel within BOTH clusters' centroid range has a group-delay residual (from the robust Theil-Sen per-channel delay line) > this many samples. warp_correlation is a cross-channel Pearson, so a couple of strong channels can hold it high while one channel betrays a different co-located source; this catches that. g5: ~1.0 vetoes ~2%% of merge-passing pairs at mid-range offset (~0.55), independent of the offset gate. None (default) = off; calibrate on curated merges.")
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
@@ -950,7 +956,7 @@ def main():
         label = group_intrachunk_iter(sig_run, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
                                  gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
-                                 refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr,
+                                 refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr, warp_resid_thr=a.warp_resid_thr,
                                  align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)
     if pre is not None:
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
