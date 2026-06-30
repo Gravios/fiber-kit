@@ -1,7 +1,7 @@
 # BASELINE — default refine/intrachunk/link.  The reference every other branch is compared against.
 # namespace: bl_   end product: .clu.stderiv.<elec>.bl_linked
 pipeline:
-  - {stage: fiber-refine,     in: "",        out: bl_refine}
+  - {stage: fiber-refine,     in: fiber_session,        out: bl_refine}
   - {stage: fiber-cpos,       in: bl_refine, out: bl_refine, spk: standard}
   - {stage: fiber-intrachunk, in: bl_refine, out: bl_chunk}
   - {stage: fiber-link,       in: bl_refine, units: bl_chunk, out: bl_linked}

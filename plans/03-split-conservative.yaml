@@ -2,7 +2,7 @@
 # Diagnostic: higher pairwise RECALL but lower cluster consolidation than baseline -> over-split tendency.
 # namespace: sp_
 pipeline:
-  - {stage: fiber-refine,     in: "",        out: sp_refine, params: {merge-min-sim: 0.98, split-min-corr: 0.90}}
+  - {stage: fiber-refine,     in: fiber_session,        out: sp_refine, params: {merge-min-sim: 0.98, split-min-corr: 0.90}}
   - {stage: fiber-cpos,       in: sp_refine, out: sp_refine, spk: standard}
   - {stage: fiber-intrachunk, in: sp_refine, out: sp_chunk}
   - {stage: fiber-link,       in: sp_refine, units: sp_chunk, out: sp_linked}
