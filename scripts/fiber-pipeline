@@ -539,13 +539,21 @@ run_plan() {           # run an ordered, possibly-repeating plan of steps
     local plan="$1"
     [ -f "$plan" ] || { echo "fiber-pipeline: plan not found: $plan" >&2; exit 2; }
     local spec; spec="$(_plan_parse "$plan")" || exit $?
+    # Track the most recent fiber-intrachunk out-stage so a later fiber-link can
+    # default its --from-units producer (<stage>.units.npz) to the stage the
+    # units were actually emitted at when the plan step omits 'units'.  Without
+    # this the default is the canonical 'refine_intrachunk', which is wrong for
+    # any plan whose intrachunk writes a different stage (e.g. exp_chunk) and
+    # makes link abort with a missing <stage>.units.npz.
     local n=0 st pin pout punits pspk pcpos pargs
+    local last_intrachunk_out=refine_intrachunk
     while IFS=$'\x1f' read -r st pin pout punits pspk pcpos pargs; do
         [ -z "$st" ] && continue
         n=$((n + 1))
         printf '== [plan %d] %s ==\n' "$n" "$st"
+        [ "$st" = fiber-intrachunk ] && last_intrachunk_out="${pout:-refine_intrachunk}"
         (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
-            STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="$punits"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
+            STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="${punits:-$last_intrachunk_out}"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
             eval "STEP_ARGS=( $pargs )"
             run_plan_stage "$st"
         )
