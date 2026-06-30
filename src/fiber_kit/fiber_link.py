@@ -35,9 +35,11 @@ def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
     from . import fiber_methods as fm
+    from . import fiber_localize as loc
 except ImportError:
     import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
     import fiber_methods as fm
+    import fiber_localize as loc
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -142,7 +144,7 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                   align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                   frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
                   dr_feat=None, dr_thr=None,
-                  complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq"):
+                  complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq", geom=None):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -200,9 +202,10 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                     if complete_edge:                                            # rescue a footprint that ran
                         Ri = tmpl[ai[v]]; Rj = tmpl[bi[u]]                        # off the array end / shifted
                         if fm.is_truncated(Ri, edge_frac=edge_frac) or fm.is_truncated(Rj, edge_frac=edge_frac):
-                            cp = np.arange(Ri.shape[1]) * channel_pitch          # across channels with drift:
-                            shape_cos = max(shape_cos,                            # spatial-register + own-model
-                                            fm.drift_completed_cos(Ri, Rj, cp, dd, field=complete_field))
+                            xyg = geom if geom is not None else np.column_stack(   # real zigzag if a
+                                [np.zeros(Ri.shape[1]), np.arange(Ri.shape[1]) * channel_pitch])  # probe is loaded
+                            shape_cos = max(shape_cos,
+                                            fm.drift_completed_cos(Ri, Rj, xyg, dd, field=complete_field))
                     if shape_cos >= cos_thr and \
                             (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
@@ -397,7 +400,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
                  bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True,
                  dr_feat=None, dr_thr=None,
-                 complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq"):
+                 complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq", geom=None):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -458,7 +461,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                             ov_min_exp=ov_min_exp, ov_censor=ov_censor,
                             dr_feat=(dr_feat[idx] if dr_feat is not None else None), dr_thr=dr_thr,
                             complete_edge=complete_edge, channel_pitch=channel_pitch,
-                            edge_frac=edge_frac, complete_field=complete_field)
+                            edge_frac=edge_frac, complete_field=complete_field, geom=geom)
     else:
         if ov_refrac is not None:
             _log("--overlap-refrac-ms only wired for 'cogated' linkage; ignored here")
@@ -709,8 +712,15 @@ def main():
     _EMPTY = np.empty(0, np.int64)
     ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
     bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc)
+    geom = None
+    if a.complete_edge:                                    # real site geometry for off-probe completion
+        try:
+            if cfg.get("probe") and cfg.get("channels") is not None:
+                geom = loc.load_geometry(cfg["probe"], cfg["channels"])
+        except Exception as e:
+            _log(f"complete-edge: no probe geometry ({e}); using collinear --channel-pitch fallback")
     complete_kw = dict(complete_edge=a.complete_edge, channel_pitch=a.channel_pitch,
-                       edge_frac=a.complete_edge_frac, complete_field=a.complete_field)
+                       edge_frac=a.complete_edge_frac, complete_field=a.complete_field, geom=geom)
 
     from . import fiber_methods as _fm
     def _method_kw(frag):                  # template-DR candidate space (off unless --dr-candidates)

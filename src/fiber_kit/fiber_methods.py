@@ -49,26 +49,33 @@ def dr_features(tmpl, k=10, basis=None):
 
 
 # == counterfactual off-probe footprint completion ===========================
-def complete_footprint(tmpl, chpos, missing, *, field="inv_sq", partner=None):
+def complete_footprint(tmpl, xy, missing, *, field="inv_sq", partner=None):
     """Render unobserved off-probe channels of a truncated template.
 
-    tmpl (nsamp,nchan); `missing` = indices of channels that drifted off the array.
-    A spike footprint is rank-1 (one temporal shape * a spatial field), so the
-    waveform on a channel that does not exist is shape(t) * field(position).  We
-    fit the field (1/r^2 default; d^2=(y-y0)^2+r^2) to the OBSERVED channels and
-    render the missing ones.  If `partner` (a same-neuron template that DID observe
-    those positions, drift-aligned) is given, its real channels are used instead of
-    the model (cross-view completion -- phase-correct, preferred); the field is the
-    fallback for positions neither view saw.  Returns a completed copy.
+    tmpl (nsamp,nchan); `xy` = per-channel site geometry, (nchan,2) [x,y] in um, or
+    (nchan,) treated as depth with x=0; `missing` = indices that drifted off the array.
+    A spike footprint is rank-1 (one temporal shape * a spatial field), so the waveform
+    on a channel that does not exist is shape(t) * field(position).  The field is fit to
+    the OBSERVED channels over the REAL site positions with the same point-source distance
+    fiber_localize uses -- d^2 = (x0-xc)^2 + (yc-y0)^2 + z0^2 -- so the lateral stagger of a
+    zigzag probe is modelled, not read as scatter, and off-probe sites are rendered at
+    their true (continued-zigzag) positions rather than on a fabricated collinear axis.
+    `field` selects the radial exponent (inv_sq=1/r^2 default, inv=1/r monopole, matching
+    localization).  If `partner` (a same-neuron template that observed those positions,
+    drift-aligned) is given, its real channels are used instead of the model (cross-view,
+    phase-correct); the field is the fallback for positions neither view saw.
     """
     T = np.asarray(tmpl, float).copy()
+    xy = np.asarray(xy, float)
+    if xy.ndim == 1:
+        xy = np.column_stack([np.zeros_like(xy), xy])
     miss = sorted(int(m) for m in missing)
     if partner is not None:                                   # cross-view: use real channels
         P = np.asarray(partner, float)
         for c in miss:
             if c < P.shape[1] and np.any(P[:, c]):
                 T[:, c] = P[:, c]
-        miss = [c for c in miss if not np.any(T[:, c])]       # only model what the partner lacked too
+        miss = [c for c in miss if not np.any(T[:, c])]
         if not miss:
             return T
     obs = np.array([c for c in range(T.shape[1]) if c not in set(miss)])
@@ -79,22 +86,43 @@ def complete_footprint(tmpl, chpos, missing, *, field="inv_sq", partner=None):
     s = U[:, 0] * S[0]; w = Vt[0]
     if np.sum(s * To[:, int(np.argmax(np.abs(w)))]) < 0:
         s, w = -s, -w
-    aw = np.abs(w); co = np.asarray(chpos, float)[obs]
+    aw = np.abs(w); P = xy[obs]; px, py = P[:, 0], P[:, 1]
     p = 2.0 if field == "inv_sq" else 1.0
+    x0g = float(px[int(np.argmax(aw))]); y0g = float(py[int(np.argmax(aw))])
     try:
         from scipy.optimize import least_squares
-        sol = least_squares(
-            lambda q: q[0] / ((co - q[1]) ** 2 + q[2] ** 2) ** (p / 2.0) - aw,
-            [float(aw.max()) * 1e3, float(co[int(np.argmax(aw))]), 30.0],
-            bounds=([0, co.min() - 80, 3.0], [1e12, co.max() + 80, 200.0])).x
+        A, x0, y0, z0 = least_squares(
+            lambda q: q[0] / ((q[1] - px) ** 2 + (py - q[2]) ** 2 + q[3] ** 2) ** (p / 2.0) - aw,
+            [float(aw.max()) * 1e3, x0g, y0g, 25.0],
+            bounds=([0, px.min() - 80, py.min() - 80, 3.0],
+                    [1e12, px.max() + 80, py.max() + 80, 200.0])).x
     except Exception:
         return T
-    A, y0, r = sol; sgn = np.sign(w[int(np.argmin(np.abs(co - y0)))] + 1e-9)
-    cm = np.asarray(chpos, float)[np.array(miss)]
-    wp = A / ((cm - y0) ** 2 + r ** 2) ** (p / 2.0)
+    M = xy[np.array(miss)]
+    wp = A / ((x0 - M[:, 0]) ** 2 + (M[:, 1] - y0) ** 2 + z0 ** 2) ** (p / 2.0)
+    sgn = np.sign(w[int(np.argmin((px - x0) ** 2 + (py - y0) ** 2))] + 1e-9)
     for i, c in enumerate(miss):
         T[:, c] = s * (sgn * wp[i])
     return T
+
+
+def _extend_zigzag(xy, lo, hi):
+    """Site positions for depth-index range [lo,hi): real sites in [0,nch), and beyond
+    the ends the regular zigzag continued (constant depth pitch + lateral offset
+    alternating about the centreline).  Returns (hi-lo, 2)."""
+    xy = np.asarray(xy, float); n = len(xy)
+    order = np.argsort(xy[:, 1]); xs = xy[order]
+    dy = float(np.median(np.diff(xs[:, 1]))) or 20.0
+    cx = float(np.mean(xs[:, 0])); off = xs[:, 0] - cx
+    stag = float(np.median(np.abs(off[np.abs(off) > 1e-6]))) if np.any(np.abs(off) > 1e-6) else 0.0
+    out = []
+    for i in range(lo, hi):
+        if 0 <= i < n:
+            out.append(xs[i])
+        else:
+            sign = 1.0 if (i % 2 == 0) else -1.0
+            out.append([cx + stag * sign, xs[0, 1] + dy * i])
+    return np.asarray(out, float)
 
 
 def truncated_channels(tmpl, chpos, *, edge_frac=0.5):
@@ -118,11 +146,10 @@ def is_truncated(tmpl, *, edge_frac=0.5):
     return bool(pp[0] >= edge_frac * m or pp[-1] >= edge_frac * m)
 
 
-def _cos_at_shift(ta, tb, chpos, k, field):
+def _cos_at_shift(ta, tb, xy, k, field):
     nsamp, nch = ta.shape
-    pitch = float(np.median(np.diff(np.sort(chpos)))) or 20.0
-    lo = min(0, k); hi = max(nch, nch + k); W = hi - lo
-    pos = float(chpos[0]) + pitch * np.arange(lo, hi)
+    lo = min(0, k); hi = max(nch, nch + k)
+    pos = _extend_zigzag(xy, lo, hi); W = hi - lo
     A = np.zeros((nsamp, W)); B = np.zeros((nsamp, W))
     ca = np.arange(nch) - lo; cb = np.arange(nch) + k - lo
     A[:, ca] = ta; B[:, cb] = tb
@@ -130,7 +157,7 @@ def _cos_at_shift(ta, tb, chpos, k, field):
     seenB = np.zeros(W, bool); seenB[cb] = True
     mA = np.flatnonzero(~seenA); mB = np.flatnonzero(~seenB)
     if len(mA):                                          # model-complete from ta's OWN structure
-        A = complete_footprint(A, pos, mA, field=field)
+        A = complete_footprint(A, pos, mA, field=field)  # over REAL (continued-zigzag) positions
     if len(mB):
         B = complete_footprint(B, pos, mB, field=field)
     cols = np.flatnonzero(seenA | seenB)                 # compare only where >=1 unit measured
@@ -138,24 +165,27 @@ def _cos_at_shift(ta, tb, chpos, k, field):
     return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
 
 
-def drift_completed_cos(ta, tb, chpos, dd, *, field="inv_sq", search=1):
+def drift_completed_cos(ta, tb, xy, dd, *, field="inv_sq", search=1):
     """Cosine after SPATIAL drift registration + own-structure off-probe completion.
 
     Drift shifts a footprint across channels, so a same-neuron pair across high-drift
     chunks lands on different channel indices and the fixed-index cosine under-rates it;
     a unit whose footprint runs off the array end is truncated relative to a partner that
-    drifted further on.  dd = D[chunk_b]-D[chunk_a] (um).  We search integer channel shifts
-    around round(dd/pitch); at each, both templates go on the union grid, each unit's
-    UNSEEN channels are completed from its OWN rank-1 structure -- never cross-view, which
-    would fabricate agreement and inflate the score -- and the cosine is over channels at
+    drifted further on.  `xy` is the real per-channel geometry (nchan,2) [x,y] um (or
+    (nchan,) depth); dd = D[chunk_b]-D[chunk_a] (um).  Integer DEPTH shifts are searched
+    around round(dd/pitch); at each, both templates go on the union (continued-zigzag)
+    grid, each unit's UNSEEN channels are completed from its OWN rank-1 structure -- never
+    cross-view, which would fabricate agreement -- and the cosine is over channels at
     least one unit observed (so every completed channel is tested against the partner's
     real measurement).  Returns the best cosine over the search."""
     ta = np.asarray(ta, float); tb = np.asarray(tb, float)
-    chpos = np.asarray(chpos, float)
-    pitch = float(np.median(np.diff(np.sort(chpos)))) or 20.0
+    xy = np.asarray(xy, float)
+    if xy.ndim == 1:
+        xy = np.column_stack([np.zeros_like(xy), xy])
+    pitch = float(np.median(np.diff(np.sort(xy[:, 1])))) or 20.0
     k0 = int(round(dd / pitch))
     K = max(abs(k0), 1) + max(0, int(search))            # search BOTH directions: the dd sign
-    return max(_cos_at_shift(ta, tb, chpos, k, field)    # convention only sets the window width
+    return max(_cos_at_shift(ta, tb, xy, k, field)       # convention only sets the window width
                for k in range(-K, K + 1))
 
 
