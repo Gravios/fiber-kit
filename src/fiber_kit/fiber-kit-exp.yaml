@@ -32,6 +32,40 @@
 # ============================================================================
 
 
+# ============================================================================
+#  PRIMARY PLAN (embedded).  `fiber-pipeline <elec>` runs THIS by default when this
+#  file is the active $FK_CONFIG; an explicit `--plan <file>` still overrides it.
+#
+#  Experimental NO-REFINE route: skip fiber-refine AND fiber-peel.  Instead realign
+#  + cpos the over-clustered session, collapse over-split fragments WITHIN each chunk
+#  (fiber-intrachunk), then realign + cpos the per-chunk units and link them across
+#  chunks against those refreshed positions.
+#
+#    fiber-session -> fiber-realign -> fiber-cpos
+#                  -> fiber-intrachunk
+#                  -> fiber-realign -> fiber-cpos -> fiber-link
+#
+#  Tag handoff (every `in`/`cpos` is produced by an earlier `out`; cpos augments its
+#  own clu stage in place, out==in; realign is in-place, no out):
+#    * fiber_session : shared base tag (matches plans/00-prep.yaml).  session over-
+#      clusters -> realign tightens -> cpos localizes (raw .spk) for intrachunk's gate.
+#    * exp_chunk     : intrachunk's within-chunk merge.  realign re-tightens the merged
+#      units, cpos re-localizes them; intrachunk keeps each unit chunk-local, so these
+#      rows stay per-chunk and remain cross-linkable.
+#    * fiber-link reads exp_chunk's refreshed cpos directly (raw-cpos mode, no `units:`).
+#      To instead drive the link off intrachunk's units.npz backbone, add
+#      `units: exp_chunk` (then the 2nd cpos is carried inside that npz, not re-read).
+# ============================================================================
+pipeline:
+  - {stage: fiber-session,    out: fiber_session}
+  - {stage: fiber-realign,    in: fiber_session}
+  - {stage: fiber-cpos,       in: fiber_session, out: fiber_session, spk: standard}
+  - {stage: fiber-intrachunk, in: fiber_session, out: exp_chunk}
+  - {stage: fiber-realign,    in: exp_chunk}
+  - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
+  - {stage: fiber-link,       in: exp_chunk, out: exp_linked}
+
+
 # ----- fiber-session : initial over-clustering -----------------------------
 # Deliberately OVER-clusters (many small, clean fragments) so the downstream merge
 # (intrachunk + link, or fiber-defrag) can reassemble units; over-split is recoverable,
