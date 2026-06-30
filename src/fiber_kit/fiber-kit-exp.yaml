@@ -52,9 +52,15 @@
 #    * exp_chunk     : intrachunk's within-chunk merge.  realign re-tightens the merged
 #      units, cpos re-localizes them; intrachunk keeps each unit chunk-local, so these
 #      rows stay per-chunk and remain cross-linkable.
-#    * fiber-link reads exp_chunk's refreshed cpos directly (raw-cpos mode, no `units:`).
-#      To instead drive the link off intrachunk's units.npz backbone, add
-#      `units: exp_chunk` (then the 2nd cpos is carried inside that npz, not re-read).
+#    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk).
+#      The pipeline runner always invokes fiber-link with --from-units (there is no
+#      raw-cpos plan mode), so the link MUST name a produced <tag>.units.npz or it
+#      falls back to the canonical 'refine_intrachunk' default, which this no-refine
+#      plan never writes.  In this mode the per-unit positions come from the units.npz
+#      (baked by intrachunk from the cpos it read, i.e. the post-realign #1 cpos on
+#      fiber_session); the 2nd cpos on exp_chunk is therefore NOT the link's position
+#      source -- it (and the 2nd realign) refresh exp_chunk itself.  Driving the link
+#      off the 2nd cpos instead would need a raw-cpos link mode in the runner.
 # ============================================================================
 pipeline:
   - {stage: fiber-session,    out: fiber_session}
@@ -63,7 +69,7 @@ pipeline:
   - {stage: fiber-intrachunk, in: fiber_session, out: exp_chunk}
   - {stage: fiber-realign,    in: exp_chunk}
   - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
-  - {stage: fiber-link,       in: exp_chunk, out: exp_linked}
+  - {stage: fiber-link,       in: exp_chunk, units: exp_chunk, out: exp_linked}
 
 
 # ----- fiber-session : initial over-clustering -----------------------------
