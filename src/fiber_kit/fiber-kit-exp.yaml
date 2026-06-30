@@ -340,6 +340,16 @@ FK_LINK_TAN_THR:         ""       # "" = off | 0.5 recommended.  Energy-tangent 
                                   #   guard on the primary-amp-frac recall.  Needs a per-fragment 'tangent' array in the cpos/units
                                   #   table (fiber-cpos/-intrachunk emit; inert until then).
 
+# template-DR candidate space (the primary-linking-space method): generate cross-chunk candidates by mutual-NN
+# in template-DR feature space (drift-robust, computed on the fly from each fragment's median template) instead
+# of physical position.  Physical localization is degenerate on the octrode (z0 sign-folded, x0 near-constant),
+# so position-NN proposes co-located-but-different units and leans on the cosine/cfiber co-gate to reject them;
+# DR-space proposes far cleaner candidates (true same-neuron partner ranked ~91-97% vs ~18% for physical on g5).
+# Turned ON here.  The cosine/cfiber/offset/amp co-gates still apply on top of the DR candidates.
+FK_LINK_DR_CANDIDATES:   1        # 1 | 0/1.  1 = template-DR candidate space; 0 = legacy physical position-NN.
+FK_LINK_DR_K:            10       # 10 | 6-16.  Template-DR dimensionality (~96% variance on g5).
+FK_LINK_DR_THR:          ""       # "" = no DR-space NN distance cap (the cosine/cfiber/pos/amp co-gates do the filtering).
+
 # ----- fiber-link : variance-bounded bundling (anti-over-merge, patch 0023) -
 # FIRST-ATTEMPT operating point for the cross-chunk over-merge seen in the linked sorts (e.g. sp_linked):
 # replace the legacy cosine-ordered single-linkage union-find with an energy-seeded, variance-bounded
