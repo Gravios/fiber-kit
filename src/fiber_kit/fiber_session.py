@@ -1174,9 +1174,9 @@ def main():
     ap.add_argument("--no-cluster-basis", action="store_true",
                     help="ignore the global .pca basis for the fine-split shape features and use a "
                          "per-call local SVD (legacy behaviour)")
-    ap.add_argument("--clu-stage", dest="clu_stage", default="",
+    ap.add_argument("--clu-stage", dest="clu_stage", default="fiber_session",
                     help="post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] "
-                         "(default none); e.g. --clu-stage session")
+                         "(default 'fiber_session'); pass --clu-stage '' for an untagged .clu")
     ap.add_argument("--emit-hierarchy", dest="emit_hierarchy", action=argparse.BooleanOptionalAction, default=True,
                     help="emit the .clu/.clc/.clp microfiber triple (atoms = pre-link fine fragments, "
                          "fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. "
