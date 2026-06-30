@@ -3,7 +3,7 @@
 # compare bl_linked vs lc_linked with fiber-score.
 # namespace: lc_
 pipeline:
-  - {stage: fiber-refine,     in: "",        out: lc_refine}
+  - {stage: fiber-refine,     in: fiber_session,        out: lc_refine}
   - {stage: fiber-cpos,       in: lc_refine, out: lc_refine, spk: standard}
   - {stage: fiber-intrachunk, in: lc_refine, out: lc_chunk}
   - {stage: fiber-link,       in: lc_refine, units: lc_chunk, out: lc_linked, params: {cfiber-q: 0.90, cos-thr: 0.80}}

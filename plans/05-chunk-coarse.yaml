@@ -2,7 +2,7 @@
 # (steadier templates) but coarser drift; compare to baseline and 04 for the drift/stability trade-off.
 # namespace: c24_
 pipeline:
-  - {stage: fiber-refine,     in: "",         out: c24_refine, params: {chunk-minutes: 24}}
+  - {stage: fiber-refine,     in: fiber_session,         out: c24_refine, params: {chunk-minutes: 24}}
   - {stage: fiber-cpos,       in: c24_refine, out: c24_refine, spk: standard}
   - {stage: fiber-intrachunk, in: c24_refine, out: c24_chunk,  params: {chunk-minutes: 24}}
   - {stage: fiber-link,       in: c24_refine, units: c24_chunk, out: c24_linked, params: {chunk-minutes: 24}}
