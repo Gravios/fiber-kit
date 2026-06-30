@@ -900,6 +900,34 @@ def main():
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     res = nio.read_res(base, elec)
+    try:                                  # consume the .clu/.clc/.clp triple if the source sort emitted one
+        from .fiber_refiberize import FiberHierarchy
+        hier = FiberHierarchy.load(base, elec, variant=clu_method, tag=clu_stage)
+    except Exception:
+        hier = None                       # flat .clu source (legacy) -> output stays flat
+
+    def _emit(newids, ncl):
+        """Write the result.  With a source triple, PRESERVE+re-parent atoms so the intrachunk
+        merge lands in the hierarchy atomically with link (parent owns its merged set of children,
+        unmergeable via FiberHierarchy.split_parent).  intrachunk is per-chunk, so an atom whose
+        spikes straddle a chunk boundary is SPLIT into per-chunk children first -- each child then
+        sits in exactly one unit, and the source atom remains recoverable for diagnosis."""
+        out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
+        if hier is None:
+            nio.write_clu_file(out_path, newids, n_clusters=ncl); return
+        from .fiber_refiberize import FiberHierarchy as _FH
+        ch = np.asarray(hier.child, np.int64); nid = np.asarray(newids)
+        chid_sp = (res.astype(float) / sr / 60.0 / a.chunk_minutes).astype(np.int64)
+        nz = ch > 0
+        uk, inv = np.unique(np.stack([ch[nz], chid_sp[nz]], 1), axis=0, return_inverse=True)
+        newchild = np.zeros(len(ch), np.int64); newchild[nz] = inv + 1     # per-(atom,chunk) child
+        newpar = {}
+        for cid in np.unique(newchild[newchild > 0]):
+            sp = int(np.flatnonzero(newchild == cid)[0]); newpar[int(cid)] = int(nid[sp])
+        _FH(newchild, newpar).save(base, elec, variant=clu_method, tag=out_stage, backup=False)
+        _log(f"intrachunk hierarchy: {len(newpar)} per-chunk atoms -> "
+             f"{len(set(newpar.values()))} units (.clu/.clc/.clp)")
+
     spkD, _ = nio.open_spkD(base, elec, nsamp, nch)   # open_spkD returns (memmap, path)
     tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
     z = np.load(tbl)
@@ -922,7 +950,7 @@ def main():
             out_lab[sel] = lab + nxt; nxt += int(lab.max()) + 1
         ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-        nio.write_clu_file(out_path, out_lab, n_clusters=ncl)
+        _emit(out_lab, ncl)
         _log(f"merge+split over {len(np.unique(chid)):,} chunks → "
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (per-spike labelling)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
@@ -981,7 +1009,7 @@ def main():
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-    nio.write_clu_file(out_path, newids, n_clusters=ncl)
+    _emit(newids, ncl)
     nunits = len(np.unique(label))
     _log(f"{len(sig['ids']):,} signed fragments over {len(np.unique(sig['chunk']))} chunks "
          f"→ {nunits:,} per-chunk units")
