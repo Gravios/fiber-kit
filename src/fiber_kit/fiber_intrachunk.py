@@ -887,6 +887,8 @@ def main():
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_intrachunk)")
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
+    ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
+                    help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
@@ -1010,6 +1012,30 @@ def main():
     newids, ncl = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     _emit(newids, ncl)
+    if a.provenance:                       # per-merge gate-score sidecar for overmerge diagnosis
+        try:
+            from . import fiber_provenance as _fp
+            lab = np.asarray(label); ids = np.asarray(sig["ids"]); nn = np.asarray(sig["n"], float)
+            y0s = np.asarray(sig["y0"], float); chs = np.asarray(sig["chunk"]); tm = sig["template"]
+            tims = sig.get("times")
+            _ml = _fp.MergeLog()
+            for u in np.unique(lab):
+                mem = np.flatnonzero(lab == u)
+                if len(mem) < 2:
+                    continue
+                p = mem[int(np.argmax(nn[mem]))]             # representative = highest-count fragment
+                for m in mem:
+                    if m == p:
+                        continue
+                    ta = (np.asarray(tims[p], float) * sr) if tims is not None else None
+                    tb = (np.asarray(tims[m], float) * sr) if tims is not None else None
+                    sc = _fp.score_pair(tm[p], tm[m], sr=sr, pos_a=float(y0s[p]), pos_b=float(y0s[m]),
+                                        times_a=ta, times_b=tb)
+                    _ml.edge("intrachunk", int(chs[m]), int(ids[p]), int(ids[m]), int(nn[m]), sc)
+            mp = out_path + ".merge.tsv"; _ml.write(mp)
+            _log(f"provenance: {len(_ml)} intrachunk merge edges → {mp.split('/')[-1]}")
+        except Exception as e:
+            _log(f"provenance: skipped ({e})")
     nunits = len(np.unique(label))
     _log(f"{len(sig['ids']):,} signed fragments over {len(np.unique(sig['chunk']))} chunks "
          f"→ {nunits:,} per-chunk units")
