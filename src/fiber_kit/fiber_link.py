@@ -138,7 +138,8 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                   pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
                   cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
                   align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
-                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0):
+                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
+                  dr_feat=None, dr_thr=None):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -174,11 +175,16 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
             if len(ai) < 2 or len(bi) < 2:
                 continue
             dd = D[int(chunks[k + g])] - D[int(chunks[k])]
-            Fa = np.vstack([y0[ai] / sy_, x0[ai] / sx, z0[ai] / sz, logA[ai] / sa]).T
-            Fb = np.vstack([(y0[bi] - dd) / sy_, x0[bi] / sx, z0[bi] / sz, logA[bi] / sa]).T
+            if dr_feat is not None:                      # template-DR candidate space (drift-robust;
+                Fa = dr_feat[ai]; Fb = dr_feat[bi]       # generates far cleaner candidates than position-NN
+                thr = dr_thr if dr_thr is not None else np.inf
+            else:
+                Fa = np.vstack([y0[ai] / sy_, x0[ai] / sx, z0[ai] / sz, logA[ai] / sa]).T
+                Fb = np.vstack([(y0[bi] - dd) / sy_, x0[bi] / sx, z0[bi] / sz, logA[bi] / sa]).T
+                thr = pos_thr
             for u in range(len(bi)):
                 dist = np.sum((Fb[u] - Fa) ** 2, 1); v = int(np.argmin(dist))
-                if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= pos_thr:
+                if int(np.argmin(np.sum((Fa[v] - Fb) ** 2, 1))) == u and np.sqrt(dist[v]) <= thr:
                     Ti = tc[ai[v]]; Tj = tc[bi[u]]
                     if align_lag > 0:                                      # sub-sample re-registration:
                         Tj = _register_lag(Ti, Tj, align_lag, align_upsample)[0]   # recover a same-neuron pair
@@ -380,7 +386,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
                  align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
-                 bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True):
+                 bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True,
+                 dr_feat=None, dr_thr=None):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -438,7 +445,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                             primary_amp_frac=primary_amp_frac, tan_thr=tan_thr,
                             tangents=(tangents[idx] if tangents is not None else None),
                             frag_times=ft_sub, ov_refrac=ov_refrac, ov_thr=ov_thr,
-                            ov_min_exp=ov_min_exp, ov_censor=ov_censor)
+                            ov_min_exp=ov_min_exp, ov_censor=ov_censor,
+                            dr_feat=(dr_feat[idx] if dr_feat is not None else None), dr_thr=dr_thr)
     else:
         if ov_refrac is not None:
             _log("--overlap-refrac-ms only wired for 'cogated' linkage; ignored here")
@@ -626,7 +634,25 @@ def main():
                          "that the overlapping chunks make of one neuron (default 0.4 ms)")
     ap.add_argument("--overlap-min-exp", type=float, default=5.0,
                     help="min expected overlap-window coincidences to have power; below this the test abstains (default 5)")
+    ap.add_argument("--dr-candidates", action="store_true",
+                    help="NEW: generate cross-chunk candidates by template-DR (PCA) nearest-neighbour instead "
+                         "of physical-position mutual-NN (g5: candidate cosine 0.966/69%% clean vs 0.888/23%%). "
+                         "The full co-gate stack still filters; this only improves the candidate set.")
+    ap.add_argument("--dr-thr", type=float, default=None, help="DR-space NN distance cap (default none; co-gate filters)")
+    ap.add_argument("--dr-k", type=int, default=10, help="template-DR dimensionality (default 10 ~ 96%% var on g5)")
+    ap.add_argument("--drift-method", choices=["accumulated", "global"], default="accumulated",
+                    help="NEW: 'global' solves drift by maximising template-anchor collinearity with a "
+                         "Laplacian-smoothness term (+ distance attenuation if the cpos table has 'dist'); "
+                         "'accumulated' = legacy consecutive xcorr (compounds on sparse partitions)")
+    ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
+                    help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
     a = ap.parse_args()
+    import os as _os
+    if _os.environ.get("FK_LINK_DR_CANDIDATES", "").strip() not in ("", "0"):
+        a.dr_candidates = True
+    _dm = _os.environ.get("FK_LINK_DRIFT_METHOD", "").strip()
+    if _dm:
+        a.drift_method = _dm
 
     cfg = sy.resolve_session_params(a.session, a.group, require=())
     base = cfg["base"]; elec = a.group
@@ -661,6 +687,18 @@ def main():
     ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
     bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc)
 
+    from . import fiber_methods as _fm
+    def _method_kw(frag):                  # template-DR candidate space (off unless --dr-candidates)
+        df = _fm.dr_features(frag["template"], k=a.dr_k)[0] if a.dr_candidates else None
+        return dict(dr_feat=df, dr_thr=a.dr_thr)
+    def _global_drift(frag):               # collinearity drift (None unless --drift-method global)
+        if a.drift_method != "global":
+            return None
+        ch_ = (np.asarray(frag["t_mid"], float) / 60.0 // a.chunk_minutes).astype(int)
+        n_ = np.asarray(frag.get("n", np.ones(len(frag["y0"]))), float)
+        return _fm.estimate_drift_global(frag["y0"], np.log(np.clip(frag["A"], 1, None)), n_,
+                                         ch_, np.unique(ch_), frag["template"], dist=frag.get("dist"))
+
     if a.from_units:
         z = np.load(a.from_units, allow_pickle=True)
         frag = {k: z[k] for k in ("template", "offset", "x0", "y0", "z0", "A", "t_mid", "n")}
@@ -672,10 +710,10 @@ def main():
         tangents = z["tangent"] if "tangent" in z.files else None
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
-                         gap=a.max_gap, drift=drift, seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         gap=a.max_gap, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
-                         frag_times=ft, **ov_kw, **bundle_kw)
+                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag))
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -689,12 +727,36 @@ def main():
         tangents = frag.get("tangent")
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
-                         gap=a.max_gap, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         gap=a.max_gap, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
-                         frag_times=ft, **ov_kw, **bundle_kw)
+                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag))
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
+    if a.provenance:                       # per-merge gate-score sidecar for overmerge diagnosis
+        try:
+            from . import fiber_provenance as _fp
+            _sr = float(cfg.get("sr") or 32552.0)
+            _ch = (np.asarray(frag["t_mid"], float) / 60.0 // a.chunk_minutes).astype(int)
+            _n = np.asarray(frag.get("n", np.ones(len(frag["t_mid"]))), float)
+            _cid = frag["clu"] if "clu" in frag else np.arange(len(frag["t_mid"]))
+            _ml = _fp.MergeLog()
+            for b in R["bundles"]:
+                if len(b) < 2:
+                    continue
+                p = b[int(np.argmax([_n[i] for i in b]))]    # representative = highest-count fragment
+                for i in b:
+                    if i == p:
+                        continue
+                    sc = _fp.score_pair(frag["template"][p], frag["template"][i], sr=_sr,
+                                        pos_a=float(frag["y0"][p]), pos_b=float(frag["y0"][i]),
+                                        times_a=(ft[p] if ft is not None else None),
+                                        times_b=(ft[i] if ft is not None else None))
+                    _ml.edge("link", int(_ch[i]), int(_cid[p]), int(_cid[i]), int(_n[i]), sc)
+            mp = out_path + ".merge.tsv"; _ml.write(mp)
+            _log(f"provenance: {len(_ml)} link merge edges → {_os.path.basename(mp)}")
+        except Exception as e:
+            _log(f"provenance: skipped ({e})")
     if hier is not None:                  # PRESERVE atoms (.clc); re-parent atom -> linked bundle; emit the triple
         from .fiber_refiberize import FiberHierarchy
         ch = hier.child                   # each atom is a subset of one bundle, so all its spikes share an id
