@@ -231,6 +231,16 @@ LINK_ALIGN_UPSAMPLE="${FK_LINK_ALIGN_UPSAMPLE:-4}"        # cubic-spline upsampl
 LINK_PRIMARY_AMP_FRAC="${FK_LINK_PRIMARY_AMP_FRAC:-0}"    # cosine over shared primary channels (0=off; 0.30 recommended)
 LINK_TAN_THR="${FK_LINK_TAN_THR:-}"                       # energy-tangent (microfiber) co-gate (empty=off; 0.5 recommended)
 
+# Template-DR candidate space.  1 = generate cross-chunk candidates as mutual-NN in template-DR feature
+# space (computed on the fly from the per-fragment templates) instead of physical position
+# (x0,y0,z0,logA).  Physical localization is degenerate on an octrode (z0 sign-folded, x0 near-constant),
+# so position-NN proposes co-located-but-different units the cosine/cfiber co-gate then has to reject;
+# DR-space proposes far cleaner candidates.  Default 0 (position-NN) so an unedited config reproduces
+# current behaviour.
+LINK_DR_CANDIDATES="${FK_LINK_DR_CANDIDATES:-0}"          # 1 = template-DR candidate space; 0 = position-NN
+LINK_DR_K="${FK_LINK_DR_K:-10}"                           # template-DR dimensionality (~96% var on g5)
+LINK_DR_THR="${FK_LINK_DR_THR:-}"                         # DR-space NN distance cap (empty = none; co-gates filter)
+
 # 0023 fiber-link variance-bounded bundling (anti-chaining over-merge guard).  bundle=varbound seeds
 # agglomeration from the highest-energy fragments and refuses a union that would spread a bundle's
 # template variance past a single-neuron envelope (self-calibrated from the high-energy backbone at link
@@ -418,6 +428,11 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         bundle_args+=(--bundle "$LINK_BUNDLE" --var-scale "$LINK_VAR_SCALE" --n-pc "$LINK_N_PC")
         [ -n "$LINK_VAR_ALLOW" ] && bundle_args+=(--var-allow "$LINK_VAR_ALLOW")
     fi
+    local dr_args=()
+    if [ "$LINK_DR_CANDIDATES" = 1 ]; then
+        dr_args+=(--dr-candidates --dr-k "$LINK_DR_K")
+        [ -n "$LINK_DR_THR" ] && dr_args+=(--dr-thr "$LINK_DR_THR")
+    fi
     _run fiber-link "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
         --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
@@ -426,7 +441,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --amp-gate "$LINK_AMP_GATE" \
         --align-lag "$LINK_ALIGN_LAG" --align-upsample "$LINK_ALIGN_UPSAMPLE" --primary-amp-frac "$LINK_PRIMARY_AMP_FRAC" \
         --refine-trajectory \
-        "${warp_args[@]}" "${bundle_args[@]}" \
+        "${warp_args[@]}" "${bundle_args[@]}" "${dr_args[@]}" \
         --out-stage "${STEP_OUT:-refine_linked}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
     echo "[done] linked clu: $(clu_path "${STEP_OUT:-refine_linked}")"
 }
