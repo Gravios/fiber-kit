@@ -34,8 +34,10 @@ def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
+    from . import fiber_methods as fm
 except ImportError:
     import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
+    import fiber_methods as fm
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -139,7 +141,8 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                   cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
                   align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                   frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
-                  dr_feat=None, dr_thr=None):
+                  dr_feat=None, dr_thr=None,
+                  complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq"):
     """Mutual-NN candidates in (x0, y0-D, z0, logA) co-gated by template cosine AND
     inter-channel offset.  Templates are mutual_center'd first -- each is circularly shifted so its
     dominant-channel trough sits at a common sample -- which removes a whole-cluster time-offset
@@ -194,6 +197,12 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                         shape_cos = _cos2d(Ti, Tj, mask, cmask)                   # mutual_center leaves)
                     else:
                         shape_cos = masked_cos(Ti, Tj, mask)                      # full-template fallback
+                    if complete_edge:                                            # rescue a footprint that ran
+                        Ri = tmpl[ai[v]]; Rj = tmpl[bi[u]]                        # off the array end / shifted
+                        if fm.is_truncated(Ri, edge_frac=edge_frac) or fm.is_truncated(Rj, edge_frac=edge_frac):
+                            cp = np.arange(Ri.shape[1]) * channel_pitch          # across channels with drift:
+                            shape_cos = max(shape_cos,                            # spatial-register + own-model
+                                            fm.drift_completed_cos(Ri, Rj, cp, dd, field=complete_field))
                     if shape_cos >= cos_thr and \
                             (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
@@ -387,7 +396,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                  align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
                  bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True,
-                 dr_feat=None, dr_thr=None):
+                 dr_feat=None, dr_thr=None,
+                 complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq"):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
     [offset],[snr]).  Returns dict(chunk, chunks, D, links, bundles, link_mask).
 
@@ -446,7 +456,9 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
                             tangents=(tangents[idx] if tangents is not None else None),
                             frag_times=ft_sub, ov_refrac=ov_refrac, ov_thr=ov_thr,
                             ov_min_exp=ov_min_exp, ov_censor=ov_censor,
-                            dr_feat=(dr_feat[idx] if dr_feat is not None else None), dr_thr=dr_thr)
+                            dr_feat=(dr_feat[idx] if dr_feat is not None else None), dr_thr=dr_thr,
+                            complete_edge=complete_edge, channel_pitch=channel_pitch,
+                            edge_frac=edge_frac, complete_field=complete_field)
     else:
         if ov_refrac is not None:
             _log("--overlap-refrac-ms only wired for 'cogated' linkage; ignored here")
@@ -646,10 +658,21 @@ def main():
                          "'accumulated' = legacy consecutive xcorr (compounds on sparse partitions)")
     ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
                     help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
+    ap.add_argument("--complete-edge", action="store_true",
+                    help="NEW: rescue truncated / channel-shifted footprints in the cosine gate by spatial "
+                         "drift registration + own-structure off-probe completion (g5: lifts a truncated pair "
+                         "0.83->0.91; taken as max with the plain cosine, so it never lowers a good match)")
+    ap.add_argument("--channel-pitch", type=float, default=20.0, help="axial channel pitch (um) for --complete-edge")
+    ap.add_argument("--complete-field", choices=["inv_sq", "inv"], default="inv_sq",
+                    help="spatial field model for off-probe completion (1/r^2 default)")
+    ap.add_argument("--complete-edge-frac", type=float, default=0.5,
+                    help="array-end amplitude fraction above which a footprint counts as truncated")
     a = ap.parse_args()
     import os as _os
     if _os.environ.get("FK_LINK_DR_CANDIDATES", "").strip() not in ("", "0"):
         a.dr_candidates = True
+    if _os.environ.get("FK_LINK_COMPLETE_EDGE", "").strip() not in ("", "0"):
+        a.complete_edge = True
     _dm = _os.environ.get("FK_LINK_DRIFT_METHOD", "").strip()
     if _dm:
         a.drift_method = _dm
@@ -686,6 +709,8 @@ def main():
     _EMPTY = np.empty(0, np.int64)
     ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
     bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc)
+    complete_kw = dict(complete_edge=a.complete_edge, channel_pitch=a.channel_pitch,
+                       edge_frac=a.complete_edge_frac, complete_field=a.complete_field)
 
     from . import fiber_methods as _fm
     def _method_kw(frag):                  # template-DR candidate space (off unless --dr-candidates)
@@ -713,7 +738,7 @@ def main():
                          gap=a.max_gap, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
-                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag))
+                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag), **complete_kw)
         newids, ncl = global_clu_map_units(z["members"], R["bundles"], src)
     else:
         tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -730,7 +755,7 @@ def main():
                          gap=a.max_gap, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
-                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag))
+                         frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag), **complete_kw)
         newids, ncl = global_clu_map(frag["clu"], R["bundles"], src)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     if a.provenance:                       # per-merge gate-score sidecar for overmerge diagnosis

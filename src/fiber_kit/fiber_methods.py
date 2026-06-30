@@ -110,6 +110,55 @@ def truncated_channels(tmpl, chpos, *, edge_frac=0.5):
     return ends
 
 
+def is_truncated(tmpl, *, edge_frac=0.5):
+    """True if the footprint has large amplitude at an array end (so it probably extends
+    off-probe and a same-neuron partner that drifted further on-array will mismatch it)."""
+    pp = np.asarray(tmpl, float).max(0) - np.asarray(tmpl, float).min(0)
+    m = float(pp.max()) + 1e-12
+    return bool(pp[0] >= edge_frac * m or pp[-1] >= edge_frac * m)
+
+
+def _cos_at_shift(ta, tb, chpos, k, field):
+    nsamp, nch = ta.shape
+    pitch = float(np.median(np.diff(np.sort(chpos)))) or 20.0
+    lo = min(0, k); hi = max(nch, nch + k); W = hi - lo
+    pos = float(chpos[0]) + pitch * np.arange(lo, hi)
+    A = np.zeros((nsamp, W)); B = np.zeros((nsamp, W))
+    ca = np.arange(nch) - lo; cb = np.arange(nch) + k - lo
+    A[:, ca] = ta; B[:, cb] = tb
+    seenA = np.zeros(W, bool); seenA[ca] = True
+    seenB = np.zeros(W, bool); seenB[cb] = True
+    mA = np.flatnonzero(~seenA); mB = np.flatnonzero(~seenB)
+    if len(mA):                                          # model-complete from ta's OWN structure
+        A = complete_footprint(A, pos, mA, field=field)
+    if len(mB):
+        B = complete_footprint(B, pos, mB, field=field)
+    cols = np.flatnonzero(seenA | seenB)                 # compare only where >=1 unit measured
+    a = fg.mutual_center(A)[:, cols].ravel(); b = fg.mutual_center(B)[:, cols].ravel()
+    return float(a @ b / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-9))
+
+
+def drift_completed_cos(ta, tb, chpos, dd, *, field="inv_sq", search=1):
+    """Cosine after SPATIAL drift registration + own-structure off-probe completion.
+
+    Drift shifts a footprint across channels, so a same-neuron pair across high-drift
+    chunks lands on different channel indices and the fixed-index cosine under-rates it;
+    a unit whose footprint runs off the array end is truncated relative to a partner that
+    drifted further on.  dd = D[chunk_b]-D[chunk_a] (um).  We search integer channel shifts
+    around round(dd/pitch); at each, both templates go on the union grid, each unit's
+    UNSEEN channels are completed from its OWN rank-1 structure -- never cross-view, which
+    would fabricate agreement and inflate the score -- and the cosine is over channels at
+    least one unit observed (so every completed channel is tested against the partner's
+    real measurement).  Returns the best cosine over the search."""
+    ta = np.asarray(ta, float); tb = np.asarray(tb, float)
+    chpos = np.asarray(chpos, float)
+    pitch = float(np.median(np.diff(np.sort(chpos)))) or 20.0
+    k0 = int(round(dd / pitch))
+    K = max(abs(k0), 1) + max(0, int(search))            # search BOTH directions: the dd sign
+    return max(_cos_at_shift(ta, tb, chpos, k, field)    # convention only sets the window width
+               for k in range(-K, K + 1))
+
+
 # == global collinearity drift (+ optional distance attenuation) ==============
 def _anchor_pairs(tmpl, chunk, chunks, *, cos_thr=0.95, gap=2):
     """Template-anchored same-neuron cross-chunk pairs: mutual cosine-NN >= cos_thr.
