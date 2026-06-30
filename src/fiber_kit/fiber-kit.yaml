@@ -273,11 +273,11 @@ FK_LINK_AMP_GATE:        1.39     # 1.39 | 1.10-1.61 (nat-log; 0=off).  Absolute
 # same neuron relabelled across a chunk boundary).  All OFF by default so an unedited config reproduces current
 # link behaviour; the recommended operating point is in each comment.  On g5 the three together roughly TRIPLE
 # the recovered cross-chunk links (32 -> 66) over the integer-mutual_center/full-cosine baseline.
-FK_LINK_ALIGN_LAG:       0        # 0=off | 6 recommended (native samples).  Sub-sample template re-registration before the
+FK_LINK_ALIGN_LAG:       6        # 0=off | 6 recommended (native samples).  Sub-sample template re-registration before the
                                   #   cosine gate.  Integer mutual_center leaves a fractional-sample residual that drops a true
                                   #   same-neuron cross-chunk cosine under threshold; re-registering recovers it (+25% of links).
 FK_LINK_ALIGN_UPSAMPLE:  4        # 4 | 1-4.  Cubic-spline upsample factor for the align-lag search (sub-sample precision).
-FK_LINK_PRIMARY_AMP_FRAC: 0       # 0=off | 0.30 recommended.  Restrict the cosine gate to channels BOTH fragments treat as
+FK_LINK_PRIMARY_AMP_FRAC: 0.30   # 0=off | 0.30 recommended.  Restrict the cosine gate to channels BOTH fragments treat as
                                   #   primary (p2p >= frac*max).  The near-threshold channels carry mostly noise and decorrelate
                                   #   true same-neuron pairs; the intersection (g5 median 5 of 8) lifts those links over threshold.
                                   #   Recall lever -- keep the FK_LINK_OFF_THR (and FK_LINK_TAN_THR) precision guards ON with it.
