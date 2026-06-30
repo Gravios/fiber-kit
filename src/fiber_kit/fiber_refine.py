@@ -1122,6 +1122,27 @@ def write_bundles(arrays, path):
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────
+def emit_identity_hierarchy(base, group, ids, *, variant, tag):
+    """Process refine's written flat .clu (per-spike `ids`) with the microfiberize IDENTITY
+    lift, emitting the matching .clc (atom layer = the clu) and .clp (identity child->parent)
+    so the refine output is a full .clu/.clc/.clp triple that intrachunk/link can consume as a
+    hierarchy.  Not tracked during refine; derived from the final labelling here.  renumber=False
+    keeps the ids exactly as written, so the triple stays consistent with the .clu (the .clu
+    itself is left untouched).  Returns (clc_path, clp_path)."""
+    try:
+        from .fiber_microfiberize import lift_identity
+        from .fiber_refiberize import FiberHierarchy
+    except ImportError:
+        from fiber_microfiberize import lift_identity
+        from fiber_refiberize import FiberHierarchy
+    child, parent = lift_identity(np.asarray(ids))
+    _, clc, clp = FiberHierarchy(child, parent).refiberize(renumber=False)
+    cp = nio.session_path(base, "clc", group, variant=variant, tag=tag)
+    pp = nio.session_path(base, "clp", group, variant=variant, tag=tag)
+    nio.write_clu_file(cp, clc); nio.write_clu_file(pp, clp)
+    return cp, pp
+
+
 def main():
     ap = argparse.ArgumentParser(
         prog="fiber-refine",
@@ -1142,6 +1163,10 @@ def main():
                          "<base>.clu.<out-method>.<group>.refine  ('' for none). "
                          "(was --out-variant; renamed so --out-variant is free for the "
                          "feature variant, as in fiber-realign)")
+    ap.add_argument("--emit-hierarchy", dest="emit_hierarchy", action=argparse.BooleanOptionalAction, default=True,
+                    help="after writing the .clu, also emit the .clc/.clp microfiber triple via the "
+                         "fiber-microfiberize identity lift (each fiber = one atom) so the refine output is "
+                         "a hierarchy intrachunk/link can consume; --no-emit-hierarchy writes the flat .clu only")
     ap.add_argument("--refr-floor", type=int, default=None,
                     help="imposed detection refractory (samples); default = from yaml")
     ap.add_argument("--refr-window-ms", type=float, default=2.0,
@@ -1439,6 +1464,9 @@ def main():
         res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)
         _log("wrote")
         _det("clu", clu_path); _det("res", res_path)
+        if a.emit_hierarchy:
+            _cp, _pp = emit_identity_hierarchy(base, elec, ids, variant=a.out_method, tag=a.out_stage)
+            _det("clc", _cp); _det("clp", _pp)
         if tracks is not None:
             gpath = write_chunk_geometry(tracks, f"{base}.geomchunk.{elec}.npz")
             _det("geom", f"{gpath}   ({len(tracks):,} fibers across windows)")
@@ -1486,6 +1514,9 @@ def main():
                     f"{s['rkk']}\t{s['dip']}\t{s['iso']}\t{s['fold']}\t{s['kept']}\n")
     _log("wrote")
     _det("clu", clu_path); _det("res", res_path); _det("stats", tsv)
+    if a.emit_hierarchy:
+        _cp, _pp = emit_identity_hierarchy(base, elec, ids, variant=a.out_method, tag=a.out_stage)
+        _det("clc", _cp); _det("clp", _pp)
     if snaps is not None:
         tracks = geometry_tracks(snaps, waves, W, nmean, mask)
         gpath = write_geometry_tracks(tracks, f"{base}.geom.{elec}.npz")
