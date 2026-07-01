@@ -20,6 +20,8 @@ Usage:
         --variant stderiv --stage fiber_session [--celltype int] [--min-n 120] \
         [--gap-min 45] [--cos-thr 0.92] [--amp-ratio 2.2] [--out report.png]
     python3 tools/piece_interneurons.py <session> <group> --seed 134 --gap-min 60 --out chase.png
+    # hold out a found chain, seed a new anchor from what remains:
+    python3 tools/piece_interneurons.py <session> <group> --seed 262 --exclude 134,314,... --gap-min 60
 """
 import argparse
 import os
@@ -31,15 +33,16 @@ except ImportError:
     import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_geometry as fg
 
 
-def fragment_templates(spk, res, ids, *, min_n, sig_cap, sr, celltype, dom_idx, seed=0):
+def fragment_templates(spk, res, ids, *, min_n, sig_cap, sr, celltype, dom_idx, exclude=None, seed=0):
     """Per-cluster aligned template + time centroid, filtered to `celltype` with dominant channel in
-    `dom_idx`.  Returns a time-sorted list of fragment dicts."""
+    `dom_idx`.  `exclude` (a set of clu ids) is held out entirely.  Returns a time-sorted list."""
     rng = np.random.default_rng(seed)
+    exclude = exclude or set()
     tmin = (res - res.min()) / sr / 60.0
     uniq, cnt = np.unique(ids, return_counts=True)
     frags = []
     for u, c in zip(uniq, cnt):
-        if u < 2 or c < min_n:
+        if u < 2 or c < min_n or int(u) in exclude:
             continue
         idx = np.flatnonzero(ids == u)
         s = idx if len(idx) <= sig_cap else rng.choice(idx, sig_cap, replace=False)
@@ -178,8 +181,12 @@ def main():
     ap.add_argument("--seed", type=int, default=None,
                     help="chase ONE cell across ALL channels from this seed cluster id (drift-following: "
                          "follows it as its dominant channel drifts); ignores --dom-channels, keeps --celltype")
+    ap.add_argument("--exclude", default=None,
+                    help="comma list of clu ids to HOLD OUT of the fragment pool (e.g. a previously-found "
+                         "chain) so a new anchor is linked from the remaining fragments only")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
+    exclude = {int(x) for x in a.exclude.split(',')} if a.exclude else set()
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
@@ -193,7 +200,7 @@ def main():
 
     if a.seed is not None:                                      # chase ONE cell across ALL channels
         frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
-                                   celltype=a.celltype or None, dom_idx=set(range(len(gch))))
+                                   celltype=a.celltype or None, dom_idx=set(range(len(gch))), exclude=exclude)
         pos = next((k for k, f in enumerate(frags) if f["clu"] == a.seed), None)
         if pos is None:
             raise SystemExit(f"[piece] seed clu {a.seed} not among {len(frags)} {a.celltype} fragments (>= --min-n)")
@@ -220,7 +227,7 @@ def main():
         return
 
     frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
-                               celltype=a.celltype or None, dom_idx=dom_idx)
+                               celltype=a.celltype or None, dom_idx=dom_idx, exclude=exclude)
     tgt = [int(gch[i]) for i in sorted(dom_idx)] if a.target else "any"
     print(f"[piece] {os.path.basename(base)} elec {elec}: {len(frags)} {a.celltype} fragments dominant on {tgt}")
     if len(frags) < 2:
