@@ -863,9 +863,8 @@ def main():
                          "loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.")
     ap.add_argument("--off-ceil", type=float, default=DEFAULT_OFF_CEIL,
                     help="cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee).")
-    ap.add_argument("--iter", "--iters", type=int, default=1, dest="n_iter",
-                    help="iterate group->re-estimate->regroup this many passes (default 1 = single pass). "
-                         ">1 keeps the tight gate but re-merges denoised units across passes (g5: 5 -> ~1124).")
+    # --iter (dest n_iter) is an IntrachunkConfig knob (config.py) so --profile recommended / the
+    # exp config can carry it; it is added by IntrachunkConfig.add_arguments above.
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,

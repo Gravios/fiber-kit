@@ -307,6 +307,12 @@ FK_INTRA_OFF_THR_INT:    0.5      # 0.5 | 0.4-0.6 ("" off).  DUAL gate: offset R
                                   #   tighten to ~0.5. Needs raw .spk for cell-typing.
 FK_INTRA_OFF_THR_PYR:    1.0      # 1.0 | 0.9-1.1 ("" off).  DUAL gate: offset RMS threshold for PYRAMIDAL pairs (wide
                                   #   trough-to-peak). Set BOTH _INT and _PYR to enable the dual gate; mixed -> stricter.
+FK_INTRA_ITER:           5        # 5 | 1 = single pass.  Iterate group->re-estimate->regroup to convergence (cap 5;
+                                  #   early-stops when a pass merges nothing).  NOT a gate: each pass AGGREGATES the
+                                  #   partial merges and re-signs the units, so the same tight gate keeps finding the
+                                  #   true merges a single pass left -- denoising, not gate-loosening.  Production
+                                  #   default is 1 (config.py); this experiment runs the within-chunk merge to
+                                  #   convergence to shed the residual over-split before linking.
 
 FK_LINK_COS_THR:         0.75     # 0.75 | 0.70-0.85.  Cosine PREFILTER for cross-chunk candidates.  Relaxed to 0.75 (vs 0.85)
                                   #   added 7 clean bundles: recall matters here because the precision is carried by the
