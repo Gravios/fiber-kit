@@ -82,7 +82,7 @@ pipeline:
 # over-merge is not.
 FK_SESSION_FINE_METHOD:  rkk      # rkk | kk.  Per-fiber fine clusterer; rkk = masked-EM KlustaKwik with
                                   #   BIC model selection (robust to unequal covariances). Categorical.
-FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
+FK_SESSION_CHUNK_MIN:    18       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.
 FK_SESSION_RKK_DELETE:   0        # 0 | 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters
@@ -111,10 +111,10 @@ FK_FEATURE_ALIGN:        xcorr    # xcorr | centroid | off.  Sub-sample align of
                                   #   ~(d/W)^2 (W = spike width); for narrow interneurons (W~4 samp) even d=1 hurts.
                                   #   The #1 lever for separating subtle look-alike shapes.  xcorr aligns to the
                                   #   summed template; centroid uses the energy centroid; off disables.
-FK_INCLUSION_K:          2.5      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
+FK_INCLUSION_K:          2.0      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
                                   #   Gaussian MAD=0.6745*sigma, so k=2.5 -> median+1.69*sigma (~91% of a unimodal
                                   #   core).  Lower k = purer cores (drop contaminant tails); higher = more inclusive.
-FK_DIP_DIM:              6        # 6 | 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint /
+FK_DIP_DIM:              4        # 6 | 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint /
                                   #   secondary PCs that separate co-located pairs; too many adds pure-noise dims.
 FK_DIP_ALPHA:            0.02     # 0.02 | 0.01-0.03.  Dip-test p to REJECT unimodality and bisect.  Statistical gate:
                                   #   >0.05 starts splitting on sampling noise; <0.01 misses real bimodality.
@@ -123,7 +123,7 @@ FK_DIP_MIN:              30       # 30 | 30-60.  Min spikes to attempt a dip bis
 # energy-band split: partition an energy-CONFOUNDED coarse fiber into log10-energy bands, cluster per
 # band, relink by overlap-anchor.  Surfaces shape sub-units the amplitude/drift axis masks.
 FK_EBAND:                1        # 1=on (validated) | 0=off (falls back to --fine-method per fiber).
-FK_EBAND_WIDTH:          0.45     # 0.45 | 0.35-0.60 (decades).  Band width; 0.45 dec ~ factor 2.8 in amplitude.
+FK_EBAND_WIDTH:          0.40     # 0.45 | 0.35-0.60 (decades).  Band width; 0.45 dec ~ factor 2.8 in amplitude.
                                   #   Narrower = more, finer but sparser bands.
 FK_EBAND_OVERLAP:        0.2      # 0.20 | 0.15-0.25 (decades).  Band overlap so the overlap-anchor relink has shared
                                   #   spikes to stitch adjacent bands.
@@ -140,11 +140,11 @@ FK_EBAND_LOW_ASSIGN:     0.2      # 0.20 | 0.0-0.3.  Bottom fraction of the ener
 # The alignment window and peak sample come from <session>.yaml (peakSampleIndex / nSamples).
 
 # ----- fiber-refine : split + fold gates + merge-back ----------------------
-FK_REFINE_LARGE:         150      # 150 | 100-300.  Split only clusters with >= this many spikes (need enough to
+FK_REFINE_LARGE:         100      # 150 | 100-300.  Split only clusters with >= this many spikes (need enough to
                                   #   estimate sub-structure).  Stock 800 skips most 60-700-spike units -> subtle
                                   #   pairs never split.  Lower = more aggressive splitting.
 FK_REFINE_MIN_GROUP:     30       # 30 | 25-50.  Min spikes per split piece; a piece below this is noise, not a unit.
-FK_REFINE_DROP_MIN:      5        # 5 | 0-30.  Cluster-KEEP floor (decoupled from MIN_GROUP, the split-PIECE floor):
+FK_REFINE_DROP_MIN:      0        # 5 | 0-30.  Cluster-KEEP floor (decoupled from MIN_GROUP, the split-PIECE floor):
                                   #   each refine iteration drops clusters SMALLER than this to the artifact bin.  At
                                   #   MIN_GROUP=30 this discarded session's small over-split fragments (8-30 spikes)
                                   #   wholesale -- tens of thousands of real spikes lost to artifact.  5 keeps real
@@ -159,7 +159,7 @@ FK_RKK_DELETE:           1        # 1 | 0/1.  1 = rkk's CEM culls sub-min-group 
                                   #   to the residual/artifact bin).  Set 0 (--no-rkk-delete) to keep small,
                                   #   non-singular rkk sub-clusters as real units when too many spikes are landing
                                   #   in the artifact cluster.  Trades a fuller sort for some extra over-split.
-FK_REFINE_MERGE_MIN_SIM: 0.96     # 0.96 | 0.92-0.97.  Merge-back similarity after splitting.  0.96 KEEPS over-splits
+FK_REFINE_MERGE_MIN_SIM: 0.98     # 0.96 | 0.92-0.97.  Merge-back similarity after splitting.  0.96 KEEPS over-splits
                                   #   for intrachunk to adjudicate locally; 0.92 re-merges eagerly here.
 FK_REFINE_MERGE_BUDGET:  1.0      # 1.0 | 0.5-1.0.  Merge-back refractory budget (%): a pair merges only if the
                                   #   merged unit's [floor,window) contamination stays <= this.  TO REDUCE
@@ -177,9 +177,9 @@ FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the 
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).
 FK_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters whose top-3 feature variance exceeds this x the
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
-FK_REFINE_SPLIT_MIN_CORR: 0.93    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
+FK_REFINE_SPLIT_MIN_CORR: 0.95    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
                                   #   (within-piece template correlation >= this); else the split was noise.
-FK_REFINE_CHUNK_MINUTES: 12       # 12 | 8-20 (min).  Refine chunk length; match FK_SESSION_CHUNK_MIN.
+FK_REFINE_CHUNK_MINUTES: 18       # 12 | 8-20 (min).  Refine chunk length; match FK_SESSION_CHUNK_MIN.
 FK_REFINE_CHUNK_JOBS:    1        # 1 | 1-N (processes).  Parallel worker processes over chunks in drift-aware mode
                                   #   (chunk-minutes>0).  Chunks are independent (own whitener + refine), so this is
                                   #   the main speedup for a chunked run; the cross-window link runs serially after.
@@ -221,8 +221,8 @@ FK_MERGE_WARP_RESID_THR_PYR: ""   # "" = off.  PYRAMIDAL threshold (wide trough-
 # OFF: per-spike stderiv discrimination is weak (a spike scores ~0.69 to its OWN template vs ~0.65 to a foreign one),
 # so the same gate that reclaims real contamination also moves ~3.8% of already-clean continuum-boundary spikes --
 # enable deliberately (curation, or a known dirty/distinct pair), NOT as a blind automatic pass.
-FK_REFINE_AB_RECLAIM:    0        # 0 | 0/1.  0 = off (default; reproduces current output).  1 = run the reclaim pass.
-FK_REFINE_AB_DISTINCT:   0.93     # 0.93 | 0.90-0.95.  Max host-RESIDUAL/donor template shape-corr to treat them as two
+FK_REFINE_AB_RECLAIM:    1        # 0 | 0/1.  0 = off (default; reproduces current output).  1 = run the reclaim pass.
+FK_REFINE_AB_DISTINCT:   0.98     # 0.93 | 0.90-0.95.  Max host-RESIDUAL/donor template shape-corr to treat them as two
                                   #   cells; >= this is ONE cell -> merge-back's job, not a reclaim.  Validated knee ~0.93
                                   #   (recall ~100% below it, collapsing into the continuum above).
 FK_REFINE_AB_ABS:        0.50     # 0.50 | 0.40-0.70.  Absolute donor-shape floor a spike must reach (a loose noise floor
@@ -276,17 +276,17 @@ FK_INTRA_GATE:           cfiber   # cfiber | cosine | mmd | kcov.  Shape gate.  
                                   #   mutual-centre-dependent cosine and self-calibrates from the split-half null; it is
                                   #   marginally better on the hard look-alike subset (cosine>0.85) -- the regime that
                                   #   matters under drift.  Set cosine to revert.
-FK_INTRA_COS_THR:        0.85     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
+FK_INTRA_COS_THR:        0.90     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
                                   #   decision is the gate above).
 FK_INTRA_OFF_THR:        1.0      # 1.0 | 0.8-1.2 (samples).  Inter-channel offset RMS gate: fragments of one neuron share
                                   #   per-channel timing; > ~1 sample mismatch implies a different source.
-FK_INTRA_DEPTH_GATE:     35.0     # 35 | 25-45 (um).  Depth gate.  On 20-um pitch a single neuron's localized depth
+FK_INTRA_DEPTH_GATE:     10.0     # 35 | 25-45 (um).  Depth gate.  On 20-um pitch a single neuron's localized depth
                                   #   wanders < ~1.5 sites; 35 um ~ 1.75 sites caps drift and rejects far-apart merges.
-FK_INTRA_AMP_GATE:       1.10     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
+FK_INTRA_AMP_GATE:       0.90     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
                                   #   caps a merge to <=3x amplitude ratio (a single unit's drift amplitude range).
-FK_REFRAC_CEILING:       1.0      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
+FK_REFRAC_CEILING:       0.5      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
                                   #   exceeds this percent -- two genuine units merged manufacture cross-refractory spikes.
-FK_PRE_MERGE_COS:        0.97     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
+FK_PRE_MERGE_COS:        0.98     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
                                   #   the full gate (cheap, safe consolidation that shrinks the agglomeration).
 FK_INTRA_LINKAGE:        complete # complete | dynamic | ms.  Agglomeration linkage.  complete (farthest-point) yields tight,
                                   #   conservative clusters; dynamic/ms are density-adaptive.
@@ -294,7 +294,7 @@ FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag h
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
                                   #   1 = native-rate search.  Higher = finer alignment at compute cost.
-FK_INTRA_CFIBER_Q:       0.90     # 0.90 | 0.85-0.95.  cfiber self-calibration quantile: threshold = Q-quantile of the
+FK_INTRA_CFIBER_Q:       0.95     # 0.90 | 0.85-0.95.  cfiber self-calibration quantile: threshold = Q-quantile of the
                                   #   per-fragment split-half null.  Higher = stricter.
 FK_CFIBER_NULL:          order    # order | energy.  Split-half null basis.  order splits a fragment by spike time (drift-
                                   #   robust); energy splits by amplitude (sensitive to amplitude structure).
