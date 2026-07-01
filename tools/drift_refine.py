@@ -20,7 +20,7 @@ fragments pin the drift more).
 
 Usage:
     python3 tools/drift_refine.py <session> <group> [--snr-thr 8] [--iters 10] \
-        [--gap-min 60] [--cos-thr 0.92] [--pos-tol 8] [--cos-tol 0.08] [--celltype ""] \
+        [--gap-min 60] [--cos-thr 0.92] [--pos-tol 8] [--cos-tol 0.08] [--celltype int|pyr] \
         [--tsv drift_refine.tsv] [--out drift_refine.png]
 """
 import argparse
@@ -29,9 +29,10 @@ import sys
 import numpy as np
 
 try:
-    from fiber_kit import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_localize as loc
+    from fiber_kit import (fiber_lib as fl, session_yaml as sy, neuro_io as nio,
+                           fiber_localize as loc, fiber_geometry as fg)
 except ImportError:
-    import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_localize as loc
+    import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_localize as loc, fiber_geometry as fg
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import piece_interneurons as pi                      # chase_from, _pcos
@@ -55,6 +56,8 @@ def build_pool(spk, res, ids, pos, *, sr, min_n, snr_thr, cap, chunk_min, cellty
         noise = 1.4826 * np.median(np.abs(resid - np.median(resid))) + 1e-9
         snr = float(amp[dom] / noise)
         if snr < snr_thr:
+            continue
+        if celltype and fg.classify_celltype(t, sr) != celltype:
             continue
         ew = amp.astype(float) ** 2; ew /= ew.sum()
         tm = float(np.median(tmin[idx]))
@@ -148,6 +151,8 @@ def main():
     ap.add_argument("--variant", default="stderiv"); ap.add_argument("--stage", default="fiber_session")
     ap.add_argument("--snr-thr", type=float, default=8.0); ap.add_argument("--min-n", type=int, default=200)
     ap.add_argument("--cap", type=int, default=800); ap.add_argument("--iters", type=int, default=10)
+    ap.add_argument("--celltype", choices=["int", "pyr", ""], default="",
+                    help="restrict the pool to a cell class (int/pyr); default '' = ALL high-SNR clusters")
     ap.add_argument("--gap-min", type=float, default=60.0); ap.add_argument("--cos-thr", type=float, default=0.92)
     ap.add_argument("--amp-ratio", type=float, default=2.2); ap.add_argument("--prim-frac", type=float, default=0.3)
     ap.add_argument("--pos-tol", type=float, default=8.0, help="depth tolerance (um) in the re-assignment score")
@@ -164,7 +169,7 @@ def main():
     spk, _ = nio.open_spk_raw(base_p, elec, nsamp, nchan)
     _, ids = nio.read_clu_at(base_p, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
 
-    pool = build_pool(spk, res, ids, pos, sr=sr, min_n=a.min_n, snr_thr=a.snr_thr, cap=a.cap, chunk_min=chunk_min)
+    pool = build_pool(spk, res, ids, pos, sr=sr, min_n=a.min_n, snr_thr=a.snr_thr, cap=a.cap, chunk_min=chunk_min, celltype=a.celltype or None)
     if len(pool) < 4:
         raise SystemExit(f"[drift_refine] pool has {len(pool)} clusters (lower --snr-thr / --min-n)")
     P = {f["clu"]: f for f in pool}

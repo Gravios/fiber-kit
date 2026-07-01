@@ -26,9 +26,9 @@ import os
 import numpy as np
 
 try:
-    from fiber_kit import fiber_lib as fl, session_yaml as sy, neuro_io as nio
+    from fiber_kit import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_geometry as fg
 except ImportError:
-    import fiber_lib as fl, session_yaml as sy, neuro_io as nio
+    import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_geometry as fg
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -47,8 +47,9 @@ def cluster_snr(spk, idx, sr, cap, rng):
     return t, amp, dom, float(amp[dom] / noise)
 
 
-def build_pool(spk, res, ids, *, sr, min_n, snr_thr, cap, seed=0):
-    """High-SNR cluster pool: {clu -> spike idx}, {clu -> snr}, and each cluster's time centroid."""
+def build_pool(spk, res, ids, *, sr, min_n, snr_thr, cap, celltype=None, seed=0):
+    """High-SNR cluster pool (optionally restricted to a cell class): {clu -> spike idx},
+    {clu -> snr}, and each cluster's time centroid."""
     rng = np.random.default_rng(seed)
     tmin = (res - res.min()) / sr / 60.0
     uniq, cnt = np.unique(ids, return_counts=True)
@@ -57,8 +58,8 @@ def build_pool(spk, res, ids, *, sr, min_n, snr_thr, cap, seed=0):
         if u < 2 or c < min_n:
             continue
         idx = np.flatnonzero(ids == u)
-        _, _, _, s = cluster_snr(spk, idx, sr, cap, rng)
-        if s >= snr_thr:
+        t, _, _, s = cluster_snr(spk, idx, sr, cap, rng)
+        if s >= snr_thr and (not celltype or fg.classify_celltype(t, sr) == celltype):
             pool.append(int(u)); snr[int(u)] = s; idxmap[int(u)] = idx; tc[int(u)] = float(np.median(tmin[idx]))
     return pool, snr, idxmap, tc
 
@@ -152,6 +153,8 @@ def main():
     ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",
                     help="waveform space for the templates (default standard = raw)")
     ap.add_argument("--snr-thr", type=float, default=8.0, help="dom-channel SNR floor for the pool (default 8)")
+    ap.add_argument("--celltype", choices=["int", "pyr", ""], default="",
+                    help="restrict the pool to a cell class (int/pyr); default '' = ALL high-SNR clusters")
     ap.add_argument("--min-n", type=int, default=200); ap.add_argument("--cap", type=int, default=500)
     ap.add_argument("--trials", type=int, default=50, help="Monte Carlo peel repeats (default 50)")
     ap.add_argument("--holdout-frac", type=float, default=0.2,
@@ -175,7 +178,7 @@ def main():
         spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
     _, ids = nio.read_clu_at(base, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
 
-    pool, snr, idxmap, tc = build_pool(spk, res, ids, sr=sr, min_n=a.min_n, snr_thr=a.snr_thr, cap=a.cap)
+    pool, snr, idxmap, tc = build_pool(spk, res, ids, sr=sr, min_n=a.min_n, snr_thr=a.snr_thr, cap=a.cap, celltype=a.celltype or None)
     if len(pool) < 2:
         raise SystemExit(f"[consensus] high-SNR pool has {len(pool)} clusters (raise --min-n / lower --snr-thr)")
     print(f"[consensus] {os.path.basename(base)} elec {elec}: {len(pool)} clusters SNR>={a.snr_thr:g}, "
