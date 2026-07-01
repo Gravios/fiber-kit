@@ -112,6 +112,12 @@ MERGE_WARP_RESID_THR="${FK_MERGE_WARP_RESID_THR:-}" # single-channel warp-incong
 LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
 LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles vs the 0.85 default
 
+# 0080 overlap-backbone standard-space co-gate (fiber-intrachunk --emit-units).  The boundary match
+# runs on the stderiv spkD, which is near-blind to depth/amplitude; these co-gate each accepted seed
+# on the RAW standard median template.  BACKBONE_WARP (group-delay coherence) is the extra warp gate.
+BACKBONE_STD_COS="${FK_BACKBONE_STD_COS:-}"        # empty = stage default (0.75); 0 disables the cosine co-gate
+BACKBONE_WARP="${FK_BACKBONE_WARP:-}"              # empty = off (warp co-gate)
+
 # ===================== cfiber shape gate (affine-invariant) ============
 # cfiber = rotation+scale+translation-invariant Fourier descriptor of each unit's complex channel-
 # loop.  Drift-invariant by construction, so it complements/strengthens the (mutual-centre-dependent)
@@ -409,10 +415,14 @@ fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard sp
 
 fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
     echo "== fiber-intrachunk  (.${STEP_IN:-refine} -> .${STEP_OUT:-refine_intrachunk}) =="
+    local backbone_args=()
+    [ -n "$BACKBONE_STD_COS" ] && backbone_args+=(--backbone-std-cos "$BACKBONE_STD_COS")
+    [ -n "$BACKBONE_WARP" ]    && backbone_args+=(--backbone-warp "$BACKBONE_WARP")
     _run fiber-intrachunk "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
         --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --profile recommended --emit-units \
+        "${backbone_args[@]+"${backbone_args[@]}"}" \
         --out-stage "${STEP_OUT:-refine_intrachunk}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
