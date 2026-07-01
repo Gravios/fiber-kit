@@ -22,6 +22,7 @@ Usage:
     python3 tools/piece_interneurons.py <session> <group> --seed 134 --gap-min 60 --out chase.png
     # hold out a found chain, seed a new anchor from what remains:
     python3 tools/piece_interneurons.py <session> <group> --seed 262 --exclude 134,314,... --gap-min 60
+    python3 tools/piece_interneurons.py <session> <group> --seed 134 --spk stderiv   # link in stderiv space
 """
 import argparse
 import os
@@ -33,9 +34,11 @@ except ImportError:
     import fiber_lib as fl, session_yaml as sy, neuro_io as nio, fiber_geometry as fg
 
 
-def fragment_templates(spk, res, ids, *, min_n, sig_cap, sr, celltype, dom_idx, exclude=None, seed=0):
+def fragment_templates(spk, res, ids, *, min_n, sig_cap, sr, celltype, dom_idx, exclude=None, type_spk=None, seed=0):
     """Per-cluster aligned template + time centroid, filtered to `celltype` with dominant channel in
-    `dom_idx`.  `exclude` (a set of clu ids) is held out entirely.  Returns a time-sorted list."""
+    `dom_idx`.  `exclude` (a set of clu ids) is held out entirely.  The linking template comes from
+    `spk`; cell-typing uses `type_spk` (the STANDARD waveform -- stderiv breaks trough-to-peak
+    width) when given, else `spk`.  Returns a time-sorted list."""
     rng = np.random.default_rng(seed)
     exclude = exclude or set()
     tmin = (res - res.min()) / sr / 60.0
@@ -46,12 +49,16 @@ def fragment_templates(spk, res, ids, *, min_n, sig_cap, sr, celltype, dom_idx, 
             continue
         idx = np.flatnonzero(ids == u)
         s = idx if len(idx) <= sig_cap else rng.choice(idx, sig_cap, replace=False)
-        t = np.median(fl.align_xcorr(np.asarray(spk[np.sort(s)], float), ref="median", iters=4), axis=0)
+        srt = np.sort(s)
+        t = np.median(fl.align_xcorr(np.asarray(spk[srt], float), ref="median", iters=4), axis=0)
         amp = np.ptp(t, axis=0); dom = int(np.argmax(amp))
         if dom not in dom_idx:
             continue
-        if celltype and fg.classify_celltype(t, sr) != celltype:
-            continue
+        if celltype:
+            tt = (np.median(fl.align_xcorr(np.asarray(type_spk[srt], float), ref="median", iters=4), axis=0)
+                  if type_spk is not None else t)
+            if fg.classify_celltype(tt, sr) != celltype:
+                continue
         frags.append(dict(clu=int(u), n=int(c), t=t, amp=amp, dom=dom, tmid=float(np.median(tmin[idx]))))
     frags.sort(key=lambda f: f["tmid"])
     return frags
@@ -181,6 +188,9 @@ def main():
     ap.add_argument("--seed", type=int, default=None,
                     help="chase ONE cell across ALL channels from this seed cluster id (drift-following: "
                          "follows it as its dominant channel drifts); ignores --dom-channels, keeps --celltype")
+    ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",
+                    help="waveform space for the linking templates (default standard = raw; stderiv = the "
+                         "clustering feature space).  Cell-typing always uses standard (stderiv breaks width).")
     ap.add_argument("--exclude", default=None,
                     help="comma list of clu ids to HOLD OUT of the fragment pool (e.g. a previously-found "
                          "chain) so a new anchor is linked from the remaining fragments only")
@@ -195,12 +205,17 @@ def main():
     dom_idx = set(range(len(gch))) if not a.target else {int(np.flatnonzero(gch == int(x))[0])
                                                           for x in a.target.split(",") if (gch == int(x)).any()}
     res = nio.read_res(base, elec)
-    spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
+    if a.spk == "stderiv":
+        spk, _ = nio.open_spk(base, elec, nsamp, nchan, prefer=nio.prefer_derived())
+        type_spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)   # standard, for cell-typing only
+    else:
+        spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
+        type_spk = None
     _, ids = nio.read_clu_at(base, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
 
     if a.seed is not None:                                      # chase ONE cell across ALL channels
         frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
-                                   celltype=a.celltype or None, dom_idx=set(range(len(gch))), exclude=exclude)
+                                   celltype=a.celltype or None, dom_idx=set(range(len(gch))), exclude=exclude, type_spk=type_spk)
         pos = next((k for k, f in enumerate(frags) if f["clu"] == a.seed), None)
         if pos is None:
             raise SystemExit(f"[piece] seed clu {a.seed} not among {len(frags)} {a.celltype} fragments (>= --min-n)")
@@ -227,7 +242,7 @@ def main():
         return
 
     frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
-                               celltype=a.celltype or None, dom_idx=dom_idx, exclude=exclude)
+                               celltype=a.celltype or None, dom_idx=dom_idx, exclude=exclude, type_spk=type_spk)
     tgt = [int(gch[i]) for i in sorted(dom_idx)] if a.target else "any"
     print(f"[piece] {os.path.basename(base)} elec {elec}: {len(frags)} {a.celltype} fragments dominant on {tgt}")
     if len(frags) < 2:
