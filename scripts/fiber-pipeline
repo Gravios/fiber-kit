@@ -107,6 +107,8 @@ MERGE_WARP_RECALL="${FK_MERGE_WARP_RECALL:-}"     # empty = OFF (default).  The 
 MERGE_AMP_THR="${FK_MERGE_AMP_THR:-0.7}"           # amplitude-profile correlation floor for the recall path
 MERGE_WARP_THR="${FK_MERGE_WARP_THR:-}"            # 0084 precision GATE on cosine-selected merges (empty=off)
 MERGE_WARP_RESID_THR="${FK_MERGE_WARP_RESID_THR:-}" # single-channel warp-incongruity SUB-gate on the warp gate/recall (empty=off)
+MERGE_WARP_RESID_THR_INT="${FK_MERGE_WARP_RESID_THR_INT:-}"  # cell-type-aware warp-resid gate: INTERNEURON threshold (empty=off)
+MERGE_WARP_RESID_THR_PYR="${FK_MERGE_WARP_RESID_THR_PYR:-}"  # cell-type-aware warp-resid gate: PYRAMIDAL threshold (set both to enable)
 # 0085 fiber-link warp co-gate: on g5 did NOT help (precision already saturated; per-chunk templates
 # too noisy) -- off by default.  The linking win was relaxing the cosine prefilter (LINK_COS_THR).
 LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
@@ -375,6 +377,8 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ -n "$MERGE_WARP_RECALL" ] && warp_args+=(--merge-warp-recall "$MERGE_WARP_RECALL" --merge-amp-thr "$MERGE_AMP_THR")
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
     [ -n "$MERGE_WARP_RESID_THR" ] && warp_args+=(--merge-warp-resid-thr "$MERGE_WARP_RESID_THR")
+    [ -n "$MERGE_WARP_RESID_THR_INT" ] && warp_args+=(--merge-warp-resid-thr-int "$MERGE_WARP_RESID_THR_INT")
+    [ -n "$MERGE_WARP_RESID_THR_PYR" ] && warp_args+=(--merge-warp-resid-thr-pyr "$MERGE_WARP_RESID_THR_PYR")
     local rkk_args=()
     [ "$RKK_DELETE" = "0" ] && rkk_args+=(--no-rkk-delete)
     local dedup_args=()

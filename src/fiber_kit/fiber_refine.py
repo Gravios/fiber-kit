@@ -448,7 +448,8 @@ def _amp_profile_corr(ta, tb):
 
 
 def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
-               mode="normalized", warp_thr=None, warp_recall=None, warp_resid_thr=None, amp_thr=0.7, verbose=True):
+               mode="normalized", warp_thr=None, warp_recall=None, warp_resid_thr=None, amp_thr=0.7,
+               warp_resid_thr_int=None, warp_resid_thr_pyr=None, raw_waves=None, sr=32552.0, verbose=True):
     """Contamination-gated agglomerative merge of an over-split sort back down to
     a reasonable count.  Greedily merges the most-similar cluster pair (by median
     waveform: shape-only when mode='normalized' -> merges energy levels of one
@@ -464,14 +465,30 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
     groups = {c: np.flatnonzero(lab == c) for c in u}
     med = {c: _med(groups[c], waves) for c in u}
     gd = ({c: fg.group_delay_profile(med[c]) for c in u}
-          if (warp_thr is not None or warp_recall is not None or warp_resid_thr is not None) else None)
+          if (warp_thr is not None or warp_recall is not None or warp_resid_thr is not None
+              or warp_resid_thr_int is not None or warp_resid_thr_pyr is not None) else None)
+    # cell-type-aware (dual) warp-residual threshold.  Interneurons have far stiffer per-channel timing
+    # than pyramidal cells (offset RMS ~0.23 vs ~0.72), so a single-channel group-delay residual that is
+    # benign jitter for a pyr is a real different-source signature for an int -> it wants a TIGHTER veto.
+    # Type each cluster from its RAW median (classify_celltype: trough-to-peak width; stderiv breaks it, so
+    # this needs raw_waves); a pair touching an interneuron uses the int threshold.  Absent the dual thrs
+    # or raw_waves, falls back to the single warp_resid_thr (unchanged behaviour).
+    dual = raw_waves is not None and (warp_resid_thr_int is not None or warp_resid_thr_pyr is not None)
+    ctype = {c: fg.classify_celltype(_med(groups[c], raw_waves), sr) for c in u} if dual else {}
+    def _resid_thr(a, b):
+        if not dual:
+            return warp_resid_thr
+        t_int = warp_resid_thr_int if warp_resid_thr_int is not None else warp_resid_thr
+        t_pyr = warp_resid_thr_pyr if warp_resid_thr_pyr is not None else warp_resid_thr
+        return t_int if (ctype.get(a) == "int" or ctype.get(b) == "int") else t_pyr
     def _warp_ok(a, b):   # spatio-temporal WARP coherence gate on the (clean) median templates
         return warp_thr is None or fg.warp_correlation(gd[a], gd[b]) >= warp_thr
     def _warp_resid_ok(a, b):   # single-channel warp-incongruity SUB-gate (layers on the warp gate/recall):
         # among coherent-overall pairs, reject when one channel's group-delay residual betrays a different
         # co-located source; warp_channel_incongruity returns 0.0 when warp < 0.85, so it only acts on
-        # already-coherent pairs and is a no-op below that.
-        return warp_resid_thr is None or fg.warp_channel_incongruity(gd[a], gd[b]) <= warp_resid_thr
+        # already-coherent pairs and is a no-op below that.  The threshold is cell-type-aware (see above).
+        thr = _resid_thr(a, b)
+        return thr is None or fg.warp_channel_incongruity(gd[a], gd[b]) <= thr
     def _admit(a, b, sim):
         if sim >= min_sim and _warp_ok(a, b) and _warp_resid_ok(a, b):
             return True                      # cosine-selected merge (energy levels), warp-gated
@@ -504,6 +521,8 @@ def merge_back(lab, waves, res, ctx, *, budget=1.0, min_sim=0.90,
         med[nid] = (sizes[a] * med[a] + sizes[b] * med[b]) / sizes[nid]   # cheap merged template
         if gd is not None:
             gd[nid] = fg.group_delay_profile(med[nid])
+        if dual:                                 # a merge touching an interneuron stays int (the stiffer gate)
+            ctype[nid] = "int" if (ctype.get(a) == "int" or ctype.get(b) == "int") else "pyr"
         active.add(nid); nmerge += 1
         for c in active:
             if c == nid:
@@ -759,6 +778,7 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
            conv_tol=0.0, conv_patience=2, reseed=0,
            merge_back_enable=True, merge_budget=1.0, merge_min_sim=0.92, merge_warp_thr=None,
            merge_warp_recall=None, merge_warp_resid_thr=None, merge_amp_thr=0.7,
+           merge_warp_resid_thr_int=None, merge_warp_resid_thr_pyr=None, raw_waves=None,
            merge_mode="normalized", fine_method="gmm", coarse_mg=150,
            residual_split=True, residual_margin=0.02,
            ab_reclaim=False, ab_distinct=0.93, ab_abs=0.50, ab_margin=0.05, ab_min=10, ab_sigcap=2000, ab_jobs=1,
@@ -837,6 +857,8 @@ def refine(waves, res_abs, W, nmean, mask, sr, *,
             lab = merge_back(lab, waves, res_abs, ctx, budget=merge_budget,
                              min_sim=merge_min_sim, mode=merge_mode, warp_thr=merge_warp_thr,
                              warp_recall=merge_warp_recall, warp_resid_thr=merge_warp_resid_thr,
+                             warp_resid_thr_int=merge_warp_resid_thr_int,
+                             warp_resid_thr_pyr=merge_warp_resid_thr_pyr, raw_waves=raw_waves, sr=sr,
                              amp_thr=merge_amp_thr, verbose=verbose)
             st = _iter_stats(f"{p+1}.merge" if reseed else "merge", lab, waves, res_abs, ctx)
             stats.append(st)
@@ -986,6 +1008,8 @@ def _init_refine_worker(cfg):
     _RCTX.clear(); _RCTX.update(cfg)
     _RCTX["spk"], _ = fs.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"])
     _RCTX["filmm"] = nio.open_signal(f'{cfg["base"]}.fil', cfg["ntotal"])
+    if cfg.get("need_raw"):                     # standard .spk for the cell-type-aware warp-resid gate
+        _RCTX["raw"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"], prefer=["standard"])
 
 
 def _refine_one_chunk(task):
@@ -997,10 +1021,11 @@ def _refine_one_chunk(task):
     c, ext, res_e, init_e = task
     ctx = _RCTX
     waves_e = np.asarray(ctx["spk"][ext], dtype=float)
+    raw_e = np.asarray(ctx["raw"][ext], dtype=float) if "raw" in ctx else None
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
     Wc, nmc, _ = fs.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
     labc, _ = refine(waves_e, res_e, Wc, nmc, ctx["mask"], ctx["sr"],
-                     init_labels=init_e, min_group=ctx["min_group"], verbose=False, **ctx["refine_kw"])
+                     init_labels=init_e, min_group=ctx["min_group"], raw_waves=raw_e, verbose=False, **ctx["refine_kw"])
     return c, ext, labc, Wc, nmc
 
 
@@ -1040,8 +1065,10 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
             continue
         tasks.append((c, ext, res[ext], (init[ext] if init is not None else None)))
 
+    need_raw = (refine_kw.get("merge_warp_resid_thr_int") is not None
+                or refine_kw.get("merge_warp_resid_thr_pyr") is not None)
     cfg = dict(base=base, elec=elec, ntotal=ntotal, nsamp=nsamp, nchan=nchan, gch=gch,
-               mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw)
+               mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw, need_raw=need_raw)
     jobs = max(1, int(jobs))
     if jobs == 1 or len(tasks) <= 1:                            # chunks are independent; serial == the former inline loop
         _init_refine_worker(cfg)
@@ -1220,6 +1247,16 @@ def main():
                          "channels can hold it high while one channel betrays a different co-located source; this catches "
                          "that (especially on the low-cosine warp-recall admits). g5: vetoes ~9%% of warp-coherent merge-"
                          "admissible pairs at ~1.0. None (default) = off.")
+    ap.add_argument("--merge-warp-resid-thr-int", type=float, default=None,
+                    help="cell-type-aware warp-incongruity SUB-gate: threshold for pairs touching an INTERNEURON "
+                         "(narrow trough-to-peak). Interneurons fire fast so their per-channel timing is very stable "
+                         "(offset RMS ~0.23), making a single-channel group-delay residual a real different-source "
+                         "signature -> tighter than pyr (~0.7). Needs raw .spk for cell-typing. Set BOTH _INT and _PYR "
+                         "to enable the dual gate (each falls back to --merge-warp-resid-thr if only one is set).")
+    ap.add_argument("--merge-warp-resid-thr-pyr", type=float, default=None,
+                    help="cell-type-aware warp-incongruity SUB-gate: threshold for PYRAMIDAL pairs (wide trough-to-peak). "
+                         "Pyramidal timing jitters more (offset RMS ~0.72), so a larger single-channel residual is benign "
+                         "(~1.3). A pair touching an interneuron uses the stricter _INT threshold.")
     ap.add_argument("--merge-mode", choices=["normalized", "amplitude"], default="normalized",
                     help="normalized = merge energy levels (neuron count); amplitude = keep them")
     ap.add_argument("--split-min-corr", type=float, default=0.93,
@@ -1445,6 +1482,7 @@ def main():
                          conv_patience=a.converge_patience, reseed=a.reseed,
                          merge_back_enable=a.merge_back, merge_budget=a.merge_budget, merge_warp_thr=a.merge_warp_thr,
                          merge_warp_recall=a.merge_warp_recall, merge_warp_resid_thr=a.merge_warp_resid_thr, merge_amp_thr=a.merge_amp_thr,
+                         merge_warp_resid_thr_int=a.merge_warp_resid_thr_int, merge_warp_resid_thr_pyr=a.merge_warp_resid_thr_pyr,
                          merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
                          fine_method=a.fine_method, residual_split=a.residual_split,
                          ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
@@ -1482,6 +1520,10 @@ def main():
     W, nmean, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
 
     snaps = [] if a.track_geometry else None
+    raw_waves_ws = None
+    if a.merge_warp_resid_thr_int is not None or a.merge_warp_resid_thr_pyr is not None:
+        _rspk, _ = nio.open_spk(base, elec, nsamp, nchan, prefer=["standard"])   # cell-type-aware warp-resid gate
+        raw_waves_ws = np.asarray(_rspk[:], dtype=float)                          # aligned to waves (post-dedup)
     lab, stats = refine(waves, res, W, nmean, mask, sr,
                         floor=floor, window_ms=a.refr_window_ms, iters=a.iters,
                         large=a.large, min_group=a.min_group, drop_min=a.drop_min,
@@ -1497,6 +1539,10 @@ def main():
                         conv_patience=a.converge_patience, reseed=a.reseed,
                         merge_back_enable=a.merge_back, merge_budget=a.merge_budget,
                         merge_min_sim=a.merge_min_sim, merge_mode=a.merge_mode,
+                        merge_warp_thr=a.merge_warp_thr, merge_warp_recall=a.merge_warp_recall,
+                        merge_warp_resid_thr=a.merge_warp_resid_thr, merge_amp_thr=a.merge_amp_thr,
+                        merge_warp_resid_thr_int=a.merge_warp_resid_thr_int,
+                        merge_warp_resid_thr_pyr=a.merge_warp_resid_thr_pyr, raw_waves=raw_waves_ws,
                         fine_method=a.fine_method, residual_split=a.residual_split,
                         ab_reclaim=a.ab_reclaim, ab_distinct=a.ab_distinct, ab_abs=a.ab_abs,
                         ab_margin=a.ab_margin, ab_min=a.ab_min, ab_sigcap=a.ab_sigcap, ab_jobs=a.ab_jobs,

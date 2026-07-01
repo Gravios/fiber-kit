@@ -207,6 +207,13 @@ FK_MERGE_WARP_RESID_THR: 1.0      # 1.0 | 0.75-1.5 ("" off).  Single-channel war
                                   #   gate/recall: among coherent-overall pairs, veto if any ONE channel's group-delay
                                   #   residual (Theil-Sen line) > this many samples (a strong-channel-masked source).
                                   #   Self-gates at warp >= 0.85 (no-op below).
+FK_MERGE_WARP_RESID_THR_INT: ""   # "" = off.  Cell-type-aware warp-resid gate: threshold for pairs touching an
+                                  #   INTERNEURON (narrow trough-to-peak).  Interneurons fire fast -> very stable per-
+                                  #   channel timing, so a single-channel group-delay residual is a real different-source
+                                  #   signature -> tighter (~0.7).  Needs raw .spk (loaded when set).  Set BOTH _INT+_PYR
+                                  #   to enable the dual gate; each falls back to FK_MERGE_WARP_RESID_THR if only one set.
+FK_MERGE_WARP_RESID_THR_PYR: ""   # "" = off.  PYRAMIDAL threshold (wide trough-to-peak): timing jitters more, so a larger
+                                  #   residual is benign (~1.3).  A pair touching an interneuron uses the stricter _INT.
 # A/B contamination reclaim (--ab-reclaim).  OPT-IN, runs AFTER merge-back: move a host cluster's spikes into a
 # clean, DISTINCT donor when their realigned peak-window shape clearly prefers the donor (gated on the host
 # RESIDUAL staying distinct + the donor's refractory staying clean; reclaim-only, never spawns clusters).  Recovers
