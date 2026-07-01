@@ -139,7 +139,7 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
-                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1,
+                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1, max_shift=None,
                   cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
                   align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                   frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
@@ -180,6 +180,10 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
             if len(ai) < 2 or len(bi) < 2:
                 continue
             dd = D[int(chunks[k + g])] - D[int(chunks[k])]
+            if max_shift is not None and abs(dd) > max_shift:
+                continue                                 # drift over this boundary exceeds the allowed linear
+                                                         # shift -> leave the two sides split (a collinear band
+                                                         # break); low-drift spans still link, ISI re-joins later
             if dr_feat is not None:                      # template-DR candidate space (drift-robust;
                 Fa = dr_feat[ai]; Fb = dr_feat[bi]       # generates far cleaner candidates than position-NN
                 thr = dr_thr if dr_thr is not None else np.inf
@@ -393,7 +397,7 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
 
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
-                 max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1,
+                 max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1, max_shift=None,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
                  align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
@@ -452,7 +456,7 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
         ft_sub = [frag_times[int(i)] for i in idx] if (frag_times is not None and ov_refrac is not None) else None
         raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                             chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                            off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap,
+                            off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap, max_shift=max_shift,
                             cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate,
                             align_lag=align_lag, align_upsample=align_upsample,
                             primary_amp_frac=primary_amp_frac, tan_thr=tan_thr,
@@ -560,6 +564,11 @@ def main():
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     ap.add_argument("--cos-thr", type=float, default=0.975)
     ap.add_argument("--pos-thr", type=float, default=1.5)
+    ap.add_argument("--max-shift", type=float, default=None,
+                    help="cap (um) on the drift shift a single cross-chunk link may bridge: skip a chunk-pair "
+                         "whose estimated drift |D(c+g)-D(c)| exceeds this. Restricts linking to low-drift spans "
+                         "and leaves high-drift boundaries split into separate collinear time-bands (rejoin by "
+                         "ISI). Off by default (unbounded); set small to only auto-link the low-drift regions.")
     ap.add_argument("--off-thr", type=float, default=1.0, help="inter-channel offset RMS co-gate (samples); <=0 disables")
     ap.add_argument("--amp-gate", type=float, default=0.0,
                     help="absolute log-amplitude gate (natural-log units): veto a cross-chunk link whose two "
@@ -745,7 +754,7 @@ def main():
         tangents = z["tangent"] if "tangent" in z.files else None
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
-                         gap=a.max_gap, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         gap=a.max_gap, max_shift=a.max_shift, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
                          frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag), **complete_kw)
@@ -762,7 +771,7 @@ def main():
         tangents = frag.get("tangent")
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
-                         gap=a.max_gap, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
+                         gap=a.max_gap, max_shift=a.max_shift, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
                          frag_times=ft, **ov_kw, **bundle_kw, **_method_kw(frag), **complete_kw)
