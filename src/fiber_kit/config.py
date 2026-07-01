@@ -141,6 +141,11 @@ class IntrachunkConfig(StageConfig):
                                  env="FK_REFRAC_CEILING", recommended=1.0)
     pre_merge_cos: float = knob(0.0, "pre-collapse obvious mutual-NN pairs at cosine>=this (0=off)",
                                 env="FK_PRE_MERGE_COS", recommended=0.97)
+    n_iter: int = knob(1, "iterate group->re-estimate->regroup this many passes (1=single pass); >1 keeps the tight "
+                       "gate but re-merges DENOISED units across passes, consolidating over-split fragments a single "
+                       "pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in "
+                       "production; the exp config opts in (FK_INTRA_ITER).",
+                       env="FK_INTRA_ITER", type=int, cli="iter")
     linkage: str = knob("complete", "complete|dynamic|ms",
                         env="FK_INTRA_LINKAGE", choices=("complete", "dynamic", "ms"), type=str)
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
