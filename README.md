@@ -333,9 +333,12 @@ chunks shade by time. Writes `.gif`, or `.mp4` if ffmpeg is present.*
 | `--gpu` | off | run the realign / whiten / tracer-residual kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
 
 Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
-<elec> --channels ... --ntotal ...`, and the visualization front-ends
-`fiber-view` (static figures), `fiber-view-gui` (rotatable bundle table), and
-`fiber-view-tour` (interesting-projection tour video) — see
+<elec> --channels ... --ntotal ...`, `fiber-chan-svd <session> <group>`
+(per-channel SVD of the cluster templates — ranks which channels are invariant
+vs vary across clusters, a merge/curation aid; plots the first few components of
+each channel), and the visualization front-ends `fiber-view` (static figures),
+`fiber-view-gui` (rotatable bundle table), and `fiber-view-tour`
+(interesting-projection tour video) — see
 [Visualization](#visualization-fiber-view).
 
 ## Python API
