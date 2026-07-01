@@ -188,6 +188,12 @@ def main():
     ap.add_argument("--seed", type=int, default=None,
                     help="chase ONE cell across ALL channels from this seed cluster id (drift-following: "
                          "follows it as its dominant channel drifts); ignores --dom-channels, keeps --celltype")
+    ap.add_argument("--seed-like", type=int, default=None,
+                    help="auto-pick the seed as the fragment MOST CORRELATED (primary-channel cosine) with "
+                         "this reference cluster, then chase it -- 'find another seed like clu X and link it'")
+    ap.add_argument("--seed-on", default=None,
+                    help="restrict --seed-like's chosen seed to fragments dominant on these physical channels "
+                         "(e.g. 33); default: the reference cluster's own dominant channel")
     ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",
                     help="waveform space for the linking templates (default standard = raw; stderiv = the "
                          "clustering feature space).  Cell-typing always uses standard (stderiv breaks width).")
@@ -212,6 +218,26 @@ def main():
         spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
         type_spk = None
     _, ids = nio.read_clu_at(base, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
+
+    if a.seed_like is not None and a.seed is None:             # pick the seed most correlated with a reference
+        pool = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
+                                  celltype=a.celltype or None, dom_idx=set(range(len(gch))),
+                                  exclude=exclude, type_spk=type_spk)
+        ref = next((f for f in pool if f["clu"] == a.seed_like), None)
+        if ref is None:
+            raise SystemExit(f"[piece] --seed-like reference clu {a.seed_like} is not in the pool "
+                             f"(below --min-n {a.min_n}, wrong --celltype, or excluded)")
+        if a.seed_on:
+            on = {int(np.flatnonzero(gch == int(x))[0]) for x in a.seed_on.split(",") if (gch == int(x)).any()}
+        else:
+            on = {ref["dom"]}
+        cands = [f for f in pool if f["clu"] != a.seed_like and f["dom"] in on]
+        if not cands:
+            raise SystemExit(f"[piece] no candidate fragments dominant on {a.seed_on or gch[ref['dom']]} to seed from")
+        best = max(cands, key=lambda f: _pcos(ref, f, a.prim_frac))
+        a.seed = best["clu"]
+        print(f"[piece] --seed-like {a.seed_like} (dom ch{gch[ref['dom']]}) -> chose clu{a.seed} "
+              f"(dom ch{gch[best['dom']]}, n={best['n']}, primcos {_pcos(ref, best, a.prim_frac):.3f}) as the seed")
 
     if a.seed is not None:                                      # chase ONE cell across ALL channels
         frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
