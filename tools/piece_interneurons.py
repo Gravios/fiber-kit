@@ -15,9 +15,11 @@ overlap), so there is NO shared-spike / refractory check -- the chain rests enti
 channel template match.  Read the per-step cosine in the report as the confidence of each link.
 
 Usage:
+    # piece same-channel interneurons across chunks, then chase ONE across the whole session:
     python3 tools/piece_interneurons.py <session> <group> --dom-channels 33,34 \
         --variant stderiv --stage fiber_session [--celltype int] [--min-n 120] \
         [--gap-min 45] [--cos-thr 0.92] [--amp-ratio 2.2] [--out report.png]
+    python3 tools/piece_interneurons.py <session> <group> --seed 134 --gap-min 60 --out chase.png
 """
 import argparse
 import os
@@ -90,6 +92,34 @@ def chain(frags, *, gap_min, cos_thr, amp_ratio, prim_frac, min_step_min=2.0):
     return chains
 
 
+def chase_from(frags, seed, *, gap_min, cos_thr, amp_ratio, prim_frac):
+    """Bidirectional greedy chase of ONE cell from `seed` across ALL channels (drift-following): at each
+    end, link to the best union-primary-cosine fragment within gap_min, gated on amplitude ratio.  Unlike
+    chain(), this follows the cell wherever its dominant channel drifts.  Returns ordered indices."""
+    def step(cur, forward):
+        a = frags[cur]; best, bs = -1, cos_thr
+        span = range(cur + 1, len(frags)) if forward else range(cur - 1, -1, -1)
+        for j in span:
+            b = frags[j]
+            dt = (b["tmid"] - a["tmid"]) if forward else (a["tmid"] - b["tmid"])
+            if dt > gap_min:
+                break
+            if dt <= 2.0:
+                continue
+            ratio = a["amp"].max() / max(b["amp"].max(), 1e-9); ratio = max(ratio, 1 / ratio)
+            if _pcos(a, b, prim_frac) >= bs and ratio <= amp_ratio:
+                bs, best = _pcos(a, b, prim_frac), j
+        return best
+    used = {seed}
+    fwd = [seed]; cur = seed
+    while (j := step(cur, True)) >= 0 and j not in used:
+        fwd.append(j); used.add(j); cur = j
+    bwd = []; cur = seed
+    while (j := step(cur, False)) >= 0 and j not in used:
+        bwd.append(j); used.add(j); cur = j
+    return list(reversed(bwd)) + fwd
+
+
 def report_figure(track, gch, sr):
     import matplotlib
     matplotlib.use("Agg")
@@ -145,6 +175,9 @@ def main():
     ap.add_argument("--min-n", type=int, default=120); ap.add_argument("--sig-cap", type=int, default=1500)
     ap.add_argument("--gap-min", type=float, default=45.0); ap.add_argument("--cos-thr", type=float, default=0.92)
     ap.add_argument("--amp-ratio", type=float, default=2.2); ap.add_argument("--prim-frac", type=float, default=0.3)
+    ap.add_argument("--seed", type=int, default=None,
+                    help="chase ONE cell across ALL channels from this seed cluster id (drift-following: "
+                         "follows it as its dominant channel drifts); ignores --dom-channels, keeps --celltype")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
@@ -157,6 +190,34 @@ def main():
     res = nio.read_res(base, elec)
     spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
     _, ids = nio.read_clu_at(base, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
+
+    if a.seed is not None:                                      # chase ONE cell across ALL channels
+        frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
+                                   celltype=a.celltype or None, dom_idx=set(range(len(gch))))
+        pos = next((k for k, f in enumerate(frags) if f["clu"] == a.seed), None)
+        if pos is None:
+            raise SystemExit(f"[piece] seed clu {a.seed} not among {len(frags)} {a.celltype} fragments (>= --min-n)")
+        order = chase_from(frags, pos, gap_min=a.gap_min, cos_thr=a.cos_thr,
+                           amp_ratio=a.amp_ratio, prim_frac=a.prim_frac)
+        track = [frags[i] for i in order]
+        print(f"[piece] {os.path.basename(base)} elec {elec}: chase from clu {a.seed} across all channels "
+              f"({a.celltype}, gap {a.gap_min:.0f} min)")
+        print(f"  {'clu':>6} {'t(min)':>7} {'domCh':>5} {'n':>6} {'gap':>5} {'cos->prev':>9}")
+        for k, f in enumerate(track):
+            if k == 0:
+                print(f"  {f['clu']:>6} {f['tmid']:>7.1f} {gch[f['dom']]:>5} {f['n']:>6} {'':>5} {'seed':>9}")
+            else:
+                p = track[k - 1]
+                print(f"  {f['clu']:>6} {f['tmid']:>7.1f} {gch[f['dom']]:>5} {f['n']:>6} "
+                      f"{f['tmid']-p['tmid']:>5.0f} {_pcos(p, f, a.prim_frac):>9.3f}")
+        span = track[-1]["tmid"] - track[0]["tmid"]
+        print(f"  tracked {track[0]['tmid']:.0f} -> {track[-1]['tmid']:.0f} min ({span:.0f} min, {len(track)} fragments, "
+              f"~{int(span//18)+1} chunks); dominant channel drifts "
+              f"{gch[track[0]['dom']]}..{gch[track[-1]['dom']]}")
+        fig, _anchor, _step = report_figure(track, gch, sr)
+        out = a.out or f"{base}.piece.{elec}.seed{a.seed}.png"
+        fig.savefig(out, dpi=120); print(f"  wrote {out}")
+        return
 
     frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
                                celltype=a.celltype or None, dom_idx=dom_idx)
