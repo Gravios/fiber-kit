@@ -132,6 +132,9 @@ BACKBONE_WARP="${FK_BACKBONE_WARP:-}"              # empty = off (warp co-gate)
 #     from the overlap-backbone same-unit shape distances at LINK_CFIBER_Q.  Empty disables it.
 LINK_CFIBER_Q="${FK_LINK_CFIBER_Q:-0.90}"          # empty = link cfiber co-gate off
 LINK_AMP_GATE="${FK_LINK_AMP_GATE:-0}"             # absolute log-amplitude gate (natural log; 0 = off)
+LINK_MIN_A="${FK_LINK_MIN_A:-0}"                   # absolute amplitude (A) floor on linkability, SEEDS included
+                                                   #   (drops noise-floor A~1 fragments that weld into bundles); 0 = off
+LINK_AMP_SPAN="${FK_LINK_AMP_SPAN:-0}"             # varbound bundler: max per-bundle logA span (natural log; 0 = off)
 
 # ===================== over-split tuning (small-cluster regime) ========
 # Goal: more, CLEANER clusters that separate subtle co-located pairs (footprint-ratio /
@@ -452,7 +455,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --from-units "$units" \
         --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
-        --amp-gate "$LINK_AMP_GATE" \
+        --amp-gate "$LINK_AMP_GATE" --min-a "$LINK_MIN_A" --amp-span "$LINK_AMP_SPAN" \
         --align-lag "$LINK_ALIGN_LAG" --align-upsample "$LINK_ALIGN_UPSAMPLE" --primary-amp-frac "$LINK_PRIMARY_AMP_FRAC" \
         --refine-trajectory \
         "${warp_args[@]}" "${bundle_args[@]}" "${dr_args[@]}" \
