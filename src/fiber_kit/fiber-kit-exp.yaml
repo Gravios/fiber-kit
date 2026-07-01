@@ -36,40 +36,44 @@
 #  PRIMARY PLAN (embedded).  `fiber-pipeline <elec>` runs THIS by default when this
 #  file is the active $FK_CONFIG; an explicit `--plan <file>` still overrides it.
 #
-#  Experimental NO-REFINE route: skip fiber-refine AND fiber-peel.  Instead realign
-#  + cpos the over-clustered session, collapse over-split fragments WITHIN each chunk
-#  (fiber-intrachunk), then realign + cpos the per-chunk units and link them across
-#  chunks against those refreshed positions.
+#  Experimental WITH-REFINE, FULL-REEXTRACT route: run fiber-refine (split + fold +
+#  merge-back), then collapse over-split fragments WITHIN each chunk (fiber-intrachunk)
+#  and link across chunks.  A fiber-realign runs after EVERY clu-changing stage, in
+#  --reextract --refeaturize mode (re-reads the .fil at the corrected per-spike times and
+#  rebuilds raw+stderiv .spk and .fet), so each stage reads freshly re-extracted spikes
+#  rather than shift-rolled ones -- at the cost of a .fil pass per step.  (fiber-peel is
+#  still skipped; intrachunk does the cross-fragment consolidation refine leaves.)
 #
-#    fiber-session -> fiber-realign -> fiber-cpos
-#                  -> fiber-intrachunk
-#                  -> fiber-realign -> fiber-cpos -> fiber-link
+#    fiber-session -> realign
+#                  -> fiber-refine -> realign -> fiber-cpos
+#                  -> fiber-intrachunk -> realign -> fiber-cpos
+#                  -> fiber-link -> realign
 #
-#  Tag handoff (every `in`/`cpos` is produced by an earlier `out`; cpos augments its
-#  own clu stage in place, out==in; realign is in-place, no out):
-#    * fiber_session : shared base tag (matches plans/00-prep.yaml).  session over-
-#      clusters -> realign tightens -> cpos localizes (raw .spk) for intrachunk's gate.
-#    * exp_chunk     : intrachunk's within-chunk merge.  realign re-tightens the merged
-#      units, cpos re-localizes them; intrachunk keeps each unit chunk-local, so these
-#      rows stay per-chunk and remain cross-linkable.
-#    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk).
-#      The pipeline runner always invokes fiber-link with --from-units (there is no
-#      raw-cpos plan mode), so the link MUST name a produced <tag>.units.npz or it
-#      falls back to the canonical 'refine_intrachunk' default, which this no-refine
-#      plan never writes.  In this mode the per-unit positions come from the units.npz
-#      (baked by intrachunk from the cpos it read, i.e. the post-realign #1 cpos on
-#      fiber_session); the 2nd cpos on exp_chunk is therefore NOT the link's position
-#      source -- it (and the 2nd realign) refresh exp_chunk itself.  Driving the link
-#      off the 2nd cpos instead would need a raw-cpos link mode in the runner.
+#  Tag handoff (every `in`/`cpos` is produced by an earlier `out`; cpos augments its own
+#  clu stage in place, out==in; realign is in-place from the .fil, no out):
+#    * fiber_session : shared base tag.  session over-clusters -> realign re-extracts.
+#    * exp_refine    : fiber-refine's split/merge-back output.  realign re-extracts the
+#      refined groups, cpos localizes them (raw .spk) for intrachunk's gate.
+#    * exp_chunk     : intrachunk's within-chunk merge.  realign re-extracts, cpos re-
+#      localizes; intrachunk keeps each unit chunk-local, so these rows stay per-chunk
+#      and remain cross-linkable.
+#    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk); the
+#      runner always invokes fiber-link with --from-units, so the link names the produced
+#      exp_chunk.units.npz.  The overlap-backbone in that units.npz carries the 0080
+#      standard-cosine + (here ON) warp co-gate -- see FK_BACKBONE_* below.
+#    * exp_linked    : the linked output; a final realign re-extracts it for curation.
 # ============================================================================
 pipeline:
   - {stage: fiber-session,    out: fiber_session}
   - {stage: fiber-realign,    in: fiber_session}
-  - {stage: fiber-cpos,       in: fiber_session, out: fiber_session, spk: standard}
-  - {stage: fiber-intrachunk, in: fiber_session, out: exp_chunk}
+  - {stage: fiber-refine,     in: fiber_session, out: exp_refine}
+  - {stage: fiber-realign,    in: exp_refine}
+  - {stage: fiber-cpos,       in: exp_refine, out: exp_refine, spk: standard}
+  - {stage: fiber-intrachunk, in: exp_refine, out: exp_chunk}
   - {stage: fiber-realign,    in: exp_chunk}
   - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
   - {stage: fiber-link,       in: exp_chunk, units: exp_chunk, out: exp_linked}
+  - {stage: fiber-realign,    in: exp_linked}
 
 
 # ----- fiber-session : initial over-clustering -----------------------------
@@ -291,6 +295,20 @@ FK_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self-calib
                                   #   pathologically tight null on a very clean fragment.
 FK_INTRA_SIG_CAP:        8000     # 8000 | "" = no cap.  Per-fragment spikes used for the mean template; beyond ~8000 the
                                   #   template is already stable, so the cap only bounds compute.
+
+# ----- overlap-backbone co-gate (fiber-intrachunk --emit-units; patch 0080) -------------------
+# The overlap-backbone (the trusted cross-chunk seed set fiber-link bundles from) is matched on the
+# stderiv boundary templates, which are near-blind to depth/amplitude -- so different co-located units
+# can seed a bad anchor (g4: 25% of seeds had standard cosine <0.75, some anti-correlated).  These
+# co-gate every accepted seed on the RAW standard axis the stderiv transform collapses.
+FK_BACKBONE_STD_COS:     0.75     # 0.75 | 0.5-0.85 (0=off).  STANDARD median-template cosine a seed must also clear.
+                                  #   On g4 keeps 100% of same-unit seeds, rejects 100% of the anti-correlated ones.
+FK_BACKBONE_WARP:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay (warp) coherence co-gate on the seed, ON here.
+                                  #   NOTE (validated g4): on this octrode most units span <=2 channels, so the per-channel
+                                  #   group-delay is degenerate and warp is NOT discriminative (same/diff both ~0) -- at 0.3
+                                  #   this REJECTS most seeds, shrinking the backbone.  That is deliberately conservative: it
+                                  #   pushes the linker toward under-linking (collinear time-bands to rejoin by ISI) rather
+                                  #   than trusting stderiv-similar anchors.  Set "" to fall back to the std-cos gate alone.
 
 # ----- fiber-link : cross-chunk link ---------------------------------------
 # ----- EXPERIMENTAL intrachunk gates (newest; left OFF in production fiber-kit.yaml) ---------
