@@ -760,8 +760,23 @@ def _boundary_sig(waves, sigma=fg.DEFAULT_SMOOTH_SIGMA):
     return t.ravel() / (np.linalg.norm(t) + 1e-9), fg.interchannel_offsets(t), dep
 
 
+def _boundary_std_template(waves, sigma=fg.DEFAULT_SMOOTH_SIGMA):
+    """Unit-norm MEDIAN standard (raw) template (nsamp, nch), mutual_center'd exactly like
+    _boundary_sig, from a boundary-window RAW spike stack.  This is the discriminative shape axis the
+    stderiv transform (spatial+temporal derivative) collapses -- two different co-located units can sit
+    at stderiv cosine ~0.99 yet standard cosine <0.5.  Median, not mean, to shrug off the boundary
+    window's outlier spikes.  None if empty."""
+    w = np.asarray(waves, float)
+    if len(w) == 0:
+        return None
+    al = fg.mutual_center_spikes(fg.denoise(fl.realign(w), sigma))
+    t = np.median(al, 0)
+    return t / (np.linalg.norm(t) + 1e-9)
+
+
 def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
-                     half_window=3.0, cos_thr=0.90, off_thr=0.80, depth_tol=1.0, min_n=8):
+                     half_window=3.0, cos_thr=0.90, off_thr=0.80, depth_tol=1.0, min_n=8,
+                     raw_waves=None, std_cos_thr=0.75, warp_thr=None):
     """Anchor units across each chunk boundary using only the spikes that STRADDLE it.
 
     Spikes within +/-half_window minutes of a boundary are measured at almost the same
@@ -778,7 +793,21 @@ def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
                           (on real g5 it reads a small wandering +/-~20um where the density
                           method read a spurious ~120um).
 
-    member_spikes : list (per unit) of spike indices into spkD / t_spike_s.
+    DISCRIMINATIVE CO-GATE (`raw_waves`).  The boundary match above runs on the stderiv `spkD`; the
+    stderiv transform (spatial+temporal derivative) removes common mode and reweights channels, so it
+    is near-blind to the depth/amplitude axis -- two DIFFERENT co-located units routinely sit at stderiv
+    cosine ~0.99 (validated on g4: 25% of the emitted backbone pairs have standard-template cosine <0.75,
+    some anti-correlated to -0.38, spanning 40-117um of drift-corrected depth).  Those contaminated
+    anchors then bypass every downstream link gate as trusted seeds and weld distinct neurons.  When the
+    RAW standard waveforms are supplied, each accepted pair is additionally required to agree in STANDARD
+    median-template cosine (>= std_cos_thr) -- the axis stderiv collapses.  On g4 std_cos_thr in 0.5..0.7
+    keeps 100% of the same-unit pairs (standard cosine >=0.85) and rejects 100% of the anti-correlated
+    ones.  `warp_thr` (Omlor-Giese group-delay coherence) is available as an extra co-gate but defaults
+    OFF: on this octrode most units concentrate on <=2 channels, so the per-channel group-delay profile
+    has <3 valid channels and warp_correlation collapses to 0 for same- and different-unit pairs alike
+    (non-discriminative here) -- keep it None unless the probe geometry spreads energy over >=3 channels.
+
+    member_spikes : list (per unit) of spike indices into spkD / t_spike_s / raw_waves.
     t_spike_s     : per-spike time in seconds.  Returns (links, {chunk_id: D_um})."""
     uC = units["chunk"]; uY = units["y0"]; uN = len(uC)
     chunks = sorted({int(c) for c in uC})
@@ -789,15 +818,19 @@ def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
         lo, hi = tb - half_window * 60.0, tb + half_window * 60.0
         a = [u for u in range(uN) if uC[u] == chunks[kk - 1]]
         b = [u for u in range(uN) if uC[u] == chunks[kk]]
-        SA, SB = {}, {}
+        SA, SB = {}, {}; RA, RB = {}, {}
         for u in a:
             m = (ut[u] >= lo) & (ut[u] < tb)
             if m.sum() >= min_n:
                 SA[u] = _boundary_sig(spkD[member_spikes[u][m]])
+                if raw_waves is not None:
+                    RA[u] = _boundary_std_template(raw_waves[member_spikes[u][m]])
         for u in b:
             m = (ut[u] >= tb) & (ut[u] < hi)
             if m.sum() >= min_n:
                 SB[u] = _boundary_sig(spkD[member_spikes[u][m]])
+                if raw_waves is not None:
+                    RB[u] = _boundary_std_template(raw_waves[member_spikes[u][m]])
         if len(SA) < 2 or len(SB) < 2:
             D[chunks[kk]] = D[chunks[kk - 1]]; continue
         al, bl = list(SA), list(SB)
@@ -808,12 +841,30 @@ def overlap_backbone(units, member_spikes, spkD, t_spike_s, *, chunk_min=12.0,
             jj = int(np.argmax(C[ii]))
             if int(np.argmax(C[:, jj])) == ii and C[ii, jj] >= cos_thr \
                     and _offset_rms(SA[al[ii]][1], SB[bl[jj]][1]) <= off_thr \
-                    and abs(DA[ii] - DB[jj]) <= depth_tol:
+                    and abs(DA[ii] - DB[jj]) <= depth_tol \
+                    and _std_shape_ok(RA.get(al[ii]), RB.get(bl[jj]), std_cos_thr, warp_thr, raw_waves):
                 pairs.append((al[ii], bl[jj]))
         links += [(int(i), int(j)) for i, j in pairs]
         ds = float(np.median([uY[j] - uY[i] for i, j in pairs])) if pairs else 0.0
         D[chunks[kk]] = D[chunks[kk - 1]] + ds
     return links, D
+
+
+def _std_shape_ok(Ra, Rb, std_cos_thr, warp_thr, raw_waves):
+    """Standard-space discriminative co-gate for a candidate backbone pair (see overlap_backbone).
+    Passes trivially when no raw waveforms were supplied (backward-compatible).  Refuses a pair whose
+    standard median templates disagree in cosine, or -- if warp_thr is set -- in group-delay coherence."""
+    cos_on = std_cos_thr is not None and std_cos_thr > 0
+    if raw_waves is None or (not cos_on and warp_thr is None):
+        return True                                          # co-gate disabled / no raw waveforms
+    if Ra is None or Rb is None:
+        return False                                         # no boundary standard template -> untrusted
+    if cos_on and float(Ra.ravel() @ Rb.ravel()) < std_cos_thr:
+        return False
+    if warp_thr is not None and \
+            fg.warp_correlation(fg.group_delay_profile(Ra), fg.group_delay_profile(Rb)) < warp_thr:
+        return False
+    return True
 
 
 def member_spike_index(src_ids, members):
@@ -884,6 +935,14 @@ def main():
                          "per-fragment split-half nulls at --cfiber-q.")
     ap.add_argument("--min-n", type=int, default=DEFAULT_MIN_N)
     ap.add_argument("--boundary-minutes", type=float, default=3.0, help="half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units)")
+    ap.add_argument("--backbone-std-cos", type=float, default=0.75,
+                    help="STANDARD median-template cosine a backbone pair must also clear (--emit-units). The "
+                         "stderiv boundary match is near-blind to depth/amplitude; this co-gate on the raw axis "
+                         "rejects the different-unit anchors it lets through. 0 disables.")
+    ap.add_argument("--backbone-warp", type=float, default=None,
+                    help="optional Omlor-Giese group-delay coherence a backbone pair must also clear. OFF by "
+                         "default: on octrodes most units span <=2 channels so group-delay is degenerate "
+                         "(non-discriminative). Set only if energy spreads over >=3 channels.")
     ap.add_argument("--out-stage", default=None, help="output .clu stage (default: <clu-stage>_intrachunk)")
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
@@ -1042,8 +1101,11 @@ def main():
     if a.emit_units:
         units = aggregate_units(sig, label)
         mspk = member_spike_index(src.astype(np.int64), units["members"])
+        raw_bb, _ = nio.open_spk(base, elec, nsamp, nch, prefer=["standard"])  # standard co-gate for the backbone
         bb, D = overlap_backbone(units, mspk, spkD, res.astype(float) / sr,
-                                 chunk_min=a.chunk_minutes, half_window=a.boundary_minutes)
+                                 chunk_min=a.chunk_minutes, half_window=a.boundary_minutes,
+                                 raw_waves=raw_bb, std_cos_thr=a.backbone_std_cos,
+                                 warp_thr=a.backbone_warp)
         dch = np.array(sorted(D)); dum = np.array([D[c] for c in dch], float)
         upath = out_path + ".units.npz"
         np.savez(upath, **{k: v for k, v in units.items() if k != "members"},
