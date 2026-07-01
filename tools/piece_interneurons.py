@@ -174,6 +174,31 @@ def report_figure(track, gch, sr):
     return fig, anchor, step
 
 
+def write_chain_hierarchy(base, elec, ids, *, variant, in_tag, out_tag, chain_clus):
+    """Group the chain's fragments under a NEW parent fiber and write the .clu/.clc/.clp triple for
+    the group: the chain becomes a parent (a top-level cluster in .clu) whose children (.clc) are the
+    concatenated pieces (.clp maps each piece -> the parent).  Builds the hierarchy from an existing
+    .clc/.clp pair at `in_tag` if present, else lifts it from the flat .clu (each cluster its own
+    child).  renumber=False keeps every other cluster's id stable; save() backs up any existing files."""
+    try:
+        from fiber_kit.fiber_refiberize import FiberHierarchy
+        from fiber_kit.fiber_microfiberize import lift_identity
+    except ImportError:
+        from fiber_refiberize import FiberHierarchy
+        from fiber_microfiberize import lift_identity
+    try:
+        h = FiberHierarchy.load(base, elec, variant=variant, tag=in_tag)
+    except (FileNotFoundError, OSError):
+        child, parent = lift_identity(np.asarray(ids))
+        h = FiberHierarchy(child, parent)
+    parent_id = h._fresh_fiber()
+    grouped = [int(c) for c in chain_clus if int(c) in h.parent]
+    for c in grouped:
+        h.move_child(c, parent_id)
+    out = h.save(base, elec, variant=variant, tag=out_tag, renumber=False)
+    return parent_id, grouped, out
+
+
 def main():
     ap = argparse.ArgumentParser(prog="piece_interneurons", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -194,6 +219,10 @@ def main():
     ap.add_argument("--seed-on", default=None,
                     help="restrict --seed-like's chosen seed to fragments dominant on these physical channels "
                          "(e.g. 33); default: the reference cluster's own dominant channel")
+    ap.add_argument("--write-clu", default=None, metavar="TAG",
+                    help="after a --seed / --seed-like chase, write the group's .clu/.clc/.clp triple at this "
+                         "output stage tag with the chain as a PARENT fiber and the concatenated pieces as its "
+                         "children (non-destructive: a new tag; existing files are backed up to .bak)")
     ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",
                     help="waveform space for the linking templates (default standard = raw; stderiv = the "
                          "clustering feature space).  Cell-typing always uses standard (stderiv breaks width).")
@@ -265,6 +294,12 @@ def main():
         fig, _anchor, _step = report_figure(track, gch, sr)
         out = a.out or f"{base}.piece.{elec}.seed{a.seed}.png"
         fig.savefig(out, dpi=120); print(f"  wrote {out}")
+        if a.write_clu:
+            chain_clus = [f["clu"] for f in track]
+            pid, grouped, paths = write_chain_hierarchy(base, elec, ids, variant=a.variant,
+                                                        in_tag=a.stage, out_tag=a.write_clu, chain_clus=chain_clus)
+            print(f"  hierarchy: chain -> new parent fiber {pid} with {len(grouped)} children {grouped}")
+            print(f"  wrote {os.path.basename(paths['clu'])} + .clc + .clp at tag '{a.write_clu}'")
         return
 
     frags = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
