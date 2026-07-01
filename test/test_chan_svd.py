@@ -95,6 +95,29 @@ def main():
     check(os.path.getsize(out) > 2000, "figure rendered to a non-trivial PNG")
     os.remove(out)
 
+    # --within: split ONE synthetic cluster into time-ordered sub-templates.  The dominant channel is
+    # invariant; the weak channels carry a structured, time-varying (physiological-like) component.  The
+    # per-channel SVD over the sub-templates must rank the dominant channel most invariant.
+    rng = np.random.default_rng(1)
+    N = 2400; t = np.arange(NSAMP)
+    base = -np.exp(-((t - 15) ** 2) / 4.0) + 0.6 * np.exp(-((t - 21) ** 2) / 6.0)
+    amp = np.array([1.0, 0.8, 0.5, 0.4, 0.3, 0.25, 0.15, 0.12])   # dominant = ch 0
+    res_t = np.sort(rng.integers(0, 3_000_000, size=N)).astype(np.int64)
+    phase = np.linspace(0, 1, N)                                   # slow time-ordered drift of the weak channels
+    spk = np.zeros((N, NSAMP, NCH))
+    for k in range(N):
+        for c in range(NCH):
+            wob = 0.0 if c < 2 else 0.4 * amp[c] * np.sin(2 * np.pi * phase[k])   # structured on weak channels only
+            spk[k, :, c] = amp[c] * base + wob * base
+    spk += 0.01 * rng.standard_normal(spk.shape)
+    sub, span = cs.cluster_subtemplates(spk, res_t, np.arange(N), bins=12)
+    check(len(sub) >= 8, f"cluster_subtemplates produced {len(sub)} sub-templates")
+    rw = cs.per_channel_svd(sub, n_comp=3)
+    dom = int(np.argmax(np.ptp(sub.mean(0), axis=0)))
+    check(rw["var_rel"][dom] < rw["var_rel"][6] and rw["var_rel"][dom] < rw["var_rel"][7],
+          "within-unit: dominant channel is more invariant than the weak channels")
+    check(rw["var_rel"][0] < rw["var_rel"][2], "within-unit: relvar rises as channel amplitude falls")
+
     print(f"\n{ran - fails}/{ran} checks passed")
     sys.exit(1 if fails else 0)
 

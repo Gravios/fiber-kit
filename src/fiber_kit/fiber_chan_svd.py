@@ -36,10 +36,12 @@ try:
     from . import fiber_lib as fl
     from . import session_yaml as sy
     from . import neuro_io as nio
+    from . import fiber_geometry as fg
 except ImportError:                                   # script / flat-layout fallback
     import fiber_lib as fl
     import session_yaml as sy
     import neuro_io as nio
+    import fiber_geometry as fg
 
 
 def _need_mpl():
@@ -85,6 +87,23 @@ def cluster_templates(spk, ids, clusters, *, sig_cap=2000, normalize=False, seed
         temps.append(t)
         kept.append(int(c))
     return np.asarray(temps), kept, counts
+
+
+def cluster_subtemplates(spk, res, idx, *, bins=12, local_frac=None, min_bin=15, seed=0):
+    """Split ONE cluster's spikes into time-ordered sub-templates -> (subtemplates (B,nSamp,nCh),
+    span_minutes, sr_note).  With `local_frac` (0<f<=1) only a contiguous central fraction of the
+    cluster's timespan is used (drift-minimal), so the per-channel variation across the sub-templates
+    is physiological rather than drift.  Each sub-template is the aligned median of its bin."""
+    idx = np.asarray(idx)
+    order = np.argsort(res[idx]); idx = idx[order]
+    if local_frac is not None and 0 < local_frac < 1.0:
+        n = len(idx); lo = int((0.5 - local_frac / 2) * n); hi = int((0.5 + local_frac / 2) * n)
+        idx = idx[lo:hi]
+    w = np.asarray(spk[np.sort(idx)], dtype=float)
+    wa = fl.align_xcorr(w, ref="median", iters=4)               # align once, then bin (bins keep time order)
+    sub = [np.median(wa[b], axis=0) for b in np.array_split(np.arange(len(idx)), bins) if len(b) >= min_bin]
+    span = float(res[idx].max() - res[idx].min())
+    return np.asarray(sub), span
 
 
 def per_channel_svd(templates, n_comp=3):
@@ -185,6 +204,13 @@ def main():
     ap.add_argument("--n-comp", type=int, default=3, help="components plotted per channel (default 3)")
     ap.add_argument("--min-n", type=int, default=30, help="skip clusters below this many spikes (noisy template)")
     ap.add_argument("--sig-cap", type=int, default=2000, help="spikes sampled per cluster for the template")
+    ap.add_argument("--within", type=int, default=None,
+                    help="examine ONE cluster: split its spikes into --bins time-ordered sub-templates and "
+                         "run the per-channel SVD across them (single-unit view, not across clusters)")
+    ap.add_argument("--bins", type=int, default=12, help="--within: time-ordered sub-templates (default 12)")
+    ap.add_argument("--local-frac", type=float, default=None,
+                    help="--within: use only a contiguous central fraction of the cluster's timespan "
+                         "(drift-minimal -> the residual per-channel variation is physiological, not drift)")
     ap.add_argument("--normalize", action="store_true",
                     help="p2p-normalize each template first -> SVD sees SHAPE variation, amplitude drift removed")
     ap.add_argument("--out", default=None, help="output PNG path or directory (default next to the session)")
@@ -206,6 +232,38 @@ def main():
     ids = _load_clu(base, elec, n_spikes, a.in_clu, a.variant, a.stage)
     if len(ids) != spk.shape[0]:
         raise SystemExit(f"[fiber-chan-svd] .clu {len(ids)} vs .spk {spk.shape[0]} spike-count mismatch")
+
+    if a.within is not None:                                    # single-unit view: sub-templates of ONE cluster
+        idx = np.flatnonzero(ids == a.within)
+        if len(idx) < a.bins * 15:
+            raise SystemExit(f"[fiber-chan-svd] cluster {a.within} has {len(idx)} spikes; need >= {a.bins*15} for {a.bins} bins")
+        sub, span = cluster_subtemplates(spk, res_t, idx, bins=a.bins, local_frac=a.local_frac)
+        if len(sub) < 2:
+            raise SystemExit(f"[fiber-chan-svd] cluster {a.within}: fewer than 2 non-empty sub-templates")
+        if a.normalize:
+            sub = sub / (np.ptp(sub.reshape(len(sub), -1), axis=1)[:, None, None] + 1e-9)
+        res = per_channel_svd(sub, n_comp=a.n_comp)
+        tmpl = sub.mean(0); ct = fg.classify_celltype(tmpl, sr)
+        win = f", central {a.local_frac:.0%} window" if a.local_frac else ""
+        print(f"[fiber-chan-svd] {os.path.basename(base)} elec {elec} · cluster {a.within} ({ct}) · "
+              f"{len(idx):,} spikes, {len(sub)} sub-templates over {span/sr/60:.1f} min{win} ({a.spk})")
+        order = np.argsort(np.ptp(tmpl, axis=0))[::-1]          # report dominant channel first
+        print(f"  {'ch':>4} {'amp':>8} {'relvar%':>8} {'PC1%':>6} {'PC2%':>6}   (dominant -> weakest)")
+        for c in order:
+            print(f"  {gch[c]:>4} {np.ptp(tmpl[:,c]):>8.1f} {100*res['var_rel'][c]:>8.2f} "
+                  f"{100*res['vfrac'][c,0]:>6.1f} {100*res['vfrac'][c,1]:>6.1f}")
+        print(f"  dominant (invariant / link-driving): {[gch[c] for c in order[:2]]}")
+        print(f"  weakest  (physiological / noise):    {[gch[c] for c in order[-2:]]}")
+        fig, _ = figure(res, gch, n_comp=a.n_comp, sr=sr,
+                        title=f"{os.path.basename(base)} elec {elec} — cluster {a.within} ({ct}) "
+                              f"within-unit per-channel SVD ({len(sub)} sub-templates{win})")
+        if a.out and os.path.isdir(a.out):
+            out = os.path.join(a.out, f"{os.path.basename(base)}.chansvd.{elec}.u{a.within}.png")
+        else:
+            out = a.out or f"{base}.chansvd.{elec}.u{a.within}.png"
+        fig.savefig(out, dpi=120); plt.close(fig)
+        print(f"  wrote {out}")
+        return
 
     if a.clusters:
         want = [int(x) for x in a.clusters.split(",")]

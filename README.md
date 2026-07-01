@@ -336,7 +336,10 @@ Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
 <elec> --channels ... --ntotal ...`, `fiber-chan-svd <session> <group>`
 (per-channel SVD of the cluster templates — ranks which channels are invariant
 vs vary across clusters, a merge/curation aid; plots the first few components of
-each channel), and the visualization front-ends `fiber-view` (static figures),
+each channel; `--within <clu>` instead examines a single unit, splitting its
+spikes into time-ordered sub-templates, and `--local-frac` restricts that to a
+drift-minimal window so the residual per-channel variation is physiological),
+and the visualization front-ends `fiber-view` (static figures),
 `fiber-view-gui` (rotatable bundle table), and `fiber-view-tour`
 (interesting-projection tour video) — see
 [Visualization](#visualization-fiber-view).
