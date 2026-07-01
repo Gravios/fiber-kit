@@ -112,6 +112,8 @@ MERGE_WARP_RESID_THR_PYR="${FK_MERGE_WARP_RESID_THR_PYR:-}"  # cell-type-aware w
 # 0085 fiber-link warp co-gate: on g5 did NOT help (precision already saturated; per-chunk templates
 # too noisy) -- off by default.  The linking win was relaxing the cosine prefilter (LINK_COS_THR).
 LINK_WARP_THR="${FK_LINK_WARP_THR:-}"              # empty = off
+LINK_WARP_AMP_THR="${FK_LINK_WARP_AMP_THR:-}"      # Omlor-Giese amplitude-profile floor (eq.10); empty = off
+LINK_WARP_RESID_THR="${FK_LINK_WARP_RESID_THR:-}"  # single-channel warp-incongruity ceiling (samples); empty = off
 LINK_COS_THR="${FK_LINK_COS_THR:-0.75}"            # 0.75 added 7 clean bundles vs the 0.85 default
 
 # 0080 overlap-backbone standard-space co-gate (fiber-intrachunk --emit-units).  The boundary match
@@ -438,6 +440,8 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
     local units="$(clu_path "${STEP_UNITS:-refine_intrachunk}").units.npz"
     local warp_args=()
     [ -n "$LINK_WARP_THR" ] && warp_args+=(--warp-thr "$LINK_WARP_THR")
+    [ -n "$LINK_WARP_AMP_THR" ] && warp_args+=(--warp-amp-thr "$LINK_WARP_AMP_THR")
+    [ -n "$LINK_WARP_RESID_THR" ] && warp_args+=(--warp-resid-thr "$LINK_WARP_RESID_THR")
     [ -n "$LINK_CFIBER_Q" ] && warp_args+=(--cfiber-q "$LINK_CFIBER_Q")
     [ -n "$LINK_TAN_THR" ] && warp_args+=(--tan-thr "$LINK_TAN_THR")
     local bundle_args=()
