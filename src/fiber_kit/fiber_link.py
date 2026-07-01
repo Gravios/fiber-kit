@@ -306,7 +306,7 @@ def _selfcal_var_allow(links, P, w, energy, scale=1.0, top_frac=0.34, pct=95.0):
     return float(np.percentile(tv, pct)) * float(scale)
 
 
-def bundles_variance_bounded(n_frag, links, chunk, strength, energy, P, w, var_allow):
+def bundles_variance_bounded(n_frag, links, chunk, strength, energy, P, w, var_allow, amp_span=np.inf):
     """Energy-seeded, variance-bounded sibling of bundles_chunk_exclusive (the anti-chaining bundler).
 
     Same chunk-exclusivity guard, but two changes that target single-linkage over-merge:
@@ -331,6 +331,7 @@ def bundles_variance_bounded(n_frag, links, chunk, strength, energy, P, w, var_a
     order = sorted(range(len(links)), key=_key)
     par = list(range(n_frag)); chs = [{int(chunk[i])} for i in range(n_frag)]
     N = w.astype(float).copy(); S = (w[:, None] * P).astype(float); Q = (w[:, None] * P ** 2).astype(float)
+    Amin = e.copy(); Amax = e.copy()          # per-bundle logA extremes for the amplitude-span bound
 
     def find(x):
         while par[x] != x:
@@ -346,8 +347,13 @@ def bundles_variance_bounded(n_frag, links, chunk, strength, energy, P, w, var_a
         if not np.isinf(strength[k]) and var_allow < np.inf and _trace_var(n2, s2, q2) > var_allow:
             blocked += 1                                  # variance boundary -> reject (anti-chaining)
             continue
+        amin2 = min(Amin[ri], Amin[rj]); amax2 = max(Amax[ri], Amax[rj])
+        if not np.isinf(strength[k]) and amp_span < np.inf and (amax2 - amin2) > amp_span:
+            blocked += 1                                  # amplitude-span boundary -> reject (stops the
+            continue                                      # <=4x per-link chain that spans 1000s x per bundle)
         par[rj] = ri; chs[ri] |= chs[rj]
         N[ri] = n2; S[ri] = s2; Q[ri] = q2
+        Amin[ri] = amin2; Amax[ri] = amax2
     groups = {}
     for i in range(n_frag):
         groups.setdefault(find(i), []).append(i)
@@ -397,12 +403,12 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
 
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
-                 max_resid=0.08, min_n=20, min_snr=0.0, mask=None, gap=1, max_shift=None,
+                 max_resid=0.08, min_n=20, min_snr=0.0, min_a=0.0, mask=None, gap=1, max_shift=None,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
                  align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                  frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
-                 bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, verbose=True,
+                 bundle="chunkexcl", var_allow=None, var_scale=1.0, n_pc=12, amp_span=0.0, verbose=True,
                  dr_feat=None, dr_thr=None,
                  complete_edge=False, channel_pitch=20.0, edge_frac=0.5, complete_field="inv_sq", geom=None):
     """frag: dict of per-fragment arrays (clu,x0,y0,z0,A,template,t_mid[s],resid,one_flank,n,
@@ -420,10 +426,12 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
     chunk = (np.asarray(frag["t_mid"], float) / 60.0 // chunk_min).astype(int)   # t_mid is seconds
     one_flank = frag.get("one_flank", np.zeros(len(y0), int))
     resid = frag.get("resid", np.zeros(len(y0)))
-    linkable = ((one_flank == 0) & (y0 > 0) & (y0 < 140)
-                & (resid < max_resid) & (frag["n"] >= min_n))
+    real = (one_flank == 0) & (frag["n"] >= min_n)   # a REAL, identity-valid fragment (not noise/tiny)
+    if min_a > 0:                                     # absolute amplitude floor: drop noise-floor (A~1)
+        real &= (np.asarray(A, float) >= min_a)       # fragments that otherwise seed huge-amplitude bundles
     if min_snr > 0 and "snr" in frag:
-        linkable &= np.asarray(frag["snr"]) >= min_snr
+        real &= np.asarray(frag["snr"]) >= min_snr
+    linkable = real & (y0 > 0) & (y0 < 140) & (resid < max_resid)   # + GOOD localization, for co-gating
     idx = np.flatnonzero(linkable)
     chunks = sorted(int(c) for c in np.unique(chunk[idx]))
     if drift is not None:
@@ -472,8 +480,11 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
         raw = _graph_links(linkage, frag, idx, y0, logA, chunk, D, mask, offs)
     nraw = len(raw)
     links = [(int(idx[i]), int(idx[j])) for i, j in raw]
-    if seed_links is not None:
-        links += [(int(i), int(j)) for i, j in seed_links]
+    if seed_links is not None:                        # seeds bypass the localization/shape co-gates (they
+        links += [(int(i), int(j)) for i, j in seed_links   # are trusted same-unit by overlap) but must
+                  if real[int(i)] and real[int(j)]]   # still be REAL fragments -- a backbone pair touching
+                                                      # a noise-floor / sub-min_n fragment welds noise in
+
     if chunk_exclusive:
         Tt = frag["template"]
         strength = [masked_cos(Tt[i], Tt[j], mask) for i, j in links]
@@ -487,7 +498,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
             elif var_scale != 1.0:
                 allow = float(allow) * float(var_scale)
             bundles, n_blocked = bundles_variance_bounded(len(y0), links, chunk, strength, logA,
-                                                          P, w, allow)
+                                                          P, w, allow,
+                                                          amp_span=(amp_span if amp_span and amp_span > 0 else np.inf))
             if verbose:
                 src = "self-cal" if var_allow is None else "budget"
                 _log(f"varbound bundling: var_allow={allow:.4g}  ({src}, scale={var_scale})")
@@ -625,6 +637,12 @@ def main():
     ap.add_argument("--max-resid", type=float, default=0.08)
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--min-snr", type=float, default=0.0, help="gate linkable fragments on waveform SNR (needs snr in the cpos table; 0=off)")
+    ap.add_argument("--min-a", type=float, default=0.0,
+                    help="absolute amplitude (A) floor on linkability, seeds included: drop noise-floor (A~1) "
+                         "fragments so a backbone pair cannot weld a noise unit into a huge-amplitude bundle (0=off)")
+    ap.add_argument("--amp-span", type=float, default=0.0,
+                    help="varbound bundler: refuse a non-seed union whose bundle logA span would exceed this "
+                         "(natural-log units, e.g. ln(6)=1.79 for 6x; caps <=4x-per-link amplitude chaining; 0=off)")
     ap.add_argument("--from-units", default=None, help="link a fiber-intrachunk <...>.units.npz (per-chunk units) instead of raw cpos fragments")
     ap.add_argument("--refine-trajectory", action="store_true",
                     help="post-pass: fit per-bundle depth + PCA-feature trajectories, resolve "
@@ -720,7 +738,7 @@ def main():
         times_by_id = {int(uval[k]): np.sort(rr[ufirst[k]:ends[k]]) for k in range(len(uval))}
     _EMPTY = np.empty(0, np.int64)
     ov_kw = dict(ov_refrac=ov_refrac, ov_thr=a.overlap_refrac_thr, ov_min_exp=a.overlap_min_exp, ov_censor=ov_censor)
-    bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc)
+    bundle_kw = dict(bundle=a.bundle, var_allow=a.var_allow, var_scale=a.var_scale, n_pc=a.n_pc, amp_span=a.amp_span)
     geom = None
     if a.complete_edge:                                    # real site geometry for off-probe completion
         try:
@@ -753,7 +771,7 @@ def main():
                for m in z["members"]] if times_by_id is not None else None)
         tangents = z["tangent"] if "tangent" in z.files else None
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
-                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n,
+                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr, min_a=a.min_a,
                          gap=a.max_gap, max_shift=a.max_shift, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
@@ -770,7 +788,7 @@ def main():
         ft = ([times_by_id.get(int(c), _EMPTY) for c in frag["clu"]] if times_by_id is not None else None)
         tangents = frag.get("tangent")
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
-                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr,
+                         off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr, min_a=a.min_a,
                          gap=a.max_gap, max_shift=a.max_shift, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
                          align_lag=a.align_lag, align_upsample=a.align_upsample, primary_amp_frac=a.primary_amp_frac, tan_thr=a.tan_thr, tangents=tangents,
