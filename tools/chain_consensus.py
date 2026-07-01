@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""chain_consensus.py -- systematically chain the HIGH-SNR clusters of a group, peeling each chain out
-of the pool after it is found, then repeat the whole peel over many trials and track how consistently
-each cluster lands in the same chain.
+"""chain_consensus.py -- Monte Carlo consensus for chaining the HIGH-SNR clusters of a group: peel
+chains out of the pool, repeat over many randomised trials, and track how consistently each cluster
+lands in the same chain.
 
-One trial (a peel): seed from the highest-SNR unassigned cluster, chase it across chunks with
-piece_interneurons.chase_from (primary-channel cosine, drift-following), record the chain, REMOVE its
-members from the pool, and repeat until the pool is empty.  This partitions the high-SNR clusters into
-chains greedily, strongest cell first.
+One trial (a peel): seed from a RANDOM unassigned cluster (any chunk), chase it BIDIRECTIONALLY across
+chunks with piece_interneurons.chase_from (primary-channel cosine, drift-following), record the chain,
+REMOVE its members, and repeat until the pool is empty -- a greedy partition whose result depends on
+the random seed order.
 
-Across trials the per-cluster template is re-drawn from a fresh spike subsample (a bootstrap), so links
-that sit near the cosine gate flip between trials while well-separated cells recur.  Tracking the
-co-membership (fraction of trials two clusters share a chain) turns the greedy, seed-order-dependent
-chaining into a stability map: high co-membership = a robust cell, singletons = ambiguous fragments.
+Each trial also (a) randomly HOLDS OUT a fraction of the pool (--holdout-frac, bagging) and (b) re-draws
+every cluster's template from a fresh spike subsample (a bootstrap).  So three independent sources of
+randomness -- seed order, hold-out, template noise -- perturb the greedy chaining; robust cells recur,
+near-gate links flip.  Co-membership C[i,j] = (trials i,j both present AND in one chain)/(trials both
+present) is the Monte Carlo consensus; connected components of (C >= --comemb-thr) are the consensus
+groups, and each cluster's peak co-membership is its stability.
 
 Usage:
-    python3 tools/chain_consensus.py <session> <group> [--snr-thr 8] [--trials 15] \
-        [--variant stderiv] [--stage fiber_session] [--spk standard|stderiv] \
+    python3 tools/chain_consensus.py <session> <group> [--snr-thr 8] [--trials 50] \
+        [--holdout-frac 0.2] [--seed-order random|snr] [--spk standard|stderiv] \
         [--gap-min 60] [--cos-thr 0.92] [--min-n 200] [--cap 500] [--comemb-thr 0.5] \
         [--tsv memberships.tsv] [--out consensus.png]
 """
@@ -71,11 +73,16 @@ def trial_templates(pool, idxmap, tc, spk, sr, cap, rng_seed):
     return F
 
 
-def peel(F, pool, snr, *, gap_min, cos_thr, amp_ratio, prim_frac):
-    """Greedily peel chains: seed = highest-SNR unassigned, chase, remove, repeat."""
+def peel(F, pool, snr, *, seed_order, rng, gap_min, cos_thr, amp_ratio, prim_frac):
+    """Greedily peel chains out of `pool`: pick a seed (a RANDOM unassigned cluster for Monte Carlo,
+    or the highest-SNR one), chase it bidirectionally, record the chain, REMOVE its members, repeat
+    until the pool is empty."""
     avail = set(pool); chains = []
     while avail:
-        seed = max(avail, key=lambda u: snr[u])
+        if seed_order == "random":
+            seed = int(rng.choice(np.array(sorted(avail))))
+        else:
+            seed = max(avail, key=lambda u: snr[u])
         sub = sorted((F[u] for u in avail), key=lambda f: f["tmid"])
         si = next(k for k, f in enumerate(sub) if f["clu"] == seed)
         order = pi.chase_from(sub, si, gap_min=gap_min, cos_thr=cos_thr, amp_ratio=amp_ratio, prim_frac=prim_frac)
@@ -87,20 +94,21 @@ def peel(F, pool, snr, *, gap_min, cos_thr, amp_ratio, prim_frac):
     return chains
 
 
-def consensus(memb, thr):
-    """Co-membership matrix C[i,j] = fraction of trials clusters i,j share a chain, and the
-    connected components of (C >= thr) as consensus groups."""
+def consensus(memb, present, thr):
+    """Co-membership C[i,j] = (# trials i,j BOTH present AND in the same chain) / (# trials both
+    present) -- normalising by co-presence handles the random hold-out.  Returns C and the connected
+    components of (C >= thr) as consensus groups."""
     nt, n = memb.shape
-    C = np.zeros((n, n))
+    co_pres = np.zeros((n, n)); co_mem = np.zeros((n, n))
     for tr in range(nt):
+        p = present[tr]
+        pp = np.outer(p, p)
+        co_pres += pp
         m = memb[tr]
-        for i in range(n):
-            if m[i] < 0:
-                continue
-            C[i] += (m == m[i]) & (m >= 0)
-    C /= nt
+        same = (m[:, None] == m[None, :]) & (m[:, None] >= 0)
+        co_mem += pp & same
+    C = np.where(co_pres > 0, co_mem / np.maximum(co_pres, 1.0), 0.0)
     np.fill_diagonal(C, 1.0)
-    # connected components of the thresholded co-membership graph (no scipy dependency)
     A = C >= thr
     comp = -np.ones(n, dtype=int); k = 0
     for s in range(n):
@@ -145,7 +153,11 @@ def main():
                     help="waveform space for the templates (default standard = raw)")
     ap.add_argument("--snr-thr", type=float, default=8.0, help="dom-channel SNR floor for the pool (default 8)")
     ap.add_argument("--min-n", type=int, default=200); ap.add_argument("--cap", type=int, default=500)
-    ap.add_argument("--trials", type=int, default=15, help="peel repeats with re-drawn templates (default 15)")
+    ap.add_argument("--trials", type=int, default=50, help="Monte Carlo peel repeats (default 50)")
+    ap.add_argument("--holdout-frac", type=float, default=0.2,
+                    help="fraction of the pool randomly held out each trial (bagging; default 0.2; 0 = none)")
+    ap.add_argument("--seed-order", choices=["random", "snr"], default="random",
+                    help="peel seed order: random unassigned cluster (Monte Carlo, default) or highest-SNR first")
     ap.add_argument("--gap-min", type=float, default=60.0); ap.add_argument("--cos-thr", type=float, default=0.92)
     ap.add_argument("--amp-ratio", type=float, default=2.2); ap.add_argument("--prim-frac", type=float, default=0.3)
     ap.add_argument("--comemb-thr", type=float, default=0.5, help="co-membership for a consensus group (default 0.5)")
@@ -167,25 +179,34 @@ def main():
     if len(pool) < 2:
         raise SystemExit(f"[consensus] high-SNR pool has {len(pool)} clusters (raise --min-n / lower --snr-thr)")
     print(f"[consensus] {os.path.basename(base)} elec {elec}: {len(pool)} clusters SNR>={a.snr_thr:g}, "
-          f"{a.trials} trials ({a.spk} templates)")
+          f"{a.trials} Monte Carlo trials ({a.spk} templates, seed-order {a.seed_order}, "
+          f"hold-out {a.holdout_frac:.0%})")
     pidx = {u: i for i, u in enumerate(pool)}
     memb = np.full((a.trials, len(pool)), -1, dtype=int)
+    present = np.zeros((a.trials, len(pool)), dtype=bool)
     nch = []
     for tr in range(a.trials):
-        F = trial_templates(pool, idxmap, tc, spk, sr, a.cap, rng_seed=1000 + tr)
-        chains = peel(F, pool, snr, gap_min=a.gap_min, cos_thr=a.cos_thr, amp_ratio=a.amp_ratio, prim_frac=a.prim_frac)
+        rng = np.random.default_rng(1000 + tr)
+        keep = [u for u in pool if rng.random() >= a.holdout_frac]
+        if len(keep) < 2:
+            keep = list(pool)
+        for u in keep:
+            present[tr, pidx[u]] = True
+        F = trial_templates(keep, idxmap, tc, spk, sr, a.cap, rng_seed=1000 + tr)
+        chains = peel(F, keep, snr, seed_order=a.seed_order, rng=rng,
+                      gap_min=a.gap_min, cos_thr=a.cos_thr, amp_ratio=a.amp_ratio, prim_frac=a.prim_frac)
         nch.append(len(chains))
         for ci, c in enumerate(chains):
             for u in c:
                 memb[tr, pidx[u]] = ci
-    C, comp = consensus(memb, a.comemb_thr)
+    C, comp = consensus(memb, present, a.comemb_thr)
 
     from collections import Counter
     sizes = Counter(comp)
     groups = sorted((g for g, s in sizes.items() if s >= 2), key=lambda g: -sizes[g])
     stab = C.copy(); np.fill_diagonal(stab, np.nan)
     peakco = np.array([np.nanmax(stab[i]) for i in range(len(pool))])
-    print(f"  chains/trial: {nch} (mean {np.mean(nch):.1f})")
+    print(f"  chains/trial: min {min(nch)} mean {np.mean(nch):.1f} max {max(nch)}")
     print(f"  consensus groups (co-membership >= {a.comemb_thr:g}, size >= 2): {len(groups)}; "
           f"singleton/ambiguous clusters: {sum(1 for g in comp if sizes[g] < 2)}/{len(pool)}")
     print(f"  {'grp':>4} {'size':>4} {'meanCo':>6} {'SNRrange':>12}  members")
@@ -197,11 +218,13 @@ def main():
 
     if a.tsv:
         with open(a.tsv, "w") as fh:
-            fh.write("clu\tsnr\tn\tconsensus_group\tgroup_size\tpeak_comembership\ttrials_chained\n")
+            fh.write("clu\tsnr\tn\tconsensus_group\tgroup_size\tpeak_comembership\ttrials_present\ttrials_chained\n")
             for i, u in enumerate(pool):
-                tc_n = int((memb[:, i] >= 0).sum())
+                pres_n = int(present[:, i].sum())
+                ch_n = int(((memb[:, i] >= 0) & present[:, i]).sum())
                 gid = int(comp[i]); fh.write(f"{u}\t{snr[u]:.2f}\t{len(idxmap[u])}\t"
-                                             f"{gid if sizes[gid] >= 2 else -1}\t{sizes[gid]}\t{peakco[i]:.3f}\t{tc_n}\n")
+                                             f"{gid if sizes[gid] >= 2 else -1}\t{sizes[gid]}\t{peakco[i]:.3f}\t"
+                                             f"{pres_n}\t{ch_n}\n")
         print(f"  wrote {a.tsv}")
 
     fig, _ = report_figure(C, comp, pool, snr)
