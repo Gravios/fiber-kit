@@ -171,6 +171,18 @@ def warp_correlation(gd_a, gd_b):
     return float(np.corrcoef(gd_a[m], gd_b[m])[0, 1])
 
 
+def amp_profile_correlation(ta, tb):
+    """Cross-channel correlation of two templates' per-channel peak-to-peak AMPLITUDE profiles -- the
+    magnitude term of the Omlor-Giese anechoic model (eq. 10), the companion to warp_correlation's
+    group-delay term (eq. 11).  The full same-neuron criterion demands BOTH.  On g5 co-located
+    look-alikes (cosine>=0.9) this term (AUC ~0.76) separates same/different better than the group-delay
+    term alone (~0.65).  Time-shift invariant (per-channel p2p), so no mutual_center needed."""
+    a = np.ptp(np.asarray(ta, float), axis=0); b = np.ptp(np.asarray(tb, float), axis=0)
+    if a.std() < 1e-9 or b.std() < 1e-9:
+        return 0.0
+    return float(np.corrcoef(a, b)[0, 1])
+
+
 def warp_channel_incongruity(gd_a, gd_b, warp_hi=0.85, min_local=4):
     """Worst single-channel group-delay incongruity -- a SUB-GATE statistic for pairs whose
     overall warp is ALREADY coherent.  warp_correlation is a cross-channel Pearson, so a couple

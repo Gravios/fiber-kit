@@ -139,7 +139,8 @@ def estimate_drift(y0, logA, w, chunk, chunks, *, span_um=24.0, step=3.0):
 
 
 def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.975,
-                  pos_thr=1.5, off_thr=1.0, warp_thr=None, offsets=None, gap=1, max_shift=None,
+                  pos_thr=1.5, off_thr=1.0, warp_thr=None, warp_amp_thr=None, warp_resid_thr=None,
+                  offsets=None, gap=1, max_shift=None,
                   cfiber_thr=None, cfiber_win=None, amp_gate=0.0,
                   align_lag=0, align_upsample=1, primary_amp_frac=0.0, tan_thr=None, tangents=None,
                   frag_times=None, ov_refrac=None, ov_thr=0.3, ov_min_exp=5.0, ov_censor=0,
@@ -162,6 +163,17 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
     if offsets is None:
         offsets = np.array([fg.interchannel_offsets(t) for t in tc])
     gd = [fg.group_delay_profile(t) for t in tmpl] if warp_thr is not None else None
+
+    def _warp_gate(i, j):                              # full Omlor-Giese: group-delay (eq.11) AND, if set,
+        if warp_thr is None:                          # amplitude-profile (eq.10) AND single-channel incongruity
+            return True
+        if fg.warp_correlation(gd[i], gd[j]) < warp_thr:
+            return False
+        if warp_amp_thr is not None and fg.amp_profile_correlation(tc[i], tc[j]) < warp_amp_thr:
+            return False
+        if warp_resid_thr is not None and fg.warp_channel_incongruity(gd[i], gd[j]) > warp_resid_thr:
+            return False
+        return True
     Scf = _cfiber_shapes(np.asarray(tmpl), cfiber_win) if cfiber_thr is not None else None
     sy_ = y0.std() + 1e-9; sx = x0.std() + 1e-9; sz = z0.std() + 1e-9; sa = logA.std() + 1e-9
     links = []; linked_fwd = set()
@@ -214,7 +226,7 @@ def cogated_links(x0, y0, z0, logA, tmpl, chunk, chunks, D, mask, *, cos_thr=0.9
                             (amp_gate <= 0 or abs(logA[ai[v]] - logA[bi[u]]) <= amp_gate) and \
                             (off_thr <= 0 or _offset_rms(offsets[ai[v]], offsets[bi[u]]) <= off_thr) and \
                             (tan_thr is None or tangents is None or _tan_cos(tangents[ai[v]], tangents[bi[u]]) >= tan_thr) and \
-                            (warp_thr is None or fg.warp_correlation(gd[ai[v]], gd[bi[u]]) >= warp_thr) and \
+                            _warp_gate(ai[v], bi[u]) and \
                             (cfiber_thr is None or np.linalg.norm(Scf[ai[v]] - Scf[bi[u]]) <= cfiber_thr) and \
                             _ov_ok(ai[v], bi[u]):
                         links.append((int(ai[v]), int(bi[u]))); linked_fwd.add(int(ai[v]))
@@ -403,6 +415,7 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
 
 
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
+                 warp_amp_thr=None, warp_resid_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, min_a=0.0, mask=None, gap=1, max_shift=None,
                  drift=None, seed_links=None, refine_trajectory=False, traj_ext_min=0.0,
                  chunk_exclusive=True, cfiber_thr=None, cfiber_q=None, linkage="cogated", amp_gate=0.0,
@@ -464,7 +477,8 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
         ft_sub = [frag_times[int(i)] for i in idx] if (frag_times is not None and ov_refrac is not None) else None
         raw = cogated_links(frag["x0"][idx], y0[idx], frag["z0"][idx], logA[idx], frag["template"][idx],
                             chunk[idx], chunks, D, mask, cos_thr=cos_thr, pos_thr=pos_thr,
-                            off_thr=off_thr, warp_thr=warp_thr, offsets=offs, gap=gap, max_shift=max_shift,
+                            off_thr=off_thr, warp_thr=warp_thr, warp_amp_thr=warp_amp_thr,
+                            warp_resid_thr=warp_resid_thr, offsets=offs, gap=gap, max_shift=max_shift,
                             cfiber_thr=cfiber_thr, cfiber_win=cfw, amp_gate=amp_gate,
                             align_lag=align_lag, align_upsample=align_upsample,
                             primary_amp_frac=primary_amp_frac, tan_thr=tan_thr,
@@ -626,6 +640,12 @@ def main():
                          "more, <1 splits more); applies to both the self-calibrated and explicit boundary.")
     ap.add_argument("--n-pc", type=int, default=12,
                     help="varbound: number of template principal components defining the variance space.")
+    ap.add_argument("--warp-amp-thr", type=float, default=None,
+                    help="Omlor-Giese amplitude-profile floor (eq.10) -- full warp criterion with --warp-thr "
+                         "(more discriminative on co-located look-alikes than group-delay alone; ''/unset=off)")
+    ap.add_argument("--warp-resid-thr", type=float, default=None,
+                    help="single-channel warp-incongruity ceiling (samples) -- sub-gate on warp-coherent pairs "
+                         "(catches a co-located source one channel's group delay betrays; unset=off)")
     ap.add_argument("--warp-thr", type=float, default=None,
                     help="spatio-temporal WARP continuity co-gate (Omlor-Giese group delay): require the "
                          "cross-channel correlation of two candidates' per-channel group-delay profiles >= this "
@@ -771,6 +791,7 @@ def main():
                for m in z["members"]] if times_by_id is not None else None)
         tangents = z["tangent"] if "tangent" in z.files else None
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
+                         warp_amp_thr=a.warp_amp_thr, warp_resid_thr=a.warp_resid_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr, min_a=a.min_a,
                          gap=a.max_gap, max_shift=a.max_shift, drift=(_global_drift(frag) or drift), seed_links=seed, refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
@@ -788,6 +809,7 @@ def main():
         ft = ([times_by_id.get(int(c), _EMPTY) for c in frag["clu"]] if times_by_id is not None else None)
         tangents = frag.get("tangent")
         R = link_session(frag, chunk_min=a.chunk_minutes, cos_thr=a.cos_thr, pos_thr=a.pos_thr, warp_thr=a.warp_thr,
+                         warp_amp_thr=a.warp_amp_thr, warp_resid_thr=a.warp_resid_thr,
                          off_thr=a.off_thr, max_resid=a.max_resid, min_n=a.min_n, min_snr=a.min_snr, min_a=a.min_a,
                          gap=a.max_gap, max_shift=a.max_shift, drift=_global_drift(frag), refine_trajectory=a.refine_trajectory, traj_ext_min=a.traj_ext_min,
                          chunk_exclusive=not a.allow_chunk_clash, cfiber_thr=a.cfiber_thr, cfiber_q=a.cfiber_q, linkage=a.linkage, amp_gate=a.amp_gate,
