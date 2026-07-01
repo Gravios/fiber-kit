@@ -73,7 +73,20 @@ def _pcos(a, b, prim_frac):
     return float(va @ vb / ((np.linalg.norm(va) + 1e-9) * (np.linalg.norm(vb) + 1e-9)))
 
 
-def chain(frags, *, gap_min, cos_thr, amp_ratio, prim_frac, min_step_min=2.0):
+def _cogate_ok(a, b, cogate, thr, prim_frac):
+    """Co-gate on a SECOND waveform space: while chasing IDENTITY on one space (e.g. standard footprint),
+    also require the SEPARABILITY space (stderiv, where the clustering happened) to agree -- its union-
+    primary cosine >= thr.  On g5 this trims a co-located over-extension standard cosine cannot see
+    (clu134 chase 25 -> 8 fragments).  Permissive when either fragment lacks a co-gate template."""
+    if cogate is None:
+        return True
+    ca, cb = cogate.get(a["clu"]), cogate.get(b["clu"])
+    if ca is None or cb is None:
+        return True
+    return _pcos(ca, cb, prim_frac) >= thr
+
+
+def chain(frags, *, gap_min, cos_thr, amp_ratio, prim_frac, min_step_min=2.0, cogate=None, cogate_thr=0.0):
     """Greedy forward chaining: each fragment links to the best later fragment within `gap_min`,
     primary cosine >= cos_thr and amplitude ratio <= amp_ratio.  Returns chains (lists of indices),
     longest first."""
@@ -88,7 +101,7 @@ def chain(frags, *, gap_min, cos_thr, amp_ratio, prim_frac, min_step_min=2.0):
                 continue
             ratio = a["amp"].max() / max(b["amp"].max(), 1e-9); ratio = max(ratio, 1 / ratio)
             cos = _pcos(a, b, prim_frac)
-            if cos >= bs and ratio <= amp_ratio:
+            if cos >= bs and ratio <= amp_ratio and _cogate_ok(a, b, cogate, cogate_thr, prim_frac):
                 bs, best = cos, j
         nxt[i] = best
     succ = {j for j in nxt if j >= 0}
@@ -104,7 +117,7 @@ def chain(frags, *, gap_min, cos_thr, amp_ratio, prim_frac, min_step_min=2.0):
     return chains
 
 
-def chase_from(frags, seed, *, gap_min, cos_thr, amp_ratio, prim_frac):
+def chase_from(frags, seed, *, gap_min, cos_thr, amp_ratio, prim_frac, cogate=None, cogate_thr=0.0):
     """Bidirectional greedy chase of ONE cell from `seed` across ALL channels (drift-following): at each
     end, link to the best union-primary-cosine fragment within gap_min, gated on amplitude ratio.  Unlike
     chain(), this follows the cell wherever its dominant channel drifts.  Returns ordered indices."""
@@ -119,8 +132,9 @@ def chase_from(frags, seed, *, gap_min, cos_thr, amp_ratio, prim_frac):
             if dt <= 2.0:
                 continue
             ratio = a["amp"].max() / max(b["amp"].max(), 1e-9); ratio = max(ratio, 1 / ratio)
-            if _pcos(a, b, prim_frac) >= bs and ratio <= amp_ratio:
-                bs, best = _pcos(a, b, prim_frac), j
+            c = _pcos(a, b, prim_frac)
+            if c >= bs and ratio <= amp_ratio and _cogate_ok(a, b, cogate, cogate_thr, prim_frac):
+                bs, best = c, j
         return best
     used = {seed}
     fwd = [seed]; cur = seed
@@ -228,6 +242,13 @@ def main():
     ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",
                     help="waveform space for the linking templates (default standard = raw; stderiv = the "
                          "clustering feature space).  Cell-typing always uses standard (stderiv breaks width).")
+    ap.add_argument("--cogate", choices=["standard", "stderiv"], default=None,
+                    help="co-gate the chase on a SECOND waveform space: also require that space's union-primary "
+                         "cosine >= --cogate-cos (e.g. --spk standard --cogate stderiv chases footprint identity "
+                         "but demands stderiv separability -- trims co-located over-extensions the identity space "
+                         "cannot see; g5 clu134 chase 25 -> 8 fragments).")
+    ap.add_argument("--cogate-cos", type=float, default=0.90,
+                    help="co-gate primary-cosine threshold in the --cogate space (default 0.90).")
     ap.add_argument("--exclude", default=None,
                     help="comma list of clu ids to HOLD OUT of the fragment pool (e.g. a previously-found "
                          "chain) so a new anchor is linked from the remaining fragments only")
@@ -249,6 +270,18 @@ def main():
         spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
         type_spk = None
     _, ids = nio.read_clu_at(base, elec, variant=a.variant, tag=a.stage, n_spikes=len(res))
+
+    cogate = None
+    if a.cogate:                                              # second-space (separability) co-gate templates
+        if a.cogate == "stderiv":
+            cspk, _ = nio.open_spk(base, elec, nsamp, nchan, prefer=nio.prefer_derived())
+        else:
+            cspk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
+        cfrags = fragment_templates(cspk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
+                                    celltype=a.celltype or None, dom_idx=set(range(len(gch))),
+                                    exclude=exclude, type_spk=None)
+        cogate = {f["clu"]: f for f in cfrags}
+        print(f"[piece] co-gate on {a.cogate} space (primary cosine >= {a.cogate_cos}): {len(cogate)} templates")
 
     if a.seed_like is not None and a.seed is None:             # pick the seed most correlated with a reference
         pool = fragment_templates(spk, res, ids, min_n=a.min_n, sig_cap=a.sig_cap, sr=sr,
@@ -277,7 +310,7 @@ def main():
         if pos is None:
             raise SystemExit(f"[piece] seed clu {a.seed} not among {len(frags)} {a.celltype} fragments (>= --min-n)")
         order = chase_from(frags, pos, gap_min=a.gap_min, cos_thr=a.cos_thr,
-                           amp_ratio=a.amp_ratio, prim_frac=a.prim_frac)
+                           amp_ratio=a.amp_ratio, prim_frac=a.prim_frac, cogate=cogate, cogate_thr=a.cogate_cos)
         track = [frags[i] for i in order]
         print(f"[piece] {os.path.basename(base)} elec {elec}: chase from clu {a.seed} across all channels "
               f"({a.celltype}, gap {a.gap_min:.0f} min)")
@@ -310,7 +343,8 @@ def main():
     print(f"[piece] {os.path.basename(base)} elec {elec}: {len(frags)} {a.celltype} fragments dominant on {tgt}")
     if len(frags) < 2:
         raise SystemExit("[piece] need >= 2 fragments")
-    chains = chain(frags, gap_min=a.gap_min, cos_thr=a.cos_thr, amp_ratio=a.amp_ratio, prim_frac=a.prim_frac)
+    chains = chain(frags, gap_min=a.gap_min, cos_thr=a.cos_thr, amp_ratio=a.amp_ratio, prim_frac=a.prim_frac,
+                   cogate=cogate, cogate_thr=a.cogate_cos)
     for ch in chains[:8]:
         seg = " -> ".join(f"clu{frags[i]['clu']}@{frags[i]['tmid']:.0f}m(ch{gch[frags[i]['dom']]})" for i in ch)
         print(f"  [{len(ch)} frags, {frags[ch[-1]]['tmid']-frags[ch[0]]['tmid']:.0f} min] {seg}")
