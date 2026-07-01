@@ -23,6 +23,8 @@ Usage:
     # hold out a found chain, seed a new anchor from what remains:
     python3 tools/piece_interneurons.py <session> <group> --seed 262 --exclude 134,314,... --gap-min 60
     python3 tools/piece_interneurons.py <session> <group> --seed 134 --spk stderiv   # link in stderiv space
+    # auto-pick a correlated seed on ch33 and write the chain back as a parent/child .clu/.clc/.clp:
+    python3 tools/piece_interneurons.py <session> <group> --seed-like 134 --seed-on 33 --gap-min 60 --write-clu pieced
 """
 import argparse
 import os
