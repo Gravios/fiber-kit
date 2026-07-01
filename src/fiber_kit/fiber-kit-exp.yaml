@@ -344,8 +344,11 @@ FK_LINK_COS_THR:         0.75     # 0.75 | 0.70-0.85.  Cosine PREFILTER for cros
                                   #   position, cfiber and amplitude gates below.
 FK_LINK_CFIBER_Q:        0.90     # 0.90 | 0.85-0.95 ("" = off).  cfiber CO-GATE (cosine AND cfiber); threshold self-calibrates
                                   #   from the overlap-backbone same-unit shape distances at link time.
-FK_LINK_WARP_THR:        ""       # "" = off.  Warp co-gate.  On g5 it did not help (precision already saturated; per-chunk
-                                  #   templates too noisy for a reliable group-delay) -- leave off unless curation shows need.
+FK_LINK_WARP_THR:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay (warp) co-gate: link only if per-channel timing
+                                  #   profiles also agree.  Earlier "g5 no-op" was PRE-DR-candidates (precision saturated);
+                                  #   with template-DR candidates ON the widened candidate set over-merges, and warp
+                                  #   discriminates same/different units at AUC ~0.87 on these units -- an independent
+                                  #   cross-timing veto cosine lacks, useful in the co-located dense regions.
 FK_LINK_POS_THR:         1.5      # 1.5 | 1.0-2.0.  Position gate: link across chunks only if localized positions agree within
                                   #   this (in the localizer's units).  Tighter rejects drift-jumped mismatches.
 FK_LINK_OFF_THR:         1.0      # 1.0 | 0.8-1.2 (samples).  Inter-channel offset gate (same timing-signature logic as intra).
@@ -353,6 +356,14 @@ FK_LINK_MAX_GAP:         2        # 2 | 1-4 (chunks).  Max chunk gap a unit may 
                                   #   a neuron can fall silent or drift off-probe before returning).
 FK_LINK_AMP_GATE:        1.39     # 1.39 | 1.10-1.61 (nat-log; 0=off).  Absolute log-amplitude gate across the WHOLE recording's
                                   #   drift.  ln(4)=1.386 -> <=4x amplitude cap (wider than intrachunk's 3x: more total drift).
+FK_LINK_MIN_A:           50       # 50 | 0=off.  Absolute amplitude (A) floor on linkability, SEEDS INCLUDED.  ~115 g5 units
+                                  #   sit at the localization floor A~1 (next percentile ~490); a backbone seed touching one
+                                  #   welds a noise unit into a huge-amplitude bundle (worst 52750x A ratio).  Floor drops
+                                  #   them: worst A-ratio 52750x -> 21x, backbone-pair recall 93.5% -> 85.9% (the 7.6% lost
+                                  #   are exactly those noise pairs).  Session-scaled: set between the noise floor and real units.
+FK_LINK_AMP_SPAN:        1.79     # 1.79 | 0=off (nat-log).  Varbound bundler: refuse a NON-seed union whose bundle logA span
+                                  #   would exceed this.  ln(6)=1.79 -> 6x.  amp_gate caps 4x PER LINK but a chain of <=4x links
+                                  #   accumulates unbounded amplitude; this bounds the accrued bundle span (seeds bypass).
 
 # cross-chunk UNDER-LINK recovery (the linker leaves ~90% of bundles single-chunk; a meaningful share are the
 # same neuron relabelled across a chunk boundary).  All OFF by default so an unedited config reproduces current
