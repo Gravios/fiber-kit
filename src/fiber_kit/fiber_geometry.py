@@ -183,6 +183,76 @@ def amp_profile_correlation(ta, tb):
     return float(np.corrcoef(a, b)[0, 1])
 
 
+def dispersion_profile(waves, sigma=DEFAULT_SMOOTH_SIGMA, aligned=False):
+    """Per-channel spike-to-spike DISPERSION profile sigma(t) of a cluster -- the (nsamp, nch)
+    half-width of the per-channel confidence band, the second-moment companion to the MEDIAN
+    template.  From an (nspk, nsamp, nch) raw stack: realign (fl.realign) -> denoise ->
+    mutual_center_spikes -> per-sample std over spikes, so sigma(t) is measured on the SAME
+    aligned stack the median template is (pass aligned=True to skip that when the caller already
+    aligned, e.g. beside _boundary_std_template).
+
+    This is sigma(t), NOT the SEM sigma(t)/sqrt(n): deliberately n-INDEPENDENT so it is a
+    cross-fragment identity signature and not a sample-size artefact (low-count fragments would
+    otherwise read a wide band purely from small n).  Where the band is WIDE is where the
+    cluster's spikes disagree: amplitude variability (bursting -> wide at the peak/trough),
+    temporal jitter (-> wide at the edges), or -- on peripheral channels -- background noise.
+    Returns None for < 2 spikes."""
+    w = np.asarray(waves, float)
+    if len(w) < 2:
+        return None
+    if aligned:
+        al = w
+    else:
+        try:
+            from . import fiber_lib as fl
+        except ImportError:
+            import fiber_lib as fl
+        al = mutual_center_spikes(denoise(fl.realign(w), sigma))
+    return al.std(0)
+
+
+def ci_xcorr_score(sa, sb, template=None, amp_frac=0.3, maxlag=4):
+    """Cross-correlate two dispersion profiles sigma(t) (dispersion_profile) as an identity
+    signal ORTHOGONAL to the median-template cosine: the median compares first moments, this
+    compares WHERE on each channel the spikes disagree -- the confidence-band SHAPE.  Per
+    channel, take the peak normalised cross-correlation of the two sigma(t) columns within
+    +/-maxlag samples (a small lag absorbs residual mis-centring), then average across channels,
+    amplitude-weighted by `template`'s per-channel peak-to-peak (channels >= amp_frac x the
+    dominant peak) when a template is given, else over channels with non-trivial dispersion in
+    both.  Returns a scalar in [-1, 1] (1 == identical band shape); 0.0 when too few channels
+    qualify.
+
+    IMPORTANT (to be MEASURED on curated GT, not assumed): as a CO-LOCATED discriminator -- the
+    actual linking bottleneck -- this is expected to be WEAK.  sigma(t) is dominated by a shared
+    background-noise floor (common to co-located cells on the same channels/time) plus amplitude
+    variability that is CONFOUNDED by within-chunk drift (a drifting unit inflates its band exactly
+    like a bursting one); the residual bursting signature is captured more directly and is already
+    validated via ISI/CCG (fiber_ccg).  Its plausible value is a same-cell CONSISTENCY term along a
+    track, or one more orthogonal term to thicken the thin stderiv seed margin in
+    fiber_intrachunk.overlap_backbone (handoff 12.4) -- NOT breaking the co-location degeneracy.
+    Report the same/different AUC (the fiber_score 6.2 harness) before wiring it as a gate."""
+    A = np.asarray(sa, float); B = np.asarray(sb, float)
+    if A.ndim != 2 or A.shape != B.shape:
+        return 0.0
+    _, nc = A.shape
+    if template is not None:
+        p2p = np.ptp(np.asarray(template, float), axis=0)
+        chans = np.flatnonzero(p2p >= amp_frac * p2p.max()) if p2p.max() > 0 else np.arange(0)
+        wts = p2p
+    else:
+        chans = np.flatnonzero((A.std(0) > 1e-9) & (B.std(0) > 1e-9))
+        wts = np.ones(nc)
+    num = den = 0.0
+    for c in chans:
+        a = A[:, c] - A[:, c].mean(); b = B[:, c] - B[:, c].mean()
+        na = float(np.linalg.norm(a)); nb = float(np.linalg.norm(b))
+        if na < 1e-9 or nb < 1e-9:
+            continue
+        best = max(float(a @ np.roll(b, lag)) / (na * nb) for lag in range(-maxlag, maxlag + 1))
+        num += wts[c] * best; den += wts[c]
+    return float(num / den) if den > 0 else 0.0
+
+
 def warp_channel_incongruity(gd_a, gd_b, warp_hi=0.85, min_local=4):
     """Worst single-channel group-delay incongruity -- a SUB-GATE statistic for pairs whose
     overall warp is ALREADY coherent.  warp_correlation is a cross-channel Pearson, so a couple
