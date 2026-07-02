@@ -242,6 +242,10 @@ def main():
     gch = list(cfg["channels"])
     pinned = np.array([gch.index(int(x)) for x in a.channels.split(",")]) if a.channels else None
     chunk_min = a.chunk_min if a.chunk_min else float(gcfg.get("FK_SESSION_CHUNK_MIN") or os.environ.get("FK_SESSION_CHUNK_MIN") or 12.0)
+    print(f"[backbone-link] knobs (CLI/param > FK_BBLINK_* env > $FK_CONFIG > default): "
+          f"z={a.z} win={a.win} slide={a.slide} iou-thr={a.iou_thr} floor={a.floor} prim-frac={a.prim_frac} "
+          f"warp/amp/resid={a.warp_thr}/{a.amp_thr}/{a.resid_thr} min-frag={a.min_frag} max-gap={a.max_gap} "
+          f"min-snr-q={a.min_snr_q} chunk-min={chunk_min:g}")
 
     res = nio.read_res_file(nio.session_path(base, "res", elec))
     if a.in_clu:
