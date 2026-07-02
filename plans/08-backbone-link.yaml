@@ -1,0 +1,21 @@
+# ============================================================================
+#  08-backbone-link : link an EXISTING fiber-session sort on the invariant backbone.
+#
+#  Starts from .clu.stderiv.<elec>.fiber_session (does NOT re-run or overwrite
+#  fiber-session) and links its chunk-local fragments into per-neuron chains by
+#  ENERGY-SCALED median+/-sigma confidence-band overlap on the invariant backbone
+#  channels (the pair's shared primary channels), MUTUAL-NN across adjacent chunks,
+#  gated by the Omlor-Giese warp veto, STARTING WITH the high-SNR clusters
+#  (min-snr-q); writes .clu.stderiv.<elec>.backbone_linked.
+#
+#  Needs only the fiber-session .clu + the standard .spk (the linker realigns and
+#  templates internally) -- no fiber-refine / fiber-intrachunk / fiber-cpos, and it
+#  is NOT fiber-link (which drives off an intrachunk .units.npz).  The low-SNR
+#  fragments left as singletons are the input to the contamination/refinement pass.
+#
+#  Run:   fiber-pipeline <elec> --plan plans/08-backbone-link.yaml
+#  Score against a curated sort: add   gt-clu: fiber_session_curated   to params.
+#  Pin the interneuron backbone instead of per-pair primaries: add   channels: 33,34.
+# ============================================================================
+pipeline:
+  - {stage: fiber-backbone-link, in: fiber_session, out: backbone_linked, params: {min-snr-q: 0.5}}

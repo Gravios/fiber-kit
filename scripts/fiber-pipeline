@@ -280,7 +280,8 @@ PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragmen
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
-KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}")
+ALT_STAGES=(fiber-backbone-link)              # alternative linker (fiber-session fragments); plannable, not in `all`
+KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
 STAGE_SUMMARY=(
@@ -295,6 +296,9 @@ STAGE_SUMMARY=(
 CURATED_SUMMARY=(
     "post-curation: rebuild the per-unit/per-chunk model from a curated .clu (no regrouping)"
 )
+ALT_SUMMARY=(
+    "link fiber-session fragments on the invariant backbone (CI-overlap + warp veto); alt to intrachunk+link"
+)
 
 list_stages() {   # -l/--list : short per-stage summary
     local i
@@ -305,6 +309,10 @@ list_stages() {   # -l/--list : short per-stage summary
     echo "post-curation (recognized + plannable, NOT part of 'all'):"
     for i in "${!CURATED_STAGES[@]}"; do
         printf '  %-18s %s\n' "${CURATED_STAGES[$i]}" "${CURATED_SUMMARY[$i]}"
+    done
+    echo "alternative linkers (recognized + plannable, NOT part of 'all'):"
+    for i in "${!ALT_STAGES[@]}"; do
+        printf '  %-18s %s\n' "${ALT_STAGES[$i]}" "${ALT_SUMMARY[$i]}"
     done
 }
 
@@ -491,6 +499,17 @@ usage() {
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
 }
 
+fiber_backbone_link() {   # link fiber-session fragments on the invariant backbone -> .backbone_linked
+    # Reads the fiber-session .clu + the standard .spk directly (does its own realign + templating), so it
+    # needs NO fiber-refine / fiber-intrachunk / fiber-cpos.  FK_BBLINK_* knobs come from $FK_CONFIG / the
+    # exported env; per-step plan `params:` (e.g. channels, min-snr-q) override via argparse last-wins.
+    echo "== fiber-backbone-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-backbone_linked}) =="
+    _run fiber-backbone-link "$SESS" "$ELEC" \
+        --clu-method stderiv --clu-stage "${STEP_IN:-fiber_session}" \
+        --out-tag "${STEP_OUT:-backbone_linked}" \
+        "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 run_stage() {
     # forward the command-line override args (set in main) to the selected stage only; argparse is
     # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
@@ -506,6 +525,7 @@ run_stage() {
         fiber-intrachunk) fiber_intrachunk "${ov[@]}" ;;
         fiber-link)       fiber_link       "${ov[@]}" ;;
         fiber-refit)      fiber_refit      "${ov[@]}" ;;
+        fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -521,6 +541,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-intrachunk) fiber_intrachunk ;;
         fiber-link)       fiber_link       ;;
         fiber-refit)      fiber_refit      ;;
+        fiber-backbone-link) fiber_backbone_link ;;
         *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
     esac
 }
@@ -540,7 +561,7 @@ except Exception as e:
 steps = doc.get("pipeline") if isinstance(doc, dict) else doc
 if not isinstance(steps, list) or not steps:
     sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit"}
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link"}
 def field(st, k):
     v = st.get(k, "")
     return "" if v is None else str(v)
