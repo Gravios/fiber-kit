@@ -32,6 +32,12 @@ _LP = "\u25b8 fiber-link"
 def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
 def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
+
+def _float_or_auto(s):
+    """argparse type for --min-a: a float, or the literal 'auto' (resolved by
+    link_session via suggest_min_a on the loaded fragment amplitudes)."""
+    return "auto" if str(s).strip().lower() == "auto" else float(s)
+
 try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
     from . import fiber_methods as fm
@@ -414,6 +420,48 @@ def _graph_links(method, frag, idx, y0, logA, chunk, D, mask, offs, knn=7):
     return raw
 
 
+def suggest_min_a(A, *, clip_factor=3.0, min_clip_frac=0.02, search_quantile=0.5, gap_factor=3.0):
+    """Suggest an absolute amplitude floor (the `min_a` link_session gates on) that
+    separates the localization-clip noise floor -- fragments pinned near the minimum
+    A (the clip, ~1) that seed huge-amplitude bundles -- from real units, so a session
+    can be gated without hand-tuning (g5 was hand-set to 50; A 5%-ile ~490).
+
+    Method (log-amplitude): find the widest gap in the LOW half of the log-A
+    distribution -- the empty valley between the clip pile-up and the real-unit mass --
+    and return its geometric midpoint. The valley, not a fixed ratio, sets the floor,
+    so it adapts to each session's real-unit scale.
+
+    Returns 0.0 (do NOT gate) unless there is a genuine clip pile-up to cut:
+      * the valley must exceed `gap_factor`x the typical log-A spacing in the low
+        region (a real gap, not order-statistic noise on a smooth distribution),
+      * the below-floor mass must be a non-trivial fraction (`min_clip_frac`), AND
+      * it must be CONCENTRATED within `clip_factor`x the minimum A -- i.e. really the
+        clip pile-up, not merely a run of small real units (which must NOT be cut).
+    So a clean session with no clip returns 0.0 and is left ungated."""
+    A = np.asarray(A, dtype=float)
+    A = A[np.isfinite(A) & (A > 0)]
+    if A.size < 20:
+        return 0.0
+    logA = np.log(A)
+    lo = np.sort(logA[logA <= np.quantile(logA, search_quantile)])
+    if lo.size < 3:
+        return 0.0
+    gaps = np.diff(lo)
+    pos = gaps[gaps > 0]
+    if pos.size == 0:
+        return 0.0
+    j = int(np.argmax(gaps))
+    if gaps[j] < gap_factor * float(np.median(pos)):
+        return 0.0
+    floor = float(np.exp(0.5 * (lo[j] + lo[j + 1])))
+    below = A[A < floor]
+    if below.size < max(1, int(min_clip_frac * A.size)):
+        return 0.0
+    if float(below.max()) > clip_factor * float(A.min()):   # not a tight clip pile-up
+        return 0.0
+    return floor
+
+
 def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.0, warp_thr=None,
                  warp_amp_thr=None, warp_resid_thr=None,
                  max_resid=0.08, min_n=20, min_snr=0.0, min_a=0.0, mask=None, gap=1, max_shift=None,
@@ -436,6 +484,16 @@ def link_session(frag, *, chunk_min=12.0, cos_thr=0.975, pos_thr=1.5, off_thr=1.
     if mask is None:
         mask = fl.MASK_FULL
     y0 = frag["y0"]; A = frag["A"]; logA = np.log(np.clip(A, 1, None))
+    if isinstance(min_a, str):                        # "auto": pick the floor from the amplitude gap
+        if min_a.strip().lower() == "auto":
+            _est = suggest_min_a(A)
+            if verbose:
+                _cut = int(np.count_nonzero(np.asarray(A, float) < _est)) if _est > 0 else 0
+                _log(f"min_a=auto -> {_est:.1f} (cuts {_cut} clip-floor fragments)" if _est > 0
+                     else "min_a=auto -> no clip pile-up detected; not gating on amplitude")
+            min_a = _est
+        else:
+            min_a = float(min_a)
     chunk = (np.asarray(frag["t_mid"], float) / 60.0 // chunk_min).astype(int)   # t_mid is seconds
     one_flank = frag.get("one_flank", np.zeros(len(y0), int))
     resid = frag.get("resid", np.zeros(len(y0)))
@@ -657,9 +715,11 @@ def main():
     ap.add_argument("--max-resid", type=float, default=0.08)
     ap.add_argument("--min-n", type=int, default=20)
     ap.add_argument("--min-snr", type=float, default=0.0, help="gate linkable fragments on waveform SNR (needs snr in the cpos table; 0=off)")
-    ap.add_argument("--min-a", type=float, default=0.0,
+    ap.add_argument("--min-a", type=_float_or_auto, default=0.0,
                     help="absolute amplitude (A) floor on linkability, seeds included: drop noise-floor (A~1) "
-                         "fragments so a backbone pair cannot weld a noise unit into a huge-amplitude bundle (0=off)")
+                         "fragments so a backbone pair cannot weld a noise unit into a huge-amplitude bundle (0=off). "
+                         "'auto' picks the floor from the gap between the clip pile-up and the real-unit mass "
+                         "(per-session; leaves a clean session ungated)")
     ap.add_argument("--amp-span", type=float, default=0.0,
                     help="varbound bundler: refuse a non-seed union whose bundle logA span would exceed this "
                          "(natural-log units, e.g. ln(6)=1.79 for 6x; caps <=4x-per-link amplitude chaining; 0=off)")
