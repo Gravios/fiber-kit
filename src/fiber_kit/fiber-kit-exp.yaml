@@ -420,6 +420,40 @@ FK_LINK_VAR_ALLOW:       ""       # "" = self-calibrate at link time from the hi
 # new precision methods, left OFF here on purpose -- both are documented no-ops on g5 (warp: precision already
 # saturated; overlap-refractory: g5 too sparse, it abstains).  Enable them on a denser session, not this one.
 
+# ----- fiber-backbone-link : link fiber-session fragments on the invariant backbone --------------------------
+# Concatenates the fiber-session over-split fragments (chunk-local) into per-neuron chains by ENERGY-SCALED
+# median+/-sigma CONFIDENCE-BAND overlap on the invariant backbone channels (the pair's SHARED primary channels,
+# or --channels pinned), MUTUAL-NN across adjacent chunks, gated by the full Omlor-Giese WARP veto.  Runs on the
+# STANDARD .spk (curation/localization axis; group-delay wants raw templates).  It STARTS WITH HIGH-SNR clusters:
+# only clusters at/above the SNR floor are linked this pass, so the clean backbone is assembled first and the
+# low-SNR/contaminated fragments are deferred to the contamination/refinement stage.  Validated on g5 standard
+# .spk: ch33/34 backbone purity 0.997 (completeness 0.990); whole-group general purity 0.806 -> 0.886 with the
+# SNR floor (completeness 0.991).  Knobs read FK_BBLINK_* on a direct call ($FK_CONFIG); or pass the CLI flags.
+FK_BBLINK_MIN_SNR_Q:     0.5      # 0.5 | 0.0-0.8.  START-WITH-HIGH-SNR floor: link only clusters whose SNR
+                                  #   (dom-channel amplitude / spike-to-spike spread) is at/above this QUANTILE;
+                                  #   below it are left as singletons for the refinement pass.  0 = link all.
+FK_BBLINK_Z:             1.0      # 1.0 | 0.8-1.5 (sigma).  Band half-width; median +/- z*sigma.  1 sigma is tight
+                                  #   enough to drop co-located impostors; the literal SEM CI goes pencil-thin and fails.
+FK_BBLINK_WIN:           8        # 8 | 6-10 (samples).  Half-window around the fragment's RMS-energy centre.
+FK_BBLINK_SLIDE:         4        # 4 | 2-6 (samples).  +/- lag search for the max-overlap alignment.
+FK_BBLINK_IOU_THR:       0.5      # 0.5.  Per (sample x channel) interval-IoU counted at >= this (the '50% overlap').
+FK_BBLINK_FLOOR:         0.55     # 0.55 | 0.5-0.7.  Min mean-IoU to accept a mutual-NN link (mutual-NN + warp veto
+                                  #   carry precision; this is a floor, not the main gate).
+FK_BBLINK_PRIM_FRAC:     0.30     # 0.30 | 0.2-0.4.  Backbone = channels with p2p >= frac*max in BOTH fragments (the
+                                  #   shared primary footprint); --channels pins an explicit set instead.
+FK_BBLINK_WARP_THR:      0.5      # 0.5 | 0.3-0.9.  Omlor-Giese group-delay coherence (eq.11).  NEAR-DEGENERATE on the
+                                  #   octrode (units span few channels) so RELAXED; the amp-profile term does the gating.
+FK_BBLINK_AMP_THR:       0.85     # 0.85 | 0.75-0.92.  Omlor-Giese amplitude-profile correlation (eq.10) -- the
+                                  #   EFFECTIVE veto here (spatial-footprint agreement across the full 8 channels).
+FK_BBLINK_RESID_THR:     1.0      # 1.0 | 0.75-1.5 (samples).  Single-channel warp-incongruity ceiling (self-gates at
+                                  #   warp>=0.85; a no-op below, so it only vetoes already-coherent look-alikes).
+FK_BBLINK_MIN_FRAG:      40       # 40 | 30-60.  Min spikes for a fragment to carry a template/CI (else left as-is).
+FK_BBLINK_MAX_GAP:       1        # 1 | 1-2 (chunks).  Bridge a cell silent for up to this many chunks.
+#  BACKBONE-LINK route (direct-CLI; the pipeline runner does not yet dispatch fiber-backbone-link):
+#    fiber-session -> fiber-realign -> fiber-cpos (spk: standard) -> fiber-backbone-link
+#    FK_CONFIG=fiber-kit-exp.yaml fiber-backbone-link <sess> <elec> --gt-clu <curated>   # -> .clu...backbone_linked
+
+
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by
 #  fiber-pipeline; these keys are documentation, the tools take the flags directly).
