@@ -265,7 +265,9 @@ def main():
     res = nio.read_res(base, elec)
     if a.spk == "stderiv":
         spk, _ = nio.open_spk(base, elec, nsamp, nchan, prefer=nio.prefer_derived())
-        type_spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)   # standard, for cell-typing only
+        type_spk = None
+        if a.celltype:                                        # cell-typing needs the STANDARD waveform
+            type_spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)   # (stderiv breaks trough-to-peak width)
     else:
         spk, _ = nio.open_spk_raw(base, elec, nsamp, nchan)
         type_spk = None
