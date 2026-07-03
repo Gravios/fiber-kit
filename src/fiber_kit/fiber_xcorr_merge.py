@@ -51,6 +51,7 @@ _KNOBS = {
     "FK_XCM_REFRAC_MIN_EXP": ("refrac_min_exp", float, 5.0),
     "FK_XCM_MIN_N": ("min_n", int, 40),
     "FK_XCM_SPK_CAP": ("spk_cap", int, 300),
+    "FK_XCM_CX_SCALE": ("complexity_scale", float, 0.0),
 }
 
 
@@ -97,13 +98,16 @@ def roll_cos_row(t, T, shift):
 
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
-                refrac_min_exp, censor, cap, ref_sample, rng):
+                refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
-    Returns (mapping id->group id, n_merge, n_veto)."""
+    If cx_scale>0 the required cosine is raised for LOW-complexity (shift-insensitive) pairs, whose
+    high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto)."""
     m = len(ids)
     T = np.stack([_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng) for k in range(m)])
     C = roll_cos_matrix(T, shift)
     np.fill_diagonal(C, -np.inf)
+    cx = np.array([fg.waveform_complexity(T[k]) for k in range(m)]) if cx_scale > 0 else None
+    cx_ref = (float(np.median(cx)) + 1e-9) if cx is not None else 1.0
     parent = list(range(m)); alive = np.ones(m, bool)
     idx = [idx0[k].copy() for k in range(m)]; tt = [times0[k] for k in range(m)]
     vetoed = set(); n_merge = n_veto = 0
@@ -114,6 +118,10 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         i, j = divmod(k, m)
         if i > j:
             i, j = j, i
+        if cx is not None:                                 # complexity-scaled threshold: simpler pairs must match harder
+            thr_eff = cos_thr + cx_scale * (1.0 - cos_thr) * max(0.0, 1.0 - min(cx[i], cx[j]) / cx_ref)
+            if val < thr_eff:
+                C[i, j] = C[j, i] = -np.inf; continue
         if (i, j) in vetoed:
             C[i, j] = C[j, i] = -np.inf; continue
         if refrac > 0 and cg.refractory_gate(tt[i], tt[j], duration, refrac, thr=refrac_thr,
@@ -124,6 +132,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         T[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng)
         tt[i] = np.sort(np.concatenate([tt[i], tt[j]]))
         alive[j] = False; parent[j] = i; n_merge += 1
+        if cx is not None:
+            cx[i] = fg.waveform_complexity(T[i])
         ci = roll_cos_row(T[i], T, shift); ci[~alive] = -np.inf; ci[i] = -np.inf
         C[i, :] = ci; C[:, i] = ci; C[j, :] = -np.inf; C[:, j] = -np.inf
 
@@ -192,7 +202,8 @@ def main():
     times0 = [np.sort(res[ix]) for ix in idx0]
     mapping, n_merge, n_veto = agglomerate(spk, big, idx0, times0, duration, cos_thr=a.cos_thr, shift=a.shift,
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
-                                           censor=censor, cap=a.spk_cap, ref_sample=a.ref_sample, rng=rng)
+                                           censor=censor, cap=a.spk_cap, ref_sample=a.ref_sample, rng=rng,
+                                           cx_scale=a.complexity_scale)
     new = clu.copy().astype(np.int64)
     for u in big:
         if mapping[u] != u:
