@@ -510,7 +510,7 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
-                       n_grid=40, incl_k=3.0, incl_assign=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
+                       n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
@@ -815,6 +815,19 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     fine[np.array(coll)] = len(geoms); geoms.append(g)
                 except Exception:
                     pass                                   # leave as noise if geom build fails
+    # ── no-noise: sweep every REMAINING noise spike into ONE undefined fiber (a real cluster, not the
+    #    noise cluster).  Heterogeneous by construction (rejected inclusion tails / coarse rejects / junk);
+    #    kept in the sort so it is cleaned in subsequent steps rather than dropped.  Off by default. ──
+    if no_noise:
+        noise = np.flatnonzero(fine < 0)
+        if noise.size >= 8:
+            try:
+                g = fiber_geom(waves[noise], res_abs[noise], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                g['coarse'] = -1; g['radius_incl'] = float('nan'); g['n_rejected'] = 0; g['n_merged'] = 0
+                g['undefined'] = True; g['n_undefined'] = int(noise.size)
+                fine[noise] = len(geoms); geoms.append(g)
+            except Exception:
+                pass                                       # geom build failed: leave as noise
     return fine, geoms
 
 
@@ -1121,6 +1134,10 @@ def main():
     ap.add_argument("--quality-dims", type=int, default=10, help="PCA dims for L-ratio/isolation Mahalanobis")
     ap.add_argument("--pca-k", type=int, default=6); ap.add_argument("--max-sub", type=int, default=8)
     ap.add_argument("--inclusion-k", type=float, default=3.0, help="per-fiber radius = median+k*MAD of residuals; 0 disables")
+    ap.add_argument("--no-noise", dest="no_noise", action="store_true", default=False,
+                    help="sweep every remaining noise spike (below the inclusion radius / rejected / collision junk) into a "
+                         "single UNDEFINED FIBER (one real cluster, not the noise cluster) rather than dropping it. For clean "
+                         "stderiv data; the undefined fiber is cleaned/re-split in later steps.")
     ap.add_argument("--incl-assign-rejected", dest="incl_assign", action="store_true", default=False,
                     help="assign spikes beyond the per-fiber inclusion radius to that fiber (kept in the sort) instead "
                          "of dropping them to the unsorted bin.  Geometry/templates still use the pure core; this only "
@@ -1247,7 +1264,7 @@ def main():
             f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
     cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
               fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
-              incl_k=a.inclusion_k, incl_assign=a.incl_assign, cone_channel_k=a.cone_channel_k,
+              incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
               energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
               eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
               eband_low_assign=a.eband_low_assign,
