@@ -247,7 +247,7 @@ def main():
           f"warp/amp/resid={a.warp_thr}/{a.amp_thr}/{a.resid_thr} min-frag={a.min_frag} max-gap={a.max_gap} "
           f"min-snr-q={a.min_snr_q} chunk-min={chunk_min:g}")
 
-    res = nio.read_res_file(nio.session_path(base, "res", elec))
+    res = nio.read_res(base, elec)                         # variant-aware: resolves <base>.res.<variant>.<elec>
     if a.in_clu:
         _, fs = nio.read_clu_file(a.in_clu, n_spikes=res.size)
     else:
