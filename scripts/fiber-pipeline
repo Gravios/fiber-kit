@@ -280,7 +280,7 @@ PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragmen
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
-ALT_STAGES=(fiber-backbone-link)              # alternative linker (fiber-session fragments); plannable, not in `all`
+ALT_STAGES=(fiber-backbone-link fiber-xcorr-merge)              # alternative linker (fiber-session fragments); plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
@@ -298,6 +298,7 @@ CURATED_SUMMARY=(
 )
 ALT_SUMMARY=(
     "link fiber-session fragments on the invariant backbone (CI-overlap + warp veto); alt to intrachunk+link"
+    "fuse near-identical clusters by Klusters roll-shift cosine + refractory veto; realign after each merge"
 )
 
 list_stages() {   # -l/--list : short per-stage summary
@@ -510,6 +511,11 @@ fiber_backbone_link() {   # link fiber-session fragments on the invariant backbo
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
+fiber_xcorr_merge() {   # merge clusters by Klusters roll-shift cosine (realign after each merge) -> .xcorr_merged
+    echo "== fiber-xcorr-merge  (.${STEP_IN:-backbone_linked} -> .${STEP_OUT:-xcorr_merged}) =="
+    _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method stderiv --clu-stage "${STEP_IN:-backbone_linked}" --out-tag "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 run_stage() {
     # forward the command-line override args (set in main) to the selected stage only; argparse is
     # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
@@ -526,6 +532,7 @@ run_stage() {
         fiber-link)       fiber_link       "${ov[@]}" ;;
         fiber-refit)      fiber_refit      "${ov[@]}" ;;
         fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
+        fiber-xcorr-merge) fiber_xcorr_merge "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -542,6 +549,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-link)       fiber_link       ;;
         fiber-refit)      fiber_refit      ;;
         fiber-backbone-link) fiber_backbone_link ;;
+        fiber-xcorr-merge) fiber_xcorr_merge ;;
         *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
     esac
 }
@@ -561,7 +569,7 @@ except Exception as e:
 steps = doc.get("pipeline") if isinstance(doc, dict) else doc
 if not isinstance(steps, list) or not steps:
     sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link"}
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-xcorr-merge"}
 def field(st, k):
     v = st.get(k, "")
     return "" if v is None else str(v)

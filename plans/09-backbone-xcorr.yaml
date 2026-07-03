@@ -1,0 +1,13 @@
+# ============================================================================
+#  09-backbone-xcorr : link on the invariant backbone, then fuse near-identical
+#  chains by the KLUSTERS roll-shift cosine (realign after each merge), re-link at
+#  a lower SNR floor, and fuse again.  Starts from the EXISTING fiber-session sort
+#  (does not overwrite it).  cos-thr starts HIGH (0.99); the curated GT is
+#  INCOMPLETE, so 'over-merge' it reports below ~0.995 may include correct merges --
+#  tune cos-thr on your own review.  Run:  fiber-pipeline <elec> --plan plans/09-backbone-xcorr.yaml
+# ============================================================================
+pipeline:
+  - {stage: fiber-backbone-link, in: fiber_session, out: bb1,            params: {min-snr-q: 0.5}}
+  - {stage: fiber-xcorr-merge,   in: bb1,           out: xm1,            params: {cos-thr: 0.99}}
+  - {stage: fiber-backbone-link, in: xm1,           out: bb2,            params: {min-snr-q: 0.3}}
+  - {stage: fiber-xcorr-merge,   in: bb2,           out: backbone_xcorr, params: {cos-thr: 0.99}}

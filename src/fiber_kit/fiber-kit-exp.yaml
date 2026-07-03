@@ -449,6 +449,21 @@ FK_BBLINK_RESID_THR:     1.0      # 1.0 | 0.75-1.5 (samples).  Single-channel wa
                                   #   warp>=0.85; a no-op below, so it only vetoes already-coherent look-alikes).
 FK_BBLINK_MIN_FRAG:      40       # 40 | 30-60.  Min spikes for a fragment to carry a template/CI (else left as-is).
 FK_BBLINK_MAX_GAP:       1        # 1 | 1-2 (chunks).  Bridge a cell silent for up to this many chunks.
+
+# ----- fiber-xcorr-merge : fuse near-identical clusters by Klusters roll-shift cosine -----------------------
+# Runs AFTER fiber-backbone-link: the highest roll-shift-cosine pair (max cosine over circular time shifts of
+# the two mean waveforms) at/above cos-thr fuses first, the combined spikes are RE-ALIGNED and the merged
+# template recomputed before the next pick (confidence-ordered, realign-after-merge), gated by the refractory
+# CCG veto.  Default cos-thr is a conservative 0.99: scored on a curated g5 sort, lower floors fused co-located
+# same-site fragments (near-identical footprints; the refractory gate is powerless on sparse g5).  That GT is
+# INCOMPLETE, so treat the reported purity as a lower bound and tune cos-thr on your own review.  Knobs FK_XCM_*.
+FK_XCM_COS_THR:          0.99     # 0.99 | 0.985-0.999.  Min roll-shift cosine to merge; start HIGH.
+FK_XCM_SHIFT:            4        # 4 | 2-6 (samples).  +/- circular-shift half-window (Klusters xcorr).
+FK_XCM_REFRAC_MS:        2.0      # 2.0 | 1.5-3.0.  Refractory window; 0 disables the CCG veto.
+FK_XCM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powered pair is vetoed as two cells.
+FK_XCM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
+FK_XCM_MIN_N:            40       # 40 | 30-100.  Min spikes for a cluster to participate (else carried as-is).
+FK_XCM_SPK_CAP:          300      # 300.  Spikes per cluster used to build/realign the template.
 #  BACKBONE-LINK route (direct-CLI; the pipeline runner does not yet dispatch fiber-backbone-link):
 #    fiber-session -> fiber-realign -> fiber-cpos (spk: standard) -> fiber-backbone-link
 #    FK_CONFIG=fiber-kit-exp.yaml fiber-backbone-link <sess> <elec> --gt-clu <curated>   # -> .clu...backbone_linked

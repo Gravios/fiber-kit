@@ -104,6 +104,13 @@ CATALOG = {
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
         # note: --channels (pin backbone channels, e.g. 33,34) collides with the reserved structural
         # 'channels' (session channel list) so it is not a UI knob; set it in the plan text if needed.
+    "fiber-xcorr-merge": dict(input=True, tags=["in", "out"], params=[  # roll-shift cosine merge; not in `all`
+        _p("cos-thr", "float", 0.99, "min roll-shift cosine to merge; start high (0.985-0.999)"),
+        _p("shift", "int", 4, "+/- circular-shift half-window, samples (Klusters xcorr)"),
+        _p("refrac-ms", "float", 2.0, "refractory window (ms); 0 disables the CCG veto"),
+        _p("refrac-thr", "float", 0.3, "CCG obs/exp ratio above which a merge is vetoed"),
+        _p("min-n", "int", 40, "min spikes for a cluster to participate"),
+        _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
 }
 STAGES = list(CATALOG)
 
@@ -118,6 +125,7 @@ STAGE_MODULES = {
     "fiber-link": "fiber_kit.fiber_link",
     "fiber-refit": "fiber_kit.fiber_refit",
     "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
+    "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
