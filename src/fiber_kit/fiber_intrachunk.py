@@ -167,7 +167,7 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
         s = rng.choice(len(Wf), min(len(Wf), 100000), replace=False)   # spike (drop the energy axis the
         mu_w = Wf[s].mean(0)                                            # cosine gate also discards), so an
         Vt = np.linalg.svd(Wf[s] - mu_w, full_matrices=False)[2][:feat_dim]   # energy ladder stays one unit
-    ids, T, O, X, Y, Z, A, CH, TM, NS, FT, NULL, VAR, TIMES = ([] for _ in range(14))
+    ids, T, O, X, Y, Z, A, CH, TM, NS, FT, NULL, VAR, TIMES, SIG = ([] for _ in range(15))
     for k, c in enumerate(uq):
         c = int(c)
         if c in reserve or c not in pos:
@@ -181,11 +181,12 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
             idx = np.random.default_rng(feat_seed + c).choice(idx_full, sig_cap, replace=False)
         al = fg.mutual_center_spikes(fg.denoise(fl.realign(spkD[idx].astype(float), *(realign_lohi or ())), sigma))
         tmpl = al.mean(0)
+        sd_tmpl = al.std(0)                                        # per-sample sigma for the median+/-sigma band gate
         _af = al.reshape(len(al), -1)                              # within-fragment spread (stderiv, flattened)
         _var = float(((_af - tmpl.reshape(-1)) ** 2).sum(1).mean())
         x0, y0, z0, amp = pos[c]
         tm = float(np.mean(t_mid_s[idx]))
-        ids.append(c); T.append(tmpl); O.append(fg.interchannel_offsets(tmpl))
+        ids.append(c); T.append(tmpl); SIG.append(sd_tmpl); O.append(fg.interchannel_offsets(tmpl))
         X.append(x0); Y.append(y0); Z.append(z0); A.append(abs(amp))
         CH.append(int(tm / 60.0 // chunk_min)); TM.append(tm); NS.append(n_true)
         VAR.append(_var); TIMES.append(np.sort(np.asarray(t_mid_s[idx_full], float)))
@@ -209,7 +210,7 @@ def build_signatures(spkD, clu, t_mid_s, pos, *, chunk_min=12.0, min_n=DEFAULT_M
             sp = sp / (np.linalg.norm(sp, axis=1, keepdims=True) + 1e-9)
             FT.append((sp - mu_w) @ Vt.T)
     out = dict(ids=np.array(ids, int), template=np.array(T, np.float32),
-               offset=np.array(O, np.float32), x0=np.array(X), y0=np.array(Y),
+               sigma=np.array(SIG, np.float32), offset=np.array(O, np.float32), x0=np.array(X), y0=np.array(Y),
                z0=np.array(Z), A=np.array(A), chunk=np.array(CH, int),
                t_mid=np.array(TM), n=np.array(NS, int), var=np.array(VAR, float),
                times=np.array(TIMES, dtype=object))
@@ -280,7 +281,7 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                      off_n_ref=DEFAULT_OFF_NREF, off_ceil=DEFAULT_OFF_CEIL,
                      cfiber_thr=None, cfiber_win=None, refrac_ceiling=None, warp_thr=None,
                      warp_resid_thr=None, off_thr_int=None, off_thr_pyr=None,
-                     align_lag=0, align_upsample=1, amp_gate=0.0):
+                     align_lag=0, align_upsample=1, amp_gate=0.0, band_thr=None):
     """Per-chunk complete-linkage clique on (similarity, offset, depth).  Returns a
     per-cluster integer label (dense, 0-based) — one label per per-chunk unit.
 
@@ -307,6 +308,9 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
     logA = np.log(np.clip(sig["A"], 1, None))           # absolute log-amplitude gate (energy distance)
     use_kernel = gate in ("mmd", "kcov")
     use_cfiber = gate == "cfiber"
+    use_band = gate == "band"
+    if use_band and band_thr is None:
+        band_thr = 0.5
     if use_cfiber:
         Scf = _cfiber_shapes(sig["template"], cfiber_win)   # (M,ndesc) affine-invariant
         cthr = float(cfiber_thr) if cfiber_thr is not None else np.inf
@@ -354,6 +358,12 @@ def group_intrachunk(sig, *, cos_thr=DEFAULT_COS_THR, off_thr=DEFAULT_OFF_THR,
                     if s > thr:
                         continue
                     strength = thr - s                      # smaller divergence -> stronger
+                elif use_band:                              # median+/-sigma band-overlap (backbone-link method)
+                    bov = fg.band_overlap(sig["template"][i], sig["sigma"][i],
+                                          sig["template"][j], sig["sigma"][j])
+                    if not np.isfinite(bov) or bov < band_thr:
+                        continue
+                    strength = bov
                 else:
                     if ceff < cos_thr:
                         continue
@@ -1042,6 +1052,11 @@ def main():
              + (f" → floored {floored:.3f}" if floored != cfiber_thr else ""))
         _det("null", f"split-half '{a.cfiber_null}' · q={a.cfiber_q} · n={nulls.size:,}")
         cfiber_thr = floored
+    band_thr = a.band_thr
+    if a.gate == "band" and band_thr is None:
+        band_thr = 0.5
+    if a.gate == "band" and a.linkage == "dynamic":
+        raise SystemExit("fiber-intrachunk: gate='band' is supported with complete linkage only")
     pre = None
     if getattr(a, "pre_merge_cos", 0.0) and a.pre_merge_cos > 0.0:
         pre = pre_merge_obvious(sig, pre_cos=a.pre_merge_cos, off_thr=a.off_thr, depth_gate=a.depth_gate,
@@ -1061,7 +1076,7 @@ def main():
     else:
         label = group_intrachunk_iter(sig_run, max_iter=a.n_iter, cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=a.depth_gate,
                                  off_n_ref=a.off_n_ref, off_ceil=a.off_ceil,
-                                 gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win,
+                                 gate=a.gate, cfiber_thr=cfiber_thr, cfiber_win=cfiber_win, band_thr=band_thr,
                                  refrac_ceiling=a.refrac_ceiling, warp_thr=a.warp_thr, warp_resid_thr=a.warp_resid_thr,
                                  off_thr_int=a.off_thr_int, off_thr_pyr=a.off_thr_pyr,
                                  align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)

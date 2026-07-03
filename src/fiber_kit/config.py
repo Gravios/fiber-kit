@@ -130,8 +130,8 @@ class StageConfig:
 class IntrachunkConfig(StageConfig):
     """Tunable knobs for fiber-intrachunk (the within-chunk merge). Structural data-flow flags
     (--cpos-*, --clu-*, --out-stage, --emit-units) are NOT here — they are the file-naming contract."""
-    gate: str = knob("cosine", "shape gate: cosine|mmd|kcov|cfiber",
-                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber"), type=str, recommended="cfiber")
+    gate: str = knob("cosine", "shape gate: cosine|mmd|kcov|cfiber|band",
+                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber", "band"), type=str, recommended="cfiber")
     cos_thr: float = knob(0.85, "cosine recall prefilter", env="FK_INTRA_COS_THR")
     off_thr: float = knob(1.0, "inter-channel offset RMS gate (samples)", env="FK_INTRA_OFF_THR")
     depth_gate: float = knob(35.0, "depth gate (um)", env="FK_INTRA_DEPTH_GATE")
@@ -155,6 +155,8 @@ class IntrachunkConfig(StageConfig):
     cfiber_q: float = knob(0.90, "cfiber self-calibration quantile", env="FK_INTRA_CFIBER_Q")
     cfiber_null: str = knob("order", "cfiber split-half null basis: order|energy",
                             env="FK_CFIBER_NULL", choices=("order", "energy"), type=str)
+    band_thr: float = knob(None, "gate='band': min energy-scaled median+/-sigma band-overlap IoU to merge (empty -> 0.5)",
+                           env="FK_INTRA_BAND_THR")
     cfiber_thr_floor: float = knob(0.0, "absolute floor on the self-calibrated cfiber threshold (0=off)",
                                    env="FK_CFIBER_THR_FLOOR")
     sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int, recommended=8000)
