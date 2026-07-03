@@ -466,6 +466,8 @@ FK_XCM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powere
 FK_XCM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
 FK_XCM_MIN_N:            40       # 40 | 30-100.  Min spikes for a cluster to participate (else carried as-is).
 FK_XCM_SPK_CAP:          300      # 300.  Spikes per cluster used to build/realign the template.
+FK_XCM_BAND_THR:         0.0      # 0.0 | 0.0-0.8.  Median+/-sigma BAND-OVERLAP co-gate (fiber-backbone-link's method):
+                                  #   a candidate merge must also have band-overlap IoU >= this.  0=off (roll-cosine only).
 FK_XCM_CX_SCALE:         0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling: raise the required cosine for LOW-complexity
                                   #   (shift-insensitive) pairs -- their high roll-shift cosine is weak evidence (the best
                                   #   circular shift inflates it).  0=off.  Moderate signal on g5 (AUC 0.73 correct-vs-

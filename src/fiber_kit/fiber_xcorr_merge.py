@@ -52,6 +52,7 @@ _KNOBS = {
     "FK_XCM_MIN_N": ("min_n", int, 40),
     "FK_XCM_SPK_CAP": ("spk_cap", int, 300),
     "FK_XCM_CX_SCALE": ("complexity_scale", float, 0.0),
+    "FK_XCM_BAND_THR": ("band_thr", float, 0.0),
 }
 
 
@@ -68,7 +69,7 @@ def _tmpl(spk, idx, *, cap, ref_sample, rng):
     if idx.size > cap:
         idx = rng.choice(idx, cap, replace=False)
     w = fg.mutual_center_spikes(fg.denoise(fl.realign(np.asarray(spk[np.sort(idx)], float))), ref_sample=ref_sample)
-    return np.median(w, 0)
+    return np.median(w, 0), w.std(0)                       # median template + per-sample sigma (for the band co-gate)
 
 
 def _unit_flat(Tc):
@@ -98,12 +99,13 @@ def roll_cos_row(t, T, shift):
 
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
-                refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0):
+                refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
     If cx_scale>0 the required cosine is raised for LOW-complexity (shift-insensitive) pairs, whose
     high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto)."""
     m = len(ids)
-    T = np.stack([_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng) for k in range(m)])
+    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng) for k in range(m)]
+    T = np.stack([t for t, _ in _ms]); SD = np.stack([sd for _, sd in _ms])
     C = roll_cos_matrix(T, shift)
     np.fill_diagonal(C, -np.inf)
     cx = np.array([fg.waveform_complexity(T[k]) for k in range(m)]) if cx_scale > 0 else None
@@ -127,9 +129,13 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         if refrac > 0 and cg.refractory_gate(tt[i], tt[j], duration, refrac, thr=refrac_thr,
                                               min_exp=refrac_min_exp, censor=censor)["verdict"] == "veto":
             vetoed.add((i, j)); C[i, j] = C[j, i] = -np.inf; n_veto += 1; continue
+        if band_thr > 0:                                   # median+/-sigma band-overlap co-gate (backbone-link method)
+            bov = fg.band_overlap(T[i], SD[i], T[j], SD[j])
+            if not np.isfinite(bov) or bov < band_thr:
+                C[i, j] = C[j, i] = -np.inf; continue
         # merge j into i, then RE-ALIGN the combined spikes and recompute the template
         idx[i] = np.concatenate([idx[i], idx[j]])
-        T[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng)
+        T[i], SD[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng)
         tt[i] = np.sort(np.concatenate([tt[i], tt[j]]))
         alive[j] = False; parent[j] = i; n_merge += 1
         if cx is not None:
@@ -203,7 +209,7 @@ def main():
     mapping, n_merge, n_veto = agglomerate(spk, big, idx0, times0, duration, cos_thr=a.cos_thr, shift=a.shift,
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
                                            censor=censor, cap=a.spk_cap, ref_sample=a.ref_sample, rng=rng,
-                                           cx_scale=a.complexity_scale)
+                                           cx_scale=a.complexity_scale, band_thr=a.band_thr)
     new = clu.copy().astype(np.int64)
     for u in big:
         if mapping[u] != u:

@@ -198,6 +198,51 @@ def waveform_complexity(template, shift=1):
     return 1.0 - float(a @ b / d) if d > 1e-12 else 0.0
 
 
+def band_overlap(med_a, sd_a, med_b, sd_b, chans=None, *, z=1.0, win=8, slide=4, iou_thr=0.5):
+    """Energy-scaled median+/-z*sigma band-overlap between two cluster templates: the per-sample
+    interval IoU of their [median +/- z*sigma] bands, each windowed on its RMS-energy centroid
+    (+/- win samples), the second slid +/- slide samples for the best overlap, each band normalised
+    to unit energy over the compared window x channels (spike-to-spike variance scales with waveform
+    energy).  Returns the mean IoU (higher = more consistent shape at matched scale), or nan.  This is
+    fiber-backbone-link's ci_overlap as a reusable primitive.  med_*, sd_*: (nsamp, nchan) template and
+    per-sample std.  chans: channel subset (None = all channels)."""
+    med_a = np.asarray(med_a, float); sd_a = np.asarray(sd_a, float)
+    med_b = np.asarray(med_b, float); sd_b = np.asarray(sd_b, float)
+    ns, nch = med_a.shape
+    ch = np.arange(nch) if chans is None else np.asarray(list(chans), int)
+    if ch.size == 0:
+        return np.nan
+
+    def _rc(m):
+        e = np.sqrt((m ** 2).mean(1)); s = e.sum()
+        return int(round(float((np.arange(ns) * e).sum() / s))) if s > 1e-12 else ns // 2
+
+    def _w(lo, hi, c):
+        st, en = c - win, c + win
+        return (lo[st:en + 1], hi[st:en + 1]) if (st >= 0 and en < ns) else None
+
+    wA = _w(med_a - z * sd_a, med_a + z * sd_a, _rc(med_a))
+    if wA is None:
+        return np.nan
+    aL, aH = wA[0][:, ch], wA[1][:, ch]
+    eA = float(np.linalg.norm((aL + aH) * 0.5)) + 1e-9
+    aL, aH = aL / eA, aH / eA
+    cb = _rc(med_b); best = np.nan
+    for L in range(-slide, slide + 1):
+        wB = _w(med_b - z * sd_b, med_b + z * sd_b, cb + L)
+        if wB is None:
+            continue
+        bL, bH = wB[0][:, ch], wB[1][:, ch]
+        eB = float(np.linalg.norm((bL + bH) * 0.5)) + 1e-9
+        bL, bH = bL / eB, bH / eB
+        inter = np.clip(np.minimum(aH, bH) - np.maximum(aL, bL), 0, None)
+        union = np.clip(np.maximum(aH, bH) - np.minimum(aL, bL), 1e-12, None)
+        miou = float((inter / union).mean())
+        if not np.isfinite(best) or miou > best:
+            best = miou
+    return best
+
+
 def dispersion_profile(waves, sigma=DEFAULT_SMOOTH_SIGMA, aligned=False):
     """Per-channel spike-to-spike DISPERSION profile sigma(t) of a cluster -- the (nsamp, nch)
     half-width of the per-channel confidence band, the second-moment companion to the MEDIAN
