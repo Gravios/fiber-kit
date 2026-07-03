@@ -95,6 +95,15 @@ CATALOG = {
         _p("gate", "choice", "cfiber", "shape descriptor to attach per signature", ["cfiber", "wave", "none"]),
         _p("chunk-minutes", "int", 12, "per-chunk signature length (min)"),
         _p("min-n", "int", 12, "min spikes for a per-chunk signature (12-30)")]),
+    "fiber-backbone-link": dict(input=True, tags=["in", "out"], params=[  # alt linker on fiber-session output; not in `all`
+        _p("min-snr-q", "float", 0.5, "START-WITH-HIGH-SNR floor quantile (0=link all; 0.5=clean backbone first)"),
+        _p("z", "float", 1.0, "energy-scaled band half-width in sigma (0.8-1.5)"),
+        _p("amp-thr", "float", 0.85, "Omlor-Giese amplitude-profile veto, eq.10 (the effective term; 0.75-0.92)"),
+        _p("warp-thr", "float", 0.5, "Omlor-Giese group-delay coherence veto, eq.11 (relaxed on octrode)"),
+        _p("max-gap", "int", 1, "bridge a cell silent up to N chunks (1-2)"),
+        _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
+        # note: --channels (pin backbone channels, e.g. 33,34) collides with the reserved structural
+        # 'channels' (session channel list) so it is not a UI knob; set it in the plan text if needed.
 }
 STAGES = list(CATALOG)
 
@@ -108,6 +117,7 @@ STAGE_MODULES = {
     "fiber-intrachunk": "fiber_kit.fiber_intrachunk",
     "fiber-link": "fiber_kit.fiber_link",
     "fiber-refit": "fiber_kit.fiber_refit",
+    "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
