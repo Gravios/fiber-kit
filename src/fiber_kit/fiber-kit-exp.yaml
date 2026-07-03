@@ -449,6 +449,8 @@ FK_BBLINK_RESID_THR:     1.0      # 1.0 | 0.75-1.5 (samples).  Single-channel wa
                                   #   warp>=0.85; a no-op below, so it only vetoes already-coherent look-alikes).
 FK_BBLINK_MIN_FRAG:      40       # 40 | 30-60.  Min spikes for a fragment to carry a template/CI (else left as-is).
 FK_BBLINK_MAX_GAP:       1        # 1 | 1-2 (chunks).  Bridge a cell silent for up to this many chunks.
+FK_BBLINK_CX_SCALE:      0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling of the mutual-NN overlap floor: simpler (shift-
+                                  #   insensitive) fragments must overlap harder.  0=off (opt-in; mild effect, tune on review).
 
 # ----- fiber-xcorr-merge : fuse near-identical clusters by Klusters roll-shift cosine -----------------------
 # Runs AFTER fiber-backbone-link: the highest roll-shift-cosine pair (max cosine over circular time shifts of
@@ -464,6 +466,10 @@ FK_XCM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powere
 FK_XCM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
 FK_XCM_MIN_N:            40       # 40 | 30-100.  Min spikes for a cluster to participate (else carried as-is).
 FK_XCM_SPK_CAP:          300      # 300.  Spikes per cluster used to build/realign the template.
+FK_XCM_CX_SCALE:         0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling: raise the required cosine for LOW-complexity
+                                  #   (shift-insensitive) pairs -- their high roll-shift cosine is weak evidence (the best
+                                  #   circular shift inflates it).  0=off.  Moderate signal on g5 (AUC 0.73 correct-vs-
+                                  #   over-merge) but a MILD practical effect; opt-in and tune on review.
 #  BACKBONE-LINK route (direct-CLI; the pipeline runner does not yet dispatch fiber-backbone-link):
 #    fiber-session -> fiber-realign -> fiber-cpos (spk: standard) -> fiber-backbone-link
 #    FK_CONFIG=fiber-kit-exp.yaml fiber-backbone-link <sess> <elec> --gt-clu <curated>   # -> .clu...backbone_linked

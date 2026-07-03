@@ -183,6 +183,21 @@ def amp_profile_correlation(ta, tb):
     return float(np.corrcoef(a, b)[0, 1])
 
 
+def waveform_complexity(template, shift=1):
+    """Shift-sensitivity of a mean waveform: 1 - cos(t, roll(t, shift)) on the DC-removed template
+    (flattened over samples x channels).  A simple, broad waveform is shift-INSENSITIVE (low value)
+    -- a high roll-shift cosine to it is weak evidence, since the best circular shift inflates the
+    match -- while a complex, peaked waveform is distinctive (high value).  Downstream merge/link
+    thresholds scale with this: demand more similarity from low-complexity clusters.  On g5 it
+    separates co-located over-merges from correct merges at AUC ~0.73.  template: (nsamp, nch)."""
+    t = np.asarray(template, float)
+    tc = t - t.mean(axis=-2, keepdims=True) if t.ndim >= 2 else t - t.mean()
+    a = tc.ravel()
+    b = (np.roll(tc, shift, axis=-2) if t.ndim >= 2 else np.roll(tc, shift)).ravel()
+    d = float(np.linalg.norm(a) * np.linalg.norm(b))
+    return 1.0 - float(a @ b / d) if d > 1e-12 else 0.0
+
+
 def dispersion_profile(waves, sigma=DEFAULT_SMOOTH_SIGMA, aligned=False):
     """Per-channel spike-to-spike DISPERSION profile sigma(t) of a cluster -- the (nsamp, nch)
     half-width of the per-channel confidence band, the second-moment companion to the MEDIAN

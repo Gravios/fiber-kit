@@ -68,6 +68,7 @@ _KNOBS = {
     "FK_BBLINK_RESID_THR": ("resid_thr", float, 1.0),
     "FK_BBLINK_MIN_FRAG": ("min_frag", int, 40),
     "FK_BBLINK_MAX_GAP": ("max_gap", int, 1),
+    "FK_BBLINK_CX_SCALE": ("complexity_scale", float, 0.0),
     "FK_BBLINK_MIN_SNR_Q": ("min_snr_q", float, 0.0),
 }
 
@@ -95,7 +96,8 @@ def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng):
     sd = w.std(0, ddof=1) if len(w) > 1 else np.zeros_like(med)
     dom = int(np.argmax(np.ptp(med, 0)))
     snr = float(np.ptp(med[:, dom]) / (sd[:, dom].mean() + 1e-9))    # dominant-channel amplitude / spike-to-spike spread
-    return dict(med=med, sd=sd, c=rms_center(med), gd=fg.group_delay_profile(med, sr=sr), dom=dom, snr=snr)
+    return dict(med=med, sd=sd, c=rms_center(med), gd=fg.group_delay_profile(med, sr=sr), dom=dom, snr=snr,
+                cx=fg.waveform_complexity(med))
 
 
 def _win(lo, hi, c, win, ns):
@@ -154,13 +156,14 @@ def warp_ok(A, B, *, warp_thr, amp_thr, resid_thr):
     return True
 
 
-def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_gap, veto, warp_kw):
+def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_gap, veto, warp_kw, cx_scale=0.0):
     """Conservative adjacent-chunk (+ one-chunk gap) MUTUAL-NN CI-overlap links with the warp veto.
     Within each chunk boundary the fragments are considered HIGH-SNR FIRST, so the cleanest clusters
     anchor their links before the noisier ones.  (The high-SNR RESTRICTION -- linking only the clean
     backbone this pass, deferring low-SNR/contaminated fragments -- is applied by the caller via the
     SNR floor.)  Union-find over the accepted links; returns a label per fragment index."""
     uf = list(range(len(frags)))
+    cx_ref = (float(np.median([f["cx"] for f in frags])) + 1e-9) if (cx_scale > 0 and frags) else 1.0
 
     def find(x):
         while uf[x] != x:
@@ -184,7 +187,9 @@ def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_ga
                 if not cand:
                     continue
                 sc, j = max(cand)
-                if sc < floor:
+                floor_eff = (floor + cx_scale * (1.0 - floor) * max(0.0, 1.0 - min(frags[i]["cx"], frags[j]["cx"]) / cx_ref)
+                             if cx_scale > 0 else floor)   # complexity-scaled: simpler fragments must overlap harder
+                if sc < floor_eff:
                     continue
                 back = [(score(i2, j), i2) for i2 in A]
                 back = [(s, i2) for s, i2 in back if np.isfinite(s)]
@@ -285,7 +290,7 @@ def main():
           + (f" | channels pinned {a.channels}" if a.channels else " | per-pair shared-primary channels"))
 
     labels = link(frags, byc, pinned=pinned, prim_frac=a.prim_frac, z=a.z, win=a.win, slide=a.slide,
-                  iou_thr=a.iou_thr, floor=a.floor, max_gap=a.max_gap, veto=True,
+                  iou_thr=a.iou_thr, floor=a.floor, max_gap=a.max_gap, veto=True, cx_scale=a.complexity_scale,
                   warp_kw=dict(warp_thr=a.warp_thr, amp_thr=a.amp_thr, resid_thr=a.resid_thr))
     # component -> new contiguous unit id (>=2); fragments below min_frag / unlinked keep their own id
     comp_units = {}
