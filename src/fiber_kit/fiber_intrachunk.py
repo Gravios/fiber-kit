@@ -911,7 +911,8 @@ def main():
                                              "chunk into units (stderiv cosine + offset + depth).")
     sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
     ap.add_argument("--cpos-method", default="stderiv")
-    ap.add_argument("--cpos-stage", default="refine")
+    ap.add_argument("--cpos-stage", default=None,
+                    help="positions (.cpos) stage tag; default follows --clu-stage, else 'refine'")
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     IntrachunkConfig.add_arguments(ap)        # gate/threshold knobs (CLI > env > <session>.yaml > default)
@@ -965,7 +966,10 @@ def main():
     base = cfg.base; elec = a.group; sr = float(cfg.sr)
     nsamp = int(cfg.nsamp); nch = int(cfg.nchan)
     clu_method = a.clu_method if a.clu_method is not None else a.cpos_method
-    clu_stage = a.clu_stage if a.clu_stage is not None else a.cpos_stage
+    # positions and labels default to the SAME stage: set either --clu-stage or --cpos-stage and both follow
+    cpos_stage = a.cpos_stage if a.cpos_stage is not None else (a.clu_stage if a.clu_stage is not None else "refine")
+    a.cpos_stage = cpos_stage
+    clu_stage = a.clu_stage if a.clu_stage is not None else cpos_stage
     out_stage = a.out_stage if a.out_stage is not None else (f"{clu_stage}_intrachunk" if clu_stage else "intrachunk")
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
