@@ -52,7 +52,7 @@ _KNOBS = {
     "FK_XCM_MIN_N": ("min_n", int, 40),
     "FK_XCM_SPK_CAP": ("spk_cap", int, 300),
     "FK_XCM_CX_SCALE": ("complexity_scale", float, 0.0),
-    "FK_XCM_BAND_THR": ("band_thr", float, 0.0),
+    "FK_XCM_BAND_THR": ("band_thr", float, 0.5),
 }
 
 
