@@ -102,6 +102,10 @@ FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fib
                                   #   that fiber (kept in the sort) instead of dropping them to the unsorted/artifact bin.
                                   #   FK_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
                                   #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
+FK_SESSION_NO_NOISE:     0        # 0 | 0/1.  1 = sweep every remaining noise spike (below the inclusion radius /
+                                  #   rejected / collision junk) into a single UNDEFINED FIBER -- a real cluster, not the
+                                  #   noise cluster -- instead of dropping it.  For clean stderiv data; the undefined fiber
+                                  #   is heterogeneous and gets cleaned/re-split in later steps.  0 = leave in the noise cluster.
 FK_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
                                   #   (affine-invariant Fourier descriptor) distance exceeds the Q-quantile of the
                                   #   fiber's OWN split-half null.  0.90 = tolerate up to the 90th-pct self-jitter.
