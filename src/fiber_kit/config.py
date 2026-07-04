@@ -130,8 +130,8 @@ class StageConfig:
 class IntrachunkConfig(StageConfig):
     """Tunable knobs for fiber-intrachunk (the within-chunk merge). Structural data-flow flags
     (--cpos-*, --clu-*, --out-stage, --emit-units) are NOT here — they are the file-naming contract."""
-    gate: str = knob("cosine", "shape gate: cosine|mmd|kcov|cfiber|band",
-                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber", "band"), type=str, recommended="cfiber")
+    gate: str = knob("band", "shape gate: cosine|mmd|kcov|cfiber|band (default band: energy-scaled median+/-sigma overlap)",
+                     env="FK_INTRA_GATE", choices=("cosine", "mmd", "kcov", "cfiber", "band"), type=str, recommended="band")
     cos_thr: float = knob(0.85, "cosine recall prefilter", env="FK_INTRA_COS_THR")
     off_thr: float = knob(1.0, "inter-channel offset RMS gate (samples)", env="FK_INTRA_OFF_THR")
     depth_gate: float = knob(35.0, "depth gate (um)", env="FK_INTRA_DEPTH_GATE")
