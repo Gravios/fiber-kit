@@ -175,8 +175,9 @@ def main():
     ap.add_argument("--spk-variant", default="standard", help="waveform axis for templates (curation axis)")
     ap.add_argument("--out-tag", default="xcorr_merged", help="output .clu stage tag")
     ap.add_argument("--refrac-censor-ms", type=float, default=0.0, help="detection censor window (ms)")
-    ap.add_argument("--nsamp", type=int, default=42); ap.add_argument("--nchan", type=int, default=8)
-    ap.add_argument("--ref-sample", type=int, default=21)
+    ap.add_argument("--nsamp", type=int, default=None, help="override; default from <session>.yaml")
+    ap.add_argument("--nchan", type=int, default=None, help="override; default from <session>.yaml")
+    ap.add_argument("--ref-sample", type=int, default=None, help="override; default = peak from <session>.yaml")
     ap.add_argument("--gt-clu", default=None, help="curated .clu tag/path to score purity+completeness")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
@@ -187,12 +188,15 @@ def main():
 
     cfg = sy.resolve_session_params(a.session, a.elec)
     base = cfg["base"]; elec = a.elec; SR = cfg["sr"]
+    NS = a.nsamp if a.nsamp else cfg["nsamp"]              # per-group counts from <session>.yaml (groups differ, e.g. 8 vs 9 ch)
+    NC = a.nchan if a.nchan else cfg["nchan"]
+    PK = a.ref_sample if a.ref_sample is not None else cfg["peak"]
     res = nio.read_res(base, elec)
     if a.in_clu:
         _, clu = nio.read_clu_file(a.in_clu, n_spikes=res.size)
     else:
         _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.clu_stage, n_spikes=res.size)
-    spk = nio.open_spk_file(nio.session_path(base, "spk", elec, variant=a.spk_variant), a.nsamp, a.nchan)
+    spk = nio.open_spk_file(nio.session_path(base, "spk", elec, variant=a.spk_variant), NS, NC)
     assert res.size == clu.size == spk.shape[0], "res/clu/spk length mismatch"
     duration = float(res.max()) if res.size else 1.0
     refrac = cg.refrac_samples(a.refrac_ms, SR); censor = cg.refrac_samples(a.refrac_censor_ms, SR)
@@ -208,7 +212,7 @@ def main():
     times0 = [np.sort(res[ix]) for ix in idx0]
     mapping, n_merge, n_veto = agglomerate(spk, big, idx0, times0, duration, cos_thr=a.cos_thr, shift=a.shift,
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
-                                           censor=censor, cap=a.spk_cap, ref_sample=a.ref_sample, rng=rng,
+                                           censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
                                            cx_scale=a.complexity_scale, band_thr=a.band_thr)
     new = clu.copy().astype(np.int64)
     for u in big:
