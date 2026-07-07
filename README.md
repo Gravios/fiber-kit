@@ -20,6 +20,7 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 ---
 
 ## Contents
+- [Documentation (docs/)](#documentation)
 - [Install](#install)
 - [Quick start](#quick-start)
 - [How it works](#how-it-works)
@@ -36,6 +37,22 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 - [License](#license)
 
 See [CHANGELOG.md](CHANGELOG.md) for the version history.
+
+---
+
+## Documentation
+
+The narrative sections below are the overview.  Exhaustive per-stage / per-parameter reference lives in
+**[docs/](docs/index.md)**:
+
+- **[docs/pipeline.md](docs/pipeline.md)** — the chunk/variant model, the canonical stage order, the
+  alternative drift linkers (`fiber-backbone-link`, `fiber-xcorr-merge`), the matching methods
+  ("band matching"), and how to run stages/plans with `fiber-pipeline`.
+- **[docs/stages.md](docs/stages.md)** — every `fiber-*` stage with all its positionals, flags,
+  defaults and choices (generated from the argument parsers — ~36 stages, ~700 parameters).
+- **[docs/config.md](docs/config.md)** — every `FK_*` configuration knob, grouped by stage.
+- **[docs/methods.md](docs/methods.md)** — the core primitives: energy-scaled median±σ band overlap,
+  the Omlor–Giese drift-warp veto, waveform complexity, and the refractory cross-correlogram gate.
 
 ---
 
@@ -331,6 +348,19 @@ chunks shade by time. Writes `.gif`, or `.mp4` if ffmpeg is present.*
 | `--no-link` / `--no-fine` / `--no-dipsplit` | off | disable linking / refinement / DipSplit |
 | `--jobs` / `-j` | 1 | parallel worker processes over chunks (chunks are independent; output is identical to serial) |
 | `--gpu` | off | run the realign / whiten / tracer-residual kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
+
+For **every** stage's full parameter list (~36 `fiber-*` commands, ~700 parameters), see
+**[docs/stages.md](docs/stages.md)** or run `fiber-<stage> --help`.  Stages added since the table above:
+
+| Stage | Purpose | Key flags |
+|-------|---------|-----------|
+| `fiber-backbone-link` | link the over-split `fiber_session` output across chunks on the invariant backbone by median±σ **band overlap** + Omlor–Giese warp veto, starting from high-SNR clusters (no refine/intrachunk/cpos needed) | `--min-snr-q` `--z` `--warp-thr` `--amp-thr` `--channels` |
+| `fiber-xcorr-merge` | confidence-ordered Klusters roll-shift-cosine merge, **realign after each merge**, refractory + band-overlap co-gates | `--cos-thr` `--band-thr` `--refrac-ms` `--min-n` |
+| `fiber-intrachunk` | within-chunk merge; shape gate defaults to `--gate band` (median±σ overlap), with `cfiber`/`cosine`/`mmd`/`kcov` alternatives | `--gate` `--band-thr` `--cos-thr` `--off-thr` |
+| `fiber-session --no-noise` | sweep rejected/noise spikes into one **undefined fiber** instead of the noise cluster (`FK_SESSION_NO_NOISE`) | `--no-noise` `--inclusion-k` |
+
+Run stages in the pipeline with `fiber-pipeline <elec> <stage> [args…]`; see
+[docs/pipeline.md](docs/pipeline.md).
 
 Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
 <elec> --channels ... --ntotal ...`, `fiber-chan-svd <session> <group>`
