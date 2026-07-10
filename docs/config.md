@@ -15,6 +15,11 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_SESSION_RKK_DELETE` | `0` | 0 \| 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old behaviour; sheds fragments into the artifact bin -- not what session is for). |
 | `FK_SESSION_MERGE_METHOD` | `sliding` | sliding \| template \| profile.  Coarse merge method; INERT when MERGE_CORR=0. |
 | `FK_SESSION_MERGE_CORR` | `0` | 0 \| 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk stitches later WITH its refractory gate.  Set 0.90 to restore the old session sliding merge (premature: it welds co-active cells before refine can clean). |
+| `FK_SESSION_RESPLIT_PASSES` | `0` (exp: 3) | iterative within-chunk residual-gated re-split (em_swap on target-channel residual) + correlation merge, to convergence; replaces Block A/B when >0. 0=off. |
+| `FK_SESSION_RESPLIT_RESIDUAL_THR` | `0.08` | re-split only fibers whose amplitude-scaled max residual (+-8 @ RMS peak) exceeds this (~0.08 stderiv, ~0.15 standard). |
+| `FK_SESSION_RESPLIT_TOPCH` | `3` | channels fed to em_swap (top residual variance). |
+| `FK_SESSION_RESPLIT_MIN_REDUCTION` | `0.20` | keep an em_swap split only if it cuts target-channel variance by >= this. |
+| `FK_SESSION_RESPLIT_MERGE_CORR` | `0.99` | correlation merge threshold inside the loop. |
 | `FK_SESSION_LINK` | `0` | 0 \| 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging). |
 | `FK_SESSION_CFIBER_GATE` | `1` | 1 \| 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision). |
 | `FK_SESSION_DIPSPLIT` | `1` | 1 \| 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the downstream stages have the real cells to stitch, not a pre-merged blob. |
