@@ -558,14 +558,25 @@ def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10):
     return lab if (1 - varS / var0) >= min_reduction else np.zeros(n, int)
 
 
-def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1):
+def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, src_fine=None, src_geoms=None):
     """Relabel `fine` contiguous over its non-negative units and rebuild one geom per unit; noise
-    (< 0) labels are preserved.  Used after the re-split so geoms match fine before the merge."""
+    (< 0) labels are preserved.  Used after the re-split so geoms match fine before the merge.
+    Attaches the per-fiber metadata (`coarse`, `radius_incl`, `n_rejected`, `n_adapt_rejected`,
+    `n_merged`) that fiber_geom does not set but _apply_edges + downstream read; coarse/radius_incl
+    are carried from each fiber's majority parent in (src_fine, src_geoms) when given."""
     units = np.unique(fine[fine >= 0]); newfine = np.full(len(fine), -1, int); geoms = []
     for ni, u in enumerate(units):
         sidx = np.flatnonzero(fine == u)
-        geoms.append(fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1))
-        newfine[sidx] = ni
+        g = fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+        par = None
+        if src_fine is not None and src_geoms is not None:
+            pl = src_fine[sidx]; pl = pl[pl >= 0]
+            if pl.size:
+                par = src_geoms[int(np.bincount(pl).argmax())]
+        g['coarse'] = int(par['coarse']) if par is not None else int(ni)
+        g['radius_incl'] = par['radius_incl'] if par is not None else float('nan')
+        g['n_rejected'] = 0; g['n_adapt_rejected'] = 0; g['n_merged'] = 1
+        geoms.append(g); newfine[sidx] = ni
     newfine[fine < 0] = fine[fine < 0]
     return newfine, geoms
 
@@ -854,6 +865,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     #    to converge and drop within-cluster residual; replaces Block A/B when resplit_passes > 0. ──
     if resplit_passes > 0:
         for _rp in range(resplit_passes):
+            src_fine = fine.copy(); src_geoms = geoms       # parents, for metadata carry after re-split
             nid = (int(fine.max()) + 1) if (fine >= 0).any() else 0
             nsplit = 0
             for u in np.unique(fine[fine >= 0]):
@@ -869,7 +881,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                         fine[loc[sub == sv]] = nid; nid += 1
                     nsplit += 1
             if nsplit:
-                fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+                fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
             nmerge = 0
             if len(geoms) > 1:
                 Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
