@@ -38,6 +38,11 @@ Positional: `session`, `group`
 | `--rkk-delete` | flag (off) | rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on) |
 | `--no-rkk-delete` | flag (on) | keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull to refine; use to stop session shedding fragments into the residual/artifact bin |
 | `--merge-corr` | `0.0` | consolidate fibers above this (0=off; 0.95 template / 0.90 sliding) |
+| `--resplit-passes` | `0` | iterative residual-gated re-split (em_swap, target-channel residual) + correlation merge; 0=off, replaces Block A/B when >0. |
+| `--resplit-residual-thr` | `0.08` | re-split fibers with amplitude-scaled max residual above this (~0.08 stderiv, ~0.15 standard). |
+| `--resplit-topch` | `3` | channels fed to em_swap (top residual variance). |
+| `--resplit-min-reduction` | `0.2` | keep an em_swap split only if it cuts target-channel variance by >= this. |
+| `--resplit-merge-corr` | `0.99` | correlation merge threshold inside the loop. |
 | `--cfiber-gate` | flag (off) | veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q) |
 | `--cfiber-q` | `0.9` | quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold |
 | `--merge-method` | `template` |  — choices: `template`, `sliding`, `profile` |

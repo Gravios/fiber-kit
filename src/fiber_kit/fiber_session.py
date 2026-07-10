@@ -508,6 +508,68 @@ def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2
             if S.get(i) is None or S.get(j) is None or float(np.linalg.norm(S[i] - S[j])) <= thr]
 
 
+def _gauss1d(x, sig):
+    """Gaussian smooth along axis 0 (samples); numpy only (no scipy dep)."""
+    r = max(1, int(3 * sig)); k = np.exp(-0.5 * (np.arange(-r, r + 1) / sig) ** 2); k /= k.sum()
+    return np.apply_along_axis(lambda v: np.convolve(v, k, mode="same"), 0, x)
+
+
+def _rms_peak_window(median, sigma=1.0, half=8):
+    """+-half-sample window centred on the smoothed-RMS-energy peak.  The smoothing ONLY locates the
+    peak; callers compute the residual on the RAW window."""
+    ms = _gauss1d(median, sigma); pk = int(np.argmax(np.sqrt((ms ** 2).mean(1))))
+    return max(0, pk - half), min(median.shape[0], pk + half + 1)
+
+
+def _shape_residual(waves, sigma=1.0, half=8):
+    """Amplitude-scaled max residual from the cluster MEDIAN over the +-half window at the RMS peak.
+    GT-free within-cluster tightness; rises when distinct cells are welded, robust to over-splitting."""
+    m = np.median(waves, 0); lo, hi = _rms_peak_window(m, sigma, half)
+    return float((waves[:, lo:hi, :] - m[lo:hi, :]).var(0).max() / (np.ptp(m) ** 2 + 1e-9))
+
+
+def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10):
+    """Hard-EM spike swap in the TARGET-CHANNEL RESIDUAL space (not PCA).  After primary alignment,
+    feature_i = (spike_i - combined group median) on the top-k highest-variance channels over the
+    RMS-peak window.  2-means (farthest-point init, MEDIAN centroids) reassigns spikes to the sub-
+    cluster whose residual-centroid they best match -- descending the within-group target-channel
+    variance; the E-step is the swap.  Split kept only if it cuts that variance by >= min_reduction
+    with both parts >= min_n.  Returns per-spike sub-labels (all 0 if not split)."""
+    n = len(waves)
+    if n < 2 * min_n:
+        return np.zeros(n, int)
+    M = np.median(waves, 0); lo, hi = _rms_peak_window(M)
+    R = waves[:, lo:hi, :] - M[lo:hi, :]
+    tgt = np.argsort(R.var(0).max(0))[::-1][:topk]
+    F = R[:, :, tgt].reshape(n, -1); var0 = F.var(0).sum()
+    if var0 <= 0:
+        return np.zeros(n, int)
+    i1 = int(((F - F.mean(0)) ** 2).sum(1).argmax()); i2 = int(((F - F[i1]) ** 2).sum(1).argmax())
+    cent = np.stack([F[i1], F[i2]]); lab = np.zeros(n, int)
+    for _ in range(max_iter):
+        nl = np.stack([((F - cent[k]) ** 2).sum(1) for k in range(2)]).argmin(0)
+        if (nl == lab).all():
+            break
+        lab = nl
+        cent = np.stack([np.median(F[lab == k], 0) if (lab == k).any() else cent[k] for k in range(2)])
+    if (lab == 0).sum() < min_n or (lab == 1).sum() < min_n:
+        return np.zeros(n, int)
+    varS = sum(F[lab == k].var(0).sum() * (lab == k).sum() for k in (0, 1)) / n
+    return lab if (1 - varS / var0) >= min_reduction else np.zeros(n, int)
+
+
+def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1):
+    """Relabel `fine` contiguous over its non-negative units and rebuild one geom per unit; noise
+    (< 0) labels are preserved.  Used after the re-split so geoms match fine before the merge."""
+    units = np.unique(fine[fine >= 0]); newfine = np.full(len(fine), -1, int); geoms = []
+    for ni, u in enumerate(units):
+        sidx = np.flatnonzero(fine == u)
+        geoms.append(fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1))
+        newfine[sidx] = ni
+    newfine[fine < 0] = fine[fine < 0]
+    return newfine, geoms
+
+
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
@@ -517,6 +579,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
                        rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
+                       resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
                        refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -687,7 +750,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # ── Block A: consolidate fragments by template / sliding-direction correlation.
     #    'template' = mean-template correlation (fast); 'sliding' = direction profile
     #    in a sliding radius window (energy-resolved).  merge_corr ~0.95 / ~0.90. ──
-    if merge_corr and merge_method in ("template", "sliding") and len(geoms) > 1:
+    if resplit_passes == 0 and merge_corr and merge_method in ("template", "sliding") and len(geoms) > 1:
         Kg = len(geoms)
         if merge_method == "sliding":
             Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
@@ -706,7 +769,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     #    defaults to the within-fiber (same-neuron) floor.  emit_candidates=True writes
     #    proposals WITHOUT merging (curation); merge_method='profile' applies them.
     #    Runs AFTER Block A, so it can review/merge already-consolidated fibers. ──
-    if (merge_method == "profile" or emit_candidates) and len(geoms) > 1:
+    if resplit_passes == 0 and (merge_method == "profile" or emit_candidates) and len(geoms) > 1:
         Kg = len(geoms)
         Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
               for u in range(Kg)]
@@ -786,6 +849,36 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             dif = F[others] - mu; d2 = np.einsum('ij,jk,ik->i', dif, Ci, dif)
             geoms[u]['lratio'] = float(np.sum(1.0 - chi2.cdf(d2, df)) / len(mem))
             ds = np.sort(d2); geoms[u]['iso_dist'] = float(ds[min(len(mem), len(ds)) - 1])
+    # ── Block C (opt-in): iterative residual-gated re-split (em_swap, target-channel residual) +
+    #    correlation merge, to convergence.  klustakwik/gmm over-split PLUS this cleanup were validated
+    #    to converge and drop within-cluster residual; replaces Block A/B when resplit_passes > 0. ──
+    if resplit_passes > 0:
+        for _rp in range(resplit_passes):
+            nid = (int(fine.max()) + 1) if (fine >= 0).any() else 0
+            nsplit = 0
+            for u in np.unique(fine[fine >= 0]):
+                loc = np.flatnonzero(fine == u)
+                if loc.size < 2 * resplit_min_n:
+                    continue
+                w = fl.realign(waves[loc])                                  # primary alignment
+                if _shape_residual(w) <= resplit_residual_thr:             # residual gate: skip tight fibers
+                    continue
+                sub = _em_swap(w, topk=resplit_topch, min_reduction=resplit_min_reduction, min_n=resplit_min_n)
+                if np.unique(sub).size >= 2:
+                    for sv in np.unique(sub)[1:]:
+                        fine[loc[sub == sv]] = nid; nid += 1
+                    nsplit += 1
+            if nsplit:
+                fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+            nmerge = 0
+            if len(geoms) > 1:
+                Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
+                      for u in range(len(geoms))]
+                edges = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=resplit_merge_corr)
+                nmerge = len(edges)
+                fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+            if nsplit == 0 and nmerge == 0:
+                break
     # ── collision flag: route recoverable collisions OUT of the noise cluster.
     #    The inclusion radius already sent collisions to noise; the two-template
     #    matching-pursuit gain (fiber_collision) separates recoverable collisions
@@ -1101,6 +1194,16 @@ def main():
                     help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
                          "to refine; use to stop session shedding fragments into the residual/artifact bin")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
+    ap.add_argument("--resplit-passes", type=int, default=0,
+                    help="iterative residual-gated re-split (em_swap on target-channel residual) + correlation merge; "
+                         "0=off.  Replaces the Block-A/B consolidation when >0.")
+    ap.add_argument("--resplit-residual-thr", type=float, default=0.08,
+                    help="re-split only fibers whose amplitude-scaled max residual (+-8 @ RMS peak) exceeds this "
+                         "(~0.08 for stderiv, ~0.15 for standard waveforms)")
+    ap.add_argument("--resplit-topch", type=int, default=3, help="channels fed to em_swap (top residual-variance)")
+    ap.add_argument("--resplit-min-reduction", type=float, default=0.20,
+                    help="keep an em_swap split only if it cuts target-channel variance by >= this")
+    ap.add_argument("--resplit-merge-corr", type=float, default=0.99, help="correlation merge threshold inside the loop")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
     ap.add_argument("--merge-method", choices=["template","sliding","profile"], default="template")
@@ -1274,6 +1377,7 @@ def main():
               nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters, rkk_delete=a.rkk_delete,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
+              resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
               cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
               profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,

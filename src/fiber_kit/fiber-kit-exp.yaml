@@ -92,6 +92,14 @@ FK_SESSION_MERGE_METHOD: sliding  # sliding | template | profile.  Coarse merge 
 FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk
                                   #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session
                                   #   sliding merge (premature: it welds co-active cells before refine can clean).
+FK_SESSION_RESPLIT_PASSES: 3     # 0 | 1-5.  Iterative WITHIN-CHUNK cleanup: residual-gated re-split (em_swap on the
+                                 #   TARGET-CHANNEL RESIDUAL of the group median, top-var channels -- NOT PCA) + correlation
+                                 #   merge, to convergence.  Replaces the Block-A/B consolidation when > 0.  0 = off.
+FK_SESSION_RESPLIT_RESIDUAL_THR: 0.08  # re-split only fibers whose amplitude-scaled max residual (+-8 @ RMS peak) exceeds
+                                 #   this.  ~0.08 for stderiv (the default sort space); ~0.15 for standard waveforms.
+FK_SESSION_RESPLIT_TOPCH: 3      # channels fed to em_swap (highest residual variance = the discriminating channels)
+FK_SESSION_RESPLIT_MIN_REDUCTION: 0.20 # keep an em_swap split only if it cuts target-channel variance by >= this
+FK_SESSION_RESPLIT_MERGE_CORR: 0.99    # correlation merge threshold inside the loop
 FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).
