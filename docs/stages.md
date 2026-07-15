@@ -422,6 +422,7 @@ Positional: `session`, `elec`
 | `--spk-variant` | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--channels` | — | pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary |
 | `--out-tag` | `backbone_linked` | output .clu stage tag (single token) |
+| `--hierarchy` | flag (off) | also write the Klusters hierarchy siblings: `.clc` (per-spike child id) + `.clp` (child->parent map); an input `.clc` is carried through so repeated passes keep the original fiber-session fragments as the leaves. |
 | `--gt-clu` | — | curated .clu to score purity+completeness against |
 | `--gt-res` | — | reserved: .res for the GT (unused when GT shares the session res) |
 | `--spk-cap` | `600` | spikes per fragment for the template |

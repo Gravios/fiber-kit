@@ -231,6 +231,11 @@ def main():
     ap.add_argument("--spk-variant", default="standard", help="waveform axis for templates/warp (standard = curation axis)")
     ap.add_argument("--channels", default=None, help="pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary")
     ap.add_argument("--out-tag", default="backbone_linked", help="output .clu stage tag (single token)")
+    ap.add_argument("--hierarchy", action="store_true",
+                    help="also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp "
+                         "(child->parent map), so the chains are browsable/undoable as parents of their "
+                         "fragments.  Composes across passes: an input .clc is carried through, so the "
+                         "leaves stay the ORIGINAL fiber-session fragments however many times you re-link.")
     ap.add_argument("--gt-clu", default=None, help="curated .clu to score purity+completeness against")
     ap.add_argument("--gt-res", default=None, help="reserved: .res for the GT (unused when GT shares the session res)")
     ap.add_argument("--spk-cap", type=int, default=600, help="spikes per fragment for the template")
@@ -311,6 +316,37 @@ def main():
     n_chains = sum(1 for lab in set(labels) if list(labels).count(lab) > 1)
     nio.write_clu(base, elec, new, variant=a.clu_method, tag=a.out_tag)
     outp = nio.session_path(base, "clu", elec, variant=a.clu_method, tag=a.out_tag)
+    if a.hierarchy:
+        # Klusters hierarchy siblings (format per klustersdoc_hierarchy.cpp buildHierarchyMaps):
+        #   .clc  binary clu-format, per-spike CHILD id, aligned to the same .res as .clu.
+        #   .clp  binary clu-format, int32 header = nChildren (matching klusters' own writer -- the
+        #         header is ignored by readers, which derive the count from the file size), then
+        #         nChildren int32 parent ids; body[i] owns child i+1 (1-based; <= 0 = noise/unmapped).
+        # The nesting invariant (each child owned by exactly ONE parent) holds by construction here:
+        # every spike of an input fragment is remapped to the same chain id.  If the input stage
+        # already carries a .clc, reuse it as the children, so repeated passes keep the ORIGINAL
+        # fiber-session fragments as the leaves instead of nesting chains inside chains.
+        clc_in = nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.clu_stage)
+        if a.clu_stage and os.path.exists(clc_in):
+            child = np.asarray(nio.read_clu_file(clc_in, n_spikes=res.size)[1], np.int64)
+            src = f"carried from {os.path.basename(clc_in)}"
+        else:
+            child = fs.astype(np.int64); src = "input fragments"
+        # nesting -> one input cluster per child; take each child's first spike (O(n log n), no per-child scan)
+        order = np.argsort(child, kind="stable"); cs = child[order]
+        first = np.flatnonzero(np.r_[True, cs[1:] != cs[:-1]])
+        child_ids = cs[first]; parent_in = fs[order[first]]
+        nchild = int(child.max()) if child.size else 0
+        lut = np.zeros(max(nchild, 1), np.int64)                 # body[i] = parent of child i+1
+        for c, u in zip(child_ids, parent_in):
+            if c > 0:
+                lut[int(c) - 1] = fs_to_unit.get(int(u), 0)
+        nfib = int(len(set(new[new > 1].tolist())))
+        nio.write_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.out_tag), child)
+        nio.write_clu_file(nio.session_path(base, "clp", elec, variant=a.clu_method, tag=a.out_tag),
+                           lut, n_clusters=nchild)          # header = nChildren, as klusters writes it
+        print(f"[backbone-link] hierarchy: {int((lut > 0).sum())} children ({src}) under {nfib} fibers "
+              f"| wrote .clc + .clp")
     print(f"[backbone-link] {len(ids)} fragments -> {len(set(new[new > 1]))} units "
           f"({n_chains} multi-fragment chains) | wrote {os.path.basename(outp)}")
 
