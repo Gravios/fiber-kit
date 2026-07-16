@@ -53,6 +53,10 @@ FK_SESSION_RESPLIT_RESIDUAL_THR: 0.08  # re-split fibers with amplitude-scaled m
 FK_SESSION_RESPLIT_TOPCH: 3      # channels fed to em_swap (top residual variance)
 FK_SESSION_RESPLIT_MIN_REDUCTION: 0.20 # keep a split only if it cuts target-channel variance by >= this
 FK_SESSION_RESPLIT_MERGE_CORR: 0.99    # correlation merge threshold inside the loop
+FK_SESSION_RESPLIT_DETREND_EPISODE: 0  # 0 | 1.  Strip the episode-position axis before each em_swap so a split cannot
+                                 #   cut a cell along its own temporal gradient (which fakes an asymmetric CCG).
+FK_SESSION_RESPLIT_DETREND_WIN: 90.0   # half-window (ms) for the episode-position count
+FK_SESSION_RESPLIT_DETREND_MIN_N: 100  # skip the detrend below this many spikes
 FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).

@@ -20,6 +20,9 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_SESSION_RESPLIT_TOPCH` | `3` | channels fed to em_swap (top residual variance). |
 | `FK_SESSION_RESPLIT_MIN_REDUCTION` | `0.20` | keep an em_swap split only if it cuts target-channel variance by >= this. |
 | `FK_SESSION_RESPLIT_MERGE_CORR` | `0.99` | correlation merge threshold inside the loop. |
+| `FK_SESSION_RESPLIT_DETREND_EPISODE` | `0` (exp: 1) | strip the episode-position axis (direction covarying with spikes-after minus spikes-before in ±90 ms) from the residual before each em_swap, so a split cannot cut a cell along its own temporal gradient and manufacture an asymmetric CCG. |
+| `FK_SESSION_RESPLIT_DETREND_WIN` | `90.0` | half-window (ms) for the episode-position count. |
+| `FK_SESSION_RESPLIT_DETREND_MIN_N` | `100` | skip the detrend below this many spikes (covariance estimate too noisy). |
 | `FK_SESSION_LINK` | `0` | 0 \| 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging). |
 | `FK_SESSION_CFIBER_GATE` | `1` | 1 \| 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision). |
 | `FK_SESSION_DIPSPLIT` | `1` | 1 \| 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the downstream stages have the real cells to stitch, not a pre-merged blob. |
