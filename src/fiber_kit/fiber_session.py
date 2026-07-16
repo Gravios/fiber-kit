@@ -528,7 +528,35 @@ def _shape_residual(waves, sigma=1.0, half=8):
     return float((waves[:, lo:hi, :] - m[lo:hi, :]).var(0).max() / (np.ptp(m) ** 2 + 1e-9))
 
 
-def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10):
+def _episode_position(t_ms, win_ms=90.0):
+    """Where a spike sits inside its firing episode: (spikes after) - (spikes before), counted in a
+    +-win_ms window and excluding the spike itself.  Returned in the CALLER's spike order.
+
+    Deliberately ANTI-CAUSAL.  A causal state -- the preceding ISI, or fiber_adapt's EWMA a[i] --
+    cannot tell the START of a burst from its END, and that distinction is precisely what makes a
+    feature order spikes in time.  Measured on g5: removing the axis this variable defines cancels
+    69% of the split-induced CCG asymmetry on average and never increases it (worst case +16%),
+    where fiber_adapt's EWMA at its best tau manages 56% and makes two of eight cells WORSE."""
+    t = np.asarray(t_ms, float); o = np.argsort(t); ts = t[o]; ar = np.arange(len(ts))
+    nb = ar - np.searchsorted(ts, ts - win_ms, side="left")
+    na = np.searchsorted(ts, ts + win_ms, side="right") - ar - 1
+    y = np.empty(len(t)); y[o] = (na - nb).astype(float)
+    return y
+
+
+def _detrend_axis(F, y):
+    """Remove from F the single direction along which it covaries with y (rank-1 projection)."""
+    y = np.asarray(y, float) - float(np.mean(y))
+    c = (F - F.mean(0)).T @ y / max(len(F), 1)
+    nrm = float(np.linalg.norm(c))
+    if nrm <= 0:
+        return F
+    c = c / nrm
+    return F - np.outer(F @ c, c)
+
+
+def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10,
+             episode=None, detrend_min_n=100):
     """Hard-EM spike swap in the TARGET-CHANNEL RESIDUAL space (not PCA).  After primary alignment,
     feature_i = (spike_i - combined group median) on the top-k highest-variance channels over the
     RMS-peak window.  2-means (farthest-point init, MEDIAN centroids) reassigns spikes to the sub-
@@ -541,7 +569,15 @@ def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10):
     M = np.median(waves, 0); lo, hi = _rms_peak_window(M)
     R = waves[:, lo:hi, :] - M[lo:hi, :]
     tgt = np.argsort(R.var(0).max(0))[::-1][:topk]
-    F = R[:, :, tgt].reshape(n, -1); var0 = F.var(0).sum()
+    F = R[:, :, tgt].reshape(n, -1)
+    if episode is not None and n >= detrend_min_n:
+        # Strip the episode-position axis BEFORE the split, so the 2-means cannot cut the cluster
+        # along it.  That axis is a within-cell temporal gradient, not sub-structure: splitting on it
+        # yields two "units" with a clean refractory gap and a strongly asymmetric CCG -- which reads
+        # as a monosynaptic connection.  It holds ~1.5% of within-cluster variance for interneurons
+        # and up to ~9% for bursty pyramidal cells (g5: asymmetry +0.53 on clu 3144 before removal).
+        F = _detrend_axis(F, episode)
+    var0 = F.var(0).sum()
     if var0 <= 0:
         return np.zeros(n, int)
     i1 = int(((F - F.mean(0)) ** 2).sum(1).argmax()); i2 = int(((F - F[i1]) ** 2).sum(1).argmax())
@@ -591,6 +627,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
+                       resplit_detrend_episode=False, resplit_detrend_win=90.0, resplit_detrend_min_n=100,
                        refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -875,7 +912,10 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 w = fl.realign(waves[loc])                                  # primary alignment
                 if _shape_residual(w) <= resplit_residual_thr:             # residual gate: skip tight fibers
                     continue
-                sub = _em_swap(w, topk=resplit_topch, min_reduction=resplit_min_reduction, min_n=resplit_min_n)
+                sub = _em_swap(w, topk=resplit_topch, min_reduction=resplit_min_reduction, min_n=resplit_min_n,
+                               episode=(_episode_position(res_abs[loc] / float(sr) * 1000.0, resplit_detrend_win)
+                                        if resplit_detrend_episode else None),
+                               detrend_min_n=resplit_detrend_min_n)
                 if np.unique(sub).size >= 2:
                     for sv in np.unique(sub)[1:]:
                         fine[loc[sub == sv]] = nid; nid += 1
@@ -1216,6 +1256,15 @@ def main():
     ap.add_argument("--resplit-min-reduction", type=float, default=0.20,
                     help="keep an em_swap split only if it cuts target-channel variance by >= this")
     ap.add_argument("--resplit-merge-corr", type=float, default=0.99, help="correlation merge threshold inside the loop")
+    ap.add_argument("--resplit-detrend-episode", action="store_true",
+                    help="before each em_swap, strip the episode-position axis (the direction covarying with "
+                         "spikes-after minus spikes-before in a +-90 ms window) from the residual, so the split "
+                         "cannot cut a cell along its own temporal gradient and manufacture an asymmetric CCG")
+    ap.add_argument("--resplit-detrend-win", type=float, default=90.0,
+                    help="half-window (ms) for the episode-position count")
+    ap.add_argument("--resplit-detrend-min-n", type=int, default=100,
+                    help="skip the detrend below this many spikes -- the axis is a covariance estimate and is "
+                         "unreliable on small groups")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
     ap.add_argument("--merge-method", choices=["template","sliding","profile"], default="template")
@@ -1390,6 +1439,7 @@ def main():
               rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters, rkk_delete=a.rkk_delete,
               merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
               resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
+              resplit_detrend_episode=a.resplit_detrend_episode, resplit_detrend_win=a.resplit_detrend_win, resplit_detrend_min_n=a.resplit_detrend_min_n,
               cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
               profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
               profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,

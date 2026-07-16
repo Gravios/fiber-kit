@@ -43,6 +43,9 @@ Positional: `session`, `group`
 | `--resplit-topch` | `3` | channels fed to em_swap (top residual variance). |
 | `--resplit-min-reduction` | `0.2` | keep an em_swap split only if it cuts target-channel variance by >= this. |
 | `--resplit-merge-corr` | `0.99` | correlation merge threshold inside the loop. |
+| `--resplit-detrend-episode` | flag (off) | strip the episode-position axis from the residual before each em_swap (prevents splitting a cell along its own temporal gradient, which fakes an asymmetric CCG). |
+| `--resplit-detrend-win` | `90.0` | half-window (ms) for the episode-position count. |
+| `--resplit-detrend-min-n` | `100` | skip the detrend below this many spikes. |
 | `--cfiber-gate` | flag (off) | veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q) |
 | `--cfiber-q` | `0.9` | quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold |
 | `--merge-method` | `template` |  — choices: `template`, `sliding`, `profile` |

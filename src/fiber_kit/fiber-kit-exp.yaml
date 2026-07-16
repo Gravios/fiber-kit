@@ -100,6 +100,14 @@ FK_SESSION_RESPLIT_RESIDUAL_THR: 0.08  # re-split only fibers whose amplitude-sc
 FK_SESSION_RESPLIT_TOPCH: 3      # channels fed to em_swap (highest residual variance = the discriminating channels)
 FK_SESSION_RESPLIT_MIN_REDUCTION: 0.20 # keep an em_swap split only if it cuts target-channel variance by >= this
 FK_SESSION_RESPLIT_MERGE_CORR: 0.99    # correlation merge threshold inside the loop
+FK_SESSION_RESPLIT_DETREND_EPISODE: 1  # 0 | 1.  Strip the EPISODE-POSITION axis from the residual before each
+                                 #   em_swap: the direction covarying with (spikes after - spikes before) in a
+                                 #   +-90 ms window.  That axis is a within-cell temporal gradient, so splitting
+                                 #   on it yields two "units" with a clean refractory gap and a strongly
+                                 #   asymmetric CCG -- indistinguishable from a monosynaptic connection.
+                                 #   Cancels ~69% of the split-induced asymmetry on g5 and never worsens it.
+FK_SESSION_RESPLIT_DETREND_WIN: 90.0   # half-window (ms) for the episode-position count
+FK_SESSION_RESPLIT_DETREND_MIN_N: 100  # skip the detrend below this many spikes (covariance too noisy)
 FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).
