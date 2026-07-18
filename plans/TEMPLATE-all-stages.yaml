@@ -8,6 +8,14 @@
 #  override some at run time.  Session positionals (<session> <elec>) are supplied
 #  by the runner, not here.  Canonical order: session -> realign -> refine ->
 #  peel -> cpos -> intrachunk -> link.  fiber-backbone-link is an ALTERNATIVE
+
+  # - stage: fiber-stochastic            # DIAGNOSTIC (not part of the sort): ensemble/consensus fibering over
+  #     args:                            #   resampled draws -> <base>.fiberens.<elec>.npz for studying fiber space
+  #       stochastic-draws: 20
+  #       stochastic-frac: 0.8           # HIGH: a low fraction starves most fibers below min_group
+  #       stochastic-match-corr: 0.95
+  #       stochastic-stable-freq: 0.6
+  #       stochastic-peel-rounds: 0
 #  linker that consumes fiber-session output directly (no refine/intrachunk/cpos).
 #  Run a plan:  fiber-pipeline <elec> --plan plans/<file>.yaml
 # ============================================================================
