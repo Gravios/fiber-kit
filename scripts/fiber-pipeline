@@ -218,6 +218,14 @@ SESSION_RKK_DELETE="${FK_SESSION_RKK_DELETE:-0}"          # 0 = session OVER-clu
                                                          #   the cull belongs to refine).  1 = cull like refine.
 SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # coarse merge method (inert when MERGE_CORR=0)
 SESSION_RESPLIT_PASSES="${FK_SESSION_RESPLIT_PASSES:-0}"          # iterative em_swap re-split + merge (0=off)
+# fiber-stochastic (diagnostic; ensemble/consensus fibering over resampled draws — writes a fiber-space
+# dump, does NOT alter the sort). All default-off / conservative.
+STOCH_DRAWS="${FK_STOCH_DRAWS:-20}"                # resampled draws per chunk
+STOCH_FRAC="${FK_STOCH_FRAC:-0.8}"                 # subsample fraction per draw (HIGH: low frac starves fibers)
+STOCH_MATCH_CORR="${FK_STOCH_MATCH_CORR:-0.95}"    # template corr = "same fiber" across draws
+STOCH_STABLE_FREQ="${FK_STOCH_STABLE_FREQ:-0.6}"   # recurrence fraction to call a fiber stable / freeze it
+STOCH_PEEL_ROUNDS="${FK_STOCH_PEEL_ROUNDS:-0}"     # 0 = single pass; N = peel stable fibers, re-run on residual
+STOCH_SEED="${FK_STOCH_SEED:-0}"
 SESSION_RESPLIT_RESIDUAL_THR="${FK_SESSION_RESPLIT_RESIDUAL_THR:-0.08}"
 SESSION_RESPLIT_TOPCH="${FK_SESSION_RESPLIT_TOPCH:-3}"
 SESSION_RESPLIT_MIN_REDUCTION="${FK_SESSION_RESPLIT_MIN_REDUCTION:-0.20}"
@@ -294,7 +302,7 @@ PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragmen
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
-ALT_STAGES=(fiber-backbone-link fiber-xcorr-merge)              # alternative linker (fiber-session fragments); plannable, not in `all`
+ALT_STAGES=(fiber-backbone-link fiber-xcorr-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
@@ -368,6 +376,21 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
         $SESSION_DETREND_FLAG --resplit-detrend-win "$SESSION_RESPLIT_DETREND_WIN" --resplit-detrend-min-n "$SESSION_RESPLIT_DETREND_MIN_N" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         "${sess_args[@]+"${sess_args[@]}"}" "${eband_args[@]+"${eband_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
+fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled draws -> <SESS>.fiberens.<ELEC>.npz
+    echo "== fiber-stochastic  (diagnostic -> $SESS.fiberens.$ELEC.npz) =="
+    local st_args=()
+    [ "${STOCH_VERBOSE:-0}" = "1" ] && st_args+=(--stochastic-verbose)
+    _run fiber-stochastic "$SESS" "$ELEC" \
+        --method stderiv --fine-method "$SESSION_FINE_METHOD" \
+        --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
+        --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
+        --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
+        --stochastic --stochastic-draws "$STOCH_DRAWS" --stochastic-frac "$STOCH_FRAC" \
+        --stochastic-match-corr "$STOCH_MATCH_CORR" --stochastic-stable-freq "$STOCH_STABLE_FREQ" \
+        --stochastic-peel-rounds "$STOCH_PEEL_ROUNDS" --stochastic-seed "$STOCH_SEED" \
+        "${st_args[@]+"${st_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
@@ -551,6 +574,7 @@ run_stage() {
         fiber-refit)      fiber_refit      "${ov[@]}" ;;
         fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
         fiber-xcorr-merge) fiber_xcorr_merge "${ov[@]}" ;;
+        fiber-stochastic) fiber_stochastic "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -565,6 +589,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-cpos)       fiber_cpos       ;;
         fiber-intrachunk) fiber_intrachunk ;;
         fiber-link)       fiber_link       ;;
+        fiber-stochastic) fiber_stochastic ;;
         fiber-refit)      fiber_refit      ;;
         fiber-backbone-link) fiber_backbone_link ;;
         fiber-xcorr-merge) fiber_xcorr_merge ;;

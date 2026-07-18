@@ -1041,3 +1041,30 @@ fiber-view-gui: a standalone, rotatable bundle viewer.
 
 *(parameters not introspectable: SystemExit; run `fiber-view-gui -h`)*
 
+
+
+### `fiber-stochastic`  (diagnostic — not part of the sort)
+
+Ensemble / consensus fibering by resampling.  Instead of clustering each chunk once, it draws
+`--stochastic-draws` random subsamples of the chunk (fraction `--stochastic-frac`), fibers each draw with
+the **ordinary per-chunk clusterer** (same `.fil` whitener + `cluster_chunk_fine` + `fiber_geom` as the
+production path — it reuses that worker directly), and finds the fibers that **recur across draws** (the
+consensus set).  With `--stochastic-peel-rounds > 0` it freezes the recurring fibers, removes their
+spikes, and re-runs the ensemble on the residual to expose the next tier.
+
+It writes **`<base>.fiberens.<elec>.npz`** and changes no sort output.  The file is a row-store of *every*
+fiber instance from *every* draw: geometry columns match the production `.fibers.npz` (`template`, `grid`,
+`dir`, `depth`, `width_ms`, `radius`, adaptation fingerprint, drift slopes, isolation) plus diagnostic
+columns — `draw`, `frac`, `peel_round`, `consensus_gid`, `recovery_freq`, `match_corr`, `match_corr2`
+(nearest-rival / merge-proneness) — and a per-round `peellog_*` trajectory.
+
+| flag | default | meaning |
+| --- | --- | --- |
+| `--stochastic` | off | run this diagnostic instead of the normal single pass. |
+| `--stochastic-draws` | `20` | resampled draws per chunk (per peel round). |
+| `--stochastic-frac` | `0.8` | subsample fraction per draw. |
+| `--stochastic-match-corr` | `0.95` | template corr above which two draw-fibers are the same consensus fiber. |
+| `--stochastic-stable-freq` | `0.6` | recurrence fraction to call a consensus fiber stable. |
+| `--stochastic-peel-rounds` | `0` | 0 = single pass; N = freeze stable fibers, peel, re-run on residual. |
+| `--stochastic-chunks` | all | restrict to these chunk indices for a quick look. |
+| `--stochastic-seed` | `0` | RNG seed for the draws. |

@@ -57,6 +57,16 @@ FK_SESSION_RESPLIT_DETREND_EPISODE: 0  # 0 | 1.  Strip the episode-position axis
                                  #   cut a cell along its own temporal gradient (which fakes an asymmetric CCG).
 FK_SESSION_RESPLIT_DETREND_WIN: 90.0   # half-window (ms) for the episode-position count
 FK_SESSION_RESPLIT_DETREND_MIN_N: 100  # skip the detrend below this many spikes
+
+# ── fiber-stochastic (diagnostic stage; ensemble/consensus fibering over resampled draws) ──
+#   Not part of the sort: writes <base>.fiberens.<elec>.npz (every fiber from every draw + geometry +
+#   consensus assignment + per-instance stability/near-miss/peel provenance) for studying the fiber space.
+FK_STOCH_DRAWS: 20            # resampled draws per chunk
+FK_STOCH_FRAC: 0.8           # subsample fraction per draw (HIGH: a low fraction starves fibers below min_group)
+FK_STOCH_MATCH_CORR: 0.95    # template corr = "same fiber" across draws
+FK_STOCH_STABLE_FREQ: 0.6    # recurrence fraction to call a consensus fiber stable / freeze it when peeling
+FK_STOCH_PEEL_ROUNDS: 0      # 0 = single pass; N = peel stable fibers and re-run on the residual
+FK_STOCH_SEED: 0
 FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).

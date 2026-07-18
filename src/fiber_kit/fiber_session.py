@@ -1224,12 +1224,9 @@ def _process_chunk(task):
     return c, ext, lab, geoms, cand, sd
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description="Cluster a session group into fibers. Reads <session>.yaml "
-                    "(or <session>/<session>.yaml) for channels/sr/nChannels; "
-                    "CLI flags override the YAML.")
-    sy.add_session_args(ap)
+def add_core_arguments(ap):
+    """Register every fiber-session clusterer argument on `ap` (after sy.add_session_args).
+    Shared by main() and the stochastic harness so both expose an identical clusterer."""
     ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")
@@ -1375,6 +1372,46 @@ def main():
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
     ap.add_argument("--out", default=None)
+    return ap
+
+
+def build_cf(a, meth, cluster_basis):
+    """Assemble the cluster_chunk_fine keyword dict from parsed args.  Extracted from main()
+    so the stochastic harness configures the clusterer identically to the production path."""
+    return dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+        fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
+        incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
+        energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
+        eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
+        eband_low_assign=a.eband_low_assign,
+        split_var_margin=a.split_var_margin, var_split=a.var_split,
+        var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
+        dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
+        nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
+        rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters, rkk_delete=a.rkk_delete,
+        merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
+        resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
+        resplit_detrend_episode=a.resplit_detrend_episode, resplit_detrend_win=a.resplit_detrend_win, resplit_detrend_min_n=a.resplit_detrend_min_n,
+        cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
+        profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
+        profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
+        refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
+        refrac_min_exp=a.refrac_min_exp, refrac_censor_ms=a.refrac_censor_ms,
+        deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
+        adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
+        adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr,
+        adapt_taumax=a.adapt_taumax, collision_flag=a.collision_flag,
+        collision_gain=a.collision_gain, collision_shift=a.collision_shift,
+        quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Cluster a session group into fibers. Reads <session>.yaml "
+                    "(or <session>/<session>.yaml) for channels/sr/nChannels; "
+                    "CLI flags override the YAML.")
+    sy.add_session_args(ap)
+    add_core_arguments(ap)
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
     def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)
@@ -1426,31 +1463,7 @@ def main():
     if cluster_basis is not None:
         log(f"fine-split shape features: global basis '{a.method}' "
             f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
-    cf = dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
-              fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
-              incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
-              energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
-              eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
-              eband_low_assign=a.eband_low_assign,
-              split_var_margin=a.split_var_margin, var_split=a.var_split,
-              var_split_depth=a.var_split_depth, dipsplit=a.dipsplit,
-              dip_dim=a.dip_dim, dip_alpha=a.dip_alpha, dip_min=a.dip_min, dip_realign=a.dip_realign,
-              nudge_split=a.nudge_split, nudge_max=a.nudge_max, nudge_amp_pct=a.nudge_amp_pct, nudge_min_channels=a.nudge_min_channels, nudge_alpha=a.nudge_alpha,
-              rkk_dims=a.rkk_dims, rkk_max=a.rkk_max, rkk_realign=a.rkk_realign, rkk_realign_iters=a.rkk_realign_iters, rkk_delete=a.rkk_delete,
-              merge_corr=a.merge_corr, merge_method=a.merge_method, sliding_nwin=a.sliding_nwin,
-              resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
-              resplit_detrend_episode=a.resplit_detrend_episode, resplit_detrend_win=a.resplit_detrend_win, resplit_detrend_min_n=a.resplit_detrend_min_n,
-              cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
-              profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
-              profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
-              refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
-              refrac_min_exp=a.refrac_min_exp, refrac_censor_ms=a.refrac_censor_ms,
-              deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
-              adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
-              adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr,
-              adapt_taumax=a.adapt_taumax, collision_flag=a.collision_flag,
-              collision_gain=a.collision_gain, collision_shift=a.collision_shift,
-              quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
+    cf = build_cf(a, meth, cluster_basis)
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu)
