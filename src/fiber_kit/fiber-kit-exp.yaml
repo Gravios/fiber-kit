@@ -98,6 +98,12 @@ FK_SESSION_COARSE_DR: 0.15       # coarse radial (whitened-amplitude) band half-
                                  #   cells stay separate for the fine splitter); higher -> fewer, fatter coarse groups.
 FK_SESSION_NO_WHITEN: 0          # 0 | 1.  1 = cluster in the RAW mask-selected (mean-centred) feature space instead of
 FK_SESSION_SEED_DENSITY: 0.0     # density-preferential coarse seeding exponent.  0 = uniform stride (current);
+FK_SESSION_RESEED_RESIDUAL_THR: 0.0   # >0 enables residual-gated RESEED: after the fine split, a fiber whose
+                                 #   median-subtracted residual/signal exceeds this is re-split (welded co-located
+                                 #   cells of different shape score high; ~0.35 is welded on g5, but the classes
+                                 #   OVERLAP so the threshold only selects candidates -- the split is kept only if
+                                 #   it lowers the residual, so clean fibers that trip it are left intact).
+FK_SESSION_RESEED_MIN_REDUCTION: 0.05 # keep a reseed only if it lowers the median-subtracted residual/signal by this.
                                  #   >0 draws ridge seeds toward CONCENTRATED modes of the waveform space
                                  #   (p ~ local_density**this), concentrating the seed budget on isolated,
                                  #   reproducible modes (isolation, not firing rate).  1 = fully density-weighted.
