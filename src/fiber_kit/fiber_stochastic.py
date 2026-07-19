@@ -115,8 +115,10 @@ def _consensus(all_geoms, match_thr, link="average"):
     else:
         # agglomerative average/complete linkage: merge the closest pair of GROUPS while their
         # linkage score is >= match_thr.  Groups never merge two instances from the same draw
-        # (that pairing is -inf).  This is O(m^2) in memory for the score matrix (m ~ hundreds to
-        # low thousands per chunk-round, so fine) and O(m^2 log m) time via repeated argmax.
+        # (that pairing is -inf).  O(m^2) memory for the score matrix; the merge loop re-scans the
+        # full matrix with argmax each step, so it is O(m^3) time -- measured ~1.5s at the realistic
+        # worst case (m~2600 instances per chunk-round, nothing merging), which is not a bottleneck
+        # (one _consensus call per chunk), so it is left simple rather than heap/cache-optimised.
         groups = [[i] for i in range(m)]
         # group-vs-group linkage matrix, seeded from the instance matrix
         G = C_other.copy()
@@ -326,42 +328,38 @@ def run_stochastic(a):
 
 def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode):
     """Resolve the per-spike votes to a Klusters clu/clc/clp triplet so the consensus fibers can be
-    inspected in Klusters.  .clu = each spike's MAJORITY consensus fiber (id+2, since 0=noise 1=artifact
-    in Klusters); .clc = its majority sub-mode within that fiber (the branch); .clp = sub-mode -> fiber
-    parent map.  Spikes never assigned to any fiber (not drawn into a stable mode) go to noise (0)."""
-    clu = np.zeros(n_spikes, np.int64)          # 0 = noise (unassigned)
-    child = np.zeros(n_spikes, np.int64)        # per-spike sub-mode child id (1-based; 0 = unmapped)
-    # resolve fiber id per spike (majority), remap consensus ids -> contiguous Klusters ids >= 2
-    fib_of = {}
-    for ri, ctr in vote_fiber.items():
-        fib_of[ri] = max(ctr, key=ctr.get)
-    used = sorted(set(fib_of.values()))
-    fib_remap = {cg: k + 2 for k, cg in enumerate(used)}      # 0/1 reserved for noise/artifact
-    for ri, cg in fib_of.items():
-        clu[ri] = fib_remap[cg]
-    # resolve sub-mode per spike (majority) and assign contiguous child ids; record child->parent
-    sub_of = {}
-    for ri, ctr in vote_submode.items():
-        sub_of[ri] = max(ctr, key=ctr.get)                    # (cg, sm)
+    inspected in Klusters.  .clc = each spike's majority SUB-MODE (the atom/leaf layer, the branch);
+    .clp = sub-mode -> consensus-fiber parent map; .clu = the per-spike fiber, DERIVED from each
+    sub-mode's parent.  Spikes never assigned to any fiber (not drawn into a stable mode) go to noise.
+
+    Built via the shared FiberHierarchy writer (the same one fiber_session / intrachunk / link / refine
+    use) rather than hand-writing the three files: it derives .clu from (child, parent) so the fiber
+    layer is guaranteed consistent with the sub-mode layer, compacts fiber ids (renumber, 0/1 reserved
+    for noise/artefact), and warns on orphaned children.  The sub-mode is the child; its consensus fiber
+    is the parent."""
+    from .fiber_refiberize import FiberHierarchy
+
+    # majority sub-mode per spike -> the child (atom) layer; child ids are 1-based, 0 = noise
+    sub_of = {ri: max(ctr, key=ctr.get) for ri, ctr in vote_submode.items()}   # ri -> ((chunk,cg), sm)
     subkeys = sorted(set(sub_of.values()))
-    child_remap = {key: k + 1 for k, key in enumerate(subkeys)}   # child ids 1-based
-    lut = np.zeros(max(len(subkeys), 1), np.int64)            # body[i] = parent fiber of child i+1
-    for key, ci in child_remap.items():
-        cg = key[0]
-        lut[ci - 1] = fib_remap.get(cg, 0)
+    child_id = {key: k + 1 for k, key in enumerate(subkeys)}
+    child = np.zeros(n_spikes, np.int64)
     for ri, key in sub_of.items():
-        child[ri] = child_remap[key]
+        child[ri] = child_id[key]
+
+    # each sub-mode's consensus fiber -> the child->parent map; parent fiber ids are 2-based (0/1 noise)
+    fibkeys = sorted({key[0] for key in subkeys})                              # distinct (chunk,cg)
+    fib_id = {cg: k + 2 for k, cg in enumerate(fibkeys)}
+    parent = {child_id[key]: fib_id[key[0]] for key in subkeys}               # child -> fiber
 
     tag = a.stochastic_clu_tag
-    cpath = nio.session_path(a.base, "clu", a.elec, variant="stderiv", tag=tag)
-    nio.write_clu_file(cpath, clu)
-    nio.write_clu_file(nio.session_path(a.base, "clc", a.elec, variant="stderiv", tag=tag), child)
-    nio.write_clu_file(nio.session_path(a.base, "clp", a.elec, variant="stderiv", tag=tag),
-                       lut, n_clusters=len(subkeys))          # header = nChildren, as klusters writes it
-    nfib = len(used); nassigned = int((clu > 0).sum())
+    paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant="stderiv", tag=tag,
+                                               renumber=True, backup=False)
+    nfib = len(fibkeys)
+    nassigned = int((child > 0).sum())
     print(f"fiber_stochastic: wrote consensus triplet .clu/.clc/.clp (tag '{tag}') — "
           f"{nfib} fibers, {len(subkeys)} sub-modes, {nassigned}/{n_spikes} spikes assigned "
-          f"({100*nassigned/max(n_spikes,1):.0f}%; rest -> noise)")
+          f"({100*nassigned/max(n_spikes,1):.0f}%; rest -> noise) [{paths['clu']}]")
 
 
 # ── serialization: the fiber-space file (mirrors production .fibers.npz + extras) ──
