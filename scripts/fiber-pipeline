@@ -218,6 +218,9 @@ SESSION_RKK_DELETE="${FK_SESSION_RKK_DELETE:-0}"          # 0 = session OVER-clu
                                                          #   the cull belongs to refine).  1 = cull like refine.
 SESSION_MERGE_METHOD="${FK_SESSION_MERGE_METHOD:-sliding}" # coarse merge method (inert when MERGE_CORR=0)
 SESSION_RESPLIT_PASSES="${FK_SESSION_RESPLIT_PASSES:-0}"          # iterative em_swap re-split + merge (0=off)
+SESSION_COARSE_DR="${FK_SESSION_COARSE_DR:-0.15}"                   # coarse radial band half-width (lower = more, smaller coarse fibers)
+SESSION_NO_WHITEN="${FK_SESSION_NO_WHITEN:-0}"                      # 1 = cluster in raw (unwhitened) feature space
+if [ "$SESSION_NO_WHITEN" = "1" ]; then SESSION_WHITEN_FLAG="--no-whiten"; else SESSION_WHITEN_FLAG=""; fi
 # fiber-stochastic (diagnostic; ensemble/consensus fibering over resampled draws — writes a fiber-space
 # dump, does NOT alter the sort). All default-off / conservative.
 STOCH_DRAWS="${FK_STOCH_DRAWS:-20}"                # resampled draws per chunk
@@ -372,7 +375,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     _run fiber-session "$SESS" "$ELEC" \
         --method stderiv --fine-method "$SESSION_FINE_METHOD" \
         --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
-        --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
+        --coarse-dr "$SESSION_COARSE_DR" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         $SESSION_DETREND_FLAG --resplit-detrend-win "$SESSION_RESPLIT_DETREND_WIN" --resplit-detrend-min-n "$SESSION_RESPLIT_DETREND_MIN_N" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         "${sess_args[@]+"${sess_args[@]}"}" "${eband_args[@]+"${eband_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
@@ -385,7 +388,7 @@ fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled d
     _run fiber-stochastic "$SESS" "$ELEC" \
         --method stderiv --fine-method "$SESSION_FINE_METHOD" \
         --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
-        --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
+        --coarse-dr "$SESSION_COARSE_DR" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --stochastic --stochastic-draws "$STOCH_DRAWS" --stochastic-frac "$STOCH_FRAC" \
         --stochastic-match-corr "$STOCH_MATCH_CORR" --stochastic-stable-freq "$STOCH_STABLE_FREQ" \
