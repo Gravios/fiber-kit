@@ -237,6 +237,11 @@ def run_stochastic(a):
 
     rows = []                      # every fiber instance, all draws, all peel rounds
     peel_log = []                  # per (chunk, round): frozen count, residual size, remaining
+    # per-spike votes (ext-absolute res index -> Counter over consensus fibers / sub-modes), for the
+    # optional clu/clc/clp triplet.  A spike is in ~frac of the draws and may land in different fibers
+    # across them; the final label is the majority vote.
+    vote_fiber = {}                # res_index -> {consensus_gid: count}
+    vote_submode = {}              # res_index -> {(consensus_gid, submode): count}
     chunks = a.stochastic_chunks if a.stochastic_chunks else list(range(nchunks))
 
     for c in chunks:
@@ -256,6 +261,23 @@ def run_stochastic(a):
             if not any(all_geoms):
                 break
             inst, cons_gid, recov, best, best2 = _consensus(all_geoms, a.stochastic_match_corr, link=a.stochastic_link)
+
+            # tally per-spike votes: each instance owns some ext-relative spikes (_draw_members) and
+            # belongs to a consensus fiber; a per-draw sub-mode id distinguishes branches within a fiber
+            # (instances of the same fiber in the same draw -- rare -- get distinct sub-mode ids).
+            if a.stochastic_write_clu:
+                submode_ctr = {}
+                for x, (dd, ii, _) in enumerate(inst):
+                    cg = int(cons_gid[x])
+                    sm = submode_ctr.get((dd, cg), 0); submode_ctr[(dd, cg)] = sm + 1
+                    mem = all_geoms[dd][ii].get("_draw_members")
+                    if mem is None:
+                        continue
+                    for e in mem.tolist():
+                        ri = int(ext[e])                       # ext-relative -> absolute res index
+                        vote_fiber.setdefault(ri, {})[cg] = vote_fiber.setdefault(ri, {}).get(cg, 0) + 1
+                        key = (cg, sm)
+                        vote_submode.setdefault(ri, {})[key] = vote_submode.setdefault(ri, {}).get(key, 0) + 1
 
             # record every instance (this is the fiber-space dump)
             for x, (d, i, _) in enumerate(inst):
@@ -295,6 +317,48 @@ def run_stochastic(a):
                   f"{len([p for p in peel_log if p['chunk']==c])} peel round(s)")
 
     _dump_ensemble(a, rows, peel_log, mask, gch)
+    if a.stochastic_write_clu:
+        _write_cluster_triplet(a, res.size, vote_fiber, vote_submode)
+
+
+def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode):
+    """Resolve the per-spike votes to a Klusters clu/clc/clp triplet so the consensus fibers can be
+    inspected in Klusters.  .clu = each spike's MAJORITY consensus fiber (id+2, since 0=noise 1=artifact
+    in Klusters); .clc = its majority sub-mode within that fiber (the branch); .clp = sub-mode -> fiber
+    parent map.  Spikes never assigned to any fiber (not drawn into a stable mode) go to noise (0)."""
+    clu = np.zeros(n_spikes, np.int64)          # 0 = noise (unassigned)
+    child = np.zeros(n_spikes, np.int64)        # per-spike sub-mode child id (1-based; 0 = unmapped)
+    # resolve fiber id per spike (majority), remap consensus ids -> contiguous Klusters ids >= 2
+    fib_of = {}
+    for ri, ctr in vote_fiber.items():
+        fib_of[ri] = max(ctr, key=ctr.get)
+    used = sorted(set(fib_of.values()))
+    fib_remap = {cg: k + 2 for k, cg in enumerate(used)}      # 0/1 reserved for noise/artifact
+    for ri, cg in fib_of.items():
+        clu[ri] = fib_remap[cg]
+    # resolve sub-mode per spike (majority) and assign contiguous child ids; record child->parent
+    sub_of = {}
+    for ri, ctr in vote_submode.items():
+        sub_of[ri] = max(ctr, key=ctr.get)                    # (cg, sm)
+    subkeys = sorted(set(sub_of.values()))
+    child_remap = {key: k + 1 for k, key in enumerate(subkeys)}   # child ids 1-based
+    lut = np.zeros(max(len(subkeys), 1), np.int64)            # body[i] = parent fiber of child i+1
+    for key, ci in child_remap.items():
+        cg = key[0]
+        lut[ci - 1] = fib_remap.get(cg, 0)
+    for ri, key in sub_of.items():
+        child[ri] = child_remap[key]
+
+    tag = a.stochastic_clu_tag
+    cpath = nio.session_path(a.base, "clu", a.elec, variant="stderiv", tag=tag)
+    nio.write_clu_file(cpath, clu)
+    nio.write_clu_file(nio.session_path(a.base, "clc", a.elec, variant="stderiv", tag=tag), child)
+    nio.write_clu_file(nio.session_path(a.base, "clp", a.elec, variant="stderiv", tag=tag),
+                       lut, n_clusters=len(subkeys))          # header = nChildren, as klusters writes it
+    nfib = len(used); nassigned = int((clu > 0).sum())
+    print(f"fiber_stochastic: wrote consensus triplet .clu/.clc/.clp (tag '{tag}') — "
+          f"{nfib} fibers, {len(subkeys)} sub-modes, {nassigned}/{n_spikes} spikes assigned "
+          f"({100*nassigned/max(n_spikes,1):.0f}%; rest -> noise)")
 
 
 # ── serialization: the fiber-space file (mirrors production .fibers.npz + extras) ──
@@ -390,6 +454,12 @@ def add_arguments(ap):
     g.add_argument("--stochastic-chunks", type=int, nargs="*", default=None,
                    help="restrict to these chunk indices (default: all) — useful for a quick look")
     g.add_argument("--stochastic-seed", type=int, default=0, help="RNG seed for the draws")
+    g.add_argument("--stochastic-write-clu", action="store_true",
+                   help="also write a Klusters clu/clc/clp triplet from the per-spike majority vote, so the "
+                        "consensus fibers (.clu) and their sub-modes/branches (.clc) can be inspected in Klusters")
+    g.add_argument("--stochastic-clu-tag", default="fiber_stochastic",
+                   help="tag for the written triplet: <base>.clu.stderiv.<elec>.<tag> etc")
+
     g.add_argument("--stochastic-verbose", action="store_true", help="per-chunk progress")
     return ap
 
