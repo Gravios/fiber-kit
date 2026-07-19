@@ -46,6 +46,7 @@ pipeline:
   # no-whiten: false           # true = cluster in raw (unwhitened) feature space
   # seed-density: 0.0          # >0 = density-preferential coarse seeding (concentrate on isolated modes)
   # reseed-residual-thr: 0.0    # >0 = residual-gated reseed of welded fibers (kept only if residual drops)
+  # refit-iters: 0              # extra realign->refit->rejudge passes at inclusion
   #       resplit-residual-thr: 0.08      # re-split fibers with amplitude-scaled max residual above this (~0.08 stderiv)
   #       resplit-topch: 3                # channels fed to em_swap (top residual variance)
   #       resplit-min-reduction: 0.20     # keep a split only if it cuts target-channel variance by >= this
