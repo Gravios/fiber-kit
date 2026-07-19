@@ -670,6 +670,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
                        resplit_detrend_episode=False, resplit_detrend_win=90.0, resplit_detrend_min_n=100,
                        reseed_residual_thr=0.0, reseed_min_reduction=0.05,
+                       refit_iters=0,
                        refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -804,15 +805,39 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 continue
             sidx = cidx[grp]; rad = float('nan'); rej = 0; rej_incl = 0; incl_rej = None
             if incl_k > 0 and len(sidx) >= 20:
-                w_al = fl.realign(waves[sidx])
-                Xg = (w_al[:, mask, :].reshape(len(sidx), -1) - nmean) @ W
-                grid, D = ft.trajectory(Xg); rr = np.linalg.norm(Xg, axis=1)
-                resid = np.linalg.norm(Xg - rr[:, None] * ft.predict_many((grid, D), rr), axis=1)
-                med = float(np.median(resid)); mad = 1.4826 * float(np.median(np.abs(resid - med)))
-                rad = med + incl_k * mad; keep = resid <= rad; rej = int((~keep).sum()); rej_incl = rej
+                # REALIGN -> REFIT -> RE-JUDGE.  A true member at a bad sub-sample offset lands far from
+                # the fiber trajectory and is rejected as an outlier (an alignment artifact, not a wrong
+                # cell), and its offset blurs the template judging everyone else.  Iterating {align this
+                # fiber's spikes to their own median -> rebuild the trajectory -> re-apply the inclusion
+                # gate} sharpens the template and re-judges from the FULL member set each pass, so an
+                # early drop on a blurred template can be undone once it sharpens.  refit_iters=0 = the
+                # original single pass.
+                base = sidx.copy()
+                keep_mask = np.ones(len(base), bool)
+                for _it in range(max(1, refit_iters + 1)):
+                    cur = base[keep_mask]
+                    if len(cur) < fine_mg:
+                        break
+                    w_al = fl.realign(waves[cur])
+                    Xg = (w_al[:, mask, :].reshape(len(cur), -1) - nmean) @ W
+                    grid, D = ft.trajectory(Xg)
+                    w_all = fl.realign(waves[base])
+                    Xall = (w_all[:, mask, :].reshape(len(base), -1) - nmean) @ W
+                    rr_all = np.linalg.norm(Xall, axis=1)
+                    resid_all = np.linalg.norm(Xall - rr_all[:, None] * ft.predict_many((grid, D), rr_all), axis=1)
+                    rc = resid_all[keep_mask] if keep_mask.any() else resid_all
+                    med = float(np.median(rc)); mad = 1.4826 * float(np.median(np.abs(rc - med)))
+                    rad = med + incl_k * mad
+                    new_mask = resid_all <= rad
+                    if new_mask.sum() < fine_mg:
+                        break
+                    if np.array_equal(new_mask, keep_mask) and _it > 0:
+                        keep_mask = new_mask; break
+                    keep_mask = new_mask
+                keep = keep_mask; rej = int((~keep).sum()); rej_incl = rej
                 if incl_assign:
-                    incl_rej = sidx[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
-                sidx = sidx[keep]
+                    incl_rej = base[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
+                sidx = base[keep]
                 if len(sidx) < fine_mg:
                     if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
                     continue
@@ -1322,6 +1347,11 @@ def add_core_arguments(ap):
     ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
                     help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
                          "to refine; use to stop session shedding fragments into the residual/artifact bin")
+    ap.add_argument("--refit-iters", type=int, default=0,
+                    help="iterate {realign each fiber's spikes to their own median -> refit template -> re-apply the "
+                         "inclusion gate} this many extra times.  Recovers true members rejected for a bad sub-sample "
+                         "offset and tightens the template; re-judges from the full member set each pass.  0 = single "
+                         "pass (original).  Marginal on clean fibers; helps contamination-heavy ones.")
     ap.add_argument("--reseed-residual-thr", type=float, default=0.0,
                     help="residual-gated reseed: after the fine split, any fiber whose median-subtracted "
                          "residual/signal exceeds this is re-split (a welded pair of co-located different-shape "
@@ -1480,7 +1510,7 @@ def add_core_arguments(ap):
 def build_cf(a, meth, cluster_basis):
     """Assemble the cluster_chunk_fine keyword dict from parsed args.  Extracted from main()
     so the stochastic harness configures the clusterer identically to the production path."""
-    return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, reseed_residual_thr=a.reseed_residual_thr, reseed_min_reduction=a.reseed_min_reduction, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+    return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, reseed_residual_thr=a.reseed_residual_thr, reseed_min_reduction=a.reseed_min_reduction, refit_iters=a.refit_iters, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
         fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
         incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
         energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,

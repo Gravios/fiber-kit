@@ -21,6 +21,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_SESSION_SEED_DENSITY` | `0.0` | density-preferential coarse seeding exponent; `0` = uniform stride, `>0` draws ridge seeds toward concentrated modes of the waveform space (isolation, not firing rate). |
 | `FK_SESSION_RESEED_RESIDUAL_THR` | `0.0` | `>0` enables residual-gated reseed: a fine-split fiber whose median-subtracted residual/signal exceeds this is re-split (kept only if the residual drops, so clean fibers that trip it are left intact). |
 | `FK_SESSION_RESEED_MIN_REDUCTION` | `0.05` | keep a reseed only if it lowers the median-subtracted residual/signal by this much. |
+| `FK_SESSION_REFIT_ITERS` | `0` | extra {realign fiber spikes → refit template → re-apply inclusion gate} passes; recovers true members rejected for a bad sub-sample offset (marginal on clean fibers, helps contaminated ones). |
 | `FK_SESSION_RESPLIT_RESIDUAL_THR` | `0.08` | re-split only fibers whose amplitude-scaled max residual (+-8 @ RMS peak) exceeds this (~0.08 stderiv, ~0.15 standard). |
 | `FK_SESSION_RESPLIT_TOPCH` | `3` | channels fed to em_swap (top residual variance). |
 | `FK_SESSION_RESPLIT_MIN_REDUCTION` | `0.20` | keep an em_swap split only if it cuts target-channel variance by >= this. |

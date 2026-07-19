@@ -60,6 +60,10 @@ FK_SESSION_RESEED_RESIDUAL_THR: 0.0   # >0 enables residual-gated RESEED: after 
                                  #   OVERLAP so the threshold only selects candidates -- the split is kept only if
                                  #   it lowers the residual, so clean fibers that trip it are left intact).
 FK_SESSION_RESEED_MIN_REDUCTION: 0.05 # keep a reseed only if it lowers the median-subtracted residual/signal by this.
+FK_SESSION_REFIT_ITERS: 0             # extra {realign fiber spikes -> refit template -> re-apply inclusion gate}
+                                 #   passes.  Recovers true members rejected for a bad sub-sample offset; marginal on
+                                 #   clean fibers (existing per-fiber realign already handles most), helps contaminated
+                                 #   ones.  0 = single pass.
                                  #   >0 draws ridge seeds toward CONCENTRATED modes of the waveform space
                                  #   (p ~ local_density**this), concentrating the seed budget on isolated,
                                  #   reproducible modes (isolation, not firing rate).  1 = fully density-weighted.
