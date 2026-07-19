@@ -42,6 +42,8 @@ Positional: `session`, `group`
 | `--coarse-dr` | `0.15` | coarse radial band half-width (fraction of the 1–99% whitened-radius span) for spike→seed association; lower = more, smaller coarse fibers. |
 | `--no-whiten` | flag (off) | cluster in the raw mask-selected (mean-centred) feature space instead of the `.fil` baseline-whitened space. |
 | `--seed-density` | `0.0` | density-preferential coarse seeding: draw ridge seeds toward concentrated modes (p ∝ local_density**this) instead of a uniform stride; `0` = uniform. |
+| `--reseed-residual-thr` | `0.0` | residual-gated reseed: re-split fine fibers whose median-subtracted residual/signal exceeds this (welded co-located cells); the split is kept only if it lowers the residual. `0` = off. |
+| `--reseed-min-reduction` | `0.05` | keep a reseed only if it lowers the residual by at least this. |
 | `--resplit-residual-thr` | `0.08` | re-split fibers with amplitude-scaled max residual above this (~0.08 stderiv, ~0.15 standard). |
 | `--resplit-topch` | `3` | channels fed to em_swap (top residual variance). |
 | `--resplit-min-reduction` | `0.2` | keep an em_swap split only if it cuts target-channel variance by >= this. |

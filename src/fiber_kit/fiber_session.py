@@ -583,6 +583,19 @@ def _detrend_axis(F, y):
     return F - np.outer(F @ c, c)
 
 
+def _median_resid_ratio(w, mask):
+    """Median-subtracted residual variance / signal for a group of aligned waveforms.  A tight fiber
+    scores low; a WELDED fiber (two shapes averaged) scores high because its spikes sit far from the
+    pooled median.  Validated on g5: corr(#sub-modes, this) = +0.88, welded fibers ~1.7x clean ones,
+    and a threshold of ~0.35 separates them with no false positives.  Used to target reseeding at the
+    heterogeneous fibers only, rather than re-splitting everything."""
+    wal = fl.realign(w)[:, mask, :].reshape(len(w), -1)
+    med = np.median(wal, 0)
+    sig = float(np.linalg.norm(med)) + 1e-9
+    resid = np.median(np.linalg.norm(wal - med[None, :], axis=1))
+    return float(resid / sig)
+
+
 def _em_swap(waves, topk=3, max_iter=40, min_reduction=0.20, min_n=10,
              episode=None, detrend_min_n=100):
     """Hard-EM spike swap in the TARGET-CHANNEL RESIDUAL space (not PCA).  After primary alignment,
@@ -656,6 +669,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
                        resplit_detrend_episode=False, resplit_detrend_win=90.0, resplit_detrend_min_n=100,
+                       reseed_residual_thr=0.0, reseed_min_reduction=0.05,
                        refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
                        emit_candidates=False, candidates_out=None,
                        deadapt=False, deadapt_min_corr=0.2,
@@ -760,6 +774,28 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                                                             nudge_alpha, nudge_max)]
                 else:
                     newg.append(grp)
+            groups = newg
+        if reseed_residual_thr > 0 and method not in ("none",):
+            # RESIDUAL-GATED reseed: a fiber whose median-subtracted residual/signal exceeds the threshold
+            # is heterogeneous -- typically two co-located cells of different shape averaged into one
+            # (the welding the consensus matcher also reveals).  Re-run the fine splitter on JUST that
+            # fiber's spikes; keep the re-split only if it actually LOWERS the residual (a real sub-unit
+            # does; noise does not).  Targeted by the residual detector, so clean fibers are untouched.
+            newg = []
+            for grp in groups:
+                if len(grp) < 2 * fine_mg or _median_resid_ratio(wcf[grp], mask) < reseed_residual_thr:
+                    newg.append(grp); continue
+                sub = cluster_chunk(wcf[grp], W, nmean, min_group=fine_mg, kappa=fine_kappa,
+                                    dedup_deg=fine_dedup, seed_density=coarse_seed_density)
+                if (sub < 0).all() or len(np.unique(sub[sub >= 0])) < 2:
+                    newg.append(grp); continue
+                pieces = [np.flatnonzero(sub == u) for u in np.unique(sub[sub >= 0])]
+                before = _median_resid_ratio(wcf[grp], mask)
+                after = max(_median_resid_ratio(wcf[grp[pc]], mask) for pc in pieces if len(pc) >= fine_mg)
+                if after < before - reseed_min_reduction:
+                    newg += [grp[pc] for pc in pieces]           # accept: reseed lowered residual
+                else:
+                    newg.append(grp)                             # reject: no improvement
             groups = newg
         for grp in groups:
             g0 = len(grp)
@@ -1286,6 +1322,14 @@ def add_core_arguments(ap):
     ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
                     help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
                          "to refine; use to stop session shedding fragments into the residual/artifact bin")
+    ap.add_argument("--reseed-residual-thr", type=float, default=0.0,
+                    help="residual-gated reseed: after the fine split, any fiber whose median-subtracted "
+                         "residual/signal exceeds this is re-split (a welded pair of co-located different-shape "
+                         "cells scores high; ~0.35 separates welded from clean on g5).  0 = off.  The re-split is "
+                         "kept only if it lowers the residual by --reseed-min-reduction.")
+    ap.add_argument("--reseed-min-reduction", type=float, default=0.05,
+                    help="keep a residual-gated reseed only if it lowers the median-subtracted residual/signal "
+                         "by at least this much (a real sub-unit does; noise does not)")
     ap.add_argument("--seed-density", type=float, default=0.0,
                     help="density-preferential coarse seeding: draw ridge seeds toward concentrated modes of the "
                          "waveform space (p proportional to local_density**this) instead of a uniform stride.  0 = "
@@ -1436,7 +1480,7 @@ def add_core_arguments(ap):
 def build_cf(a, meth, cluster_basis):
     """Assemble the cluster_chunk_fine keyword dict from parsed args.  Extracted from main()
     so the stochastic harness configures the clusterer identically to the production path."""
-    return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+    return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, reseed_residual_thr=a.reseed_residual_thr, reseed_min_reduction=a.reseed_min_reduction, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
         fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
         incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
         energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
