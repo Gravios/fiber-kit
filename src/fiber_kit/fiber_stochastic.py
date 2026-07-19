@@ -43,6 +43,8 @@ except ImportError:
     import fiber_lib as fl
     import fiber_session as fsess
 
+_POOL_CFG = None                     # stashed chunk-worker cfg so parallel draws can init pool workers
+
 
 # ── template distance: the label-free way to say "same fiber across two draws" ──
 def _template_vec(geom):
@@ -186,19 +188,57 @@ def _consensus_templates(inst, cons_gid, all_geoms):
 
 
 # ── the ensemble over one chunk (K draws), optionally over a residual index set ──
-def _ensemble_chunk(c, ext, res_ext, sub, ctx_process, ndraw, frac, rng):
+def _draw_worker(task):
+    """Pool worker: run the real per-chunk clusterer on one pre-drawn subsample.  task is
+    (c, ext_d, res_d, di) where di is the ext-relative index array the draw owns.  _process_chunk
+    reads the module _CTX set by _init_chunk_worker (the pool initializer), exactly as in
+    fiber_session's chunk pool, so this is the same validated code path.  Returns (geoms, di_members)
+    where di_members[k] is the drawn spikes owned by the k-th fiber -- computed here so the parent does
+    no per-draw work."""
+    import fiber_kit.fiber_session as fsess
+    c, ext_d, res_d, di = task
+    _, _, lab, geoms, _, _ = fsess._process_chunk((c, ext_d, res_d))
+    members = [di[np.flatnonzero(lab == gk)]
+               for gk in sorted(set(int(x) for x in lab if x >= 0))]
+    return geoms, members
+
+
+def _ensemble_chunk(c, ext, res_ext, sub, ctx_process, ndraw, frac, rng, jobs=1, seedseq=None):
     """Run the real per-chunk worker on K subsamples of `sub` (indices into ext).
     Returns a list (per draw) of geom-lists.  Each draw reuses _process_chunk, so the
-    real whitener + cluster_chunk_fine + fiber_geom run on the drawn spikes."""
+    real whitener + cluster_chunk_fine + fiber_geom run on the drawn spikes.
+
+    The draws are independent, so with jobs>1 they run on a ProcessPoolExecutor (the SAME worker
+    fiber_session's chunk pool uses).  Subsampling stays in the PARENT with per-draw seeds spawned from
+    seedseq, so the draw set is deterministic regardless of jobs (a spawned SeedSequence per draw, not
+    the shared mutable rng), and only the drawn indices cross to workers."""
+    # spawn one reproducible seed per draw so serial and parallel give identical draws
+    seeds = (seedseq.spawn(ndraw) if seedseq is not None
+             else [None] * ndraw)
+    tasks = []
+    for k in range(ndraw):
+        r = np.random.default_rng(seeds[k]) if seeds[k] is not None else rng
+        di = sub[_draw_indices(len(sub), frac, r)]
+        tasks.append((c, ext[di], res_ext[di], di))
+
     all_geoms = []
-    for _ in range(ndraw):
-        di = sub[_draw_indices(len(sub), frac, rng)]
-        ext_d = ext[di]; res_d = res_ext[di]
-        _, _, lab, geoms, _, _ = ctx_process((c, ext_d, res_d))
-        # tag each geom with which drawn spikes it owns (ext-relative) for later peel/assign
-        for g, gk in zip(geoms, sorted(set(int(x) for x in lab if x >= 0))):
-            g["_draw_members"] = di[np.flatnonzero(lab == gk)]
-        all_geoms.append(geoms)
+    if jobs <= 1:
+        for c_, ext_d, res_d, di in tasks:
+            geoms, members = _draw_worker((c_, ext_d, res_d, di))
+            for g, mem in zip(geoms, members):
+                g["_draw_members"] = mem
+            all_geoms.append(geoms)
+    else:
+        # workers inherit _CTX via the pool initializer (set in run_stochastic); reuse the same one.
+        from concurrent.futures import ProcessPoolExecutor
+        cfg = _POOL_CFG
+        nworkers = min(jobs, ndraw)
+        with ProcessPoolExecutor(max_workers=nworkers,
+                                 initializer=fsess._init_chunk_worker, initargs=(cfg,)) as ex:
+            for geoms, members in ex.map(_draw_worker, tasks):
+                for g, mem in zip(geoms, members):
+                    g["_draw_members"] = mem
+                all_geoms.append(geoms)
     return all_geoms
 
 
@@ -228,6 +268,8 @@ def run_stochastic(a):
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
+    global _POOL_CFG
+    _POOL_CFG = cfg                                   # so parallel-draw pool workers re-init the same ctx
     fsess._init_chunk_worker(cfg)
     process = fsess._process_chunk
 
@@ -236,6 +278,8 @@ def run_stochastic(a):
     chunk_s = a.chunk_min * 60.0 * a.sr; ov_s = a.overlap_min * 60.0 * a.sr
     nchunks = int(np.ceil((res.max() - t_min) / chunk_s))
     rng = np.random.default_rng(a.stochastic_seed)
+    ensemble_seedseq = np.random.SeedSequence(a.stochastic_seed)   # spawns deterministic per-draw seeds
+    ejobs = int(getattr(a, "stochastic_jobs", 1))
 
     rows = []                      # every fiber instance, all draws, all peel rounds
     peel_log = []                  # per (chunk, round): frozen count, residual size, remaining
@@ -259,7 +303,8 @@ def run_stochastic(a):
             if len(residual) < 2 * a.min_group:
                 break
             all_geoms = _ensemble_chunk(c, ext, res_ext, residual, process,
-                                        a.stochastic_draws, a.stochastic_frac, rng)
+                                        a.stochastic_draws, a.stochastic_frac, rng,
+                                        jobs=ejobs, seedseq=ensemble_seedseq)
             if not any(all_geoms):
                 break
             inst, cons_gid, recov, best, best2 = _consensus(all_geoms, a.stochastic_match_corr, link=a.stochastic_link)
@@ -414,7 +459,7 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
         meta_nsamp=a.nsamp, meta_nchan=a.nchan, meta_n_grid=a.n_grid, meta_p=p,
         meta_draws=a.stochastic_draws, meta_frac=a.stochastic_frac,
         meta_match_corr=a.stochastic_match_corr, meta_link=a.stochastic_link, meta_stable_freq=a.stochastic_stable_freq,
-        meta_peel_rounds=a.stochastic_peel_rounds, meta_seed=a.stochastic_seed)
+        meta_peel_rounds=a.stochastic_peel_rounds, meta_seed=a.stochastic_seed, meta_jobs=int(getattr(a,'stochastic_jobs',1)))
 
     with open(out, "wb") as f:
         np.savez_compressed(f, **arrs)
@@ -455,6 +500,11 @@ def add_arguments(ap):
     g.add_argument("--stochastic-chunks", type=int, nargs="*", default=None,
                    help="restrict to these chunk indices (default: all) — useful for a quick look")
     g.add_argument("--stochastic-seed", type=int, default=0, help="RNG seed for the draws")
+    g.add_argument("--stochastic-jobs", type=int, default=1,
+                   help="parallelise the (independent) resampling draws across this many worker processes "
+                        "(the same per-chunk worker fiber_session uses).  Draws are deterministic regardless "
+                        "of job count (per-draw seeds spawned from --stochastic-seed).  1 = serial.")
+
     g.add_argument("--stochastic-write-clu", action="store_true",
                    help="also write a Klusters clu/clc/clp triplet from the per-spike majority vote, so the "
                         "consensus fibers (.clu) and their sub-modes/branches (.clc) can be inspected in Klusters")

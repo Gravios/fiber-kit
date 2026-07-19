@@ -87,6 +87,8 @@ FK_STOCH_MATCH_CORR: 0.95    # template corr = "same fiber" across draws
 FK_STOCH_STABLE_FREQ: 0.6    # recurrence fraction to call a consensus fiber stable / freeze it when peeling
 FK_STOCH_PEEL_ROUNDS: 0      # 0 = single pass; N = peel stable fibers and re-run on the residual
 FK_STOCH_LINK: average       # consensus grouping from pairwise template corr: average (default) | complete | single.
+FK_STOCH_JOBS: 1             # parallelise the independent resampling draws across N worker processes (1=serial).
+                             #   Deterministic regardless of N (per-draw seeds spawned from the seed).
 FK_STOCH_WRITE_CLU: 0        # 1 = also write a Klusters clu/clc/clp triplet from the per-spike majority vote
                              #   (.clu = consensus fibers, .clc = their sub-modes/branches) for inspection in Klusters.
                              #   single = transitive union-find, CHAINS anticorrelated co-located sub-modes into one
