@@ -65,7 +65,7 @@ def _draw_indices(n, frac, rng):
 
 
 # ── consensus: connected components of the "same fiber" graph over all draw fibers ──
-def _consensus(all_geoms, match_thr):
+def _consensus(all_geoms, match_thr, link="average"):
     """all_geoms: list over draws of lists of geom dicts.  Returns, for each (draw,
     local index), a consensus id, plus per-consensus recovery frequency and the
     per-instance best/second-best match into OTHER draws.
@@ -73,9 +73,16 @@ def _consensus(all_geoms, match_thr):
     match_corr  = best template correlation into a fiber from any OTHER draw.
     match_corr2 = best correlation into a fiber that ends up in a DIFFERENT consensus
                   component -- i.e. the nearest rival, the real merge-proneness signal.
-                  (Second-best overall is usually just another fragment of the SAME
-                  fiber and says nothing about merge risk, so it is computed against the
-                  final component labels, not by raw rank.)"""
+
+    link: how instances are grouped into consensus fibers from the pairwise template
+          correlation.  'single' is transitive union-find (A~B, B~C => A,B,C together
+          even if A and C are anticorrelated) -- it CHAINS distinct co-located sub-modes
+          (e.g. a narrow and a broad spike bridged by intermediate-width instances) into
+          one component, undercounting real units.  'average' (default) and 'complete'
+          are agglomerative: two groups merge only if their AVERAGE (resp. MINIMUM)
+          cross-correlation exceeds match_thr, so a chain through intermediates cannot
+          weld anticorrelated modes.  On g5 chunk 16 single-linkage welded ~2x as many
+          real sub-modes into each 'stable' fiber as average-linkage keeps apart."""
     inst = [(d, i, _template_vec(g)) for d, gs in enumerate(all_geoms) for i, g in enumerate(gs)]
     m = len(inst)
     ndraw = len(all_geoms)
@@ -89,22 +96,65 @@ def _consensus(all_geoms, match_thr):
     np.fill_diagonal(same_draw, True)
     C_other = np.where(same_draw, -np.inf, C)       # mask self and same-draw pairs
 
-    # union-find over pairs above threshold (vectorized edge list)
-    parent = list(range(m))
+    if link == "single":
+        # transitive union-find over pairs above threshold (original behaviour; chains sub-modes)
+        parent = list(range(m))
 
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
 
-    ii, jj = np.where(np.triu(C_other >= match_thr, k=1))
-    for a, b in zip(ii.tolist(), jj.tolist()):
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            parent[ra] = rb
+        ii, jj = np.where(np.triu(C_other >= match_thr, k=1))
+        for a, b in zip(ii.tolist(), jj.tolist()):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+        comp = np.array([find(x) for x in range(m)])
+    else:
+        # agglomerative average/complete linkage: merge the closest pair of GROUPS while their
+        # linkage score is >= match_thr.  Groups never merge two instances from the same draw
+        # (that pairing is -inf).  This is O(m^2) in memory for the score matrix (m ~ hundreds to
+        # low thousands per chunk-round, so fine) and O(m^2 log m) time via repeated argmax.
+        groups = [[i] for i in range(m)]
+        # group-vs-group linkage matrix, seeded from the instance matrix
+        G = C_other.copy()
+        np.fill_diagonal(G, -np.inf)
+        # for average linkage we track sum and count to recompute merged rows in O(m)
+        cnt = np.ones(m)
+        Ssum = np.where(np.isfinite(C_other), C_other, np.nan)  # same-draw stays nan -> excluded
+        active = np.ones(m, bool)
+        while True:
+            # best mergeable pair among active groups
+            Gm = np.where(active[:, None] & active[None, :], G, -np.inf)
+            a, b = np.unravel_index(np.argmax(Gm), Gm.shape)
+            if not np.isfinite(Gm[a, b]) or Gm[a, b] < match_thr:
+                break
+            # merge b into a
+            if link == "complete":
+                newrow = np.minimum(np.where(np.isfinite(G[a]), G[a], np.inf),
+                                    np.where(np.isfinite(G[b]), G[b], np.inf))
+                newrow = np.where(np.isfinite(newrow), newrow, -np.inf)
+            else:  # average: weighted mean of the two groups' summed cross-corrs
+                sa = Ssum[a] * cnt[a]; sb = Ssum[b] * cnt[b]
+                with np.errstate(invalid="ignore"):
+                    newrow = (np.nan_to_num(sa) + np.nan_to_num(sb)) / (cnt[a] + cnt[b])
+                nanmask = np.isnan(Ssum[a]) & np.isnan(Ssum[b])
+                newrow[nanmask] = np.nan
+                Ssum[a] = newrow
+                G[a] = np.where(np.isnan(newrow), -np.inf, newrow)
+            if link == "complete":
+                G[a] = newrow
+            groups[a] = groups[a] + groups[b]
+            cnt[a] += cnt[b]
+            active[b] = False
+            G[:, a] = G[a]; np.fill_diagonal(G, -np.inf)
+        comp = np.empty(m, int)
+        for gi, rows in enumerate(g for g, ok in zip(groups, active) if ok):
+            for r in rows:
+                comp[r] = gi
 
-    comp = np.array([find(x) for x in range(m)])
     draws_of = {}
     for x in range(m):
         draws_of.setdefault(comp[x], set()).add(int(draw_id[x]))
@@ -205,7 +255,7 @@ def run_stochastic(a):
                                         a.stochastic_draws, a.stochastic_frac, rng)
             if not any(all_geoms):
                 break
-            inst, cons_gid, recov, best, best2 = _consensus(all_geoms, a.stochastic_match_corr)
+            inst, cons_gid, recov, best, best2 = _consensus(all_geoms, a.stochastic_match_corr, link=a.stochastic_link)
 
             # record every instance (this is the fiber-space dump)
             for x, (d, i, _) in enumerate(inst):
@@ -298,7 +348,7 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
         meta_elec=a.elec, meta_channels=np.asarray(gch), meta_sr=a.sr, meta_mask=np.asarray(mask),
         meta_nsamp=a.nsamp, meta_nchan=a.nchan, meta_n_grid=a.n_grid, meta_p=p,
         meta_draws=a.stochastic_draws, meta_frac=a.stochastic_frac,
-        meta_match_corr=a.stochastic_match_corr, meta_stable_freq=a.stochastic_stable_freq,
+        meta_match_corr=a.stochastic_match_corr, meta_link=a.stochastic_link, meta_stable_freq=a.stochastic_stable_freq,
         meta_peel_rounds=a.stochastic_peel_rounds, meta_seed=a.stochastic_seed)
 
     with open(out, "wb") as f:
@@ -323,6 +373,11 @@ def add_arguments(ap):
     g.add_argument("--stochastic-frac", type=float, default=0.8,
                    help="subsample fraction per draw.  HIGH by default: a low fraction starves most "
                         "fibers below min_group (a 0.5 draw drops 50-70%% of fibers on this data)")
+    g.add_argument("--stochastic-link", choices=("average", "complete", "single"), default="average",
+                   help="how draw-fibers are grouped into consensus fibers from pairwise template correlation. "
+                        "'single' (transitive union-find) CHAINS anticorrelated sub-modes through intermediate "
+                        "shapes into one component -- it undercounts real units; 'average' (default) and "
+                        "'complete' are agglomerative and will not weld a chain of distinct co-located cells.")
     g.add_argument("--stochastic-match-corr", type=float, default=0.95,
                    help="template correlation above which two fibers from different draws are the SAME "
                         "consensus fiber")

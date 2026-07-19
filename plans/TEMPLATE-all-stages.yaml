@@ -16,6 +16,7 @@
   #       stochastic-match-corr: 0.95
   #       stochastic-stable-freq: 0.6
   #       stochastic-peel-rounds: 0
+  # stochastic-link: average        # average | complete | single (single chains co-located sub-modes)
 #  linker that consumes fiber-session output directly (no refine/intrachunk/cpos).
 #  Run a plan:  fiber-pipeline <elec> --plan plans/<file>.yaml
 # ============================================================================

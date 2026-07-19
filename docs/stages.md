@@ -1069,5 +1069,6 @@ columns — `draw`, `frac`, `peel_round`, `consensus_gid`, `recovery_freq`, `mat
 | `--stochastic-match-corr` | `0.95` | template corr above which two draw-fibers are the same consensus fiber. |
 | `--stochastic-stable-freq` | `0.6` | recurrence fraction to call a consensus fiber stable. |
 | `--stochastic-peel-rounds` | `0` | 0 = single pass; N = freeze stable fibers, peel, re-run on residual. |
+| `--stochastic-link` | `average` | how draw-fibers are grouped into consensus fibers: `average` (default), `complete`, `single`. `single` chains anticorrelated sub-modes through intermediate shapes; agglomerative modes do not. |
 | `--stochastic-chunks` | all | restrict to these chunk indices for a quick look. |
 | `--stochastic-seed` | `0` | RNG seed for the draws. |
