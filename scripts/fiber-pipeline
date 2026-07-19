@@ -234,6 +234,7 @@ STOCH_STABLE_FREQ="${FK_STOCH_STABLE_FREQ:-0.6}"   # recurrence fraction to call
 STOCH_PEEL_ROUNDS="${FK_STOCH_PEEL_ROUNDS:-0}"     # 0 = single pass; N = peel stable fibers, re-run on residual
 STOCH_SEED="${FK_STOCH_SEED:-0}"
 STOCH_LINK="${FK_STOCH_LINK:-average}"                # consensus grouping: average | complete | single
+STOCH_JOBS="${FK_STOCH_JOBS:-1}"                     # parallelise resampling draws across N processes (1=serial)
 STOCH_WRITE_CLU="${FK_STOCH_WRITE_CLU:-0}"          # 1 = also write clu/clc/clp triplet for Klusters
 if [ "$STOCH_WRITE_CLU" = "1" ]; then STOCH_CLU_FLAG="--stochastic-write-clu"; else STOCH_CLU_FLAG=""; fi
 SESSION_RESPLIT_RESIDUAL_THR="${FK_SESSION_RESPLIT_RESIDUAL_THR:-0.08}"
@@ -399,7 +400,7 @@ fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled d
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --stochastic --stochastic-draws "$STOCH_DRAWS" --stochastic-frac "$STOCH_FRAC" \
         --stochastic-match-corr "$STOCH_MATCH_CORR" --stochastic-stable-freq "$STOCH_STABLE_FREQ" \
-        --stochastic-peel-rounds "$STOCH_PEEL_ROUNDS" --stochastic-link "$STOCH_LINK" $STOCH_CLU_FLAG --stochastic-seed "$STOCH_SEED" \
+        --stochastic-peel-rounds "$STOCH_PEEL_ROUNDS" --stochastic-link "$STOCH_LINK" --stochastic-jobs "$STOCH_JOBS" $STOCH_CLU_FLAG --stochastic-seed "$STOCH_SEED" \
         "${st_args[@]+"${st_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
