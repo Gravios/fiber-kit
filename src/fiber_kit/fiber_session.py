@@ -617,7 +617,7 @@ def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, s
     return newfine, geoms
 
 
-def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm",
+def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15,
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
@@ -642,7 +642,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     re-seeded as a fiber: own trajectory + per-fiber inclusion radius rebuilt on it.
     deadapt=True: de-adapt each coarse fiber's amplitudes (EWMA-τ) before splitting,
     so RS fibers don't get carved into energy bands (the 'before' placement)."""
-    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg)
+    # coarse_dr sets the radial (whitened-amplitude) band half-width for spike->seed association in
+    # the coarse pass: wider -> each coarse fiber sweeps up a broader amplitude range -> fewer, fatter
+    # coarse groups; narrower -> tighter bands, so amplitude-distinct cells stay separate coarse fibers
+    # for the fine splitter to resolve.  Only the COARSE call is exposed; the per-fiber fine re-cluster
+    # keeps the default band (it already operates within one coarse fiber).
+    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr)
     ct0 = float(res_abs.min()); ct1 = float(res_abs.max())   # chunk time bounds for rate/presence
     fine = np.full(len(waves), -1, int); geoms = []; nid = 0
     for cf in np.unique(coarse[coarse >= 0]):
@@ -1215,7 +1220,18 @@ def _process_chunk(task):
     ctx = _CTX; kw = ctx["cf"]
     waves = np.asarray(ctx["spk"][ext], dtype=float)
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
-    W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+    if ctx.get("no_whiten"):
+        # Whitening OFF: cluster in the raw (mask-selected, mean-centred) feature space.  Every
+        # downstream use is `(X - nmean) @ W`, so an identity W makes them all no-ops while keeping the
+        # mean-centring the ridge/mean-shift assumes.  The radial coordinate r = |X| is then the raw
+        # feature norm (~amplitude in data units) rather than the whitened Mahalanobis radius, and the
+        # angular metric is raw cosine -- i.e. no baseline-covariance normalisation across channels.
+        # Size W from the actual feature matrix (mask is an INDEX array, so len(mask)*nch, not a sum).
+        Xraw = fl.realign(waves)[:, ctx["mask"], :].reshape(len(waves), -1)
+        W = np.eye(Xraw.shape[1])
+        nmean = Xraw.mean(0)
+    else:
+        W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
     cand = []
     sd = {}
     lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
@@ -1242,6 +1258,15 @@ def add_core_arguments(ap):
     ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
                     help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
                          "to refine; use to stop session shedding fragments into the residual/artifact bin")
+    ap.add_argument("--coarse-dr", type=float, default=0.15,
+                    help="radial band half-width (fraction of the 1-99%% whitened-radius span) for spike->seed "
+                         "association in the COARSE pass.  Lower -> tighter amplitude bands -> more, smaller coarse "
+                         "fibers (amplitude-distinct cells stay separate for the fine splitter); higher -> fewer, "
+                         "fatter coarse groups.  Default 0.15.")
+    ap.add_argument("--no-whiten", dest="no_whiten", action="store_true",
+                    help="cluster in the RAW mask-selected (mean-centred) feature space instead of the .fil "
+                         "baseline-whitened space: identity whitener, so the radial coordinate is the raw feature "
+                         "norm and the angular metric is raw cosine (no per-channel covariance normalisation)")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
     ap.add_argument("--resplit-passes", type=int, default=0,
                     help="iterative residual-gated re-split (em_swap on target-channel residual) + correlation merge; "
@@ -1378,7 +1403,7 @@ def add_core_arguments(ap):
 def build_cf(a, meth, cluster_basis):
     """Assemble the cluster_chunk_fine keyword dict from parsed args.  Extracted from main()
     so the stochastic harness configures the clusterer identically to the production path."""
-    return dict(method=meth, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+    return dict(method=meth, coarse_dr=a.coarse_dr, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
         fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
         incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
         energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
@@ -1466,7 +1491,7 @@ def main():
     cf = build_cf(a, meth, cluster_basis)
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
-               gch=gch, mask=mask, cf=cf, gpu=a.gpu)
+               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
 
     tasks = []; ncore_of = {}
     for c in range(nchunks):

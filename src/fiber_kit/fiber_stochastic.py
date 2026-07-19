@@ -175,7 +175,7 @@ def run_stochastic(a):
 
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
-               gch=gch, mask=mask, cf=cf, gpu=a.gpu)
+               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
     fsess._init_chunk_worker(cfg)
     process = fsess._process_chunk
 
