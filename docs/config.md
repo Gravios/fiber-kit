@@ -31,6 +31,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_STOCH_MATCH_CORR` | `0.95` | fiber-stochastic: template corr = "same fiber" across draws. |
 | `FK_STOCH_STABLE_FREQ` | `0.6` | fiber-stochastic: recurrence fraction to call a consensus fiber stable / freeze it. |
 | `FK_STOCH_PEEL_ROUNDS` | `0` | fiber-stochastic: 0 = single pass; N = peel stable fibers and re-run on residual. |
+| `FK_STOCH_LINK` | `average` | consensus grouping from pairwise template correlation: `average` (default), `complete`, or `single`. `single` transitively chains anticorrelated co-located sub-modes into one component (undercounts units ~6× on g5); the agglomerative modes do not. |
 | `FK_STOCH_SEED` | `0` | fiber-stochastic: RNG seed for the draws. |
 | `FK_SESSION_LINK` | `0` | 0 \| 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging). |
 | `FK_SESSION_CFIBER_GATE` | `1` | 1 \| 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision). |

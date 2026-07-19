@@ -127,6 +127,9 @@ FK_STOCH_FRAC: 0.8           # subsample fraction per draw (HIGH: a low fraction
 FK_STOCH_MATCH_CORR: 0.95    # template corr = "same fiber" across draws
 FK_STOCH_STABLE_FREQ: 0.6    # recurrence fraction to call a consensus fiber stable / freeze it when peeling
 FK_STOCH_PEEL_ROUNDS: 0      # 0 = single pass; N = peel stable fibers and re-run on the residual
+FK_STOCH_LINK: average       # consensus grouping from pairwise template corr: average (default) | complete | single.
+                             #   single = transitive union-find, CHAINS anticorrelated co-located sub-modes into one
+                             #   component (undercounts units ~6x on g5); average/complete are agglomerative and do not.
 FK_STOCH_SEED: 0
 FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
