@@ -265,10 +265,13 @@ def run_stochastic(a):
             # tally per-spike votes: each instance owns some ext-relative spikes (_draw_members) and
             # belongs to a consensus fiber; a per-draw sub-mode id distinguishes branches within a fiber
             # (instances of the same fiber in the same draw -- rare -- get distinct sub-mode ids).
+            # cons_gid restarts at 0 in every chunk (consensus is per-chunk, no cross-chunk matching),
+            # so the vote keys are namespaced by chunk -- otherwise chunk-A fiber N and chunk-B fiber N,
+            # which are different cells, would collide onto the same .clu cluster.
             if a.stochastic_write_clu:
                 submode_ctr = {}
                 for x, (dd, ii, _) in enumerate(inst):
-                    cg = int(cons_gid[x])
+                    cg = (c, int(cons_gid[x]))                 # (chunk, per-chunk consensus id)
                     sm = submode_ctr.get((dd, cg), 0); submode_ctr[(dd, cg)] = sm + 1
                     mem = all_geoms[dd][ii].get("_draw_members")
                     if mem is None:
