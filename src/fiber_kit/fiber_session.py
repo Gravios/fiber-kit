@@ -83,7 +83,7 @@ P_DIM = len(fl.MASK_FULL) * 8     # default masked feature dim (recomputed per n
 
 def cluster_chunk(waves, W, nmean, min_group=100, kappa=20.0, dr_frac=0.15,
                   n_seeds=800, n_support=20000, dedup_deg=8.0, dedup_radf=0.12,
-                  mask=fl.MASK_FULL):
+                  mask=fl.MASK_FULL, seed_density=0.0):
     """waves (n,nsamp,nch) spkD + chunk whitener -> per-spike label (0-based, -1=none)."""
     N = len(waves)
     if N < 2 * min_group:
@@ -92,9 +92,37 @@ def cluster_chunk(waves, W, nmean, min_group=100, kappa=20.0, dr_frac=0.15,
     r = np.linalg.norm(X, axis=1); d = X / (r[:, None] + 1e-12)
     nsup = min(N, n_support); supi = np.arange(nsup) * N // nsup
     dsup, rsup = d[supi], r[supi]
-    S = min(N, n_seeds); sdi = np.arange(S) * N // S
-    ds, rs = d[sdi].copy(), r[sdi].copy()
+    S = min(N, n_seeds)
     rsort = np.sort(r); dr = dr_frac * (rsort[int(0.99 * (N - 1))] - rsort[int(0.01 * (N - 1))])
+    if seed_density > 0.0:
+        # DENSITY-PREFERENTIAL seeding: draw seeds toward CONCENTRATED modes of the waveform space
+        # instead of a uniform stride over spikes.  Uniform seeding spends the seed budget in proportion
+        # to how many spikes sit somewhere, so most seeds land in the diffuse background between modes
+        # and wander without converging; the isolated modes -- which is where reproducible fibers live,
+        # independent of firing rate (on g5 the density<->rate correlation is only ~0.2) -- get too few.
+        # Local density uses the SAME support set and the SAME band+cone geometry the mean-shift itself
+        # uses (radius within dr, angular exp(kappa*(cos-1))).  seed_density in (0,1] is the sampling
+        # exponent: p(seed=i) proportional to density_i**seed_density.  Seeds are drawn WITHOUT
+        # replacement so a single dense mode cannot take the whole budget.
+        dens = np.empty(N)
+        for i in range(0, N, 2048):                       # block the N x nsup pass to bound memory
+            dc = d[i:i + 2048] @ dsup.T
+            bd = np.abs(rsup[None, :] - r[i:i + 2048, None]) < dr
+            dens[i:i + 2048] = np.where(bd, np.exp(kappa * (dc - 1.0)), 0.0).sum(1)
+        w_seed = dens ** float(seed_density)
+        tot = w_seed.sum()
+        if tot > 0:
+            # Seed the RNG from the data itself (spike count + a coarse feature digest), NOT a constant:
+            # each resampling draw sees a different spike subset, so this varies per draw and keeps the
+            # ensemble's draw-to-draw diversity, while staying deterministic for a fixed input.
+            seed = (N * 2654435761 + int(abs(X[:, 0]).sum() * 1e3)) & 0x7FFFFFFF
+            rng = np.random.default_rng(seed)
+            sdi = np.sort(rng.choice(N, size=S, replace=False, p=w_seed / tot))
+        else:
+            sdi = np.arange(S) * N // S
+    else:
+        sdi = np.arange(S) * N // S
+    ds, rs = d[sdi].copy(), r[sdi].copy()
     for _ in range(15):
         cos = ds @ dsup.T
         w = np.where(np.abs(rsup[None, :] - rs[:, None]) < dr, np.exp(kappa * (cos - 1)), 0.0)
@@ -617,7 +645,7 @@ def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, s
     return newfine, geoms
 
 
-def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15,
+def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15, coarse_seed_density=0.0,
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
@@ -647,7 +675,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # coarse groups; narrower -> tighter bands, so amplitude-distinct cells stay separate coarse fibers
     # for the fine splitter to resolve.  Only the COARSE call is exposed; the per-fiber fine re-cluster
     # keeps the default band (it already operates within one coarse fiber).
-    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr)
+    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr, seed_density=coarse_seed_density)
     ct0 = float(res_abs.min()); ct1 = float(res_abs.max())   # chunk time bounds for rate/presence
     fine = np.full(len(waves), -1, int); geoms = []; nid = 0
     for cf in np.unique(coarse[coarse >= 0]):
@@ -1258,6 +1286,11 @@ def add_core_arguments(ap):
     ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
                     help="keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull "
                          "to refine; use to stop session shedding fragments into the residual/artifact bin")
+    ap.add_argument("--seed-density", type=float, default=0.0,
+                    help="density-preferential coarse seeding: draw ridge seeds toward concentrated modes of the "
+                         "waveform space (p proportional to local_density**this) instead of a uniform stride.  0 = "
+                         "uniform (current); 1 = fully density-weighted; small values a gentle tilt.  Concentrates "
+                         "the seed budget on isolated, reproducible modes (isolation, not firing rate).")
     ap.add_argument("--coarse-dr", type=float, default=0.15,
                     help="radial band half-width (fraction of the 1-99%% whitened-radius span) for spike->seed "
                          "association in the COARSE pass.  Lower -> tighter amplitude bands -> more, smaller coarse "
@@ -1403,7 +1436,7 @@ def add_core_arguments(ap):
 def build_cf(a, meth, cluster_basis):
     """Assemble the cluster_chunk_fine keyword dict from parsed args.  Extracted from main()
     so the stochastic harness configures the clusterer identically to the production path."""
-    return dict(method=meth, coarse_dr=a.coarse_dr, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
+    return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
         fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
         incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
         energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,

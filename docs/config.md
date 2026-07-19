@@ -18,6 +18,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_SESSION_RESPLIT_PASSES` | `0` (exp: 3) | iterative within-chunk residual-gated re-split (em_swap on target-channel residual) + correlation merge, to convergence; replaces Block A/B when >0. 0=off. |
 | `FK_SESSION_COARSE_DR` | `0.15` | coarse radial band half-width for spike→seed association; lower = more, smaller coarse fibers (amplitude-distinct cells stay separate), higher = fewer, fatter coarse groups. |
 | `FK_SESSION_NO_WHITEN` | `0` | `1` = cluster in the raw mask-selected (mean-centred) feature space instead of the `.fil` baseline-whitened space (identity whitener). |
+| `FK_SESSION_SEED_DENSITY` | `0.0` | density-preferential coarse seeding exponent; `0` = uniform stride, `>0` draws ridge seeds toward concentrated modes of the waveform space (isolation, not firing rate). |
 | `FK_SESSION_RESPLIT_RESIDUAL_THR` | `0.08` | re-split only fibers whose amplitude-scaled max residual (+-8 @ RMS peak) exceeds this (~0.08 stderiv, ~0.15 standard). |
 | `FK_SESSION_RESPLIT_TOPCH` | `3` | channels fed to em_swap (top residual variance). |
 | `FK_SESSION_RESPLIT_MIN_REDUCTION` | `0.20` | keep an em_swap split only if it cuts target-channel variance by >= this. |

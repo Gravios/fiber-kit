@@ -41,6 +41,7 @@ Positional: `session`, `group`
 | `--resplit-passes` | `0` | iterative residual-gated re-split (em_swap, target-channel residual) + correlation merge; 0=off, replaces Block A/B when >0. |
 | `--coarse-dr` | `0.15` | coarse radial band half-width (fraction of the 1–99% whitened-radius span) for spike→seed association; lower = more, smaller coarse fibers. |
 | `--no-whiten` | flag (off) | cluster in the raw mask-selected (mean-centred) feature space instead of the `.fil` baseline-whitened space. |
+| `--seed-density` | `0.0` | density-preferential coarse seeding: draw ridge seeds toward concentrated modes (p ∝ local_density**this) instead of a uniform stride; `0` = uniform. |
 | `--resplit-residual-thr` | `0.08` | re-split fibers with amplitude-scaled max residual above this (~0.08 stderiv, ~0.15 standard). |
 | `--resplit-topch` | `3` | channels fed to em_swap (top residual variance). |
 | `--resplit-min-reduction` | `0.2` | keep an em_swap split only if it cuts target-channel variance by >= this. |

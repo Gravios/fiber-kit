@@ -97,6 +97,10 @@ FK_SESSION_COARSE_DR: 0.15       # coarse radial (whitened-amplitude) band half-
                                  #   Lower -> tighter amplitude bands -> more, smaller coarse fibers (amplitude-distinct
                                  #   cells stay separate for the fine splitter); higher -> fewer, fatter coarse groups.
 FK_SESSION_NO_WHITEN: 0          # 0 | 1.  1 = cluster in the RAW mask-selected (mean-centred) feature space instead of
+FK_SESSION_SEED_DENSITY: 0.0     # density-preferential coarse seeding exponent.  0 = uniform stride (current);
+                                 #   >0 draws ridge seeds toward CONCENTRATED modes of the waveform space
+                                 #   (p ~ local_density**this), concentrating the seed budget on isolated,
+                                 #   reproducible modes (isolation, not firing rate).  1 = fully density-weighted.
                                  #   the .fil baseline-whitened space (identity whitener: radial = raw feature norm,
                                  #   angular = raw cosine, no per-channel covariance normalisation).
                                  #   TARGET-CHANNEL RESIDUAL of the group median, top-var channels -- NOT PCA) + correlation

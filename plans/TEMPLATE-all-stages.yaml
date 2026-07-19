@@ -43,6 +43,7 @@ pipeline:
   #       resplit-passes: 0               # iterative residual-gated re-split (em_swap, target-channel residual) + merge; 0=off
   # coarse-dr: 0.15            # coarse radial band half-width (lower = more, smaller coarse fibers)
   # no-whiten: false           # true = cluster in raw (unwhitened) feature space
+  # seed-density: 0.0          # >0 = density-preferential coarse seeding (concentrate on isolated modes)
   #       resplit-residual-thr: 0.08      # re-split fibers with amplitude-scaled max residual above this (~0.08 stderiv)
   #       resplit-topch: 3                # channels fed to em_swap (top residual variance)
   #       resplit-min-reduction: 0.20     # keep a split only if it cuts target-channel variance by >= this
