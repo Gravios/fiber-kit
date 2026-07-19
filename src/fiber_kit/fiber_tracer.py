@@ -342,6 +342,12 @@ def run_from_seeds(waveforms, label_groups, W, nmean, mask=fl.MASK_FULL,
         Xg=_whiten(Wal[:,mask,:].reshape(len(idx),-1), nmean, W)
         trajs[name]=trajectory(Xg); feats[name]=(idx,Xg)
     keys=list(trajs); n=len(waveforms); hard=np.empty(n,dtype=object); post=np.zeros((n,len(keys)))
+    if not keys:
+        # every provisional fiber was below the per-fiber floor (len(idx)<50 above), so there is no
+        # trajectory to assign against.  Return an all-unassigned result (hard=None everywhere, empty
+        # post/keys) instead of falling into np.vstack([]) -> "need at least one array to concatenate".
+        # cluster_chunk maps hard=None -> label -1, so the caller simply sees this fiber as unsplit.
+        return dict(hard=hard, post=post, keys=keys, trajs=trajs, cal_edges=None, cal_T=None)
     # residuals for every seeded spike (each in its own frame), all vs all trajectories
     res_by={}; res_all=[]; rad_all=[]; y_all=[]
     for ni,name in enumerate(keys):
