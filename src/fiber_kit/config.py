@@ -146,8 +146,8 @@ class IntrachunkConfig(StageConfig):
                        "pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in "
                        "production; the exp config opts in (FK_INTRA_ITER).",
                        env="FK_INTRA_ITER", type=int, cli="iter")
-    linkage: str = knob("complete", "complete|dynamic|ms",
-                        env="FK_INTRA_LINKAGE", choices=("complete", "dynamic", "ms"), type=str)
+    linkage: str = knob("complete", "complete|dynamic|ms|kk",
+                        env="FK_INTRA_LINKAGE", choices=("complete", "dynamic", "ms", "kk"), type=str)
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
                           env="FK_ALIGN_LAG", type=int)
     align_upsample: int = knob(1, "cubic-spline upsampling factor for the align-lag search",

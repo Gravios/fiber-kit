@@ -932,6 +932,23 @@ def main():
     # exp config can carry it; it is added by IntrachunkConfig.add_arguments above.
     ap.add_argument("--split-min-sil", type=float, default=0.12, help="ms linkage: min silhouette to accept a split.")
     ap.add_argument("--split-min-n", type=int, default=40, help="ms linkage: min spikes per split sub-unit.")
+    ap.add_argument("--kk-dims", type=int, default=10,
+                    help="kk linkage: PCA dims of the masked raw waveform used as KlustaKwik features.")
+    ap.add_argument("--kk-min-seed", type=int, default=50,
+                    help="kk linkage: clusters with >= this many spikes seed the CEM; smaller ones are "
+                         "left unseeded and assigned by Mahalanobis distance to the seed models. A cluster "
+                         "needs enough spikes for a stable covariance (the CEM E-step is Mahalanobis), so a "
+                         "floor of 50-100 seeds only the well-populated clusters (validated: 50/100 improve "
+                         "agreement with hand curation over a low floor, with no over-merge).")
+    ap.add_argument("--kk-min-size", type=int, default=20,
+                    help="kk linkage: KlustaKwik min cluster size (CEM delete floor).")
+    ap.add_argument("--kk-resid-var-pct", type=float, default=None,
+                    help="kk linkage: OPTIONAL seed refinement -- among the size-eligible clusters (>= "
+                         "--kk-min-seed spikes), only those whose median-waveform residual variance is <= this "
+                         "percentile seed the CEM; the rest are assigned. Default None = all size-eligible "
+                         "clusters seed. Composes with the size floor (validated: size>=50 & MWRV<median gave "
+                         "the best curation agreement); on its own (no size floor) the residual-variance filter "
+                         "is not reliably beneficial.")
     ap.add_argument("--var-env-mult", type=float, default=3.0,
                     help="dynamic linkage: single-unit variance envelope = this * median fragment variance; "
                          "blocks merges that push a unit's spread past it (permits the growth de-fragmentation "
@@ -1048,6 +1065,46 @@ def main():
         _emit(out_lab, ncl)
         _log(f"merge+split over {len(np.unique(chid)):,} chunks → "
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (per-spike labelling)")
+        _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
+        return
+    if a.linkage == "kk":                                 # seed KlustaKwik with the clean clusters, per chunk
+        import importlib
+        kk = importlib.import_module("fiber_kit.klustakwik")
+        res_s = res.astype(float) / sr
+        chid = (res_s / 60.0 / a.chunk_minutes).astype(int)
+        out_lab = np.ones(len(res), int); nxt = 2          # reserve id 1 for too-small / unsigned
+        for ch in np.unique(chid):
+            sel = np.flatnonzero((chid == ch) & (src.astype(np.int64) > 1))
+            if len(sel) < 2 * a.min_n:
+                continue
+            Wf = fl.realign(spkD[sel].astype(float), _m.realign_lo, _m.realign_hi)   # (n,nsamp,nch)
+            F = Wf[:, _m.full, :].reshape(len(sel), -1)
+            Fc = F - F.mean(0)
+            _, _, Vt = np.linalg.svd(Fc, full_matrices=False)
+            X = Fc @ Vt[:a.kk_dims].T                       # PCA features for KlustaKwik
+            lab_in = src[sel].astype(int)
+            # seed-eligible clusters: >= kk_min_seed spikes; optional median-resid-var percentile filter
+            sizes = {int(c): int((lab_in == c).sum()) for c in np.unique(lab_in)}
+            eligible = {c for c, n in sizes.items() if n >= a.kk_min_seed}
+            if a.kk_resid_var_pct is not None and eligible:
+                rv = {}
+                for c in eligible:
+                    Wc = Wf[lab_in == c]; med = np.median(Wc, 0)
+                    rv[c] = float(((Wc - med[None]) ** 2).mean())
+                thr = float(np.percentile(list(rv.values()), a.kk_resid_var_pct))
+                eligible = {c for c in eligible if rv[c] <= thr}
+            if not eligible:                                # nothing clean enough to seed -> leave chunk as-is
+                out_lab[sel] = lab_in + nxt; nxt += int(lab_in.max()) + 1
+                continue
+            uids = sorted(eligible); remap = {u: i for i, u in enumerate(uids)}
+            init = np.array([remap[c] if c in eligible else -1 for c in lab_in])
+            lab = kk.klustakwik(X, init_labels=init, min_size=a.kk_min_size)
+            out_lab[sel] = lab + nxt; nxt += int(lab.max()) + 1
+        ncl = int(out_lab.max()) + 1
+        out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
+        _emit(out_lab, ncl)
+        _log(f"seeded KlustaKwik over {len(np.unique(chid)):,} chunks → "
+             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
