@@ -284,8 +284,18 @@ FK_REFRAC_CEILING:       1.0      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge w
                                   #   exceeds this percent -- two genuine units merged manufacture cross-refractory spikes.
 FK_PRE_MERGE_COS:        0.97     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
                                   #   the full gate (cheap, safe consolidation that shrinks the agglomeration).
-FK_INTRA_LINKAGE:        complete # complete | dynamic | ms.  Agglomeration linkage.  complete (farthest-point) yields tight,
+FK_INTRA_LINKAGE:        complete # complete | dynamic | ms | kk.  Agglomeration linkage.  complete (farthest-point) yields tight,
                                   #   conservative clusters; dynamic/ms are density-adaptive.
+FK_INTRA_KK_DIMS:        14       # 14 | 0 or >=ncol = all.  kk linkage: keep the top-N most-informative (highest-variance)
+                                  #   .fet features as the KlustaKwik subspace.  Canonical .fet, not a recomputed PCA.  ALL
+                                  #   features over-merge in crowded chunks; ~14 of ~21 was the robust max staying refractory-clean.
+FK_INTRA_KK_MIN_SEED:    50       # 50 | 50-100.  kk linkage: clusters with >= this many spikes SEED the CEM; smaller ones are
+                                  #   assigned by Mahalanobis distance to the seed models (E-step is Mahalanobis -> a seed needs
+                                  #   enough spikes for a stable covariance).
+FK_INTRA_KK_MIN_SIZE:    20       # 20.  kk linkage: KlustaKwik min cluster size (CEM delete floor).
+FK_INTRA_KK_RESID_VAR_PCT: ""     # "" = off (all size-eligible seed).  kk linkage: OPTIONAL seed refinement -- among size-
+                                  #   eligible clusters, only those with median-waveform residual variance <= this percentile SEED.
+                                  #   Composes with the size floor (size>=50 & MWRV<median scored best on curation).
 FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
