@@ -148,20 +148,20 @@ class IntrachunkConfig(StageConfig):
                        env="FK_INTRA_ITER", type=int, cli="iter")
     linkage: str = knob("complete", "complete|dynamic|ms|kk",
                         env="FK_INTRA_LINKAGE", choices=("complete", "dynamic", "ms", "kk"), type=str)
-    kk_dims: int = knob(14, "kk linkage: keep the top-N most-informative (highest-variance) .fet features as "
-                        "the KlustaKwik feature subspace (0 or >=ncol = all). Canonical .fet, not recomputed PCA. "
-                        "Validated: ALL features over-merge in crowded chunks; ~14 of ~21 was the robust maximum "
-                        "that stayed refractory-clean.", env="FK_INTRA_KK_DIMS", type=int)
-    kk_min_seed: int = knob(50, "kk linkage: clusters with >= this many spikes seed the CEM; smaller ones are "
-                            "assigned by Mahalanobis distance to the seed models (the CEM E-step is Mahalanobis, so "
-                            "a seed needs enough spikes for a stable covariance; 50-100 validated best).",
-                            env="FK_INTRA_KK_MIN_SEED", type=int)
-    kk_min_size: int = knob(20, "kk linkage: KlustaKwik min cluster size (CEM delete floor).",
+    kk_dims: int = knob(5, "kk linkage (MW-cluster + median-residual KlustaKwik): PCs of the median-residual "
+                        "waveform used to split within each MW group (0 or >=ncol = all). Reduced dims keep the "
+                        "split sensitive to the dominant between-cell deviation.", env="FK_INTRA_KK_DIMS", type=int)
+    kk_mw_thr: float = knob(0.10, "kk linkage: median-waveform grouping cut = 1 - cosine; atoms whose windowed "
+                            "median waveforms are within this cosine distance group together (complete-linkage, so "
+                            "EVERY pair must be within it). 0.10 -> group only atoms with median-waveform cosine "
+                            ">= 0.90. Lower = stricter grouping (less merging); this wall is what prevents pooling "
+                            "distinct cells.", env="FK_INTRA_KK_MW_THR")
+    kk_win: int = knob(10, "kk linkage: half-window (samples each side of the peak) the waveform is cropped to "
+                       "BEFORE the median-waveform cosine and the median-residual SVD -- focuses both on the peak "
+                       "region and drops the flat baseline tails (validated: cleaner refractory than the full "
+                       "42-sample window).", env="FK_INTRA_KK_WIN", type=int)
+    kk_min_size: int = knob(20, "kk linkage: KlustaKwik min cluster size for the within-group split.",
                             env="FK_INTRA_KK_MIN_SIZE", type=int)
-    kk_resid_var_pct: float = knob(None, "kk linkage: OPTIONAL seed refinement -- among size-eligible clusters, "
-                                   "only those with median-waveform residual variance <= this percentile seed the "
-                                   "CEM (empty = all size-eligible seed; composes with the size floor).",
-                                   env="FK_INTRA_KK_RESID_VAR_PCT")
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
                           env="FK_ALIGN_LAG", type=int)
     align_upsample: int = knob(1, "cubic-spline upsampling factor for the align-lag search",

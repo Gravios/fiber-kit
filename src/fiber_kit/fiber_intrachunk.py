@@ -1050,57 +1050,72 @@ def main():
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (per-spike labelling)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
-    if a.linkage == "kk":                                 # seed KlustaKwik with the clean clusters, per chunk
+    if a.linkage == "kk":                                 # MW-cluster then median-residual KlustaKwik, per chunk
         import importlib
         kk = importlib.import_module("fiber_kit.klustakwik")
+        from scipy.cluster.hierarchy import linkage as _linkage, fcluster as _fcluster
+        from scipy.spatial.distance import pdist as _pdist
+        # Two-stage within-chunk consolidation that CANNOT pool distinct neurons:
+        #  (A) cluster the atoms' MEDIAN WAVEFORMS (windowed +-kk_win samples around the peak, all channels)
+        #      by complete-linkage on cosine distance, cutting at 1-cos = kk_mw_thr.  Complete linkage +
+        #      a template-cosine wall means two atoms only group if EVERY pair of their median waveforms is
+        #      near-identical -- so genuinely different cells (which differ in median shape) never merge.
+        #      This is the fix for the seeded-CEM merge, whose covariance expansion swallowed neighbouring
+        #      cells on the crowded/drift chunks (validated: 0% distinct-atom false-merge here vs 15-95% for
+        #      the seeded CEM).
+        #  (B) within each MW group, split with KlustaKwik on the MEDIAN-RESIDUAL waveform (each spike minus
+        #      the group median, windowed +-kk_win) reduced to kk_dims PCs -- subtracting the shared median
+        #      isolates the between-cell deviation, so a group that still holds two cells splits cleanly.
+        # A little over-splitting is intended (curation reunites; under-merge is the safe failure mode).
+        win = int(a.kk_win); w0, w1 = cfg.peak - win, cfg.peak + win + 1
         res_s = res.astype(float) / sr
         chid = (res_s / 60.0 / a.chunk_minutes).astype(int)
         out_lab = np.ones(len(res), int); nxt = 2          # reserve id 1 for too-small / unsigned
-        # canonical clustering features: the on-disk .fet the sort was built in (same variant as the
-        # .clu), NOT a per-chunk-recomputed PCA -- so the seeded CEM re-adjudicates in the SAME feature
-        # geometry the seed clusters were formed in, and uses the group's shared basis (stable across
-        # chunks) rather than a fresh per-chunk basis.  Drop the trailing time column.
-        fet_tbl = nio.read_fet(base, elec, prefer=[clu_method, ""]).values
-        fet_all = np.asarray(fet_tbl[:, :-1], np.float64)
+
+        def _mw(ids):                                      # unit-norm windowed median waveform of a spike set
+            W = fl.realign(spkD[ids[:250]].astype(float), _m.realign_lo, _m.realign_hi)[:, w0:w1, :]
+            v = np.median(W, 0).reshape(-1); return v / (np.linalg.norm(v) + 1e-9)
+
+        def _split_mrkk(gi):                               # median-residual KlustaKwik within one MW group
+            if len(gi) < 2 * a.min_n:
+                return np.zeros(len(gi), int)
+            W = fl.realign(spkD[gi].astype(float), _m.realign_lo, _m.realign_hi)[:, w0:w1, :].reshape(len(gi), -1)
+            R = W - np.median(W, 0)                        # median residual
+            Rc = R - R.mean(0)
+            _, _, Vt = np.linalg.svd(Rc, full_matrices=False)
+            d = a.kk_dims if 0 < a.kk_dims < Rc.shape[1] else Rc.shape[1]
+            return kk.klustakwik(Rc @ Vt[:d].T, min_size=a.kk_min_size)
+
         for ch in np.unique(chid):
             sel = np.flatnonzero((chid == ch) & (src.astype(np.int64) > 1))
             if len(sel) < 2 * a.min_n:
                 continue
-            Xf = fet_all[sel]
-            # reduced subspace carrying the most information: the top-kk_dims features by variance
-            # (validated: the informative subset separates the clusters and keeps per-cluster covariance
-            # estimable -- using ALL features over-merges in crowded chunks; kk_dims ~14 of ~21 was the
-            # robust maximum that stayed refractory-clean).  kk_dims <= 0 or >= ncol keeps all features.
-            ncol = Xf.shape[1]
-            if 0 < a.kk_dims < ncol:
-                order = np.argsort(-Xf.var(0))
-                X = Xf[:, order[:a.kk_dims]]
-            else:
-                X = Xf
             lab_in = src[sel].astype(int)
-            # seed-eligible clusters: >= kk_min_seed spikes; optional median-resid-var percentile filter
-            sizes = {int(c): int((lab_in == c).sum()) for c in np.unique(lab_in)}
-            eligible = {c for c, n in sizes.items() if n >= a.kk_min_seed}
-            if a.kk_resid_var_pct is not None and eligible:
-                Wf = fl.realign(spkD[sel].astype(float), _m.realign_lo, _m.realign_hi)
-                rv = {}
-                for c in eligible:
-                    Wc = Wf[lab_in == c]; med = np.median(Wc, 0)
-                    rv[c] = float(((Wc - med[None]) ** 2).mean())
-                thr = float(np.percentile(list(rv.values()), a.kk_resid_var_pct))
-                eligible = {c for c in eligible if rv[c] <= thr}
-            if not eligible:                                # nothing clean enough to seed -> leave chunk as-is
+            atoms = [int(c) for c in np.unique(lab_in) if int((lab_in == c).sum()) >= a.min_n]
+            if len(atoms) < 2:                             # nothing to group -> pass through
                 out_lab[sel] = lab_in + nxt; nxt += int(lab_in.max()) + 1
                 continue
-            uids = sorted(eligible); remap = {u: i for i, u in enumerate(uids)}
-            init = np.array([remap[c] if c in eligible else -1 for c in lab_in])
-            lab = kk.klustakwik(X, init_labels=init, min_size=a.kk_min_size)
-            out_lab[sel] = lab + nxt; nxt += int(lab.max()) + 1
+            # (A) MW clustering (complete-linkage cosine)
+            MW = np.array([_mw(sel[lab_in == c]) for c in atoms])
+            Z = _linkage(_pdist(MW, metric="cosine"), method="complete")
+            grp_id = _fcluster(Z, t=a.kk_mw_thr, criterion="distance")
+            atom_grp = {atoms[i]: int(grp_id[i]) for i in range(len(atoms))}
+            grp = np.array([atom_grp.get(int(c), -1) for c in lab_in])
+            # (B) MR-KK split within each MW group
+            for g in np.unique(grp):
+                if g < 0:                                  # atoms below min_n: keep as-is
+                    for c in np.unique(lab_in[grp < 0]):
+                        out_lab[sel[lab_in == c]] = nxt; nxt += 1
+                    continue
+                gi_local = np.flatnonzero(grp == g)
+                sub = _split_mrkk(sel[gi_local])
+                for s in np.unique(sub):
+                    out_lab[sel[gi_local[sub == s]]] = nxt; nxt += 1
         ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         _emit(out_lab, ncl)
-        _log(f"seeded KlustaKwik over {len(np.unique(chid)):,} chunks → "
-             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units")
+        _log(f"MW-cluster + median-residual KlustaKwik over {len(np.unique(chid)):,} chunks → "
+             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (over-split for curation)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)
