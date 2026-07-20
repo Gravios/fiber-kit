@@ -1055,22 +1055,27 @@ def main():
         kk = importlib.import_module("fiber_kit.klustakwik")
         from scipy.cluster.hierarchy import linkage as _linkage, fcluster as _fcluster
         from scipy.spatial.distance import pdist as _pdist
-        # Two-stage within-chunk consolidation that CANNOT pool distinct neurons:
-        #  (A) cluster the atoms' MEDIAN WAVEFORMS (windowed +-kk_win samples around the peak, all channels)
-        #      by complete-linkage on cosine distance, cutting at 1-cos = kk_mw_thr.  Complete linkage +
-        #      a template-cosine wall means two atoms only group if EVERY pair of their median waveforms is
-        #      near-identical -- so genuinely different cells (which differ in median shape) never merge.
-        #      This is the fix for the seeded-CEM merge, whose covariance expansion swallowed neighbouring
-        #      cells on the crowded/drift chunks (validated: 0% distinct-atom false-merge here vs 15-95% for
-        #      the seeded CEM).
-        #  (B) within each MW group, split with KlustaKwik on the MEDIAN-RESIDUAL waveform (each spike minus
-        #      the group median, windowed +-kk_win) reduced to kk_dims PCs -- subtracting the shared median
-        #      isolates the between-cell deviation, so a group that still holds two cells splits cleanly.
+        # Three-stage within-chunk consolidation that CANNOT pool distinct neurons:
+        #  (A) FOLD the many tiny atoms into the fold: fiber_stochastic emits mostly tiny atoms (g5: median
+        #      2 spikes, 80% < 20 spikes) whose own median waveform is too noisy to group -- so assign each
+        #      small atom (< kk_big spikes) to the nearest BIG atom by windowed median-waveform cosine, but
+        #      ONLY if that best match >= kk_fold_thr; else send it to the reserve (id 1).  The cosine gate
+        #      is the reject option a plain Mahalanobis assignment lacks: a tiny fragment of a real cell
+        #      folds in, a tiny distinct/noise atom that matches nothing stays out (validated: this brings
+        #      the singles into the fold and kills the over-split while holding 0% distinct-atom false-merge,
+        #      where a seeded-CEM assignment over-merged 15-95%).
+        #  (B) cluster the (big + folded) atoms' MEDIAN WAVEFORMS (windowed +-kk_win, all channels) by
+        #      complete-linkage on cosine distance, cut at 1-cos = kk_mw_thr.  Complete linkage + a cosine
+        #      wall means atoms only group if EVERY pair of medians is near-identical, so different cells
+        #      (which differ in median shape) never merge.
+        #  (C) within each MW group, split with KlustaKwik on the MEDIAN-RESIDUAL waveform (spike minus group
+        #      median, same window) reduced to kk_dims PCs -- subtracting the shared median isolates the
+        #      between-cell deviation, so a group still holding two cells splits cleanly.
         # A little over-splitting is intended (curation reunites; under-merge is the safe failure mode).
         win = int(a.kk_win); w0, w1 = cfg.peak - win, cfg.peak + win + 1
         res_s = res.astype(float) / sr
         chid = (res_s / 60.0 / a.chunk_minutes).astype(int)
-        out_lab = np.ones(len(res), int); nxt = 2          # reserve id 1 for too-small / unsigned
+        out_lab = np.ones(len(res), int); nxt = 2          # reserve id 1 for too-small / unmatched
 
         def _mw(ids):                                      # unit-norm windowed median waveform of a spike set
             W = fl.realign(spkD[ids[:250]].astype(float), _m.realign_lo, _m.realign_hi)[:, w0:w1, :]
@@ -1086,27 +1091,48 @@ def main():
             d = a.kk_dims if 0 < a.kk_dims < Rc.shape[1] else Rc.shape[1]
             return kk.klustakwik(Rc @ Vt[:d].T, min_size=a.kk_min_size)
 
+        n_fold = n_reserve = 0
         for ch in np.unique(chid):
             sel = np.flatnonzero((chid == ch) & (src.astype(np.int64) > 1))
             if len(sel) < 2 * a.min_n:
                 continue
             lab_in = src[sel].astype(int)
-            atoms = [int(c) for c in np.unique(lab_in) if int((lab_in == c).sum()) >= a.min_n]
-            if len(atoms) < 2:                             # nothing to group -> pass through
-                out_lab[sel] = lab_in + nxt; nxt += int(lab_in.max()) + 1
+            sizes = {int(c): int((lab_in == c).sum()) for c in np.unique(lab_in)}
+            bigs = [c for c, n in sizes.items() if n >= a.kk_big]
+            if len(bigs) < 1:                              # no big atoms to fold into -> pass through as-is
+                for c in sizes:
+                    out_lab[sel[lab_in == c]] = nxt; nxt += 1
                 continue
-            # (A) MW clustering (complete-linkage cosine)
-            MW = np.array([_mw(sel[lab_in == c]) for c in atoms])
+            # (A) fold small atoms into nearest big by gated MW cosine
+            bigMW = np.array([_mw(sel[lab_in == b]) for b in bigs])
+            fold = lab_in.copy()                           # per-spike atom id after folding
+            for c, n in sizes.items():
+                if n >= a.kk_big:
+                    continue
+                ci = np.flatnonzero(lab_in == c)
+                cos = bigMW @ _mw(sel[ci]); k = int(cos.argmax())
+                if cos[k] >= a.kk_fold_thr:
+                    fold[ci] = bigs[k]; n_fold += 1        # matches a big cell -> fold in
+                else:
+                    fold[ci] = -1; n_reserve += 1          # matches nothing -> reserve
+            out_lab[sel[fold < 0]] = 1                     # reserved small atoms -> reserve id 1
+            atoms = [b for b in bigs]                      # group only the big (+ folded) atoms
+            if len(atoms) < 2:                             # single big atom: still split it
+                gi_local = np.flatnonzero(fold == atoms[0])
+                sub = _split_mrkk(sel[gi_local])
+                for s in np.unique(sub):
+                    out_lab[sel[gi_local[sub == s]]] = nxt; nxt += 1
+                continue
+            # (B) MW clustering (complete-linkage cosine) of the big/folded atoms
+            MW = np.array([_mw(sel[fold == b]) for b in atoms])
             Z = _linkage(_pdist(MW, metric="cosine"), method="complete")
             grp_id = _fcluster(Z, t=a.kk_mw_thr, criterion="distance")
             atom_grp = {atoms[i]: int(grp_id[i]) for i in range(len(atoms))}
-            grp = np.array([atom_grp.get(int(c), -1) for c in lab_in])
-            # (B) MR-KK split within each MW group
+            grp = np.array([atom_grp.get(int(c), -1) for c in fold])
+            # (C) MR-KK split within each MW group
             for g in np.unique(grp):
-                if g < 0:                                  # atoms below min_n: keep as-is
-                    for c in np.unique(lab_in[grp < 0]):
-                        out_lab[sel[lab_in == c]] = nxt; nxt += 1
-                    continue
+                if g < 0:
+                    continue                               # reserved spikes already set to id 1
                 gi_local = np.flatnonzero(grp == g)
                 sub = _split_mrkk(sel[gi_local])
                 for s in np.unique(sub):
@@ -1115,7 +1141,8 @@ def main():
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         _emit(out_lab, ncl)
         _log(f"MW-cluster + median-residual KlustaKwik over {len(np.unique(chid)):,} chunks → "
-             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (over-split for curation)")
+             f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units "
+             f"({n_fold:,} small atoms folded, {n_reserve:,} reserved; over-split for curation)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)

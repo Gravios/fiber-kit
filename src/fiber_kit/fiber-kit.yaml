@@ -294,6 +294,12 @@ FK_INTRA_KK_MW_THR:      0.10     # 0.10 | 0.05-0.15.  kk linkage: median-wavefo
 FK_INTRA_KK_WIN:         10       # 10 | 8-12 (samples each side of peak).  kk linkage: crop the waveform to +-WIN around
                                   #   the peak BEFORE the MW cosine and the median-residual SVD (drops flat tails; cleaner refractory).
 FK_INTRA_KK_MIN_SIZE:    20       # 20.  kk linkage: KlustaKwik min cluster size for the within-group split.
+FK_INTRA_KK_BIG:         20       # 20.  kk linkage: atoms with >= this many spikes are 'big' grouping anchors; smaller
+                                  #   atoms fold into the nearest big by gated MW cosine (or reserve). fiber_stochastic emits
+                                  #   mostly tiny atoms, so this fold brings the singles into the fold and prevents over-split.
+FK_INTRA_KK_FOLD_THR:    0.90     # 0.90 | 0.85-0.95.  kk linkage: a small atom folds into the nearest big only if their
+                                  #   windowed median-waveform cosine >= this; else -> reserve (id 1). The gate is the reject
+                                  #   option a Mahalanobis assignment lacks (fragment folds in, distinct/noise atom stays out).
 FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);

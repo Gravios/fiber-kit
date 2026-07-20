@@ -162,6 +162,15 @@ class IntrachunkConfig(StageConfig):
                        "42-sample window).", env="FK_INTRA_KK_WIN", type=int)
     kk_min_size: int = knob(20, "kk linkage: KlustaKwik min cluster size for the within-group split.",
                             env="FK_INTRA_KK_MIN_SIZE", type=int)
+    kk_big: int = knob(20, "kk linkage: atoms with >= this many spikes are 'big' (kept as grouping anchors); "
+                       "smaller atoms are folded into the nearest big atom by gated median-waveform cosine, or "
+                       "reserved if none matches. fiber_stochastic emits mostly tiny atoms, so this fold is what "
+                       "brings the singles into the fold and prevents the over-split.", env="FK_INTRA_KK_BIG", type=int)
+    kk_fold_thr: float = knob(0.90, "kk linkage: a small atom folds into the nearest big atom only if their "
+                              "windowed median-waveform cosine >= this; else it goes to the reserve (id 1). This "
+                              "gate is the reject option a Mahalanobis assignment lacks -- a tiny fragment of a "
+                              "real cell folds in, a tiny distinct/noise atom stays out (holds zero false-merge).",
+                              env="FK_INTRA_KK_FOLD_THR")
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
                           env="FK_ALIGN_LAG", type=int)
     align_upsample: int = knob(1, "cubic-spline upsampling factor for the align-lag search",
