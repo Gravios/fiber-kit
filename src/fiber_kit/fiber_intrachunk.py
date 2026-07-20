@@ -910,6 +910,9 @@ def main():
     ap = argparse.ArgumentParser(description="Collapse over-split fragments within each "
                                              "chunk into units (stderiv cosine + offset + depth).")
     sy.add_session_args(ap, channels=False, ntotal=False, nsamp=False, nchan=False, sr=False)
+    ap.add_argument("--probe", nargs="*", default=None,
+                    help="probe file(s) for on-the-fly localisation when no fiber-cpos table exists "
+                         "(else the probe named in <session>.yaml)")
     ap.add_argument("--cpos-method", default="stderiv")
     ap.add_argument("--cpos-stage", default=None,
                     help="positions (.cpos) stage tag; default follows --clu-stage, else 'refine'")
@@ -1004,9 +1007,27 @@ def main():
 
     spkD, _ = nio.open_spkD(base, elec, nsamp, nch)   # open_spkD returns (memmap, path)
     tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
-    z = np.load(tbl)
-    pos = {int(c): (float(x), float(y), float(zz), float(A))
-           for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
+    def _load_positions():
+        # positions are only needed by the signature-based gates (build_signatures); the 'ms'
+        # dynamic merge+split path is purely waveform-based and needs none.  Load the fiber-cpos
+        # table if it exists; otherwise compute (x0,y0,z0,A) on the fly with the canonical
+        # fiber-cpos localiser so intrachunk can run directly on a sort that never went through the
+        # fiber-cpos stage (e.g. the fiber-stochastic triplet), without a precomputed .clusters.npz.
+        if os.path.exists(tbl):
+            z = np.load(tbl)
+            return {int(c): (float(x), float(y), float(zz), float(A))
+                    for c, x, y, zz, A in zip(z["clu"], z["x0"], z["y0"], z["z0"], z["A"])}
+        from . import fiber_cpos as fcp, fiber_localize as loc
+        probe = getattr(a, "probe", None) or cfg.get("probe")
+        if not probe:
+            raise SystemExit("[intrachunk] no fiber-cpos table and no probe geometry to compute one: "
+                             "run fiber-cpos first, or name a probe in <session>.yaml / pass --probe")
+        xy = loc.load_geometry(probe, cfg["channels"])
+        per = fcp.localize_clusters(lambda idx: spkD[idx].astype(float), src, xy)
+        _log(f"intrachunk: no .cpos table at {tbl}; localised {len(per)} clusters on the fly")
+        return {c: (u["x0"], u["y0"], u["z0"], u["A"]) for c, u in per.items()}
+
+    pos = None                                           # lazily loaded only where a gate needs it
 
     _m = fl.build_masks(nsamp, cfg.peak)                  # peak-relative realign window for this nSamples
     if a.linkage == "ms":                                  # unified dynamic merge+split (per-spike; no sig needed)
@@ -1043,6 +1064,8 @@ def main():
             celltype[int(_c)] = 1 if fg.classify_celltype(_rt, sr) == "int" else 0
         _log(f"dual gate: cell-typed {len(celltype)} fragments "
              f"({sum(v==1 for v in celltype.values())} int / {sum(v==0 for v in celltype.values())} pyr)")
+    if pos is None:                                       # signature gates need positions; ms path skipped this
+        pos = _load_positions()
     sig = build_signatures(spkD, src.astype(np.int64), res.astype(float) / sr, pos,
                            chunk_min=a.chunk_minutes, min_n=a.min_n, celltype=celltype,
                            feats=feats, peak=cfg.peak, sig_cap=a.sig_cap,
