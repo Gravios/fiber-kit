@@ -58,18 +58,40 @@ def _cem(X, lab, reg, N, min_size, pen, npar, max_iter=40, delete=True):
 
 
 def klustakwik(X, max_clusters=200, min_size=20, seed=42, reg_frac=1e-2,
-               penalty='bic', max_iter=40, merge_rounds=12, verbose=False, delete=True):
+               penalty='bic', max_iter=40, merge_rounds=12, verbose=False, delete=True,
+               init_labels=None):
     """Returns per-point labels (0-based). Random-seed init, classification-EM,
-    BIC-merge.  X: (N, D) features (e.g. PCA of masked waveforms)."""
+    BIC-merge.  X: (N, D) features (e.g. PCA of masked waveforms).
+
+    init_labels (optional, per-point, 0-based; <0 = unseeded): seed the CEM from this partition
+    instead of random seeds -- e.g. an existing clean sort, so the CEM re-adjudicates every point by
+    Mahalanobis distance to the seed models and the BIC-merge collapses seeds that are one cell.
+    Unseeded points (<0) are first assigned to the nearest seed model, then the whole CEM runs."""
     rng = np.random.default_rng(seed); N, D = X.shape
     reg = reg_frac * float(np.median(np.var(X, 0))) * np.eye(D)
     npar = D + D * (D + 1) / 2.0
     pen = np.log(N) if penalty == 'bic' else 2.0
-    K0 = min(max_clusters, max(2, N // (min_size * 3)))
-    seeds = X[rng.choice(N, K0, replace=False)]
-    lab = np.zeros(N, int); best = np.full(N, np.inf)
-    for c in range(K0):                                   # nearest random seed
-        d = ((X - seeds[c]) ** 2).sum(1); upd = d < best; best[upd] = d[upd]; lab[upd] = c
+    if init_labels is not None:
+        init = np.asarray(init_labels, int)
+        seeded = init >= 0
+        if not seeded.any():
+            raise ValueError("init_labels has no seeded (>=0) points")
+        uids = sorted(set(init[seeded].tolist())); remap = {u: i for i, u in enumerate(uids)}
+        lab = np.full(N, -1, int)
+        for i in np.flatnonzero(seeded):
+            lab[i] = remap[int(init[i])]
+        if (~seeded).any():                               # assign unseeded points to nearest seed model
+            K = lab.max() + 1
+            mu, icov, logdet, cnt, ok = _fit(X[seeded], lab[seeded], K, reg)
+            keep = [c for c in range(K) if ok[c]]
+            if keep:
+                lab, _ = _assign(X, mu[keep], icov[keep], logdet[keep], cnt[keep], N)
+    else:
+        K0 = min(max_clusters, max(2, N // (min_size * 3)))
+        seeds = X[rng.choice(N, K0, replace=False)]
+        lab = np.zeros(N, int); best = np.full(N, np.inf)
+        for c in range(K0):                               # nearest random seed
+            d = ((X - seeds[c]) ** 2).sum(1); upd = d < best; best[upd] = d[upd]; lab[upd] = c
     lab = _cem(X, lab, reg, N, min_size, pen, npar, max_iter, delete)
     for mr in range(merge_rounds):
         K = lab.max() + 1
