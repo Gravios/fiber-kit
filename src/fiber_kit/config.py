@@ -171,6 +171,20 @@ class IntrachunkConfig(StageConfig):
                               "gate is the reject option a Mahalanobis assignment lacks -- a tiny fragment of a "
                               "real cell folds in, a tiny distinct/noise atom stays out (holds zero false-merge).",
                               env="FK_INTRA_KK_FOLD_THR")
+    kk_strip: int = knob(0, "kk linkage: OPT-IN per-channel polynomial-coefficient contamination strip run "
+                          "after the split (0 = off, 1 = on). Fits each spike's per-channel waveform with a "
+                          "Legendre polynomial (smooths per-sample stderiv noise into stable coeffs) and moves "
+                          "robust-z outlier spikes to the reserve. Cleans most contaminated units while keeping "
+                          "clean units usable (raw per-sample strips cannot -- stderiv self-correlation ~0.6 "
+                          "drowns the signal).", env="FK_INTRA_KK_STRIP", type=int)
+    kk_strip_deg: int = knob(4, "kk linkage: Legendre polynomial degree for the per-channel strip (validated: "
+                             "4 best; 3 under-cleans, 5 over-strips).", env="FK_INTRA_KK_STRIP_DEG", type=int)
+    kk_strip_z: float = knob(4.0, "kk linkage: robust-z (MAD-scaled) threshold on the per-channel polynomial "
+                             "coefficients; a spike is a per-channel outlier if any coefficient exceeds this.",
+                             env="FK_INTRA_KK_STRIP_Z")
+    kk_strip_maxbad: int = knob(1, "kk linkage: a spike is stripped to the reserve if it is a polynomial-coeff "
+                                "outlier on MORE than this many signal channels (0 = strictest).",
+                                env="FK_INTRA_KK_STRIP_MAXBAD", type=int)
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
                           env="FK_ALIGN_LAG", type=int)
     align_upsample: int = knob(1, "cubic-spline upsampling factor for the align-lag search",

@@ -1137,12 +1137,47 @@ def main():
                 sub = _split_mrkk(sel[gi_local])
                 for s in np.unique(sub):
                     out_lab[sel[gi_local[sub == s]]] = nxt; nxt += 1
+        n_strip = 0
+        if a.kk_strip:
+            # Per-channel POLYNOMIAL-COEFFICIENT contamination strip.  Fitting each spike's per-channel
+            # waveform (windowed +-kk_win) with a low-order Legendre polynomial smooths away the per-sample
+            # stderiv noise into a few stable coefficients -- so a clean spike stays near the unit's median
+            # in coefficient space while a spike from a co-located different cell deviates in the low-order
+            # SHAPE coefficients on the channel(s) where the cells differ.  A spike is stripped (-> reserve,
+            # id 1) if its per-channel coefficient vector is a robust-z outlier (> kk_strip_z on any of the
+            # DEG+1 coeffs, MAD-scaled) on more than kk_strip_maxbad signal channels.  Raw per-sample
+            # correlation/band strips could NOT do this (individual stderiv waveforms self-correlate ~0.6,
+            # so clean spikes look as 'off' as contaminants); the polynomial fit is what beats that floor.
+            # Validated on the pooled small-atom units: keeps ~100% of clean units usable (median ~83% of
+            # their spikes, none reduced below viability) while cleaning most contaminated units; barely
+            # touches the already-clean big-atom units (~88% kept).  Off by default.
+            S = w1 - w0
+            _tg = np.linspace(-1.0, 1.0, S)
+            _vp = np.linalg.pinv(np.polynomial.legendre.legvander(_tg, a.kk_strip_deg))
+            for u in np.unique(out_lab):
+                if u <= 1:
+                    continue
+                ui = np.flatnonzero(out_lab == u)
+                if len(ui) < max(3 * a.min_n, 30):         # too small to estimate a stable per-channel band
+                    continue
+                Wu = fl.realign(spkD[ui].astype(float), _m.realign_lo, _m.realign_hi)[:, w0:w1, :]  # (n,S,C)
+                coef = np.stack([_vp @ Wu[i] for i in range(len(ui))])          # (n, deg+1, C)
+                med = np.median(coef, 0); mad = np.median(np.abs(coef - med), 0) + 1e-9
+                sig = np.ptp(med, 0) >= 0.05 * np.abs(med).max()               # (C,) real-signal channels
+                bad = np.zeros((len(ui), Wu.shape[2]), bool)
+                for ch in np.flatnonzero(sig):
+                    z = np.abs(coef[:, :, ch] - med[:, ch]) / mad[:, ch]        # (n, deg+1)
+                    bad[:, ch] = z.max(1) > a.kk_strip_z
+                drop = bad.sum(1) > a.kk_strip_maxbad
+                if drop.any() and (~drop).sum() >= a.min_n:                     # keep the unit viable
+                    out_lab[ui[drop]] = 1; n_strip += int(drop.sum())
         ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         _emit(out_lab, ncl)
         _log(f"MW-cluster + median-residual KlustaKwik over {len(np.unique(chid)):,} chunks → "
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units "
-             f"({n_fold:,} small atoms folded, {n_reserve:,} reserved; over-split for curation)")
+             f"({n_fold:,} small atoms folded, {n_reserve:,} reserved"
+             + (f", {n_strip:,} spikes stripped" if a.kk_strip else "") + "; over-split for curation)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
         return
     feats = "cfiber" if a.gate == "cfiber" else ("wave" if a.gate in ("mmd", "kcov") else None)

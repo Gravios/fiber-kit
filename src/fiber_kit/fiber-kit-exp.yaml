@@ -361,6 +361,14 @@ FK_INTRA_KK_BIG:         20       # 20.  kk linkage: atoms with >= this many spi
 FK_INTRA_KK_FOLD_THR:    0.90     # 0.90 | 0.85-0.95.  kk linkage: a small atom folds into the nearest big only if their
                                   #   windowed median-waveform cosine >= this; else -> reserve (id 1). The gate is the reject
                                   #   option a Mahalanobis assignment lacks (fragment folds in, distinct/noise atom stays out).
+FK_INTRA_KK_STRIP:       0        # 0 = off, 1 = on.  OPT-IN per-channel polynomial-coefficient contamination strip after
+                                  #   the split: fits each spike's per-channel waveform with a Legendre polynomial (smooths
+                                  #   per-sample stderiv noise into stable coeffs) and moves robust-z outlier spikes to reserve.
+                                  #   Cleans most contaminated units while keeping clean units usable (raw per-sample strips
+                                  #   cannot -- stderiv self-correlation ~0.6 drowns the signal).
+FK_INTRA_KK_STRIP_DEG:   4        # 4 | 3-5.  Legendre degree for the strip (4 best; 3 under-cleans, 5 over-strips).
+FK_INTRA_KK_STRIP_Z:     4.0      # 4.0 | 3-5.  robust-z (MAD-scaled) outlier threshold on the per-channel poly coefficients.
+FK_INTRA_KK_STRIP_MAXBAD: 1       # 1 | 0-2.  strip a spike if it is a poly-coeff outlier on MORE than this many signal channels.
 FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
