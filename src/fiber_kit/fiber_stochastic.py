@@ -290,10 +290,21 @@ def run_stochastic(a):
     vote_submode = {}              # res_index -> {(consensus_gid, submode): count}
     chunks = a.stochastic_chunks if a.stochastic_chunks else list(range(nchunks))
 
-    for c in chunks:
+    import sys as _sys, time as _time
+    def _plog(msg):                # progress -> stderr, flushed, so a long run is not silent
+        print(msg, file=_sys.stderr, flush=True)
+    _t0 = _time.time(); _done = 0
+    _plog(f"fiber_stochastic: {len(chunks)} chunk(s), {a.stochastic_draws} draw(s)/round"
+          + (f" x{ejobs} parallel" if ejobs > 1 else "")
+          + f", up to {a.stochastic_peel_rounds} peel round(s), frac {a.stochastic_frac:g}, "
+          f"link {a.stochastic_link}")
+
+    for ci, c in enumerate(chunks):
+        _tc = _time.time()
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
         ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s))
         if len(ext) < 2 * a.min_group:
+            _plog(f"  [{ci + 1:>3}/{len(chunks)}] chunk {c:>3}: {len(ext):>6} ext spikes — skipped (< {2 * a.min_group})")
             continue
         res_ext = res[ext]
         residual = np.arange(len(ext))       # ext-relative indices still "in play"
@@ -357,15 +368,24 @@ def run_stochastic(a):
             new_residual = residual[~owned[residual]]
             peel_log.append(dict(chunk=c, round=rnd, frozen=len(stable),
                                  residual_in=len(residual), remaining=len(new_residual)))
+            if a.stochastic_verbose:
+                _plog(f"        round {rnd}: froze {len(stable):>3} stable fiber(s), "
+                      f"residual {len(residual):>6} -> {len(new_residual):>6}")
             if len(new_residual) == len(residual):
                 break
             residual = new_residual
 
-        if a.stochastic_verbose:
-            print(f"  chunk {c:>3}: {len(ext):>6} ext | "
-                  f"{sum(r['_chunk']==c for r in rows):>5} fiber instances over draws | "
-                  f"{len([p for p in peel_log if p['chunk']==c])} peel round(s)")
+        _done += 1
+        _rows_c = sum(r['_chunk'] == c for r in rows)
+        _npeel = len([p for p in peel_log if p['chunk'] == c])
+        _dt = _time.time() - _tc; _el = _time.time() - _t0
+        _eta = _el / _done * (len(chunks) - _done)
+        _plog(f"  [{ci + 1:>3}/{len(chunks)}] chunk {c:>3}: {len(ext):>6} ext | "
+              f"{_rows_c:>5} fiber instances | {_npeel} peel round(s) | "
+              f"{_dt:5.1f}s (elapsed {_el / 60:4.1f}m, eta {_eta / 60:4.1f}m)")
 
+    _plog(f"fiber_stochastic: all {_done} chunk(s) done in {(_time.time() - _t0) / 60:.1f}m; "
+          f"{len(rows):,} fiber instances total")
     _dump_ensemble(a, rows, peel_log, mask, gch)
     if a.stochastic_write_clu:
         _write_cluster_triplet(a, res.size, vote_fiber, vote_submode)
@@ -461,10 +481,14 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
         meta_match_corr=a.stochastic_match_corr, meta_link=a.stochastic_link, meta_stable_freq=a.stochastic_stable_freq,
         meta_peel_rounds=a.stochastic_peel_rounds, meta_seed=a.stochastic_seed, meta_jobs=int(getattr(a,'stochastic_jobs',1)))
 
+    import sys as _sys, time as _time
+    print(f"fiber_stochastic: compressing + writing {out} ({M:,} instances)...",
+          file=_sys.stderr, flush=True)
+    _tw = _time.time()
     with open(out, "wb") as f:
         np.savez_compressed(f, **arrs)
+    print(f"fiber_stochastic: wrote {out}  ({_time.time() - _tw:.1f}s)", file=_sys.stderr, flush=True)
     nconsensus = int(col("_consensus_gid", int, -1).max() + 1) if M else 0
-    print(f"fiber_stochastic: wrote {out}")
     print(f"  {M:,} fiber instances over {a.stochastic_draws} draws x {len(set(r['_chunk'] for r in rows))} chunks "
           f"(frac={a.stochastic_frac}) -> {nconsensus} consensus fibers")
     if M:
