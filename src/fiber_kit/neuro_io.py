@@ -39,6 +39,7 @@
 #  as text (e.g. a 1332-cluster .clu -> first header byte 0x34 = '4'), which broke
 #  reads outright -- it was never the "non-issue in practice" it was assumed to be.
 # ════════════════════════════════════════════════════════════════════════════
+import glob
 import os
 from collections import namedtuple
 
@@ -46,6 +47,7 @@ import numpy as np
 
 __all__ = [
     "ResolvedInput", "resolve_input", "prefer_derived", "prefer_canonical",
+    "variant_family", "is_stderiv_variant",
     "read_res_file", "write_res_file", "read_res", "write_res",
     "read_clu_file", "write_clu_file", "read_clu", "write_clu",
     "read_cluster_res",
@@ -65,6 +67,33 @@ FET_HDR_DTYPE = np.dtype("<i4")
 
 # ── variant-aware input resolution (mirrors neurofileio::resolveInput) ───────
 ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found"])
+
+
+def variant_family(variant):
+    """Family of a variant token -- the part before an _S<order>/_C<order> suffix.
+
+    'stderiv_C4' -> 'stderiv';  'stderiv' -> 'stderiv';  'standard' -> 'standard'.
+
+    Mirrors the neurosuite-3 token grammar (<family>[_<kind><order>], kind S for the
+    plain spatial derivative or C for the session's custom sdiffPairs pattern) as
+    implemented in custody.hpp / ndm_custody / ndm_resolve_io.  A token that does not
+    match the suffix grammar is opaque -- the whole string is the family -- so an
+    unknown token never masquerades as a known one.
+    """
+    cut = variant.rfind("_")
+    if cut != -1:
+        suffix = variant[cut + 1:]
+        if len(suffix) >= 2 and suffix[0] in ("S", "C") and suffix[1:].isdigit():
+            return variant[:cut]
+    return variant
+
+
+def is_stderiv_variant(variant):
+    """True for the stderiv family, including suffixed tokens (stderiv_S3, stderiv_C4).
+
+    Deliberately not a 'stderiv' prefix test: 'stderivfoo' is a different family.
+    """
+    return variant_family(variant) == "stderiv"
 
 
 def prefer_derived():
@@ -113,6 +142,24 @@ def resolve_input(base, type_, group, prefer_variants):
         glued = f"{base}.{type_}{v}.{g}"
         if os.path.exists(glued):
             return ResolvedInput(glued, v, False, True)
+        # A session produced with a SUFFIXED token (stderiv_C4) has no plain
+        # <type>.stderiv.<group>.  Match the family here rather than falling
+        # through to the next preference: for prefer_derived() the next entry is
+        # "standard", so falling through would silently hand back RAW waveforms
+        # for a stderiv request.
+        if "_" not in v:
+            prefix, tail = f"{base}.{type_}.{v}_", f".{g}"
+            hits = [m for m in sorted(glob.glob(f"{prefix}*{tail}"))
+                    if variant_family(m[len(f"{base}.{type_}."):-len(tail)]) == v]
+            if len(hits) == 1:
+                token = hits[0][len(f"{base}.{type_}."):-len(tail)]
+                return ResolvedInput(hits[0], token, True, True)
+            if len(hits) > 1:
+                tokens = [h[len(f"{base}.{type_}."):-len(tail)] for h in hits]
+                raise ValueError(
+                    f"{base}.{type_}.*.{g}: several '{v}' variants exist "
+                    f"({', '.join(tokens)}); pass the exact token in prefer_variants "
+                    f"rather than the family name so the choice is explicit")
     return ResolvedInput(canonical, "", False, False)
 
 
