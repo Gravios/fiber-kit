@@ -145,20 +145,59 @@ the variant, when present, sits between the type and the group:
 | legacy glued (read-only) | `<base>.<type><variant>.<group>` | `…​.spkD.5` |
 
 `neuro_io.resolve_input(base, type, group, prefer)` walks a preference list
-(`prefer_derived() = ["stderiv","D",""]`, `prefer_canonical() = ["","stderiv","D"]`)
-and returns the first file that exists, probing the dotted form before the legacy
-glued form. Waveform reads default to `prefer_derived()` (so a stderiv run picks
-up `.spk.stderiv.N` / `.spk.D.N` / legacy `.spkD.N` before raw `.spk.N`); the
-`.fet` reader defaults to `prefer_canonical()` to match KlustaKwik's
-`pickInputPath`.
+(`prefer_derived() = ["stderiv","D","standard",""]`,
+`prefer_canonical() = ["","stderiv","D"]`) and returns the first file that exists,
+probing the dotted form before the legacy glued form. Waveform reads default to
+`prefer_derived()`; the `.fet` reader defaults to `prefer_canonical()` to match
+KlustaKwik's `pickInputPath`.
+
+**Suffixed variant tokens.** neurosuite-3 qualifies the stderiv variant when the
+transform is not the plain all-pairs derivative:
+
+| Token | Meaning |
+|-------|---------|
+| `stderiv_S<order>` | plain spatial derivative at that order; any `sdiffPairs` deliberately unused |
+| `stderiv_C4` | the session's custom `sdiffPairs` single-partner pattern |
+| `stderiv_C5` | the session's custom `sdiffPairs` per-channel reference sets |
+
+A bare preference entry matches its whole **family**, so `prefer_derived()` finds
+`.spk.stderiv_C5.5` even though the list only names `stderiv`. This matters: the
+family match happens *before* the walk moves on, because falling through to
+`"standard"` would hand back RAW waveforms for a stderiv request, silently. If
+several tokens of one family are present, `resolve_input` raises rather than guess —
+pass the exact token.
+
+`variant_family("stderiv_C4") == "stderiv"` and `is_stderiv_variant` test the family,
+never a `"stderiv"` prefix (`stderivfoo` is a different family). The grammar mirrors
+`custody.hpp` / `ndm_custody` / `ndm_resolve_io` and is held to the same shared table
+by `test/custody_token_conformance` against `test/custody_vectors.tsv`.
+
+**Interop notes.**
+
+- The `.spk` on disk is **full width**. neurosuite-3's channel drop happens
+  downstream at PCA time, so fiber-kit sees every channel. `.fet` width is read from
+  the file's own header, so a dropped-channel (N−1) or kept-channel (N) `.fet` both
+  load without configuration.
+- `fiber_pca.Method` mirrors `neurosuite::core::Method` **by integer value** — a
+  basis written by either repo is read by the other. Values 7 (`STDERIV_CUSTOM`) and
+  8 (`STDERIV_CUSTOM_CAR`) correspond to the `_C4` / `_C5` tokens. Held in step by
+  `test/pca_method_vectors.tsv`, an identical copy of neurosuite-3's.
+- fiber-kit **never applies the stderiv transform itself**; it reads whatever the
+  extractor wrote.
+- `fiber_pca.read_pca` defaults to `prefer_standard()` and deliberately never falls
+  back to stderiv: localization depends on the amplitude–distance law the transform
+  breaks. A session sorted in a stderiv variant therefore still needs
+  `.spk.standard.N` / `.pca.standard.N` on disk for `fiber_localize` and
+  `fiber_cpos`, produced by running `ndm_extractspikes --method standard` and
+  `ndm_pca --method standard` alongside the stderiv pipeline.
 
 **Inputs** (neurosuite binary formats):
 
 | File | Format |
 |------|--------|
 | `<base>.res.<elec>` | spike times, little-endian `int64`, no header (text auto-detected) |
-| `<base>.spkD.<elec>` (or `.spk.<elec>`) | waveforms, `int16`, sample-major `(n, nsamp, nchan)` |
-| `<base>.fet.<elec>` (or `.fetD.<elec>`) | `int32` count header + `int64` features, row-major |
+| `<base>.spk.<variant>.<elec>` (legacy `.spkD.<elec>` / `.spk.<elec>`) | waveforms, `int16`, sample-major `(n, nsamp, nchan)`, **full channel width** |
+| `<base>.fet.<variant>.<elec>` (legacy `.fetD.<elec>`) | `int32` count header + `int64` features, row-major; width taken from the header |
 | `<base>.fil` | filtered wideband, `int16`, `ntotal` channels interleaved |
 | `<session>.yaml` | session parameters (nChannels, samplingRate, spikeDetection groups) |
 
