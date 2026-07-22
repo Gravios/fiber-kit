@@ -432,8 +432,8 @@ def run_stochastic(a):
         # Spikes from chunks not yet processed land in cluster 1.
         if a.stochastic_write_clu:
             try:
-                _write_cluster_triplet(a, res.size, vote_fiber, vote_submode,
-                                       variant=clu_variant, partial=True)
+                _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, variant=clu_variant,
+                                       min_spikes=a.stochastic_min_fiber_spikes, partial=True)
             except Exception as e:                    # never let a checkpoint kill the run
                 _plog(f"        .clu checkpoint failed ({type(e).__name__}: {e}) — continuing")
 
@@ -441,10 +441,12 @@ def run_stochastic(a):
           f"{len(rows):,} fiber instances total")
     _dump_ensemble(a, rows, peel_log, mask, gch)
     if a.stochastic_write_clu:
-        _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, variant=clu_variant)
+        _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, variant=clu_variant,
+                               min_spikes=a.stochastic_min_fiber_spikes)
 
 
-def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="stderiv", partial=False):
+def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="stderiv",
+                           min_spikes=1, partial=False):
     """Resolve the per-spike votes to a Klusters clu/clc/clp triplet so the consensus fibers can be
     inspected in Klusters.  .clc = each spike's majority SUB-MODE (the atom/leaf layer, the branch);
     .clp = sub-mode -> consensus-fiber parent map; .clu = the per-spike fiber, DERIVED from each
@@ -459,6 +461,25 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="st
 
     # majority sub-mode per spike -> the child (atom) layer; child ids are 1-based, 0 = noise
     sub_of = {ri: max(ctr, key=ctr.get) for ri, ctr in vote_submode.items()}   # ri -> ((chunk,cg), sm)
+    voted = set(sub_of)                       # spikes that got any vote at all
+
+    # Purge consensus fibers that own almost nothing.  A fiber holding one or two
+    # spikes after the majority vote is a single-draw artefact, not a unit, and at
+    # a strict match threshold the ensemble produces thousands of them -- enough to
+    # make the .clu unusable in Klusters.  Their spikes go to NOISE (cluster 0),
+    # which is distinct from the not-yet-processed spikes that go to cluster 1, so
+    # the two can be told apart and re-clustered separately later.
+    n_purged_fib = n_purged_spk = 0
+    if min_spikes > 1:
+        from collections import Counter
+        per_fiber = Counter(key[0] for key in sub_of.values())     # (chunk,cg) -> spikes
+        small = {cg for cg, k in per_fiber.items() if k < min_spikes}
+        if small:
+            keep = {ri: key for ri, key in sub_of.items() if key[0] not in small}
+            n_purged_fib = len(small)
+            n_purged_spk = len(sub_of) - len(keep)
+            sub_of = keep                     # dropped spikes keep child 0 -> noise
+
     subkeys = sorted(set(sub_of.values()))
     child_id = {key: k + 1 for k, key in enumerate(subkeys)}
     child = np.zeros(n_spikes, np.int64)
@@ -470,10 +491,15 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="st
     # makes a mid-run .clu unreadable -- 1 is the reserved artefact/unsorted bin and
     # survives renumbering, so they land in one inspectable cluster.  A child id is
     # needed because the hierarchy derives .clu from the child->parent map.
-    n_pending = int((child == 0).sum())
+    # Only spikes that were never voted on are "pending"; purged ones stay at 0 so
+    # they land in noise rather than being swept into the unsorted bin.
+    pending_mask = np.ones(n_spikes, bool)
+    if voted:
+        pending_mask[np.fromiter(voted, int, len(voted))] = False
+    n_pending = int(pending_mask.sum())
     pending_child = len(subkeys) + 1 if n_pending else None
     if pending_child is not None:
-        child[child == 0] = pending_child
+        child[pending_mask] = pending_child
 
     # each sub-mode's consensus fiber -> the child->parent map; parent fiber ids are 2-based (0/1 noise)
     fibkeys = sorted({key[0] for key in subkeys})                              # distinct (chunk,cg)
@@ -489,9 +515,11 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="st
     nassigned = n_spikes - n_pending
     if partial:
         import sys as _sys
+        extra = (f", purged {n_purged_fib} fiber(s) <{min_spikes} spikes "
+                 f"({n_purged_spk} spikes -> noise)") if n_purged_fib else ""
         print(f"        .clu updated: {nfib} fibers, {len(subkeys)} sub-modes, "
               f"{nassigned}/{n_spikes} assigned ({100*nassigned/max(n_spikes,1):.0f}%), "
-              f"rest -> cluster 1", file=_sys.stderr, flush=True)
+              f"rest -> cluster 1{extra}", file=_sys.stderr, flush=True)
         return nfib
     print(f"fiber_stochastic: wrote consensus triplet .clu/.clc/.clp (tag '{tag}') — "
           f"{nfib} fibers, {len(subkeys)} sub-modes, {nassigned}/{n_spikes} spikes assigned "
@@ -583,6 +611,10 @@ def add_arguments(ap):
                         "'single' (transitive union-find) CHAINS anticorrelated sub-modes through intermediate "
                         "shapes into one component -- it undercounts real units; 'average' (default) and "
                         "'complete' are agglomerative and will not weld a chain of distinct co-located cells.")
+    g.add_argument("--stochastic-min-fiber-spikes", type=int, default=3,
+                   help="consensus fibers owning fewer than this many spikes are purged to "
+                        "NOISE (cluster 0) in the written triplet; 1 disables. Not-yet-processed "
+                        "spikes go to cluster 1 and are unaffected (default 3)")
     g.add_argument("--stochastic-clu-method", default=None,
                    help="variant token for the written clu/clc/clp (default: the variant of "
                         "the .spk actually resolved, e.g. stderiv_C5)")
