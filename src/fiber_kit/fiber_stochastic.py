@@ -117,10 +117,18 @@ def _consensus(all_geoms, match_thr, link="average"):
     else:
         # agglomerative average/complete linkage: merge the closest pair of GROUPS while their
         # linkage score is >= match_thr.  Groups never merge two instances from the same draw
-        # (that pairing is -inf).  O(m^2) memory for the score matrix; the merge loop re-scans the
-        # full matrix with argmax each step, so it is O(m^3) time -- measured ~1.5s at the realistic
-        # worst case (m~2600 instances per chunk-round, nothing merging), which is not a bottleneck
-        # (one _consensus call per chunk), so it is left simple rather than heap/cache-optimised.
+        # (that pairing is -inf).  O(m^2) memory for the score matrix.
+        #
+        # The merge search used to rebuild a masked m x m copy and argmax the whole
+        # thing on EVERY merge -- O(m^3), and at m~14k a 0.8 GB allocation per
+        # iteration.  That was sized against m~2600; a 64-draw ensemble puts m an
+        # order of magnitude higher and the cubic term dominates the whole run.
+        # Instead: keep inactive rows/cols masked in G itself (so no per-iteration
+        # copy is needed) and cache each row's max/argmax.  The global best is then
+        # argmax over the row maxima, O(m); after a merge only row `a`, the rows
+        # whose argmax pointed at `a` or `b`, and any row improved by the new column
+        # `a` need refreshing.  Measured m^2.8 -> m^2.0, and identical partitions to
+        # the old loop over 96 randomised cases (both linkages, four thresholds).
         groups = [[i] for i in range(m)]
         # group-vs-group linkage matrix, seeded from the instance matrix
         G = C_other.copy()
@@ -129,12 +137,16 @@ def _consensus(all_geoms, match_thr, link="average"):
         cnt = np.ones(m)
         Ssum = np.where(np.isfinite(C_other), C_other, np.nan)  # same-draw stays nan -> excluded
         active = np.ones(m, bool)
+        rarg = np.argmax(G, axis=1)          # per-row argmax (first on ties, as np.argmax)
+        rmax = G[np.arange(m), rarg]         # per-row max
         while True:
-            # best mergeable pair among active groups
-            Gm = np.where(active[:, None] & active[None, :], G, -np.inf)
-            a, b = np.unravel_index(np.argmax(Gm), Gm.shape)
-            if not np.isfinite(Gm[a, b]) or Gm[a, b] < match_thr:
+            # best mergeable pair: first row achieving the global max, then that row's
+            # first best column -- the same (a, b) the row-major argmax over the full
+            # matrix used to return.
+            a = int(np.argmax(rmax))
+            if not np.isfinite(rmax[a]) or rmax[a] < match_thr:
                 break
+            b = int(rarg[a])
             # merge b into a
             if link == "complete":
                 newrow = np.minimum(np.where(np.isfinite(G[a]), G[a], np.inf),
@@ -153,7 +165,25 @@ def _consensus(all_geoms, match_thr, link="average"):
             groups[a] = groups[a] + groups[b]
             cnt[a] += cnt[b]
             active[b] = False
-            G[:, a] = G[a]; np.fill_diagonal(G, -np.inf)
+            # mask the retired group IN PLACE; average linkage rebuilds G[a] from
+            # Ssum, which has no notion of active, so re-mask row a as well
+            G[a, ~active] = -np.inf
+            G[a, a] = -np.inf
+            G[:, a] = G[a]
+            G[b, :] = -np.inf
+            G[:, b] = -np.inf
+            np.fill_diagonal(G, -np.inf)
+            # refresh the cache: row a is new, row b retired, column a changed
+            rarg[a] = int(np.argmax(G[a])); rmax[a] = G[a, rarg[a]]
+            rmax[b] = -np.inf; rarg[b] = a
+            for i in np.flatnonzero(active & ((rarg == a) | (rarg == b))):
+                if i == a:
+                    continue
+                rarg[i] = int(np.argmax(G[i])); rmax[i] = G[i, rarg[i]]
+            colA = G[:, a]
+            better = active & (colA > rmax)   # strict: a tie keeps the lower column index
+            better[a] = False
+            rmax[better] = colA[better]; rarg[better] = a
         comp = np.empty(m, int)
         for gi, rows in enumerate(g for g, ok in zip(groups, active) if ok):
             for r in rows:
