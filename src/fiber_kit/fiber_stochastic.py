@@ -303,6 +303,16 @@ def run_stochastic(a):
     fsess._init_chunk_worker(cfg)
     process = fsess._process_chunk
 
+    # The clu/clc/clp must carry the SAME variant token as the waveforms they label:
+    # Klusters parses the method off the .clu name and resolves .fet/.spk siblings in
+    # that variant, so writing .clu.stderiv.N beside a .fet.stderiv_C5.N leaves it
+    # unable to find the features.  Take the token from the .spk actually resolved
+    # (same preference the workers use) rather than assuming plain "stderiv".
+    clu_variant = getattr(a, "stochastic_clu_method", None)
+    if not clu_variant:
+        _r = nio.resolve_input(a.base, "spk", a.elec, nio.prefer_derived())
+        clu_variant = _r.variant or "stderiv"      # untagged legacy -> the historical name
+
     res = nio.read_res(a.base, a.elec)
     t_min = float(res.min())
     chunk_s = a.chunk_min * 60.0 * a.sr; ov_s = a.overlap_min * 60.0 * a.sr
@@ -422,7 +432,8 @@ def run_stochastic(a):
         # Spikes from chunks not yet processed land in cluster 1.
         if a.stochastic_write_clu:
             try:
-                _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, partial=True)
+                _write_cluster_triplet(a, res.size, vote_fiber, vote_submode,
+                                       variant=clu_variant, partial=True)
             except Exception as e:                    # never let a checkpoint kill the run
                 _plog(f"        .clu checkpoint failed ({type(e).__name__}: {e}) — continuing")
 
@@ -430,10 +441,10 @@ def run_stochastic(a):
           f"{len(rows):,} fiber instances total")
     _dump_ensemble(a, rows, peel_log, mask, gch)
     if a.stochastic_write_clu:
-        _write_cluster_triplet(a, res.size, vote_fiber, vote_submode)
+        _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, variant=clu_variant)
 
 
-def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, partial=False):
+def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="stderiv", partial=False):
     """Resolve the per-spike votes to a Klusters clu/clc/clp triplet so the consensus fibers can be
     inspected in Klusters.  .clc = each spike's majority SUB-MODE (the atom/leaf layer, the branch);
     .clp = sub-mode -> consensus-fiber parent map; .clu = the per-spike fiber, DERIVED from each
@@ -472,7 +483,7 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, partial=Fal
         parent[pending_child] = 1                                            # unassigned bin
 
     tag = a.stochastic_clu_tag
-    paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant="stderiv", tag=tag,
+    paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant=variant, tag=tag,
                                                renumber=True, backup=False)
     nfib = len(fibkeys)
     nassigned = n_spikes - n_pending
@@ -572,6 +583,9 @@ def add_arguments(ap):
                         "'single' (transitive union-find) CHAINS anticorrelated sub-modes through intermediate "
                         "shapes into one component -- it undercounts real units; 'average' (default) and "
                         "'complete' are agglomerative and will not weld a chain of distinct co-located cells.")
+    g.add_argument("--stochastic-clu-method", default=None,
+                   help="variant token for the written clu/clc/clp (default: the variant of "
+                        "the .spk actually resolved, e.g. stderiv_C5)")
     g.add_argument("--stochastic-match-corr", type=float, default=0.95,
                    help="template correlation above which two fibers from different draws are the SAME "
                         "consensus fiber")
