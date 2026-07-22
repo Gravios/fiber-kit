@@ -1002,6 +1002,15 @@ def load_geometry(path):
 _RCTX = {}
 
 
+def _init_refine_pool_worker(cfg):
+    """Pool initializer for a POOL WORKER: pin BLAS to one thread, then the usual
+    context.  Separate from _init_refine_worker, which also runs the serial path --
+    a single process should keep its threads."""
+    from .fiber_session import _limit_worker_threads
+    _limit_worker_threads()
+    _init_refine_worker(cfg)
+
+
 def _init_refine_worker(cfg):
     """Pool initializer (also run for the serial path): stash the static config and open the
     .spkD / .fil memmaps once per worker process.  Mirrors fiber_session._init_chunk_worker."""
@@ -1080,7 +1089,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
         if verbose:
             _log(f"refining {len(tasks)} chunks on {nworkers} processes")
         with ProcessPoolExecutor(max_workers=nworkers,
-                                 initializer=_init_refine_worker, initargs=(cfg,)) as ex:
+                                 initializer=_init_refine_pool_worker, initargs=(cfg,)) as ex:
             for result in ex.map(_refine_one_chunk, tasks):     # map preserves task order -> ordered logs
                 _store(result)
     if strict_link:                                        # geometry+timing veto blocks chaining
