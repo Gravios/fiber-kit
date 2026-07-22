@@ -380,9 +380,21 @@ def run_stochastic(a):
         _npeel = len([p for p in peel_log if p['chunk'] == c])
         _dt = _time.time() - _tc; _el = _time.time() - _t0
         _eta = _el / _done * (len(chunks) - _done)
+        _ncons_c = len({(r['_chunk'], r['_consensus_gid']) for r in rows if r['_chunk'] == c})
         _plog(f"  [{ci + 1:>3}/{len(chunks)}] chunk {c:>3}: {len(ext):>6} ext | "
-              f"{_rows_c:>5} fiber instances | {_npeel} peel round(s) | "
+              f"{_rows_c:>5} fiber instances -> {_ncons_c:>4} consensus fiber(s) | "
+              f"{_npeel} peel round(s) | "
               f"{_dt:5.1f}s (elapsed {_el / 60:4.1f}m, eta {_eta / 60:4.1f}m)")
+
+        # Write the cluster triplet after EVERY chunk, not just at the end: a 20-chunk
+        # run is many hours and previously produced nothing inspectable until it
+        # finished, so a run that was going wrong could not be seen to be going wrong.
+        # Spikes from chunks not yet processed land in cluster 1.
+        if a.stochastic_write_clu:
+            try:
+                _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, partial=True)
+            except Exception as e:                    # never let a checkpoint kill the run
+                _plog(f"        .clu checkpoint failed ({type(e).__name__}: {e}) — continuing")
 
     _plog(f"fiber_stochastic: all {_done} chunk(s) done in {(_time.time() - _t0) / 60:.1f}m; "
           f"{len(rows):,} fiber instances total")
@@ -391,7 +403,7 @@ def run_stochastic(a):
         _write_cluster_triplet(a, res.size, vote_fiber, vote_submode)
 
 
-def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode):
+def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, partial=False):
     """Resolve the per-spike votes to a Klusters clu/clc/clp triplet so the consensus fibers can be
     inspected in Klusters.  .clc = each spike's majority SUB-MODE (the atom/leaf layer, the branch);
     .clp = sub-mode -> consensus-fiber parent map; .clu = the per-spike fiber, DERIVED from each
@@ -412,19 +424,37 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode):
     for ri, key in sub_of.items():
         child[ri] = child_id[key]
 
+    # Spikes with no fiber vote go to fiber 1, not 0.  On a partial write most of
+    # them are simply in chunks not processed yet, and burying those in noise (0)
+    # makes a mid-run .clu unreadable -- 1 is the reserved artefact/unsorted bin and
+    # survives renumbering, so they land in one inspectable cluster.  A child id is
+    # needed because the hierarchy derives .clu from the child->parent map.
+    n_pending = int((child == 0).sum())
+    pending_child = len(subkeys) + 1 if n_pending else None
+    if pending_child is not None:
+        child[child == 0] = pending_child
+
     # each sub-mode's consensus fiber -> the child->parent map; parent fiber ids are 2-based (0/1 noise)
     fibkeys = sorted({key[0] for key in subkeys})                              # distinct (chunk,cg)
     fib_id = {cg: k + 2 for k, cg in enumerate(fibkeys)}
     parent = {child_id[key]: fib_id[key[0]] for key in subkeys}               # child -> fiber
+    if pending_child is not None:
+        parent[pending_child] = 1                                            # unassigned bin
 
     tag = a.stochastic_clu_tag
     paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant="stderiv", tag=tag,
                                                renumber=True, backup=False)
     nfib = len(fibkeys)
-    nassigned = int((child > 0).sum())
+    nassigned = n_spikes - n_pending
+    if partial:
+        import sys as _sys
+        print(f"        .clu updated: {nfib} fibers, {len(subkeys)} sub-modes, "
+              f"{nassigned}/{n_spikes} assigned ({100*nassigned/max(n_spikes,1):.0f}%), "
+              f"rest -> cluster 1", file=_sys.stderr, flush=True)
+        return nfib
     print(f"fiber_stochastic: wrote consensus triplet .clu/.clc/.clp (tag '{tag}') — "
           f"{nfib} fibers, {len(subkeys)} sub-modes, {nassigned}/{n_spikes} spikes assigned "
-          f"({100*nassigned/max(n_spikes,1):.0f}%; rest -> noise) [{paths['clu']}]")
+          f"({100*nassigned/max(n_spikes,1):.0f}%; rest -> cluster 1) [{paths['clu']}]")
 
 
 # ── serialization: the fiber-space file (mirrors production .fibers.npz + extras) ──
