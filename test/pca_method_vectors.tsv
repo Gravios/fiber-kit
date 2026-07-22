@@ -9,7 +9,8 @@
 #
 #   format  <magic_hex>  <version>
 #   method  <value>  <name>  <spatial_order>  <has_temporal>  <tag>
-#     spatial_order: 0=None 1=First 2=Laplacian 3=AllPairs   has_temporal: 0/1
+#     spatial_order: 0=None 1=First 2=Laplacian 3=AllPairs 4=Custom 5=CustomCar
+#     has_temporal: 0/1
 #     tag: chain-of-custody method tag (standard | sdiff | stderiv)
 format	0x50434145	2
 method	0	Standard	0	0	standard
@@ -19,3 +20,5 @@ method	3	SdiffAllPairs	3	0	sdiff
 method	4	StderivFirst	1	1	stderiv
 method	5	StderivLaplacian	2	1	stderiv
 method	6	StderivAllPairs	3	1	stderiv
+method	7	StderivCustom	4	1	stderiv
+method	8	StderivCustomCar	5	1	stderiv

@@ -68,7 +68,7 @@ with open(VECTORS) as fh:
             check(False, f"unknown vector kind '{kind}'")
 
 # The enum has exactly the canonical members (count guards against an added/removed value).
-check(len(list(fp.Method)) == 7, "Method has exactly 7 members")
+check(len(list(fp.Method)) == 9, "Method has exactly 9 members")
 
 print(f"pca method conformance (python): {ran} checks, {fails} failed")
 if fails == 0:
