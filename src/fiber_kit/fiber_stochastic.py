@@ -234,7 +234,7 @@ def _ensemble_chunk(c, ext, res_ext, sub, ctx_process, ndraw, frac, rng, jobs=1,
         cfg = _POOL_CFG
         nworkers = min(jobs, ndraw)
         with ProcessPoolExecutor(max_workers=nworkers,
-                                 initializer=fsess._init_chunk_worker, initargs=(cfg,)) as ex:
+                                 initializer=fsess._init_pool_worker, initargs=(cfg,)) as ex:
             for geoms, members in ex.map(_draw_worker, tasks):
                 for g, mem in zip(geoms, members):
                     g["_draw_members"] = mem

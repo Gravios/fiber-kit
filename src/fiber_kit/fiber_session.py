@@ -1291,6 +1291,37 @@ def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
 _CTX = {}
 
 
+def _limit_worker_threads():
+    """Pin BLAS/OpenMP to one thread per worker process.
+
+    Each worker is already one unit of process parallelism, but NumPy's BLAS
+    defaults its thread pool to the core count -- so N workers on an N-core box
+    ask for N*N threads, and every matmul pays an N-way fork/join barrier on
+    arrays far too small to need one.  On a 64-core machine with 64 draws that is
+    4096 threads contending for 64 cores.  Set before the first BLAS call: most
+    backends read these at load time, so this must run in the initializer, not
+    later.  An explicit environment setting by the caller wins.
+    """
+    import os
+    for var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+                "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS"):
+        os.environ.setdefault(var, "1")
+    try:                     # already-loaded backends need telling directly
+        from threadpoolctl import threadpool_limits
+        threadpool_limits(1)
+    except Exception:
+        pass
+
+
+def _init_pool_worker(cfg):
+    """Pool initializer for a POOL WORKER: pin BLAS to one thread, then set up
+    the usual context.  Kept separate from _init_chunk_worker because the parent
+    also calls that one, and the parent runs the consensus/template matching that
+    genuinely wants threads."""
+    _limit_worker_threads()
+    _init_chunk_worker(cfg)
+
+
 def _init_chunk_worker(cfg):
     """Pool initializer: stash the static config and open the memmaps once per
     worker process.  Also runs (with a fresh dict) for the serial jobs==1 path."""
@@ -1630,7 +1661,7 @@ def main():
         nworkers = min(jobs, len(tasks))
         log(f"clustering {len(tasks)} chunks on {nworkers} processes")
         with ProcessPoolExecutor(max_workers=nworkers,
-                                 initializer=_init_chunk_worker, initargs=(cfg,)) as ex:
+                                 initializer=_init_pool_worker, initargs=(cfg,)) as ex:
             for result in ex.map(_process_chunk, tasks):
                 _store(result)
 
