@@ -1,0 +1,91 @@
+# custody_vectors.tsv — canonical chain-of-custody conformance vectors.
+# ONE table, run by every language mirror so they cannot drift:
+#   C++    : custody_conformance_test.cpp  (custody.hpp)
+#   Python : test_custody_conformance.py   (ndm_resolve_io.py)
+#   bash   : (future) ndm_custody mirror
+#
+# Tab-separated.  Column 1 is the case kind; remaining columns depend on kind.
+# Empty fields are written as empty strings between tabs (trailing tabs matter).
+#
+#   classify      <type>  <class>
+#   method_of     <path>  <method>
+#   parse_anchor  <path>  <base>  <type>  <method>  <group>  <suffix>  <ok 0|1>
+#   resolve       <existing-csv>  <type>  <group>  <method>  <expect-basename>  <found 0|1>
+#                 (existing-csv = comma-separated suffixes touched under "<tmp>/sess.")
+#   method_token  <token>  <family>  <kind>  <order>   (kind/order empty when absent)
+#   is_stderiv    <method>  <0|1>
+#
+# ── classify ────────────────────────────────────────────────────────────────
+classify	clu	MethodSpecific
+classify	clc	MethodSpecific
+classify	fet	MethodSpecific
+classify	pca	MethodSpecific
+classify	col	MethodSpecific
+classify	model	MethodSpecific
+classify	klg	MethodSpecific
+classify	res	Shared
+classify	spk	Shared
+classify	fil	SessionWide
+classify	dat	SessionWide
+classify	xml	SessionWide
+classify	yaml	SessionWide
+classify	par	SessionWide
+# ── method_of ───────────────────────────────────────────────────────────────
+method_of	sess.clu.stderiv.5	stderiv
+method_of	sess.clc.stderiv.5	stderiv
+method_of	sess.spk.standard.5	standard
+method_of	sess.clu.sdiff.12	sdiff
+method_of	sess.spk.5	
+method_of	a.b.spk.5	
+method_of	/path/to/sirotaA-jg-000005-20120312.clu.stderiv.5	stderiv
+method_of	sess.fil	
+method_of	sess	
+# ── parse_anchor ────────────────────────────────────────────────────────────
+parse_anchor	sess.clu.stderiv.5	sess	clu	stderiv	5		1
+parse_anchor	sess.clc.stderiv.5.microfiber	sess	clc	stderiv	5	microfiber	1
+parse_anchor	sess.clc.7	sess	clc		7		1
+parse_anchor	sess.clu.5	sess	clu		5		1
+parse_anchor	sess.clu.stderiv.5.drift	sess	clu	stderiv	5	drift	1
+parse_anchor	exp.v2.clu.sdiff.8	exp.v2	clu	sdiff	8		1
+parse_anchor	/d/sirotaA-jg-000005-20120312.spk.stderiv.5	sirotaA-jg-000005-20120312	spk	stderiv	5		1
+parse_anchor	sess.fil						0
+parse_anchor	garbage						0
+# ── resolve ─────────────────────────────────────────────────────────────────
+resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	spk	5	stderiv	sess.spk.5	1
+resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	res	5	stderiv	sess.res.standard.5	1
+resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	fet	5	stderiv	sess.fet.stderiv.5	1
+resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	pca	5	stderiv	sess.pca.stderiv.5	1
+resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	fil	5	stderiv	sess.fil	1
+resolve	spk.stderiv.7	spk	7	stderiv	sess.spk.stderiv.7	1
+resolve	res.5	res	5	stderiv	sess.res.5	1
+resolve		clu	9	stderiv	sess.clu.stderiv.9	0
+resolve		spk	3	stderiv	sess.spk.stderiv.3	0
+
+# -- method tokens: <family>[_<kind><order>], e.g. stderiv_C4 -----------------
+method_token	stderiv	stderiv		
+method_token	standard	standard		
+method_token	sdiff	sdiff		
+method_token	stderiv_S3	stderiv	S	3
+method_token	stderiv_C4	stderiv	C	4
+method_token	stderiv_C5	stderiv	C	5
+method_token	stderiv_C12	stderiv	C	12
+method_token	sdiff_S2	sdiff	S	2
+# malformed suffixes stay opaque - the whole token is the family
+method_token	stderivfoo	stderivfoo		
+method_token	stderiv_C	stderiv_C		
+method_token	stderiv_X3	stderiv_X3		
+# -- stderiv domain: family test, NOT a "stderiv" prefix test -----------------
+is_stderiv	stderiv	1
+is_stderiv	stderiv_S3	1
+is_stderiv	stderiv_C4	1
+is_stderiv	stderiv_C12	1
+is_stderiv	standard	0
+is_stderiv	sdiff	0
+is_stderiv	sdiff_S2	0
+is_stderiv	stderivfoo	0
+is_stderiv	stderiv_C	0
+is_stderiv	stderiv_X3	0
+# -- the new tokens parse through the existing naming paths -------------------
+method_of	sess.spk.stderiv_C4.5	stderiv_C4
+method_of	sess.fet.stderiv_S3.5	stderiv_S3
+parse_anchor	sess.spk.stderiv_C4.5	sess	spk	stderiv_C4	5		1

@@ -47,7 +47,7 @@ import numpy as np
 
 __all__ = [
     "ResolvedInput", "resolve_input", "prefer_derived", "prefer_canonical",
-    "variant_family", "is_stderiv_variant",
+    "VariantSpec", "parse_variant_token", "variant_family", "is_stderiv_variant",
     "read_res_file", "write_res_file", "read_res", "write_res",
     "read_clu_file", "write_clu_file", "read_clu", "write_clu",
     "read_cluster_res",
@@ -69,23 +69,37 @@ FET_HDR_DTYPE = np.dtype("<i4")
 ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found"])
 
 
-def variant_family(variant):
-    """Family of a variant token -- the part before an _S<order>/_C<order> suffix.
+VariantSpec = namedtuple("VariantSpec", "family kind order")
 
-    'stderiv_C4' -> 'stderiv';  'stderiv' -> 'stderiv';  'standard' -> 'standard'.
 
-    Mirrors the neurosuite-3 token grammar (<family>[_<kind><order>], kind S for the
-    plain spatial derivative or C for the session's custom sdiffPairs pattern) as
-    implemented in custody.hpp / ndm_custody / ndm_resolve_io.  A token that does not
-    match the suffix grammar is opaque -- the whole string is the family -- so an
-    unknown token never masquerades as a known one.
+def parse_variant_token(variant):
+    """Decompose a variant token <family>[_<kind><order>], e.g. 'stderiv_C4'.
+
+    Returns VariantSpec(family, kind, order): kind is 'S' (plain spatial derivative)
+    or 'C' (the session's custom sdiffPairs pattern), order is the spatial-derivative
+    order actually applied; both are None on a bare token.
+
+    Mirrors the neurosuite-3 token grammar as implemented in custody.hpp
+    (MethodSpec/parseMethodToken), ndm_custody (ndm_parse_method) and
+    ndm_resolve_io (parse_method_token).  A token that does not match the suffix
+    grammar is opaque -- the whole string is the family -- so an unknown token never
+    masquerades as a known one.  Kept honest by test/custody_vectors.tsv, an
+    identical copy of the canonical table those three are checked against.
     """
     cut = variant.rfind("_")
     if cut != -1:
         suffix = variant[cut + 1:]
         if len(suffix) >= 2 and suffix[0] in ("S", "C") and suffix[1:].isdigit():
-            return variant[:cut]
-    return variant
+            return VariantSpec(variant[:cut], suffix[0], int(suffix[1:]))
+    return VariantSpec(variant, None, None)
+
+
+def variant_family(variant):
+    """Family of a variant token -- the part before an _S<order>/_C<order> suffix.
+
+    'stderiv_C4' -> 'stderiv';  'stderiv' -> 'stderiv';  'standard' -> 'standard'.
+    """
+    return parse_variant_token(variant).family
 
 
 def is_stderiv_variant(variant):
