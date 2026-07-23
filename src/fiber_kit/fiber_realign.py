@@ -314,6 +314,149 @@ def _resolve_variant_token(base, group, variant):
     return variant
 
 
+def parse_sdiff_pairs(spec):
+    """Order 4 partner map: "a-b,c-d,..." -> partner[a] = b (group-local 0-based).
+
+    Port of parseSdiffPairs in neurosuite-3 libklustersshared/sdiff_pairs.h.  Output
+    channel a becomes x[a] - x[partner[a]].  The pattern must form a spanning tree
+    with exactly one root (a position never used as a source), and the root must be
+    the LAST position -- its output is redundant and is what SDIFF_PASS drops.
+    Raises ValueError on anything malformed rather than guessing.
+    """
+    partner, maxpos = {}, 0
+    for tok in str(spec).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" not in tok:
+            raise ValueError(f"bad sdiffPairs token {tok!r} (want a-b)")
+        lhs, rhs = tok.split("-", 1)
+        try:
+            a, b = int(lhs), int(rhs)
+        except ValueError:
+            raise ValueError(f"bad sdiffPairs token {tok!r} (want integers)")
+        if a < 0 or b < 0 or a == b:
+            raise ValueError(f"bad sdiffPairs token {tok!r}")
+        if a in partner:
+            raise ValueError(f"sdiffPairs channel {a} specified twice")
+        partner[a] = b
+        maxpos = max(maxpos, a + 1, b + 1)
+    if not partner:
+        raise ValueError("empty sdiffPairs")
+    roots = [i for i in range(maxpos) if i not in partner]
+    if len(roots) != 1:
+        raise ValueError(f"sdiffPairs must have exactly one root, found {roots}")
+    if roots[0] != maxpos - 1:
+        raise ValueError(f"sdiffPairs root must be the last position "
+                         f"({maxpos - 1}), found {roots[0]}")
+    return [partner.get(i, i) for i in range(maxpos)], roots[0]
+
+
+def parse_sdiff_sets(spec):
+    """Order 5 reference sets: "a-b+c+d,..." -> sets[a] = [b,c,d] (group-local 0-based).
+
+    Port of parseSdiffSets in neurosuite-3 libklustersshared/sdiff_pairs.h.  Output
+    channel a becomes x[a] - mean(x[sets[a]]).  Every channel must carry a non-empty
+    set and no channel may reference itself; there is no root requirement.
+    """
+    toks, maxpos = [], 0
+    for tok in str(spec).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" not in tok:
+            raise ValueError(f"bad sdiffSets token {tok!r} (want a-b[+c...])")
+        lhs, rhs = tok.split("-", 1)
+        try:
+            a = int(lhs)
+        except ValueError:
+            raise ValueError(f"bad sdiffSets source in {tok!r}")
+        if a < 0:
+            raise ValueError(f"bad sdiffSets source in {tok!r}")
+        members = []
+        for m in rhs.split("+"):
+            m = m.strip()
+            try:
+                b = int(m)
+            except ValueError:
+                raise ValueError(f"bad sdiffSets target in {tok!r}")
+            if b < 0 or b == a:
+                raise ValueError(f"bad sdiffSets target in {tok!r}")
+            members.append(b)
+            maxpos = max(maxpos, b + 1)
+        maxpos = max(maxpos, a + 1)
+        toks.append((a, members))
+    if not toks:
+        raise ValueError("empty sdiffSets")
+    sets = [None] * maxpos
+    for a, members in toks:
+        if sets[a] is not None:
+            raise ValueError(f"sdiffSets channel {a} specified twice")
+        sets[a] = members
+    missing = [i for i, v in enumerate(sets) if v is None]
+    if missing:
+        raise ValueError(f"sdiffSets channels {missing} have no reference set "
+                         f"(all channels must be specified)")
+    return sets
+
+
+def sdiff_spec_uses_sets(spec):
+    """True iff the pattern uses order-5 SET syntax (any '+'), else order-4."""
+    return "+" in str(spec or "")
+
+
+def _round_half_away(x):
+    """C round(): halfway cases go AWAY from zero.  np.round is half-to-EVEN, which
+    disagrees on exactly-.5 values -- and order 5 produces them routinely (x minus
+    the mean of an even-sized integer set)."""
+    return np.sign(x) * np.floor(np.abs(x) + 0.5)
+
+
+def _stderiv_custom_transform(raw_ext, partner=None, sets=None):
+    """stderiv for a custom sdiffPairs pattern (token _C4 / _C5).
+
+    Mirrors fill_sdiff_buffer + computeSDiff in neurosuite-3
+    process_extractspikes_stderiv, for SDIFF_CUSTOM (order 4) and SDIFF_CUSTOM_CAR
+    (order 5):
+
+        order 4:  sd[t,a] = x[t,a] - x[t,partner[a]]
+        order 5:  sd[t,a] = x[t,a] - mean(x[t, sets[a]])
+        both:     round-half-away-from-zero, clamp to int16, THEN
+                  stderiv[t,a] = sd[t,a] - sd[t-1,a], clamp to int16
+
+    Two things differ from the allpairs path in _stderiv_transform, and both matter:
+
+      - NO nChanGrp scaling.  Allpairs is nChanGrp*x - sum(x); orders 4 and 5 are
+        plain differences, unscaled.  Scaling them would inflate every amplitude by
+        the channel count.
+      - The spatial step is rounded and clamped to int16 BEFORE the temporal
+        difference, because the C++ holds it in a short buffer.  For allpairs the
+        spatial result is an exact integer so this is invisible; for order 5 the
+        mean of a reference set generally is not, so skipping the intermediate
+        rounding would drift from the extractor's output.
+
+    `raw_ext` is (N, nsamp+1, C): the window plus one preceding .fil sample, so the
+    t=0 temporal difference uses the TRUE previous sample.  Returns (N, nsamp, C)
+    int16 aligned 1:1 with the standard window.
+    """
+    r = np.asarray(raw_ext, np.float64)
+    C = r.shape[2]
+    if partner is not None:
+        if len(partner) != C:
+            raise ValueError(f"sdiffPairs covers {len(partner)} channels but the group has {C}")
+        sd = r - r[:, :, partner]
+    elif sets is not None:
+        if len(sets) != C:
+            raise ValueError(f"sdiffSets covers {len(sets)} channels but the group has {C}")
+        ref = np.stack([r[:, :, s].mean(axis=2) for s in sets], axis=2)
+        sd = r - ref
+    else:
+        raise ValueError("_stderiv_custom_transform needs partner or sets")
+    sd = np.clip(_round_half_away(sd), -32768.0, 32767.0)
+    st = sd[:, 1:, :] - sd[:, :-1, :]
+    return np.clip(st, -32768.0, 32767.0).astype(np.int16)
+
+
 def _variant_present(base, group, variant):
     """True if this session has a <variant> spk or pca on disk (so realign should refresh it)."""
     try:
@@ -437,7 +580,9 @@ def main():
     ap.add_argument("--variants", default=None,
                     help="comma list of feature spaces to refresh from .fil (default: standard + "
                          "stderiv if present).  Each is re-derived from the re-extracted raw window: "
-                         "standard=raw, stderiv=SDIFF_ALLPAIRS+temporal-diff, then projected onto its .pca")
+                         "standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the "
+                         "session's own spikeDetection.channelGroups[N].sdiffPairs pattern "
+                         "(partner map / reference sets); then projected onto its .pca")
     ap.add_argument("--out-tag", "--out-stage", default="",
                     help="stage tag for committed outputs (default: empty -> overwrite the canonical "
                          ".res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). "
@@ -558,18 +703,39 @@ def main():
             elif spec.family in ("stderiv", "D") and spec.kind is None:
                 wav = _stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
             elif spec.family == "stderiv" and spec.kind == "C":
-                # _C<order> means the session's own sdiffPairs pattern -- a partner map
-                # (order 4) or reference sets (order 5) stored with the session, not
-                # anything derivable from the waveform window.  fiber-kit does not
-                # hold that pattern and must not invent one: applying allpairs here
-                # would silently produce a DIFFERENT feature space under the same
-                # token.  Re-extract it with the tool that owns the pattern.
-                _log(f"variant '{v}': custom sdiffPairs pattern (order {spec.order}) cannot be "
-                     f"re-derived here -- fiber-kit never applies the stderiv transform for a "
-                     f"_C token. Re-extract with  ndm_extractspikes -P <pattern>  (or "
-                     f"ndm_alignspikes -P) after this realign, so it picks up the corrected .res. "
-                     f"NOTE its .spk is now STALE against the realigned timestamps.")
-                continue
+                # _C<order> is the session's OWN pattern, carried in
+                # spikeDetection.channelGroups[<group-1>].sdiffPairs -- a partner map
+                # (order 4) or reference sets (order 5) in group-local 0-based
+                # positions.  Read from the session rather than assumed, so the
+                # re-derived waveform is the one this session's extractor produced.
+                pat = cfg.get("sdiff_pairs")
+                if not pat:
+                    _log(f"variant '{v}': token says a custom pattern but "
+                         f"spikeDetection.channelGroups[{group - 1}].sdiffPairs is absent from "
+                         f"{cfg.get('yaml')}; refusing to guess one. Add it, or re-extract with "
+                         f"ndm_extractspikes -P. NOTE this .spk is STALE against the realigned .res.")
+                    continue
+                # The token records the order the extractor applied; the pattern's own
+                # grammar implies one too ('+' => sets => order 5).  If they disagree,
+                # one of them is wrong about this session, and picking either would
+                # write a file whose name contradicts its contents.
+                pat_order = 5 if sdiff_spec_uses_sets(pat) else 4
+                if spec.order != pat_order:
+                    _log(f"variant '{v}': token says order {spec.order} but the session's "
+                         f"sdiffPairs parses as order {pat_order}; refusing rather than writing "
+                         f"a file whose name contradicts its contents.")
+                    continue
+                try:
+                    if pat_order == 5:
+                        wav = _stderiv_custom_transform(raw_ext, sets=parse_sdiff_sets(pat))
+                    else:
+                        partner, _root = parse_sdiff_pairs(pat)
+                        wav = _stderiv_custom_transform(raw_ext, partner=partner)
+                except ValueError as e:
+                    _log(f"variant '{v}': sdiffPairs {pat!r} unusable for this group ({e}); "
+                         f"skipping. NOTE this .spk is STALE against the realigned .res.")
+                    continue
+                _det("sdiff", f"{v}: order {pat_order} from session sdiffPairs {pat!r}")
             elif spec.family == "stderiv" and spec.kind == "S":
                 # Orders 1-3 are plain spatial derivatives, but both neurosuite-3
                 # aligners refuse _S tokens outright -- they are not implemented there
