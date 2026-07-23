@@ -78,11 +78,10 @@ def main():
                     help="one row per cluster over the whole session (single whitener)")
     ap.add_argument("--min-cluster", type=int, default=20, help="skip clusters smaller than this")
     ap.add_argument("--n-grid", type=int, default=40)
-    ap.add_argument("--fibers-stage", "--method", dest="method", default="refine",
-                    help="tag in the .fibers filename. NOTE this lands in the METHOD slot of "
-                         "<base>.fibers.<slot>.<group> (see fibers_path), so a stage value here "
-                         "produces a name whose method slot holds a stage; fixing that changes "
-                         "filenames and is deliberately left as a separate decision")
+    ap.add_argument("--fibers-stage", "--method", dest="method", default=None,
+                    help="post-fiber stage tag of the written .fibers file "
+                         "(<base>.fibers.<clu-method>.<group>.<stage>). "
+                         "Default: mirror --clu-stage, since the stats describe that clu")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 
@@ -153,7 +152,11 @@ def main():
         adapt_snr=col("adapt_snr", np.float32), adapt_meanabsz=col("adapt_meanabsz", np.float32),
         adapt_fracz3=col("adapt_fracz3", np.float32),
     )
-    out = a.out or nio.fibers_path(base, a.method, elec)
+    # The method slot takes the method the clu stems from and the stage slot takes
+    # the clu's stage -- both already known from --clu-method / --clu-stage, which
+    # is why the old standalone flag was redundant as well as misplaced.
+    out = a.out or nio.fibers_path(base, a.clu_method, elec,
+                                   a.method if a.method is not None else a.variant)
     with open(out, "wb") as f:
         np.savez_compressed(f, **arrs)
     print(f"wrote {out}  ({M} cluster-instances over {len(windows)} window(s); "
