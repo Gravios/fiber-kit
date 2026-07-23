@@ -163,7 +163,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_DIP_DIM` | `4` | 6 \| 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint / secondary PCs that separate co-located pairs; too many adds pure-noise dims. |
 | `FK_DIP_ALPHA` | `0.02` | 0.02 \| 0.01-0.03.  Dip-test p to REJECT unimodality and bisect.  Statistical gate: >0.05 starts splitting on sampling noise; <0.01 misses real bimodality. |
 | `FK_DIP_MIN` | `30` | 30 \| 30-60.  Min spikes to attempt a dip bisection (need enough for a stable dip statistic; below this the test is underpowered). |
-| `FK_EBAND` | `1` | 1=on (validated) \| 0=off (falls back to --fine-method per fiber). |
+| `FK_EBAND` | `1` | 1=on (validated) \| 0=off (falls back to --fine-algo per fiber). |
 | `FK_EBAND_WIDTH` | `0.40` | 0.45 \| 0.35-0.60 (decades).  Band width; 0.45 dec ~ factor 2.8 in amplitude. Narrower = more, finer but sparser bands. |
 | `FK_EBAND_OVERLAP` | `0.2` | 0.20 \| 0.15-0.25 (decades).  Band overlap so the overlap-anchor relink has shared spikes to stitch adjacent bands. |
 | `FK_EBAND_CONFOUND` | `0.4` | 0.40 \| 0.30-0.50.  Band a fiber only if PC1 R^2 vs log-energy >= this (its main shape axis IS energy).  Avoids banding shape-clean fibers. |

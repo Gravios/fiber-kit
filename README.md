@@ -80,8 +80,8 @@ and a per-fiber `.fibers` table:
 # (looked up as <session>.yaml or <session>/<session>.yaml); group is 1-based.
 fiber-session sirotaA-jg-000005-20120312 5 \
     --chunk-min 12 --overlap-min 4 --min-group 200 \
-    --fine-method rkk --inclusion-k 3 \
-    --merge-method sliding --merge-corr 0.90 \
+    --fine-algo rkk --inclusion-k 3 \
+    --merge-algo sliding --merge-corr 0.90 \
     --collision-flag --quality-metrics
 ```
 
@@ -206,7 +206,7 @@ by `test/custody_token_conformance` against `test/custody_vectors.tsv`.
 | File | Contents |
 |------|----------|
 | `<base>.clu.<elec>` | `int32` cluster ids (header = nClusters; `0` = noise, fiber ids `+1`) |
-| `<base>.fibers.<method>.<elec>` | `npz` of per-(chunk,fiber) geometry + statistics (below) |
+| `<base>.fibers.<method>.<group>[.<stage>]` | `npz` of per-(chunk,fiber) geometry + statistics (below).  `<method>` is the operation the clusters stem from (`standard`/`stderiv`/`stderiv_C5`); the optional `<stage>` is the post-fiber tag of the clu the table describes, so each stage can keep its own. |
 | `<base>.merge_candidates.<elec>.tsv` | proposed same-neuron merges (with `--emit-merge-candidates`) |
 
 ## Per-fiber statistics
@@ -245,7 +245,7 @@ The threshold auto-calibrates to the within-fiber-half distance floor.
 
 ```bash
 # 1. consolidate normally, then propose same-neuron merges WITHOUT applying them
-fiber-session <base> 5 ... --merge-method sliding --merge-corr 0.90 \
+fiber-session <base> 5 ... --merge-algo sliding --merge-corr 0.90 \
               --emit-merge-candidates           # -> <base>.merge_candidates.5.tsv
 
 # 2. gather independent full-session evidence per proposed pair
@@ -256,7 +256,7 @@ fiber-validate-merges <base> 5 --sr 32552
 #    ([0,2] ms is confounded: cross-neuron coincidences are removed as collisions)
 
 # 3. apply once trusted (auto threshold, or --profile-thr / hand-merge the gids)
-fiber-session <base> 5 ... --merge-method profile
+fiber-session <base> 5 ... --merge-algo profile
 ```
 
 ## Cross-chunk linking (drift)
@@ -375,9 +375,9 @@ chunks shade by time. Writes `.gif`, or `.mp4` if ffmpeg is present.*
 | `--channels` / `--ntotal` / `--nchan` / `--nsamp` / `--sr` | from YAML | override the YAML-derived probe geometry & sampling |
 | `--chunk-min` / `--overlap-min` | 12 / 4 | chunk length & overlap (minutes) |
 | `--min-group` | 200 | coarse min spikes/fiber (linking anchors) |
-| `--fine-method` | `gmm` | `rkk` \| `gmm` \| `fiber` \| `none` |
+| `--fine-algo` (`--fine-method`) | `gmm` | `rkk` \| `gmm` \| `fiber` \| `none` |
 | `--inclusion-k` | 3.0 | per-fiber radius = `median + k·MAD`; `0` disables |
-| `--merge-method` | `template` | `template` \| `sliding` \| `profile` |
+| `--merge-algo` (`--merge-method`) | `template` | `template` \| `sliding` \| `profile` |
 | `--merge-corr` | 0.0 | consolidation threshold (`0`=off; ~0.95 template / ~0.90 sliding) |
 | `--profile-thr` / `--profile-floor-pct` / `--profile-min-n` | auto / 90 / 120 | profile-merge threshold, auto-floor percentile, min spikes to be a merge anchor |
 | `--emit-merge-candidates` | off | write proposals, don't merge (curation) |

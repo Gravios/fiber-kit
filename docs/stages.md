@@ -3,11 +3,33 @@
 Every `fiber-*` command is a pipeline stage or tool.  This file is generated from each stage's
 argument parser, so the parameters and defaults below match the code.  A stage's *input* is a `.clu`
 (selected by `--clu-method`/`--clu-stage`, or `--in-clu`) plus the session's `.res` and `.spk`; its
-*output* is a new `.clu` under `--out-tag`/`--out-stage`.  Session geometry (channels, samples, peak,
+*output* is a new `.clu` under `--out-stage` (`--out-tag`).  Session geometry (channels, samples, peak,
 sampling rate) is read from `<session>.yaml`.  Positionals are `<session> <elec>` unless noted.
 
 Run any stage with `-h` for the live help, or `fiber-pipeline <elec> <stage> [args…]` to run it in the
 pipeline (see [pipeline.md](pipeline.md)).
+
+---
+
+## Flag vocabulary
+
+Three words, one meaning each, across every stage.
+
+| word | means | where it lands in a filename |
+|---|---|---|
+| **method** | the operation the clusters stem from — `standard`, `stderiv`, `stderiv_C5` | the slot **before** the group: `<base>.<type>.<method>.<group>` |
+| **stage** | the post-fiber tag, so each processing step can keep its own cluster files | the slot **after** the group: `…<group>.<stage>` |
+| **algo** | a choice of algorithm — nothing to do with file naming | — |
+
+A qualified prefix says which artifact is meant when a stage touches several
+(`--clu-method`, `--spk-method`, `--out-stage`); the **suffix** carries the
+meaning.  So `--clu-method stderiv_C5 --clu-stage refine` reads
+`<base>.clu.stderiv_C5.<group>.refine`.
+
+`--method` used to be spelled `--variant` in some stages and mean the *stage* in
+others; `-method` was also used for algorithm choices.  **Every previous spelling
+still works as an alias**, so existing scripts and `plans/*.yaml` are unaffected —
+the tables below show the canonical name first with the old one in parentheses.
 
 ---
 
@@ -29,7 +51,7 @@ Positional: `session`, `group`
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
 | `--overlap-min` | `4.0` |  |
 | `--min-group` | `200` | COARSE min spikes/fiber (for linking) |
-| `--fine-method` | `gmm` |  — choices: `gmm`, `rkk`, `fiber`, `none` |
+| `--fine-algo` (`--fine-method`) | `gmm` |  — choices: `gmm`, `rkk`, `fiber`, `none` |
 | `--rkk-dims` | `6` |  |
 | `--rkk-max` | `50` |  |
 | `--rkk-realign` | flag (off) | interleave rkk (CEM) with per-cluster realignment (per-step; default on) |
@@ -54,7 +76,7 @@ Positional: `session`, `group`
 | `--resplit-detrend-min-n` | `100` | skip the detrend below this many spikes. |
 | `--cfiber-gate` | flag (off) | veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q) |
 | `--cfiber-q` | `0.9` | quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold |
-| `--merge-method` | `template` |  — choices: `template`, `sliding`, `profile` |
+| `--merge-algo` (`--merge-method`) | `template` |  — choices: `template`, `sliding`, `profile` |
 | `--sliding-nwin` | `14` |  |
 | `--profile-thr` | — | profile-merge direction-distance threshold; default = auto same-neuron floor |
 | `--profile-floor-pct` | `90.0` | percentile of within-fiber-half distances used as the auto threshold |
@@ -137,7 +159,7 @@ Positional: `session`, `group`
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
 | `--clu` | — | cluster file (default <base>.clu.<group>; pass the refined/relinked one, e.g. <base>.clu.stderiv.<group>.refine) |
-| `--align-method` | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed.  (Named --align-method to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
+| `--align-algo` (`--align-method`) | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed.  (Named --align-algo to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
 | `--max-shift` | `8` |  |
 | `--iters` | `4` |  |
 | `--min-n` | `20` |  |
@@ -148,10 +170,10 @@ Positional: `session`, `group`
 | `--refeaturize` | flag (off) | reproject the re-extracted/rolled windows onto .pca.<variant> -> new .fet (implies --reextract, or --shift-spk when that is set) |
 | `--fil` | — | filtered signal path (default <base>.fil) |
 | `--variants` | — | comma list of feature spaces to refresh from .fil (default: standard + stderiv if present).  Each is re-derived from the re-extracted raw window: standard=raw, stderiv=SDIFF_ALLPAIRS+temporal-diff, then projected onto its .pca |
-| `--out-stage` (`--out-tag`) | "" | stage tag for committed outputs (default: empty -> overwrite the canonical .res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned |
+| `--out-stage` (`--out-tag`) | "" | stage tag for committed outputs (default: empty -> overwrite the canonical .res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). Pass a tag only if you want a side-by-side copy, e.g. --out-stage realigned |
 | `--out-variant` | — | variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; falls back to standard).  There is one .res/.clu under this variant; .spk/.fet are written per feature space in --variants (standard raw, stderiv transform) |
 | `--emit-clu` | flag (off) | re-emit the (label-unchanged) clu next to the committed .res/.spk/.fet so the set opens in Klusters as a unit (default on) |
-| `--no-emit-clu` | flag (on) | do NOT write the clu.  Use when the input --clu is a stage-tagged clu but the outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE .clu.<variant>.<group> with this stage's labels.  The stage clu already exists and its labels are unchanged, so skipping the write keeps the base over-cluster intact. |
+| `--no-emit-clu` | flag (on) | do NOT write the clu.  Use when the input --clu is a stage-tagged clu but the outputs commit canonically (--out-stage ''): re-emitting would overwrite the BASE .clu.<variant>.<group> with this stage's labels.  The stage clu already exists and its labels are unchanged, so skipping the write keeps the base over-cluster intact. |
 | `--out-res` | — |  |
 | `--out-off` | — |  |
 
@@ -232,7 +254,7 @@ Positional: `session`, `group`
 | `--knn-minnew` | `30` |  |
 | `--knn-dims` | `16` |  |
 | `--fold-thr` | `0.9` | non-normalised median-xcorr above which a peeled bucket is folded (else kept as new) |
-| `--fine-method` | `gmm` | method for the initial fine sort when no --in-clu is given — choices: `gmm`, `fiber`, `none` |
+| `--fine-algo` (`--fine-method`) | `gmm` | method for the initial fine sort when no --in-clu is given — choices: `gmm`, `fiber`, `none` |
 | `--chunk-minutes` (`--chunk-min`) | `0.0` | drift-aware mode: window the session into CORE chunks of this many minutes, refine each in its own whitened frame, and link fibers across windows by overlap-anchor; 0 = single whole-session pass (assumes stationary) |
 | `--chunk-overlap-minutes` | `1.0` | overlap between adjacent windows used for overlap-anchor linking (drift-aware mode) |
 | `--chunk-jobs` | `1` | parallel worker PROCESSES over chunks in drift-aware mode (default 1 = serial). Chunks are independent (own whitener + refine), so this is the main speedup for a chunked run; the cross-window link runs serially after.  Workers re-open the .spkD/.fil memmaps, so memory is bounded.  No effect in whole-session mode (--chunk-minutes 0). |
@@ -300,7 +322,7 @@ Positional: `session`, `group`
 | `--min-spikes` | `15` |  |
 | `--no-dipole` | flag (off) |  |
 | `--no-templates` | flag (off) | skip per-cluster median templates in the .clusters.npz |
-| `--amp-method` | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
+| `--amp-algo` (`--amp-method`) | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
 | `--amp-basis` | `auto` | amplitude basis the gate-facing positions use: 'pca'=read .pca.standard.<elec> (PC1 score per channel = the .fet amplitude); 'fit'=group basis from .spk; 'auto'=pca if present else fit; 'none'=per-cluster SVD — choices: `auto`, `pca`, `fit`, `none` |
 | `--no-amp-basis` | flag (off) | alias for --amp-basis none (per-cluster SVD) |
 | `--nboot` | `0` | bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). This loop is ~5x the rest of the cost (the dominant runtime); positions (x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 for identical positions ~5x faster (analytic sig_y is still written; the percentile CIs become NaN). |
@@ -399,7 +421,7 @@ Positional: `session`, `group`
 | `--cfiber-thr` | — | cfiber shape co-gate: veto a candidate whose affine-invariant cfiber shape distance exceeds this (drift-invariant complement to the cosine gate). Fixed value. |
 | `--cfiber-q` | — | enable the cfiber co-gate with the threshold self-calibrated at link time to this quantile of the overlap-backbone same-unit shape distances (e.g. 0.90; needs --from-units). |
 | `--out-stage` | — | output .clu stage (default: <clu-stage>_linked) |
-| `--gt-clu` | — | ground-truth .clu to score the clustering before vs after linking |
+| `--gt-stage` (`--gt-clu`) | — | ground-truth .clu to score the clustering before vs after linking |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment if it covers a window) |
 | `--overlap-refrac-ms` | `0.0` | DEFAULT OFF. >0 enables a power-aware refractory veto on the chunk-OVERLAP region: a candidate cross-chunk link is vetoed if, in the time window the two fragments share, their spikes coincide at chance level (two neurons) rather than showing a refractory dip (one neuron).  Censors zero-lag duplicate detections; abstains (keeps the link) when underpowered, so it only ever removes well-supported wrong links.  Needs sr + .res; abstains on sparse data (g5).  Only the default 'cogated' linkage is gated. |
 | `--overlap-refrac-thr` | `0.3` | coincidence ratio above which the overlap test reads 'two neurons' and vetoes (default 0.3) |
@@ -408,7 +430,7 @@ Positional: `session`, `group`
 | `--dr-candidates` | flag (off) | NEW: generate cross-chunk candidates by template-DR (PCA) nearest-neighbour instead of physical-position mutual-NN (g5: candidate cosine 0.966/69%% clean vs 0.888/23%%). The full co-gate stack still filters; this only improves the candidate set. |
 | `--dr-thr` | — | DR-space NN distance cap (default none; co-gate filters) |
 | `--dr-k` | `10` | template-DR dimensionality (default 10 ~ 96%% var on g5) |
-| `--drift-method` | `accumulated` | NEW: 'global' solves drift by maximising template-anchor collinearity with a Laplacian-smoothness term (+ distance attenuation if the cpos table has 'dist'); 'accumulated' = legacy consecutive xcorr (compounds on sparse partitions) — choices: `accumulated`, `global` |
+| `--drift-algo` (`--drift-method`) | `accumulated` | NEW: 'global' solves drift by maximising template-anchor collinearity with a Laplacian-smoothness term (+ distance attenuation if the cpos table has 'dist'); 'accumulated' = legacy consecutive xcorr (compounds on sparse partitions) — choices: `accumulated`, `global` |
 | `--no-provenance` | flag (on) | skip the .merge.tsv per-merge provenance sidecar (default: write it) |
 | `--complete-edge` | flag (off) | NEW: rescue truncated / channel-shifted footprints in the cosine gate by spatial drift registration + own-structure off-probe completion (g5: lifts a truncated pair 0.83->0.91; taken as max with the plain cosine, so it never lowers a good match) |
 | `--channel-pitch` | `20.0` | axial channel pitch (um) for --complete-edge |
@@ -428,11 +450,11 @@ Positional: `session`, `elec`
 | `--clu-method` | `stderiv` | fragment .clu feature space (before the group) |
 | `--clu-stage` (`--variant`) | `fiber_session` | fragment .clu stage tag (the fiber-session output) |
 | `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
-| `--spk-variant` | `standard` | waveform axis for templates/warp (standard = curation axis) |
+| `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--channels` | — | pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary |
-| `--out-tag` | `backbone_linked` | output .clu stage tag (single token) |
+| `--out-stage` (`--out-tag`) | `backbone_linked` | output .clu stage tag (single token) |
 | `--hierarchy` | flag (off) | also write the Klusters hierarchy siblings: `.clc` (per-spike child id) + `.clp` (child->parent map); an input `.clc` is carried through so repeated passes keep the original fiber-session fragments as the leaves. |
-| `--gt-clu` | — | curated .clu to score purity+completeness against |
+| `--gt-stage` (`--gt-clu`) | — | curated .clu to score purity+completeness against |
 | `--gt-res` | — | reserved: .res for the GT (unused when GT shares the session res) |
 | `--spk-cap` | `600` | spikes per fragment for the template |
 | `--chunk-min` | — | chunk length (min); default from <session>.yaml or 12 |
@@ -462,13 +484,13 @@ Positional: `session`, `elec`
 | `--clu-method` | `stderiv` |  |
 | `--clu-stage` (`--variant`) | `backbone_linked` | input .clu stage tag (e.g. the fiber-backbone-link output) |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
-| `--spk-variant` | `standard` | waveform axis for templates (curation axis) |
-| `--out-tag` | `xcorr_merged` | output .clu stage tag |
+| `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates (curation axis) |
+| `--out-stage` (`--out-tag`) | `xcorr_merged` | output .clu stage tag |
 | `--refrac-censor-ms` | `0.0` | detection censor window (ms) |
 | `--nsamp` | — | override; default from <session>.yaml |
 | `--nchan` | — | override; default from <session>.yaml |
 | `--ref-sample` | — | override; default = peak from <session>.yaml |
-| `--gt-clu` | — | curated .clu tag/path to score purity+completeness |
+| `--gt-stage` (`--gt-clu`) | — | curated .clu tag/path to score purity+completeness |
 | `--seed` | `0` |  |
 | `--cos-thr` | `0.99` | FK_XCM_COS_THR (default 0.99) |
 | `--shift` | `4` | FK_XCM_SHIFT (default 4) |
@@ -519,7 +541,7 @@ Positional: `base`, `group`
 |---|---|---|
 | `--variant` | `stderiv` |  |
 | `--tag` | `microfiber` | input atom-layer tag |
-| `--out-tag` | — | output tag (default: same as --tag, i.e. overwrite in place with .bak) |
+| `--out-stage` (`--out-tag`) | — | output tag (default: same as --tag, i.e. overwrite in place with .bak) |
 | `--session` | — |  |
 | `--probe` | — |  |
 | `--channels` | — | comma-separated global channel ids |
@@ -546,7 +568,7 @@ Positional: `base`, `group`
 | `--variant` | `stderiv` | feature space (default stderiv) |
 | `--stage` | `refine_linked` | pipeline stage of the input .clu (default refine_linked) |
 | `--out-stage` | — | pipeline stage for the output triple (default: same as --stage) |
-| `--atoms` | — | stage of a FINER per-spike .clu to use as the atom (.clc) layer; omit for the identity lift (each fiber = one microfiber) |
+| `--atoms-stage` (`--atoms`) | — | stage of a FINER per-spike .clu to use as the atom (.clc) layer; omit for the identity lift (each fiber = one microfiber) |
 | `--write-clu` | flag (off) | also (re-)write the derived .clu; by default only .clc/.clp are written (the input .clu is left untouched unless --out-stage differs) |
 | `--no-renumber` | flag (off) | keep original fiber ids (leave gaps) instead of compacting to consecutive |
 | `--no-backup` | flag (off) | do not write .bak copies of overwritten files |
@@ -562,7 +584,7 @@ Positional: `base`, `group`
 |---|---|---|
 | `--variant` | `stderiv` | feature space (default stderiv) |
 | `--tag` | `microfiber` | stage tag of the input triple (default microfiber) |
-| `--out-tag` | — | stage tag for the output triple (default: overwrite --tag) |
+| `--out-stage` (`--out-tag`) | — | stage tag for the output triple (default: overwrite --tag) |
 | `--ops` | — | edit-script file to apply before refiberizing |
 | `--no-renumber` | flag (off) | keep original fiber ids (leave gaps) |
 | `--no-backup` | flag (off) | do not write .bak copies |
@@ -590,12 +612,12 @@ Positional: `session`, `group`
 | `--min-cluster` | `40` | fragments smaller than this are left untouched |
 | `--var-budget` | — | path to a fiber-calibrate .npz; adds a curated PC-variance stopping gate (merge rejected once a merged cluster would be more spread than a real unit) |
 | `--var-scale` | `1.0` | multiply the loaded variance allowance (dial the operating point: >1 looser/more merging, <1 tighter; floor is conservative, ~1.5-2x reaches the baseline) |
-| `--out-tag` | — | staged .clu stage tag for the merged result (default 'defrag', single token) |
+| `--out-stage` (`--out-tag`) | — | staged .clu stage tag for the merged result (default 'defrag', single token) |
 | `--ccg-refrac-ms` | `0.0` | refractory cross-correlogram veto window (ms); 0 disables. ~1.5 to enable. Power-aware: abstains where firing rates are too low to show a dip (e.g. g5). |
 | `--ccg-thr` | `0.3` | cross-CCG ratio above which a powered pair is vetoed |
 | `--ccg-min-exp` | `5.0` | min expected coincidences for the veto to act |
 | `--ccg-censor-ms` | `0.3` | duplicate censor band for the cross-CCG (ms) |
-| `--gt-clu` | — | ground-truth .clu to score before/after the merge against |
+| `--gt-stage` (`--gt-clu`) | — | ground-truth .clu to score before/after the merge against |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment if it covers a window) |
 
 ## Positions & geometry
@@ -624,7 +646,7 @@ Positional: `session`, `group`
 | `--min-spikes` | `15` |  |
 | `--no-dipole` | flag (off) |  |
 | `--no-templates` | flag (off) | skip per-cluster median templates in the .clusters.npz |
-| `--amp-method` | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
+| `--amp-algo` (`--amp-method`) | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
 | `--amp-basis` | `auto` | amplitude basis the gate-facing positions use: 'pca'=read .pca.standard.<elec> (PC1 score per channel = the .fet amplitude); 'fit'=group basis from .spk; 'auto'=pca if present else fit; 'none'=per-cluster SVD — choices: `auto`, `pca`, `fit`, `none` |
 | `--no-amp-basis` | flag (off) | alias for --amp-basis none (per-cluster SVD) |
 | `--nboot` | `0` | bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). This loop is ~5x the rest of the cost (the dominant runtime); positions (x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 for identical positions ~5x faster (analytic sig_y is still written; the percentile CIs become NaN). |
@@ -647,7 +669,7 @@ Positional: `base`, `elec`
 | `--no-dipole` | flag (off) |  |
 | `--min-n` | `50` |  |
 | `--nboot` | `0` | spike bootstrap draws for depth/distance CIs; 0 (default) uses the analytic Gaussian sigma (matches the bootstrap on isolated clusters, ~Nx cheaper). |
-| `--amp-method` | `pc1` | per-channel amplitude profile: pc1=rank-1 denoised template (default, sharpest + most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, carries a ~4-sigma noise floor on far channels). — choices: `pc1`, `wave`, `ptp` |
+| `--amp-algo` (`--amp-method`) | `pc1` | per-channel amplitude profile: pc1=rank-1 denoised template (default, sharpest + most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, carries a ~4-sigma noise floor on far channels). — choices: `pc1`, `wave`, `ptp` |
 | `--max-resid` | `0.1` |  |
 | `--amp-basis` | `auto` | amplitude denoising basis: 'pca' = read .pca.standard.<elec> eigenvectors (PC1 score per channel = the .fet amplitude); 'fit' = fit one group-wide basis from .spk; 'auto' = pca if present else fit; 'none' = per-cluster SVD — choices: `auto`, `pca`, `fit`, `none` |
 | `--no-amp-basis` | flag (off) | alias for --amp-basis none (per-cluster SVD; unstable at low n) |
@@ -661,7 +683,7 @@ Positional: `base`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--fibers` | — | <base>.fibers.<method>.<elec> (the estimated manifold) |
+| `--fibers` | — | <base>.fibers.<method>.<group>[.<stage>] (the estimated manifold) |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--nchan` | — | override: channels in this group (default from YAML) |
 | `--ntotal` | — | override: total channels in the .fil (default from YAML) |
@@ -880,7 +902,7 @@ Positional: `session`, `group`
 | `--isi-thr` | `0.01` | ISI-violation fraction to flag (default 0.01) |
 | `--snr-thr` | `4.0` | SNR below this is flagged lowSNR (default 4) |
 | `--presence-thr` | `0.5` | presence below this is flagged intermittent (lower for sparse data; default 0.5) |
-| `--gt-clu` | — | ground-truth .clu to score against (fiber-score) |
+| `--gt-stage` (`--gt-clu`) | — | ground-truth .clu to score against (fiber-score) |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment) |
 | `--out` | — | output HTML path (default <base>.qc.<elec>.html) |
 

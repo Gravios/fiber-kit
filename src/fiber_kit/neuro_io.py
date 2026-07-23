@@ -635,8 +635,19 @@ def open_signal(path, nchan, mode="r"):
 
 
 # ── .fibers.<method>.<elec> (dotted-variant npz) ─────────────────────────────
-def fibers_path(base, method, elec):
-    """Path of the per-(chunk,fiber) geometry table.  This is already in the
-    canonical dotted-variant form <base>.<type>.<variant>.<group> with
-    type='fibers', variant=method (e.g. 'stderiv'), group=elec."""
-    return f"{base}.fibers.{method}.{elec}"
+def fibers_path(base, method, elec, stage=""):
+    """Path of the per-(chunk,fiber) geometry table, in the canonical form
+    <base>.fibers.<method>.<group>[.<stage>].
+
+    `method` is the operation the table's clusters stem from (standard | stderiv |
+    stderiv_C5) and occupies the slot BEFORE the group; `stage` is the post-fiber
+    tag and follows the group.  Built through session_path so this file obeys the
+    same two-slot rule as .clu/.fet/.spk rather than a private one.
+
+    The stage slot exists because both writers of this file were previously
+    squeezing two different things into `method`: fiber_session passed the real
+    method ('stderiv'), while fiber_stats passed its clu STAGE ('refine') and so
+    produced <base>.fibers.refine.<group> -- a stage sitting in the method slot,
+    and a name fiber_session's could never be matched against.
+    """
+    return session_path(base, "fibers", elec, variant=method, tag=stage)
