@@ -43,6 +43,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--chunk-min` (`--chunk-minutes`) | `12.0` |  |
 | `--overlap-min` | `4.0` |  |
 | `--min-group` | `200` | COARSE min spikes/fiber (for linking) |
@@ -139,13 +144,6 @@ Positional: `session`, `group`
 | `--feature-align` | — | feature-building alignment: xcorr (default) or centroid (pure, no refine -- adds the trough-position-vs-asymmetry structure to the clustering/linking features). Does NOT touch committing alignment or fiber-realign. Overrides the FIBER_ALIGN env var. — choices: `xcorr`, `centroid` |
 | `--subsample` / `--no-subsample` | flag (off) | enable (--subsample) or disable (--no-subsample) realign's per-spike sub-sample (parabolic) refine in the feature build; default leaves the FIBER_SUBSAMPLE env var / lever untouched (off). Reaches pool workers. |
 | `--out` | — |  |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-realign`
 
 Per-spike Klusters-style realignment + corrected .res spike times, with optional re-extraction from .fil and re-featurisation (commit-and-reextract finalize).
@@ -154,6 +152,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu` | — | cluster file (default <base>.clu.<group>; pass the refined/relinked one, e.g. <base>.clu.stderiv.<group>.refine) |
 | `--align-algo` (`--align-method`) | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed. (Named --align-method to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
 | `--max-shift` | `8` |  |
@@ -172,13 +175,6 @@ Positional: `session`, `group`
 | `--no-emit-clu` | flag (on) | do NOT write the clu. Use when the input --clu is a stage-tagged clu but the outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE .clu.<variant>.<group> with this stage's labels. The stage clu already exists and its labels are unchanged, so skipping the write keeps the base over-cluster intact. |
 | `--out-res` | — |  |
 | `--out-off` | — |  |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-refine`
 
 Dedup at the imposed refractory, then iteratively split/peel a fine sort into clean units; writes a refined .clu (+ deduped .res).
@@ -187,6 +183,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--in-clu` | — | path to the input sort to refine; default = canonical .clu if present, else a fresh fine sort |
 | `--out-method` | `stderiv` | feature space written BEFORE the group (standard\|stderiv\|...); refine operates in stderiv space, so default stderiv |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the split-stage shape features and use a per-call local SVD (legacy behaviour) |
@@ -267,13 +268,6 @@ Positional: `session`, `group`
 | `--dedup-strict` / `--no-dedup-strict` | flag (on) | when a dedup removes spikes, every live per-spike file of the group is subset too. A live file at a third row count (neither pre- nor post-dedup) is a stale leftover from an earlier extraction that CANNOT be subset by this mask; by default it is quarantined aside (.stalebkp) and regenerated. --no-dedup-strict leaves such files in place instead; --dedup-stale error restores a hard failure. |
 | `--dedup-stale` | — | explicit policy for stale leftover per-spike files at a third row count. Default (unset) QUARANTINES them aside as <file>.stalebkp -- non-destructive, leaves the group consistent, and the stage regenerates them. error = hard-fail (old strict behavior); skip = leave them (= --no-dedup-strict). Default follows --dedup-strict. — choices: `error`, `skip`, `quarantine` |
 | `--subsample` / `--no-subsample` | flag (off) | enable (--subsample) or disable (--no-subsample) realign's per-spike sub-sample (parabolic) refine in the feature build; default leaves the FIBER_SUBSAMPLE env var / lever untouched (off). Reaches pool workers. |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-peel`
 
 fiber-peel: consolidate over-split refine fragments by footprint cosine gated by the refractory cross-CCG.
@@ -282,6 +276,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--cpos-method` | `stderiv` |  |
 | `--cpos-stage` | `refine` |  |
 | `--clu-method` | — |  |
@@ -295,13 +294,6 @@ Positional: `session`, `group`
 | `--refrac-min-exp` | `5.0` | min expected coincidences for the veto to be powered (else abstain -> merge allowed) |
 | `--refrac-censor-ms` | `0.0` | censor window (ms) dropping duplicate detections of one spike |
 | `--min-n` | `15` | min spikes for a fragment to participate |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-cpos`
 
 Write a per-spike cluster-position sidecar (.cpos) by localizing each cluster's median RAW template (monopole+dipole).
@@ -310,6 +302,10 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--peak` | `16` | peak sample index within the window |
 | `--spk` | — | path to a STANDARD/raw .spk (preferred over .fil); never the stderiv .spkD |
 | `--spk-method` | `standard` | method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec> |
 | `--fil` | — | path to raw .fil (fallback if no standard .spk) |
@@ -327,11 +323,6 @@ Positional: `session`, `group`
 | `--no-amp-basis` | flag (off) | alias for --amp-basis none (per-cluster SVD) |
 | `--nboot` | `0` | bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). This loop is ~5x the rest of the cost (the dominant runtime); positions (x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 for identical positions ~5x faster (analytic sig_y is still written; the percentile CIs become NaN). |
 | `--probe` | — | probe file(s) for geometry (else from chunk xy via YAML) |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-intrachunk`
 
 Collapse over-split fragments within each chunk into units (stderiv cosine + offset + depth).
@@ -340,38 +331,49 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--probe` | — | probe file(s) for on-the-fly localisation when no fiber-cpos table exists (else the probe named in <session>.yaml) |
 | `--cpos-method` | `stderiv` |  |
 | `--cpos-stage` | — | positions (.cpos) stage tag; default follows --clu-stage, else 'refine' |
 | `--clu-method` | — |  |
 | `--clu-stage` | — |  |
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
-| `--gate` | `==SUPPRESS==` | shape gate: cosine\|mmd\|kcov\|cfiber\|band (default band: energy-scaled median+/-sigma overlap) — choices: `cosine`, `mmd`, `kcov`, `cfiber`, `band` |
-| `--cos-thr` | `==SUPPRESS==` | cosine recall prefilter |
-| `--off-thr` | `==SUPPRESS==` | inter-channel offset RMS gate (samples) |
-| `--depth-gate` | `==SUPPRESS==` | depth gate (um) |
-| `--amp-gate` | `==SUPPRESS==` | absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x (0=off) |
-| `--refrac-ceiling` | `==SUPPRESS==` | reject merge if combined 2ms-ISI violation > this percent (empty=off) |
-| `--pre-merge-cos` | `==SUPPRESS==` | pre-collapse obvious mutual-NN pairs at cosine>=this (0=off) |
-| `--iter` | `==SUPPRESS==` | iterate group->re-estimate->regroup this many passes (1=single pass); >1 keeps the tight gate but re-merges DENOISED units across passes, consolidating over-split fragments a single pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in production; the exp config opts in (FK_INTRA_ITER). |
-| `--linkage` | `==SUPPRESS==` | complete\|dynamic\|ms — choices: `complete`, `dynamic`, `ms` |
-| `--align-lag` | `==SUPPRESS==` | merge-time best-lag half-window, NATIVE samples (0=off) |
-| `--align-upsample` | `==SUPPRESS==` | cubic-spline upsampling factor for the align-lag search |
-| `--cfiber-q` | `==SUPPRESS==` | cfiber self-calibration quantile |
-| `--cfiber-null` | `==SUPPRESS==` | cfiber split-half null basis: order\|energy — choices: `order`, `energy` |
-| `--band-thr` | `==SUPPRESS==` | gate='band': min energy-scaled median+/-sigma band-overlap IoU to merge (empty -> 0.5) |
-| `--cfiber-thr-floor` | `==SUPPRESS==` | absolute floor on the self-calibrated cfiber threshold (0=off) |
-| `--sig-cap` | `==SUPPRESS==` | per-fragment spikes for the mean template (empty = no cap) |
-| `--warp-thr` | `==SUPPRESS==` | group-delay WARP coherence gate (Omlor-Giese): merge only if the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this. Same-neuron warps cohere; co-located different cells anti-correlate. Group-delay is noisy at low spike count -> use LOW (~0.3). empty=off. |
-| `--warp-resid-thr` | `==SUPPRESS==` | single-channel warp-incongruity SUB-GATE (layers on warp_thr): among already-coherent pairs (corr>=0.85), veto if any ONE centroid-range channel's group-delay residual (Theil-Sen line) > this many samples -- a strong-channel-masked different source. g5 knee ~1.0. empty=off. |
-| `--off-thr-int` | `==SUPPRESS==` | DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have stable offsets (~0.23) so off_thr=1.0 is inert; tighten to ~0.5. Needs raw .spk for cell-typing. empty=off (use off_thr). |
-| `--off-thr-pyr` | `==SUPPRESS==` | DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak); ~1.0. Set BOTH off_thr_int and off_thr_pyr to enable the dual gate; mixed pairs use the stricter. empty=off. |
+| `--gate` | (from config) | shape gate: cosine\|mmd\|kcov\|cfiber\|band (default band: energy-scaled median+/-sigma overlap) — choices: `cosine`, `mmd`, `kcov`, `cfiber`, `band` |
+| `--cos-thr` | (from config) | cosine recall prefilter |
+| `--off-thr` | (from config) | inter-channel offset RMS gate (samples) |
+| `--depth-gate` | (from config) | depth gate (um) |
+| `--amp-gate` | (from config) | absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x (0=off) |
+| `--refrac-ceiling` | (from config) | reject merge if combined 2ms-ISI violation > this percent (empty=off) |
+| `--pre-merge-cos` | (from config) | pre-collapse obvious mutual-NN pairs at cosine>=this (0=off) |
+| `--iter` | (from config) | iterate group->re-estimate->regroup this many passes (1=single pass); >1 keeps the tight gate but re-merges DENOISED units across passes, consolidating over-split fragments a single pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in production; the exp config opts in (FK_INTRA_ITER). |
+| `--linkage` | (from config) | complete\|dynamic\|ms\|kk — choices: `complete`, `dynamic`, `ms`, `kk` |
+| `--kk-dims` | (from config) | kk linkage (MW-cluster + median-residual KlustaKwik): PCs of the median-residual waveform used to split within each MW group (0 or >=ncol = all). Reduced dims keep the split sensitive to the dominant between-cell deviation. |
+| `--kk-mw-thr` | (from config) | kk linkage: median-waveform grouping cut = 1 - cosine; atoms whose windowed median waveforms are within this cosine distance group together (complete-linkage, so EVERY pair must be within it). 0.10 -> group only atoms with median-waveform cosine >= 0.90. Lower = stricter grouping (less merging); this wall is what prevents pooling distinct cells. |
+| `--kk-win` | (from config) | kk linkage: half-window (samples each side of the peak) the waveform is cropped to BEFORE the median-waveform cosine and the median-residual SVD -- focuses both on the peak region and drops the flat baseline tails (validated: cleaner refractory than the full 42-sample window). |
+| `--kk-min-size` | (from config) | kk linkage: KlustaKwik min cluster size for the within-group split. |
+| `--kk-big` | (from config) | kk linkage: atoms with >= this many spikes are 'big' (kept as grouping anchors); smaller atoms are folded into the nearest big atom by gated median-waveform cosine, or reserved if none matches. fiber_stochastic emits mostly tiny atoms, so this fold is what brings the singles into the fold and prevents the over-split. |
+| `--kk-fold-thr` | (from config) | kk linkage: a small atom folds into the nearest big atom only if their windowed median-waveform cosine >= this; else it goes to the reserve (id 1). This gate is the reject option a Mahalanobis assignment lacks -- a tiny fragment of a real cell folds in, a tiny distinct/noise atom stays out (holds zero false-merge). |
+| `--kk-strip` | (from config) | kk linkage: OPT-IN per-channel polynomial-coefficient contamination strip run after the split (0 = off, 1 = on). Fits each spike's per-channel waveform with a Legendre polynomial (smooths per-sample stderiv noise into stable coeffs) and moves robust-z outlier spikes to the reserve. Cleans most contaminated units while keeping clean units usable (raw per-sample strips cannot -- stderiv self-correlation ~0.6 drowns the signal). |
+| `--kk-strip-deg` | (from config) | kk linkage: Legendre polynomial degree for the per-channel strip (validated: 4 best; 3 under-cleans, 5 over-strips). |
+| `--kk-strip-z` | (from config) | kk linkage: robust-z (MAD-scaled) threshold on the per-channel polynomial coefficients; a spike is a per-channel outlier if any coefficient exceeds this. |
+| `--kk-strip-maxbad` | (from config) | kk linkage: a spike is stripped to the reserve if it is a polynomial-coeff outlier on MORE than this many signal channels (0 = strictest). |
+| `--align-lag` | (from config) | merge-time best-lag half-window, NATIVE samples (0=off) |
+| `--align-upsample` | (from config) | cubic-spline upsampling factor for the align-lag search |
+| `--cfiber-q` | (from config) | cfiber self-calibration quantile |
+| `--cfiber-null` | (from config) | cfiber split-half null basis: order\|energy — choices: `order`, `energy` |
+| `--band-thr` | (from config) | gate='band': min energy-scaled median+/-sigma band-overlap IoU to merge (empty -> 0.5) |
+| `--cfiber-thr-floor` | (from config) | absolute floor on the self-calibrated cfiber threshold (0=off) |
+| `--sig-cap` | (from config) | per-fragment spikes for the mean template (empty = no cap) |
+| `--warp-thr` | (from config) | group-delay WARP coherence gate (Omlor-Giese): merge only if the cross-channel correlation of the two fragments' per-channel group-delay profiles >= this. Same-neuron warps cohere; co-located different cells anti-correlate. Group-delay is noisy at low spike count -> use LOW (~0.3). empty=off. |
+| `--warp-resid-thr` | (from config) | single-channel warp-incongruity SUB-GATE (layers on warp_thr): among already-coherent pairs (corr>=0.85), veto if any ONE centroid-range channel's group-delay residual (Theil-Sen line) > this many samples -- a strong-channel-masked different source. g5 knee ~1.0. empty=off. |
+| `--off-thr-int` | (from config) | DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have stable offsets (~0.23) so off_thr=1.0 is inert; tighten to ~0.5. Needs raw .spk for cell-typing. empty=off (use off_thr). |
+| `--off-thr-pyr` | (from config) | DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak); ~1.0. Set BOTH off_thr_int and off_thr_pyr to enable the dual gate; mixed pairs use the stricter. empty=off. |
 | `--profile` | `default` | fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: 'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline. — choices: `default`, `recommended` |
 | `--off-n-ref` | — | SNR-adaptive offset gate: spike count at which --off-thr applies as-is; loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr. |
 | `--off-ceil` | `2.0` | cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee). |
 | `--split-min-sil` | `0.12` | ms linkage: min silhouette to accept a split. |
 | `--split-min-n` | `40` | ms linkage: min spikes per split sub-unit. |
 | `--var-env-mult` | `3.0` | dynamic linkage: single-unit variance envelope = this * median fragment variance; blocks merges that push a unit's spread past it (permits the growth de-fragmentation needs, caps over-growth). |
-| `--ccg-thr` | `1000000000.0` | dynamic linkage: max cross-CCG refractory ratio to admit a merge.  DEFAULT OFF (1e9): a simple refractory-dip requirement is WRONG-SIGNED for de-fragmentation -- same-neuron over-split fragments (time-shift dups, and amplitude-splits of bursting cells whose spikes attenuate through the burst) show a short-lag cross-CCG PEAK, not a dip, so a low threshold rejects true merges (g5: collapses 1243->1850).  Left as scaffolding; a correct temporal term needs duplicate-coincidence vs distinct-co-activity. |
+| `--ccg-thr` | `1000000000.0` | dynamic linkage: max cross-CCG refractory ratio to admit a merge. DEFAULT OFF (1e9): a simple refractory-dip requirement is WRONG-SIGNED for de-fragmentation -- same-neuron over-split fragments (time-shift dups, and amplitude-splits of bursting cells whose spikes attenuate through the burst) show a short-lag cross-CCG PEAK, not a dip, so a low threshold rejects true merges (g5: collapses 1243->1850). Left as scaffolding; a correct temporal term needs duplicate-coincidence vs distinct-co-activity. |
 | `--ccg-win` | `2.0` | dynamic linkage: cross-CCG refractory half-window (ms). |
 | `--cfiber-thr` | — | gate='cfiber' shape-distance threshold; default None self-calibrates from per-fragment split-half nulls at --cfiber-q. |
 | `--min-n` | `12` |  |
@@ -381,7 +383,6 @@ Positional: `session`, `group`
 | `--out-stage` | — | output .clu stage (default: <clu-stage>_intrachunk) |
 | `--emit-units` | flag (off) | also write a <...>.units.npz unit-signature table for fiber-link |
 | `--no-provenance` | flag (on) | skip the .merge.tsv per-merge provenance sidecar (default: write it) |
-
 ### `fiber-link`
 
 Link per-chunk fragments into tracked units (position fingerprint + A anchor + template co-gate).
@@ -440,8 +441,6 @@ Positional: `session`, `group`
 | `--channel-pitch` | `20.0` | axial channel pitch (um) for --complete-edge |
 | `--complete-field` | `inv_sq` | spatial field model for off-probe completion (1/r^2 default) — choices: `inv_sq`, `inv` |
 | `--complete-edge-frac` | `0.5` | array-end amplitude fraction above which a footprint counts as truncated |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 
 ## Alternative / drift linkers
 
@@ -458,9 +457,9 @@ Positional: `session`, `elec`
 | `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--channels` | — | pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary |
-| `--out-stage` (`--out-tag`) | `backbone_linked` | output .clu stage tag (single token) |
-| `--hierarchy` | flag (off) | also write the Klusters hierarchy siblings: `.clc` (per-spike child id) + `.clp` (child->parent map); an input `.clc` is carried through so repeated passes keep the original fiber-session fragments as the leaves. |
-| `--gt-stage` (`--gt-clu`) | — | curated .clu to score purity+completeness against |
+| `--out-stage` (`--out-tag`) | `backbone_linked` | post-fiber stage tag of the output .clu (single token) |
+| `--hierarchy` | flag (off) | also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp (child->parent map), so the chains are browsable/undoable as parents of their fragments. Composes across passes: an input .clc is carried through, so the leaves stay the ORIGINAL fiber-session fragments however many times you re-link. |
+| `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness against |
 | `--gt-res` | — | reserved: .res for the GT (unused when GT shares the session res) |
 | `--spk-cap` | `600` | spikes per fragment for the template |
 | `--chunk-min` | — | chunk length (min); default from <session>.yaml or 12 |
@@ -478,7 +477,6 @@ Positional: `session`, `elec`
 | `--max-gap` | `1` | FK_BBLINK_MAX_GAP (default 1) |
 | `--complexity-scale` | `0.0` | FK_BBLINK_CX_SCALE (default 0.0) |
 | `--min-snr-q` | `0.0` | FK_BBLINK_MIN_SNR_Q (default 0.0) |
-
 ### `fiber-xcorr-merge`
 
 Confidence-ordered Klusters roll-shift cosine merge (realign after each merge).
@@ -491,12 +489,12 @@ Positional: `session`, `elec`
 | `--clu-stage` (`--variant`) | `backbone_linked` | input .clu stage tag (e.g. the fiber-backbone-link output) |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates (curation axis) |
-| `--out-stage` (`--out-tag`) | `xcorr_merged` | output .clu stage tag |
+| `--out-stage` (`--out-tag`) | `xcorr_merged` | post-fiber stage tag of the output .clu |
 | `--refrac-censor-ms` | `0.0` | detection censor window (ms) |
 | `--nsamp` | — | override; default from <session>.yaml |
 | `--nchan` | — | override; default from <session>.yaml |
 | `--ref-sample` | — | override; default = peak from <session>.yaml |
-| `--gt-stage` (`--gt-clu`) | — | curated .clu tag/path to score purity+completeness |
+| `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness |
 | `--seed` | `0` |  |
 | `--cos-thr` | `0.99` | FK_XCM_COS_THR (default 0.99) |
 | `--shift` | `4` | FK_XCM_SHIFT (default 4) |
@@ -507,7 +505,6 @@ Positional: `session`, `elec`
 | `--spk-cap` | `300` | FK_XCM_SPK_CAP (default 300) |
 | `--complexity-scale` | `0.0` | FK_XCM_CX_SCALE (default 0.0) |
 | `--band-thr` | `0.5` | FK_XCM_BAND_THR (default 0.5) |
-
 ### `fiber-relink`
 
 Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).
@@ -600,6 +597,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` | feature space before the group (default stderiv) |
 | `--clu-stage` (`--variant`) | `refine` | fiber stage after the group (default refine; '' = none) |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--variant) |
@@ -616,13 +618,6 @@ Positional: `session`, `group`
 | `--ccg-censor-ms` | `0.3` | duplicate censor band for the cross-CCG (ms) |
 | `--gt-clu` | — | ground-truth .clu to score before/after the merge against |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment if it covers a window) |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 
 ## Positions & geometry
 
@@ -634,6 +629,10 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--peak` | `16` | peak sample index within the window |
 | `--spk` | — | path to a STANDARD/raw .spk (preferred over .fil); never the stderiv .spkD |
 | `--spk-method` | `standard` | method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec> |
 | `--fil` | — | path to raw .fil (fallback if no standard .spk) |
@@ -651,11 +650,6 @@ Positional: `session`, `group`
 | `--no-amp-basis` | flag (off) | alias for --amp-basis none (per-cluster SVD) |
 | `--nboot` | `0` | bootstrap draws for the depth/distance percentile CIs (z_lo/z_hi/y_lo/y_hi). This loop is ~5x the rest of the cost (the dominant runtime); positions (x0,y0,z0,A) and the energy-tercile depth-shift do NOT use it. Use --nboot 0 for identical positions ~5x faster (analytic sig_y is still written; the percentile CIs become NaN). |
 | `--probe` | — | probe file(s) for geometry (else from chunk xy via YAML) |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-localize`
 
 Localize fibers (distance + depth + orientation) from raw waveform spread.
@@ -721,6 +715,10 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--peak` | `16` | peak sample index within the window |
 | `--clu-method` | `stderiv` | source .clu feature space before the group |
 | `--clu-stage` | `refine_linked` | source .clu stage after the group |
 | `--in-clu` | — | explicit curated .clu path (overrides method/stage) |
@@ -734,11 +732,6 @@ Positional: `session`, `group`
 | `--modes` | `2,3,4,-1,-2,-3` | comma list of Fourier modes for the shape |
 | `--out` | — | write per-unit metrics .tsv (default <base>.cfiber.<elec>.tsv) |
 | `--fig` | — | write a shape_flatness vs rotation_drift summary figure |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-chan-svd`
 
 Per-channel SVD/PCA of cluster mean templates: which channels are invariant vs vary across the clusters (a merge/curation aid).
@@ -747,6 +740,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--in-clu` | — | sort to analyse (default canonical .clu) |
 | `--clu-method` (`--variant`) | — | method the staged .clu stems from (e.g. stderiv, stderiv_C5) instead of --in-clu |
 | `--clu-stage` (`--stage`) | — | post-fiber stage tag of the staged .clu (e.g. refine); pair with --clu-method |
@@ -761,13 +759,6 @@ Positional: `session`, `group`
 | `--normalize` | flag (off) | p2p-normalize each template first -> SVD sees SHAPE variation, amplitude drift removed |
 | `--out` | — | output PNG path or directory (default next to the session) |
 | `--tsv` | — | also write the per-channel metric table here |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-pca`
 
 neurosuite-3 .pca/.pcaD basis: fit a per-channel PCA basis from .spk+.clu and write the binary, or inspect one.
@@ -785,8 +776,6 @@ Positional: `session`, `group`
 | `--centered` | flag (off) | store centered flag (projection subtracts the mean) |
 | `--stderiv` | flag (off) | fit on .spkD (stderiv) instead of .spk |
 | `--out` | — | output .pcaD path (default <base>.pca<D>.<group>) |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-branch`
 
 Flag units whose spikes branch off the single fiber d(r) (a second, energy-independent, depth-coherent waveform class).
@@ -805,8 +794,6 @@ Positional: `session`, `group`
 | `--ecorr-max` | `0.25` |  |
 | `--dbic-min` | `20.0` |  |
 | `--out` | — | write a per-unit branch report .npz |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 
 ## Curation, QC & scoring
 
@@ -818,6 +805,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` | feature space of the curated clu |
 | `--clu-stage` (`--variant`) | `curated` | stage tag of the curated .clu to refit (e.g. 'curated') |
 | `--in-clu` | — | explicit curated .clu path |
@@ -827,15 +819,8 @@ Positional: `session`, `group`
 | `--spk-method` | `standard` | raw .spk method for --relocalize |
 | `--gate` | `cfiber` | shape descriptor to attach to each signature (default cfiber) — choices: `cfiber`, `wave`, `none` |
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
-| `--min-n` | (from config) | min spikes for a per-chunk signature |
+| `--min-n` | `12` | min spikes for a per-chunk signature |
 | `--out-stage` | — | stage tag for the refit units (default '<variant>_refit') |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-reject`
 
 Reassign per-cluster outlier spikes to a better-fitting cluster or to noise.
@@ -844,6 +829,10 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--peak` | `16` | peak sample index within the window |
 | `--clu-method` | `stderiv` | variant of the input .clu (before the group) |
 | `--clu-stage` | `refine` | stage of the input .clu (after the group) |
 | `--feat-method` | `standard` | .pca/.spk variant for the feature space (standard=amplitude, stderiv=clustering) |
@@ -856,11 +845,6 @@ Positional: `session`, `group`
 | `--no-robust` | flag (off) | use a plain (non-robust) covariance instead of MCD (faster; masks contaminants) |
 | `--no-reassign` | flag (off) | send every outlier to noise (skip cross-cluster reassignment) |
 | `--min-n` | `50` | min spikes for a cluster to get a robust model |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-stats`
 
 Extract per-(chunk,cluster) fiber statistics from an existing sort (no re-clustering).
@@ -869,6 +853,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` | feature space BEFORE the group (standard\|stderiv\|...); default stderiv |
 | `--clu-stage` (`--variant`) | `refine` | fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> (default: refine; '' = no stage) |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--variant) |
@@ -879,13 +868,6 @@ Positional: `session`, `group`
 | `--n-grid` | `40` |  |
 | `--fibers-stage` (`--method`) | — | post-fiber stage tag of the written .fibers file (<base>.fibers.<clu-method>.<group>.<stage>). Default: mirror --clu-stage, since the stats describe that clu |
 | `--out` | — |  |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-qc`
 
 Per-group QC report (rate, ISI violation, SNR, amplitude, presence) rendered as an interactive HoloViz/Bokeh HTML, with a metrics CSV.
@@ -894,6 +876,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` |  |
 | `--clu-stage` (`--variant`) | `refine` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path |
@@ -907,13 +894,6 @@ Positional: `session`, `group`
 | `--gt-clu` | — | ground-truth .clu to score against (fiber-score) |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment) |
 | `--out` | — | output HTML path (default <base>.qc.<elec>.html) |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-score`
 
 Score a candidate .clu against a ground-truth .clu (ARI, V-measure, pairwise precision/recall, per-unit and split/merge diagnostics).
@@ -938,6 +918,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` | feature space before the group (default stderiv) |
 | `--clu-stage` (`--variant`) | `refine` | fiber stage after the group: read <base>.clu.<clu-method>.<elec>.<variant> (default refine; '' = no stage) |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--variant) |
@@ -949,13 +934,6 @@ Positional: `session`, `group`
 | `--out` | — | write the ranked table to this TSV path |
 | `--split` | flag (off) | write a new staged .clu (tag '<variant>.csplit') with each flagged two-cell cluster recursively QC-split into sub-ids on its bimodal axis |
 | `--max-split` | `6` | max sub-clusters a single flagged cluster may be split into (default 6) |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-calibrate`
 
 Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`.
@@ -964,6 +942,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` | feature space before the group (default stderiv) |
 | `--clu-stage` (`--variant`) | `""` | curated fiber stage tag after the group (default none) |
 | `--in-clu` | — | explicit curated .clu path (overrides --clu-method/--variant) |
@@ -973,13 +956,6 @@ Positional: `session`, `group`
 | `--cos-thr` | `0.85` | candidate cosine for the confusable-pair gate |
 | `--warp-max` | `0.06` | width gate for the confusable-pair gate |
 | `--out` | — | output .npz (default '<base>.calib.<group>.npz') |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-validate-merges`
 
 Full-session evidence for proposed same-neuron merges; reads <session>.yaml for sr.
@@ -988,10 +964,8 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
-| `--cand` | — | candidates tsv (default <base>.merge_candidates.<group>.tsv) |
 | `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
+| `--cand` | — | candidates tsv (default <base>.merge_candidates.<group>.tsv) |
 ### `fiber-ccg`
 
 Refractory QC for a group's clustering: per-cluster ISI-violation fraction, and the cluster pairs whose refractory cross-correlogram shows a dip (merge-consistent).
@@ -1000,6 +974,11 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--clu-method` | `stderiv` |  |
 | `--clu-stage` (`--variant`) | `refine` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path |
@@ -1009,13 +988,6 @@ Positional: `session`, `group`
 | `--min-exp` | `5.0` | min expected coincidences to have power |
 | `--min-cluster` | `40` | ignore clusters smaller than this |
 | `--top` | `15` | how many merge-consistent pairs to list |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 
 ## Pipeline runner, plans & tooling
 
@@ -1046,17 +1018,15 @@ Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--chunk-min-start` | `0.0` |  |
 | `--chunk-min` | `10.0` |  |
 | `--min-spikes` | `60` |  |
 | `--min-group` | `200` |  |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 
 ## Visualization
 
@@ -1064,18 +1034,15 @@ Positional: `session`, `group`
 
 Visualise fibers: template montages, a 3-D manifold of local fiber curves, and ISI/geometry panels.
 
-Positional: `bundles`, `session`, `group`
+Positional: `session`, `group`
 
 | flag | default | description |
 |---|---|---|
-| `--fibers` | `all` | comma list of bundle ids, 'top:N', or 'all' |
-| `-o` (`--out`) | — | output .gif/.mp4 (default <bundles>.tour.gif) |
-| `--ncomp` | `6` |  |
-| `--keypoints` | `4` |  |
-| `--steps` | `24` | interpolation frames per leg |
-| `--fps` | `20` |  |
-| `--spin` | `0.5` |  |
-| `--seed` | `0` |  |
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
 | `--in-clu` | — | sort to view (default canonical .clu) |
 | `--fibers` | `top:6` | comma list of .clu cluster ids, 'top:N', or 'all' (default top:6) |
 | `--mode` | `all` | choices: `templates`, `manifold`, `stats`, `all` |
@@ -1084,13 +1051,6 @@ Positional: `bundles`, `session`, `group`
 | `--no-dedup` | flag (off) |  |
 | `--out` | — | output path or directory (default next to the session) |
 | `--channels-override` | — |  |
-| `--channels` | — | override: comma-separated physical channels |
-| `--ntotal` | — | override: total channels in the recording |
-| `--nchan` (`--nch`) | — | override: channels in this group |
-| `--nsamp` | (from config) | override: samples per spike (default from YAML) |
-| `--sr` | — | override: sampling rate |
-| `--peak` | `16` | peak sample index within the window |
-| `--probe` | — | probe file(s) for geometry |
 ### `fiber-view-gui`
 
 fiber-view-gui: a standalone, rotatable bundle viewer.

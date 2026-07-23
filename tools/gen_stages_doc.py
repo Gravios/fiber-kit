@@ -28,7 +28,9 @@ Usage:
 """
 import argparse
 import ast
+import json
 import os
+import subprocess
 import re
 import sys
 
@@ -88,6 +90,112 @@ def render_default(node, consts, action):
             pass
     return "(from config)"
 
+
+
+# ── introspection: capture the REAL parser ───────────────────────────────────
+# The AST reader below cannot see a flag whose name is built at runtime, and it
+# has to re-implement argparse behaviour (shared add_*_args helpers,
+# BooleanOptionalAction's --no-X twin, defaults that are module constants) --
+# every one of which was a bug found by diffing its output against the doc.
+#
+# So the primary path asks argparse itself.  A subprocess imports the stage and
+# calls main() with ArgumentParser.parse_args patched to raise the moment it is
+# called -- which is exactly when every add_argument has run and nothing else has.
+# The captured parser is authoritative: dynamic flags, helper flags, resolved
+# defaults and boolean twins all come for free, and a NEW dynamic pattern needs no
+# change here.
+#
+# It runs in a subprocess with a timeout so a stage that hangs, exits or needs a
+# missing optional dependency (the PySide6 GUI tools) cannot take the run down --
+# those fall back to the AST reader, which is also what makes this usable in a
+# dependency-free CI job, just with fewer stages introspected.
+PROBE = r"""
+import sys, json, argparse, importlib
+sys.path.insert(0, %(src)r)
+# argparse falls back to basename(sys.argv[0]) when a parser sets no prog=.
+# Pin a sentinel so "did it set prog explicitly?" is answerable.
+_AUTO = "<<autoprog>>"
+_MODULE = sys.argv[1]          # read BEFORE argv is replaced
+sys.argv = [_AUTO]
+class _Got(Exception):
+    def __init__(self, ap): self.ap = ap
+def _stop(self, *a, **k): raise _Got(self)
+argparse.ArgumentParser.parse_args = _stop
+argparse.ArgumentParser.parse_known_args = _stop
+def dump(ap):
+    pos, rows = [], []
+    for a in ap._actions:
+        if a.dest == "help":
+            continue
+        if not a.option_strings:
+            pos.append(a.dest)
+            continue
+        rows.append(dict(flags=list(a.option_strings), dest=a.dest,
+                         default=None if a.default is argparse.SUPPRESS else a.default,
+                         suppressed=a.default is argparse.SUPPRESS,
+                         choices=list(a.choices) if a.choices else None,
+                         help=a.help or "",
+                         const=a.__class__.__name__))
+    return dict(prog=("" if ap.prog == _AUTO else ap.prog),
+                description=ap.description or "",
+                positionals=pos, rows=rows)
+try:
+    m = importlib.import_module(_MODULE)
+    m.main()
+    print("FAIL no parse_args reached")
+except _Got as g:
+    print("JSON" + json.dumps(dump(g.ap)))
+except BaseException as e:
+    print("FAIL %%s: %%s" %% (type(e).__name__, str(e)[:80]))
+"""
+
+
+def introspect(src_dir, module, timeout=90):
+    """Real parser spec via subprocess, or None if the stage cannot be imported."""
+    code = PROBE % {"src": os.path.abspath(src_dir + "/..")}
+    try:
+        r = subprocess.run([sys.executable, "-c", code, module],
+                           capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    for line in r.stdout.splitlines():
+        if line.startswith("JSON"):
+            try:
+                return json.loads(line[4:])
+            except ValueError:
+                return None
+    return None
+
+
+def rows_from_spec(spec):
+    """(prog, description, positionals, rows, dynamic=False) from a captured parser."""
+    rows = []
+    for a in spec["rows"]:
+        flags = a["flags"]
+        longs = [f for f in flags if f.startswith("--")] or flags
+        # BooleanOptionalAction puts --x and --no-x in the same action
+        neg = [f for f in longs if f.startswith("--no-")]
+        pos = [f for f in longs if not f.startswith("--no-")]
+        if neg and pos:
+            flag = f"`{pos[0]}` / `{neg[0]}`"
+            default = "flag (on)" if a["default"] is True else "flag (off)"
+        else:
+            flag = f"`{flags[0]}`"
+            if len(flags) > 1:
+                flag += " (" + ", ".join(f"`{x}`" for x in flags[1:]) + ")"
+            if a["const"] in ("_StoreTrueAction", "_StoreFalseAction"):
+                default = "flag (off)" if a["const"] == "_StoreTrueAction" else "flag (on)"
+            elif a["suppressed"]:
+                default = "(from config)"
+            elif a["default"] is None or a["default"] == "":
+                default = "\u2014" if a["default"] is None else '`""`'
+            else:
+                default = f"`{a['default']}`"
+        text = " ".join(str(a["help"] or "").split())
+        if a["choices"]:
+            text += (" \u2014 " if text else "") + "choices: " + ", ".join(f"`{c}`" for c in a["choices"])
+        rows.append((flag, default, text))
+    return (spec["prog"], spec["description"], spec["positionals"], rows, False)
 
 
 # ── flags contributed by shared helpers ──────────────────────────────────────
@@ -317,6 +425,9 @@ def main():
     ap.add_argument("--check", action="store_true",
                     help="do not write; exit 1 if docs/stages.md has drifted from the parsers")
     ap.add_argument("--src", default=SRC)
+    ap.add_argument("--no-introspect", action="store_true",
+                    help="skip importing the stages; use the AST reader only "
+                         "(dependency-free, but dynamic flags are not seen)")
     ap.add_argument("--doc", default=DOC)
     a = ap.parse_args()
 
@@ -324,17 +435,32 @@ def main():
     # a library (session_yaml, klustakwik) is deliberately absent from the doc and
     # must not be reported as undocumented.
     cmds = console_scripts()
-    stages, progmismatch = {}, []
+    stages, progmismatch, mode = {}, [], {}
     for cmd, mod in sorted(cmds.items()):
         p = os.path.join(a.src, mod + ".py")
         if not os.path.exists(p):
             continue
-        st = parse_stage(p)
-        if not st:
-            continue
-        if st[0] != cmd:
+        spec = None if a.no_introspect else introspect(a.src, "fiber_kit." + mod)
+        if spec is not None:
+            st = rows_from_spec(spec)
+            mode[cmd] = "parser"
+        else:
+            st = parse_stage(p)
+            mode[cmd] = "ast"
+            if st is None:
+                continue
+        # prog is only meaningful when the parser set it explicitly; argparse
+        # otherwise reports the probe's own filename.
+        if st[0] not in (cmd, "") and not st[0].endswith(".py") and st[0] != "-c":
             progmismatch.append((cmd, st[0]))
         stages[cmd] = st
+
+    if a.check and a.no_introspect:
+        print("refusing: --check with --no-introspect would compare the doc against an "
+              "AST reading that cannot see runtime-built flags, so it would report drift "
+              "that is not there.  Run --check with the package importable, or use "
+              "--no-introspect on its own to inspect.")
+        return 2
 
     doc = open(a.doc, errors="ignore").read()
     new, undocumented, unknown, dynamic = rebuild(doc, stages)
@@ -347,6 +473,10 @@ def main():
     for n in dynamic:
         print(f"  note: '{n}' builds flag names at runtime; its table is left as written "
               f"and is NOT checked")
+    nast = sorted(c for c, m in mode.items() if m == "ast")
+    if nast:
+        print(f"  note: {len(nast)} stage(s) could not be imported and fell back to the "
+              f"AST reader: {', '.join(nast)}")
     for cmd, prog in progmismatch:
         print(f"  note: {cmd} sets prog='{prog}' \u2014 its own --help prints the wrong "
               f"command name")
