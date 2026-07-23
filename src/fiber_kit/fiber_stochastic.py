@@ -296,6 +296,7 @@ def run_stochastic(a):
     cf = fsess.build_cf(a, meth, cluster_basis)          # identical clusterer config to production
 
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
+               fast_stats=bool(getattr(a, "stochastic_fast_stats", False)),
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
     global _POOL_CFG
@@ -439,7 +440,11 @@ def run_stochastic(a):
 
     _plog(f"fiber_stochastic: all {_done} chunk(s) done in {(_time.time() - _t0) / 60:.1f}m; "
           f"{len(rows):,} fiber instances total")
-    _dump_ensemble(a, rows, peel_log, mask, gch)
+    if getattr(a, "stochastic_no_npz", False):
+        _plog(f"fiber_stochastic: skipping the diagnostic npz (--stochastic-no-npz); "
+              f"{len(rows):,} instances not written")
+    else:
+        _dump_ensemble(a, rows, peel_log, mask, gch)
     if a.stochastic_write_clu:
         _write_cluster_triplet(a, res.size, vote_fiber, vote_submode, variant=clu_variant,
                                min_spikes=a.stochastic_min_fiber_spikes)
@@ -615,6 +620,15 @@ def add_arguments(ap):
                         "'single' (transitive union-find) CHAINS anticorrelated sub-modes through intermediate "
                         "shapes into one component -- it undercounts real units; 'average' (default) and "
                         "'complete' are agglomerative and will not weld a chain of distinct co-located cells.")
+    g.add_argument("--stochastic-no-npz", action="store_true",
+                   help="skip the diagnostic .fiberens.npz. It holds every fiber INSTANCE "
+                        "(draws x chunks) and both compressing and writing it cost real time "
+                        "on a large run; the clu/clc/clp triplet is unaffected")
+    g.add_argument("--stochastic-fast-stats", action="store_true",
+                   help="skip the per-instance curation metrics (adaptation residual, "
+                        "per-channel residual profile, within-chunk drift slopes), leaving them "
+                        "NaN. Clustering, consensus and the triplet do not read them, so this "
+                        "only empties columns of the diagnostic npz")
     g.add_argument("--stochastic-min-fiber-spikes", type=int, default=3,
                    help="consensus fibers owning fewer than this many spikes are purged to "
                         "NOISE (cluster 0) in the written triplet; 1 disables. Not-yet-processed "

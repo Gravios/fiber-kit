@@ -145,10 +145,22 @@ def cluster_chunk(waves, W, nmean, min_group=100, kappa=20.0, dr_frac=0.15,
     return np.array([keys.get(h, -1) if h is not None else -1 for h in out['hard']], int)
 
 
-def fiber_geom(wsub, res_sub, W, nmean, mask, sr, n_grid=40, chunk_t0=None, chunk_t1=None):
+# Set per worker process by _init_chunk_worker from cfg["fast_stats"].  When true,
+# fiber_geom skips the curation-only quality metrics (adaptation residual, per-channel
+# residual profile, within-chunk drift slopes) and leaves them NaN.  Nothing in
+# clustering, consensus or the clu/clc/clp triplet reads them -- they exist for the
+# diagnostic npz and for hand curation -- so an ensemble run that only wants the
+# clusters can skip several passes over every fiber's waveforms.
+_FAST_STATS = False
+
+
+def fiber_geom(wsub, res_sub, W, nmean, mask, sr, n_grid=40, chunk_t0=None, chunk_t1=None,
+               stats=None):
     """Geometry + per-chunk quality / firing / drift statistics of one fiber.
     Every stat is per-chunk, so rows sharing a gid across the session form time
     series (depth(t), rate(t), nn_dist(t), within-chunk drift, ...) for curation."""
+    if stats is None:
+        stats = not _FAST_STATS
     p = len(mask) * wsub.shape[2]
     w_al = fl.realign(wsub); template = w_al.mean(0)
     Xg = (w_al[:, mask, :].reshape(len(w_al), -1) - nmean) @ W
@@ -199,18 +211,23 @@ def fiber_geom(wsub, res_sub, W, nmean, mask, sr, n_grid=40, chunk_t0=None, chun
     else:
         radius_slope = depth_slope = float('nan')
     dir_drift = float('nan')
-    if n >= 80:
+    if n >= 80 and stats:
         h = n // 2; a, b = o[:h], o[h:]
         dd = _profile_dir_dist(ft.trajectory(Xg[a]), np.percentile(rr[a], [15, 85]),
                                ft.trajectory(Xg[b]), np.percentile(rr[b], [15, 85]))
         if dd is not None: dir_drift = dd
 
-    try:
-        from . import fiber_adapt as _fa
-    except ImportError:
-        import fiber_adapt as _fa
-    _z, _ai = _fa.adaptation_residual(wsub, res_sub, W, nmean, mask, sr)
-    crv = ft.channel_residual_profile(wsub, W, nmean, mask) if n >= 20 else None
+    if stats:
+        try:
+            from . import fiber_adapt as _fa
+        except ImportError:
+            import fiber_adapt as _fa
+        _z, _ai = _fa.adaptation_residual(wsub, res_sub, W, nmean, mask, sr)
+        crv = ft.channel_residual_profile(wsub, W, nmean, mask) if n >= 20 else None
+    else:
+        _z = np.array([np.nan], np.float32)
+        _ai = {'corr': float('nan'), 'tau': float('nan'), 'snr': float('nan')}
+        crv = None
     return dict(n=n, radius=float(rr.mean()), rate=rate, presence=presence,
                 refrac=refr, burst=burst, isi_cv=isi_cv, hill_fp=hill,
                 resid_med=resid_med, resid_mad=resid_mad,
@@ -1325,6 +1342,8 @@ def _init_pool_worker(cfg):
 def _init_chunk_worker(cfg):
     """Pool initializer: stash the static config and open the memmaps once per
     worker process.  Also runs (with a fresh dict) for the serial jobs==1 path."""
+    global _FAST_STATS
+    _FAST_STATS = bool(cfg.get("fast_stats", False))
     _CTX.clear(); _CTX.update(cfg)
     if cfg.get("gpu"):
         _bk.use_gpu(True)
