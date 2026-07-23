@@ -129,6 +129,12 @@ def load_session(session, group, path=None):
         nsamp=int(g["nSamples"]) if g.get("nSamples") is not None else None,
         peak=int(g["peakSampleIndex"]) if g.get("peakSampleIndex") is not None else None,
         nfeatures=int(g["nFeatures"]) if g.get("nFeatures") is not None else None,
+        # Optional per-group custom spatial-derivative pattern for the stderiv
+        # pipeline: "a-b,c-d,..." (order 4, single partner) or "a-b+c+d,..."
+        # (order 5, reference sets), in group-local 0-based channel positions.
+        # Absent on a session that uses a plain spatial-derivative order.
+        sdiff_pairs=(str(g["sdiffPairs"]).strip()
+                     if g.get("sdiffPairs") not in (None, "") else None),
         probe=probe,
     )
 
@@ -279,7 +285,8 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
         info = load_session(session, group, path=yp)
         cfg = dict(base=info["base"], yaml=yp, group=group, channels=info["channels"],
                    ntotal=info["ntotal"], nchan=info["nchan"], nsamp=info["nsamp"],
-                   sr=info["sr"], peak=info["peak"], probe=info.get("probe") or None)
+                   sr=info["sr"], peak=info["peak"], probe=info.get("probe") or None,
+                   sdiff_pairs=info.get("sdiff_pairs"))
         if verbose:
             _log(yp)
             _det("channels", f"{info['ntotal']} \u00b7 sr {float(info['sr']):,.0f} Hz")
@@ -293,7 +300,8 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
             if base.endswith(ext):
                 base = base[:-len(ext)]
         cfg = dict(base=base, yaml=None, group=group, channels=None, ntotal=None,
-                   nchan=None, nsamp=32, sr=32552.0, peak=None, probe=None)
+                   nchan=None, nsamp=32, sr=32552.0, peak=None, probe=None,
+                   sdiff_pairs=None)
         if verbose:
             _log(f"no YAML for '{session}'; using base='{base}' + explicit flags")
 
