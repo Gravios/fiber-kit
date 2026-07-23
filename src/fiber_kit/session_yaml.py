@@ -12,7 +12,7 @@
 #  base = <yaml path without extension>, so files resolve as base.res.<group> etc.
 # ════════════════════════════════════════════════════════════════════════════
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, fields as _dc_fields
 
 _LP = "\u25b8 session"
 def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
@@ -170,8 +170,12 @@ def refractory_period_samples(session, group, sr=None, path=None, default=16):
     return int(default), "default (not in yaml)"
 
 
-_SESSION_FIELDS = ("base", "yaml", "group", "channels", "ntotal", "nchan",
-                   "nsamp", "sr", "peak", "probe")
+# Filled from the dataclass itself immediately after the class body.  It used to
+# be a hand-written tuple, i.e. a second copy of the field list that had to be
+# edited in step with the first -- and was not: adding sdiff_pairs to SessionCfg
+# without adding it here would leave cfg["sdiff_pairs"] raising KeyError while
+# cfg.sdiff_pairs worked.  Deriving it removes the possibility.
+_SESSION_FIELDS = ()
 
 
 @dataclass
@@ -191,6 +195,12 @@ class SessionCfg:
     sr: object
     peak: object
     probe: object
+    # Per-group custom spatial-derivative pattern for the stderiv pipeline
+    # ("a-b,c-d,..." order 4, "a-b+c+d,..." order 5), or None when the session
+    # uses a plain order.  Defaulted so a caller that builds a SessionCfg without
+    # it -- and every construction predating fiber_realign's _C re-extraction
+    # does -- keeps working.
+    sdiff_pairs: object = None
 
     def __getitem__(self, k):
         if k not in _SESSION_FIELDS:
@@ -207,6 +217,8 @@ class SessionCfg:
 
     def keys(self):
         return _SESSION_FIELDS
+
+_SESSION_FIELDS = tuple(f.name for f in _dc_fields(SessionCfg))
 
 
 def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=True,
