@@ -440,6 +440,10 @@ def run_stochastic(a):
 
     _plog(f"fiber_stochastic: all {_done} chunk(s) done in {(_time.time() - _t0) / 60:.1f}m; "
           f"{len(rows):,} fiber instances total")
+    # The stability summary always runs: it is the report the ensemble exists to
+    # produce, it needs nothing but the rows already in memory, and it used to be
+    # lost whenever the npz was skipped.
+    _ensemble_summary(a, rows)
     if getattr(a, "stochastic_no_npz", False):
         _plog(f"fiber_stochastic: skipping the diagnostic npz (--stochastic-no-npz); "
               f"{len(rows):,} instances not written")
@@ -532,6 +536,111 @@ def _write_cluster_triplet(a, n_spikes, vote_fiber, vote_submode, *, variant="st
 
 
 # ── serialization: the fiber-space file (mirrors production .fibers.npz + extras) ──
+def _ensemble_summary(a, rows):
+    """Print the stability summary for this run.  No file IO -- pure numpy over the
+    instance rows already in memory.
+
+    Split out of _dump_ensemble because --stochastic-no-npz skipped that function
+    whole, and with it the only report of how the ensemble actually behaved.  The
+    flag is about not writing a large compressed file; the analysis costs
+    milliseconds and answers the question the ensemble exists to ask, so it should
+    not have been on the same switch.
+
+    The point of the breakdown is a decision that the fiber count alone cannot
+    settle.  Thousands of tiny fibers have two explanations with OPPOSITE fixes:
+
+      SPURIOUS   -- low-recovery fibers are draw-specific noise.  They are many but
+                    carry little spike mass and are individually tiny.  Filtering
+                    them out is right.
+      UNDER-MERGE -- consensus is shattering real units into low-support fragments
+                    (a match threshold too strict for the linkage).  Then the
+                    low-recovery population carries MOST of the mass and its
+                    members sit just under the threshold.  Filtering would purge
+                    real cells; the fix is upstream.
+
+    match_corr2 -- each instance's best correlation into a DIFFERENT consensus
+    component -- is what separates them: fragments of one over-split unit have a
+    near rival just below --stochastic-match-corr, genuine noise does not.
+    """
+    M = len(rows)
+    if not M:
+        print("  no fiber instances")
+        return
+    chunks = sorted({r["_chunk"] for r in rows})
+    print(f"  {M:,} fiber instances over {a.stochastic_draws} draws x {len(chunks)} chunks "
+          f"(frac={a.stochastic_frac})")
+
+    # One entry per CONSENSUS FIBER, keyed as the triplet writer keys them.
+    # Consensus gids restart at 0 in every chunk, so (chunk, gid) is the identity;
+    # max(gid)+1 counts only the largest single chunk.
+    per = {}
+    for r in rows:
+        per.setdefault((r["_chunk"], r["_consensus_gid"]), []).append(r)
+    rec, mass, ninst, rival = [], [], [], []
+    for members in per.values():
+        rec.append(float(members[0].get("_recovery_freq", 0.0)))
+        # Instances of one fiber come from different draws and overlap heavily
+        # (each draw subsamples), so summing their spike counts would multiply-count
+        # the same spikes.  The median instance size is the honest mass estimate.
+        mass.append(float(np.median([m.get("n", 0) for m in members])))
+        ninst.append(len(members))
+        rv = [m.get("_match_corr2", np.nan) for m in members]
+        rv = [v for v in rv if v == v]
+        rival.append(max(rv) if rv else np.nan)
+    rec = np.array(rec); mass = np.array(mass)
+    ninst = np.array(ninst); rival = np.array(rival)
+    nfib = len(rec); total = mass.sum()
+
+    print(f"  -> {nfib} consensus fibers | instances/fiber: median {np.median(ninst):.0f}, "
+          f"max {ninst.max()} (of {a.stochastic_draws} draws)")
+
+    print("  recovery band      fibers   % fib     mass    % mass")
+    for lo, hi in ((0.0, 0.05), (0.05, 0.1), (0.1, 0.25), (0.25, 0.5),
+                   (0.5, 0.75), (0.75, 0.95), (0.95, 1.01)):
+        m = (rec >= lo) & (rec < hi)
+        if not m.any():
+            continue
+        print(f"    [{lo:4.2f},{hi:4.2f})  {int(m.sum()):8d}  {100*m.sum()/nfib:5.1f}%  "
+              f"{mass[m].sum():8.0f}  {100*mass[m].sum()/total if total else 0:5.1f}%")
+
+    gate = a.stochastic_stable_freq
+    low = rec < gate
+    frac_low = mass[low].sum() / total if total else 0.0
+    med_low = float(np.median(mass[low])) if low.any() else 0.0
+    med_hi = float(np.median(mass[~low])) if (~low).any() else 0.0
+    print(f"  a recovery>={gate} gate would purge {int(low.sum())}/{nfib} fibers "
+          f"({100*frac_low:.1f}% of mass); "
+          f"--stochastic-min-fiber-spikes {a.stochastic_min_fiber_spikes} purges "
+          f"{int((mass < a.stochastic_min_fiber_spikes).sum())} "
+          f"({100*mass[mass < a.stochastic_min_fiber_spikes].sum()/total if total else 0:.1f}%)")
+
+    near = np.nan
+    if low.any():
+        rv = rival[low][np.isfinite(rival[low])]
+        if rv.size:
+            near = float((rv >= 0.90).mean())
+            print(f"  low-recovery nearest-rival corr: median {np.median(rv):.3f}, "
+                  f"90th {np.percentile(rv, 90):.3f}, >=0.90 in {100*near:.0f}% "
+                  f"(match threshold {a.stochastic_match_corr})")
+
+    # int() on each: numpy booleans overload + as logical OR, so summing np.bool_
+    # gives True (==1) however many hold, and a >=2 test could never fire.
+    votes = (int(frac_low > 0.5)
+             + int(med_low > 0.25 * med_hi)
+             + int(bool(np.isfinite(near)) and bool(near > 0.3)))
+    if votes >= 2:
+        print(f"  VERDICT under-merge: low-recovery fibers carry {100*frac_low:.0f}% of mass "
+              f"(median {med_low:.0f} spikes vs {med_hi:.0f}). Sweep --stochastic-link x "
+              f"--stochastic-match-corr; do NOT filter on recovery yet.")
+    elif votes == 0:
+        print(f"  VERDICT spurious: low-recovery fibers are {100*low.sum()/nfib:.0f}% of fibers "
+              f"but {100*frac_low:.0f}% of mass, median {med_low:.0f} spikes, no near rivals. "
+              f"Recovery is the right filter here.")
+    else:
+        print("  VERDICT mixed: fix the consensus first, then re-measure; a recovery "
+              "filter now would take real mass with it.")
+
+
 def _dump_ensemble(a, rows, peel_log, mask, gch):
     out = f"{a.base}.fiberens.{a.elec}.npz"
     M = len(rows)
@@ -592,17 +701,6 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
     with open(out, "wb") as f:
         np.savez_compressed(f, **arrs)
     print(f"fiber_stochastic: wrote {out}  ({_time.time() - _tw:.1f}s)", file=_sys.stderr, flush=True)
-    # Consensus gids are namespaced PER CHUNK (each chunk's consensus starts at 0), so
-    # max(gid)+1 is the largest single chunk's count, not the total -- it read 8338 for
-    # a run whose .clu held 21,987 fibers, because chunk 9 alone produced 8338.  Count
-    # distinct (chunk, gid) pairs, the same key the triplet writer uses.
-    nconsensus = len({(r["_chunk"], r["_consensus_gid"]) for r in rows}) if M else 0
-    print(f"  {M:,} fiber instances over {a.stochastic_draws} draws x {len(set(r['_chunk'] for r in rows))} chunks "
-          f"(frac={a.stochastic_frac}) -> {nconsensus} consensus fibers")
-    if M:
-        rf = col("_recovery_freq", np.float32)
-        print(f"  recovery: >={a.stochastic_stable_freq}: {(rf>=a.stochastic_stable_freq).sum()} instances | "
-              f"median match_corr2 (merge-proneness) = {np.median(col('_match_corr2', np.float32)):.3f}")
 
 
 def add_arguments(ap):
