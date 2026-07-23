@@ -179,7 +179,7 @@ def main():
     ap.add_argument("--min-spikes", type=int, default=15)
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--no-templates", action="store_true", help="skip per-cluster median templates in the .clusters.npz")
-    ap.add_argument("--amp-method", choices=("pc1", "wave", "ptp"), default="pc1",
+    ap.add_argument("--amp-algo", "--amp-method", dest="amp_method", choices=("pc1", "wave", "ptp"), default="pc1",
                     help="per-channel amplitude profile for the position inverse: pc1=rank-1 denoised "
                          "template (default, sharpest footprint + most precise), wave=median-waveform "
                          "ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels "

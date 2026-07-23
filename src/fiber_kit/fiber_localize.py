@@ -406,7 +406,7 @@ def main():
     ap.add_argument("--nboot", type=int, default=0,
                     help="spike bootstrap draws for depth/distance CIs; 0 (default) uses the analytic "
                          "Gaussian sigma (matches the bootstrap on isolated clusters, ~Nx cheaper).")
-    ap.add_argument("--amp-method", choices=("pc1", "wave", "ptp"), default="pc1",
+    ap.add_argument("--amp-algo", "--amp-method", dest="amp_method", choices=("pc1", "wave", "ptp"), default="pc1",
                     help="per-channel amplitude profile: pc1=rank-1 denoised template (default, sharpest "
                          "+ most precise); wave=median-waveform ptp; ptp=median per-spike ptp (legacy, "
                          "carries a ~4-sigma noise floor on far channels).")

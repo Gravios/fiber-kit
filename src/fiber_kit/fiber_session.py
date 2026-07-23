@@ -1384,7 +1384,7 @@ def add_core_arguments(ap):
     Shared by main() and the stochastic harness so both expose an identical clusterer."""
     ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
-    ap.add_argument("--fine-method", choices=["gmm","rkk","fiber","none"], default="gmm")
+    ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="gmm")
     ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)
     ap.add_argument("--rkk-realign", dest="rkk_realign", action="store_true", default=True,
                     help="interleave rkk (CEM) with per-cluster realignment (per-step; default on)")
@@ -1446,7 +1446,7 @@ def add_core_arguments(ap):
                          "unreliable on small groups")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
-    ap.add_argument("--merge-method", choices=["template","sliding","profile"], default="template")
+    ap.add_argument("--merge-algo", "--merge-method", dest="merge_method", choices=["template","sliding","profile"], default="template")
     ap.add_argument("--sliding-nwin", type=int, default=14)
     ap.add_argument("--profile-thr", type=float, default=None,
                     help="profile-merge direction-distance threshold; default = auto same-neuron floor")
