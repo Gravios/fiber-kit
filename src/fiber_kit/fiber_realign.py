@@ -297,6 +297,23 @@ def _stderiv_transform(raw_ext):
     return np.clip(st, -32768.0, 32767.0).astype(np.int16)
 
 
+def _resolve_variant_token(base, group, variant):
+    """The method token actually on disk for a requested one, or the request itself.
+
+    resolve_input family-matches a bare token (asking for 'stderiv' finds
+    .spk.stderiv_C5.N), which is what lets the default --variants work on a
+    custom-pattern session.  But the caller then needs to know WHICH token it got,
+    because the transform to apply and the token to write both depend on it.
+    """
+    try:
+        r = nio.resolve_input(base, "spk", group, [variant])
+        if r.found and r.variant:
+            return r.variant
+    except Exception:
+        pass
+    return variant
+
+
 def _variant_present(base, group, variant):
     """True if this session has a <variant> spk or pca on disk (so realign should refresh it)."""
     try:
@@ -492,17 +509,25 @@ def main():
                 spk_v, _r = nio.open_spk(base, group, nsamp, nch, prefer=[v])
             except Exception:
                 _log(f"variant '{v}': no .spk, skipping"); continue
+            # Write under the token that was actually RESOLVED, not the one asked
+            # for.  resolve_input family-matches a bare request, so asking for
+            # 'stderiv' on a custom-pattern session hands back .spk.stderiv_C5.N --
+            # and writing that rolled waveform back as .spk.stderiv.N would label a
+            # C5-derived file as plain allpairs stderiv.  The roll itself is a
+            # circular shift and is transform-agnostic, so any token is fine to
+            # roll; only the provenance label has to stay honest.
+            vout = _r.variant or v
             wav = roll_spikes(np.asarray(spk_v[:len(res_corr)]), ioff)        # circular per-spike roll
-            spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
-            _log(f"rolled {len(wav):,} {v} spikes by offset (no .fil) → {spk_out}")
+            spk_out = nio.write_spk(base, group, wav, variant=vout, tag=a.out_tag)
+            _log(f"rolled {len(wav):,} {vout} spikes by offset (no .fil) → {spk_out}")
             if a.refeaturize:
                 try:
-                    basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
-                                          else [v, "D"])
+                    basis = fpca.read_pca(base, group, prefer=[vout, "standard", ""]
+                                          if nio.variant_family(vout) == "standard" else [vout, "D"])
                 except FileNotFoundError:
-                    _det("fet", f"no .pca basis for {v}; .fet not written"); continue
+                    _det("fet", f"no .pca basis for {vout}; .fet not written"); continue
                 fet = refeaturize(wav, res_corr, basis)
-                fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
+                fet_out = nio.write_fet(base, group, fet, variant=vout, tag=a.out_tag)
                 _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
     elif a.reextract or a.refeaturize:
         try:
@@ -519,11 +544,40 @@ def main():
             want = [v.strip() for v in a.variants.split(",") if v.strip()]
         else:
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
+        # Resolve each requested token to the one actually on disk BEFORE choosing a
+        # transform.  A bare 'stderiv' family-matches .spk.stderiv_C5.N, and deciding
+        # on the requested name would apply the allpairs transform to a session whose
+        # waveforms were built from a custom sdiffPairs pattern -- then write the
+        # result under a token claiming otherwise.  Deciding on the resolved token is
+        # what makes the refusal below reachable at all.
+        want = [_resolve_variant_token(base, group, v) for v in want]
         for v in want:
-            if v == "standard":
+            spec = nio.parse_variant_token(v)
+            if spec.family == "standard":
                 wav = raw_ext[:, 1:, :]
-            elif v in ("stderiv", "D"):
+            elif spec.family in ("stderiv", "D") and spec.kind is None:
                 wav = _stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
+            elif spec.family == "stderiv" and spec.kind == "C":
+                # _C<order> means the session's own sdiffPairs pattern -- a partner map
+                # (order 4) or reference sets (order 5) stored with the session, not
+                # anything derivable from the waveform window.  fiber-kit does not
+                # hold that pattern and must not invent one: applying allpairs here
+                # would silently produce a DIFFERENT feature space under the same
+                # token.  Re-extract it with the tool that owns the pattern.
+                _log(f"variant '{v}': custom sdiffPairs pattern (order {spec.order}) cannot be "
+                     f"re-derived here -- fiber-kit never applies the stderiv transform for a "
+                     f"_C token. Re-extract with  ndm_extractspikes -P <pattern>  (or "
+                     f"ndm_alignspikes -P) after this realign, so it picks up the corrected .res. "
+                     f"NOTE its .spk is now STALE against the realigned timestamps.")
+                continue
+            elif spec.family == "stderiv" and spec.kind == "S":
+                # Orders 1-3 are plain spatial derivatives, but both neurosuite-3
+                # aligners refuse _S tokens outright -- they are not implemented there
+                # either, so producing one here would be the only writer of that space
+                # and nothing downstream could reproduce it.
+                _log(f"variant '{v}': _S{spec.order} spatial-derivative order is not implemented "
+                     f"(the neurosuite-3 aligners refuse it too); skipping")
+                continue
             else:
                 _log(f"variant '{v}': no known waveform transform, skipping"); continue
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
