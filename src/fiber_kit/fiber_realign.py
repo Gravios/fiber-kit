@@ -552,7 +552,7 @@ def main():
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
-    ap.add_argument("--align-method", dest="align_method", choices=["klusters", "template", "centroid"], default="klusters",
+    ap.add_argument("--align-algo", "--align-method", dest="align_method", choices=["klusters", "template", "centroid"], default="klusters",
                     help="alignment algorithm (runs on the clu's variant waveform): klusters = iterative "
                          "normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; "
                          "centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), "

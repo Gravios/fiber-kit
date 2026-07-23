@@ -762,7 +762,7 @@ def main():
                          "The full co-gate stack still filters; this only improves the candidate set.")
     ap.add_argument("--dr-thr", type=float, default=None, help="DR-space NN distance cap (default none; co-gate filters)")
     ap.add_argument("--dr-k", type=int, default=10, help="template-DR dimensionality (default 10 ~ 96%% var on g5)")
-    ap.add_argument("--drift-method", choices=["accumulated", "global"], default="accumulated",
+    ap.add_argument("--drift-algo", "--drift-method", dest="drift_method", choices=["accumulated", "global"], default="accumulated",
                     help="NEW: 'global' solves drift by maximising template-anchor collinearity with a "
                          "Laplacian-smoothness term (+ distance attenuation if the cpos table has 'dist'); "
                          "'accumulated' = legacy consecutive xcorr (compounds on sparse partitions)")
