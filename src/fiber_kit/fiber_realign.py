@@ -583,7 +583,7 @@ def main():
                          "standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the "
                          "session's own spikeDetection.channelGroups[N].sdiffPairs pattern "
                          "(partner map / reference sets); then projected onto its .pca")
-    ap.add_argument("--out-tag", "--out-stage", default="",
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="",
                     help="stage tag for committed outputs (default: empty -> overwrite the canonical "
                          ".res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). "
                          "Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned")

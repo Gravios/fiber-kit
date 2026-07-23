@@ -242,7 +242,7 @@ def main():
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv",
                     help="feature space before the group (default stderiv)")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
                     help="fiber stage after the group: read <base>.clu.<clu-method>.<elec>.<variant> "
                          "(default refine; '' = no stage)")
     ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")

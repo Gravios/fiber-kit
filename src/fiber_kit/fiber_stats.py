@@ -68,7 +68,7 @@ def main():
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv",
                     help="feature space BEFORE the group (standard|stderiv|...); default stderiv")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
                     help="fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> "
                          "(default: refine; '' = no stage)")
     ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
@@ -78,7 +78,11 @@ def main():
                     help="one row per cluster over the whole session (single whitener)")
     ap.add_argument("--min-cluster", type=int, default=20, help="skip clusters smaller than this")
     ap.add_argument("--n-grid", type=int, default=40)
-    ap.add_argument("--method", default="refine", help="method tag in the .fibers filename")
+    ap.add_argument("--fibers-stage", "--method", dest="method", default="refine",
+                    help="tag in the .fibers filename. NOTE this lands in the METHOD slot of "
+                         "<base>.fibers.<slot>.<group> (see fibers_path), so a stage value here "
+                         "produces a name whose method slot holds a stage; fixing that changes "
+                         "filenames and is deliberately left as a separate decision")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
 

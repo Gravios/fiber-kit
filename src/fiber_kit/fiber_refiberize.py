@@ -312,9 +312,12 @@ def main():
                     "aligned .clu/.clc/.clp from the child->parent map.")
     ap.add_argument("base", help="session base path (no extension)")
     ap.add_argument("group", help="electrode group id")
-    ap.add_argument("--variant", default="stderiv", help="feature space (default stderiv)")
-    ap.add_argument("--tag", default="microfiber", help="stage tag of the input triple (default microfiber)")
-    ap.add_argument("--out-tag", default=None, help="stage tag for the output triple (default: overwrite --tag)")
+    ap.add_argument("--method", "--variant", dest="variant", default="stderiv",
+                    help="method the clu stems from: standard | stderiv | stderiv_C5 (default stderiv)")
+    ap.add_argument("--stage", "--tag", dest="tag", default="microfiber",
+                    help="post-fiber stage tag of the input triple (default microfiber)")
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default=None,
+                    help="post-fiber stage tag for the output triple (default: overwrite --stage)")
     ap.add_argument("--ops", default=None, help="edit-script file to apply before refiberizing")
     ap.add_argument("--no-renumber", action="store_true", help="keep original fiber ids (leave gaps)")
     ap.add_argument("--no-backup", action="store_true", help="do not write .bak copies")

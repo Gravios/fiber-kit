@@ -44,7 +44,7 @@ def main():
                     "and write an .npz budget for `fiber-defrag --var-budget`.")
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv", help="feature space before the group (default stderiv)")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="",
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="",
                     help="curated fiber stage tag after the group (default none)")
     ap.add_argument("--in-clu", default=None, help="explicit curated .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--n-pc", type=int, default=10, help="number of PCs for the feature space (default 10)")

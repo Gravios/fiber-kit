@@ -82,12 +82,13 @@ def main():
                     "hierarchical / fiber-refiberize machinery.")
     ap.add_argument("base", help="session base path (no extension)")
     ap.add_argument("group", help="electrode group id")
-    ap.add_argument("--variant", default="stderiv", help="feature space (default stderiv)")
+    ap.add_argument("--method", "--variant", dest="variant", default="stderiv",
+                    help="method the clu stems from: standard | stderiv | stderiv_C5 (default stderiv)")
     ap.add_argument("--stage", default="refine_linked",
                     help="pipeline stage of the input .clu (default refine_linked)")
     ap.add_argument("--out-stage", default=None,
                     help="pipeline stage for the output triple (default: same as --stage)")
-    ap.add_argument("--atoms", default=None,
+    ap.add_argument("--atoms-stage", "--atoms", dest="atoms", default=None,
                     help="stage of a FINER per-spike .clu to use as the atom (.clc) layer; "
                          "omit for the identity lift (each fiber = one microfiber)")
     ap.add_argument("--write-clu", action="store_true",
