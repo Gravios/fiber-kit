@@ -587,7 +587,11 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
     with open(out, "wb") as f:
         np.savez_compressed(f, **arrs)
     print(f"fiber_stochastic: wrote {out}  ({_time.time() - _tw:.1f}s)", file=_sys.stderr, flush=True)
-    nconsensus = int(col("_consensus_gid", int, -1).max() + 1) if M else 0
+    # Consensus gids are namespaced PER CHUNK (each chunk's consensus starts at 0), so
+    # max(gid)+1 is the largest single chunk's count, not the total -- it read 8338 for
+    # a run whose .clu held 21,987 fibers, because chunk 9 alone produced 8338.  Count
+    # distinct (chunk, gid) pairs, the same key the triplet writer uses.
+    nconsensus = len({(r["_chunk"], r["_consensus_gid"]) for r in rows}) if M else 0
     print(f"  {M:,} fiber instances over {a.stochastic_draws} draws x {len(set(r['_chunk'] for r in rows))} chunks "
           f"(frac={a.stochastic_frac}) -> {nconsensus} consensus fibers")
     if M:
