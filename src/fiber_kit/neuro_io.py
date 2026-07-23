@@ -261,6 +261,55 @@ def read_clu(base, elec, n_spikes=None, prefer=None):
     return read_clu_file(r.path, n_spikes=n_spikes)
 
 
+def sibling_variants(base, type_, group, tag="", family=None):
+    """Method tokens that actually exist on disk for <base>.<type>.*.<group>[.<tag>].
+
+    The tag axis is deliberately method-pinned -- session_path/read_clu_at build the
+    path and never probe -- so a stale --clu-method just misses.  This does not add
+    a fallback (silently substituting a different method is exactly what
+    PROJECT-INSTRUCTIONS warns against); it only lets the FAILURE say what is there.
+
+    Every module still defaults its method flag to the bare 'stderiv', which
+    predates the <family>_<kind><order> token grammar: a session extracted under a
+    custom sdiffPairs pattern has .clu.stderiv_C5.5, no .clu.stderiv.5, so the
+    default misses on every one of them.  Naming the real token in the error turns
+    a bare 'file not found' into an instruction.
+
+    @param family  if set, only tokens of that family are returned.
+    """
+    g = str(group)
+    suffix = f".{str(tag).replace('.', '_')}" if tag else ""
+    pat = f"{base}.{type_}.*.{g}{suffix}"
+    head = f"{base}.{type_}."
+    tail = f".{g}{suffix}"
+    out = []
+    for m in sorted(glob.glob(pat)):
+        if not (m.startswith(head) and m.endswith(tail)):
+            continue
+        token = m[len(head):-len(tail)]
+        if "." in token:                       # a longer tag, not a method token
+            continue
+        if family and variant_family(token) != family:
+            continue
+        out.append(token)
+    return out
+
+
+def _pinned_miss_message(kind, path, base, type_, group, variant, tag):
+    """Uniform 'method-pinned read missed' error that names the tokens on disk."""
+    msg = (f"no .{kind} at {path} (variant={variant!r}, tag={tag!r})")
+    same = sibling_variants(base, type_, group, tag=tag, family=variant_family(variant))
+    other = [t for t in sibling_variants(base, type_, group, tag=tag) if t not in same]
+    if same:
+        msg += (f"; this session has {', '.join(same)} for that stage -- "
+                f"pass the exact token (e.g. --clu-method {same[0]})")
+    elif other:
+        msg += f"; tokens present for that stage: {', '.join(other)}"
+    else:
+        msg += "; no method token exists for that stage at all"
+    return msg
+
+
 def read_clu_at(base, elec, variant="", tag="", n_spikes=None):
     """Read a method-pinned staged .clu directly (no resolve_input probing):
     <base>.clu[.<variant>].<elec>[.<tag>], e.g. variant='stderiv', tag='refine'
@@ -268,7 +317,7 @@ def read_clu_at(base, elec, variant="", tag="", n_spikes=None):
     path = session_path(base, "clu", elec, variant=variant, tag=tag)
     if not os.path.exists(path):
         raise FileNotFoundError(
-            f"no .clu at {path} (variant={variant!r}, tag={tag!r}); pass --in-clu or fix the method/stage")
+            _pinned_miss_message("clu", path, base, "clu", elec, variant, tag))
     return read_clu_file(path, n_spikes=n_spikes)
 
 
