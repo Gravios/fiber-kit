@@ -420,11 +420,80 @@ def rebuild(doc_text, stages):
     return "".join(out), sorted(set(stages) - used), missing_in_code, dynamic_skipped
 
 
+# ── plans/TEMPLATE-all-stages.yaml ───────────────────────────────────────────
+# The template calls itself a menu of "each stage's ARGPARSE DEFAULTS", which is
+# the same claim stages.md made and the same liability: measured before this, it
+# carried 18 legacy flag spellings and was missing 148 flags, including every
+# runtime-built knob.  It is regenerated from the same captured parsers, block by
+# block, keyed by the `# ===== fiber-xxx :` heading already in the file so the
+# curated pipeline ORDER and the hand-written header survive untouched.
+TPL = "plans/TEMPLATE-all-stages.yaml"
+TPL_HEAD = re.compile(r"^  # ===== (fiber-[\w-]+) :.*=====\s*$", re.M)
+
+
+def yaml_scalar(v):
+    if v is None or v == "":
+        return '""'
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    return str(v)
+
+
+def render_template_block(cmd, stage):
+    _prog, desc, _pos, rows, _dyn = stage
+    head = " ".join(str(desc or "").split())
+    out = [f"  # ===== {cmd} : {head} ====="]
+    out.append(f"  # - {{stage: {cmd}, in: <tag>, out: <tag>, params: {{")
+    for flag, default, text in rows:
+        # `--a` (`--b`) -> a ;  `--x` / `--no-x` -> x
+        m = re.match(r"`(--[\w-]+)`", flag)
+        if not m:
+            continue
+        key = m.group(1).lstrip("-")
+        if default.startswith("flag ("):
+            val = "true" if default == "flag (on)" else "false"
+        elif default == "\u2014":
+            val = '""'
+        elif default == "(from config)":
+            val = '""'
+        else:
+            val = default.strip("`")
+            if val == '`""`' or val == '""':
+                val = '""'
+        cell = f"  #       {key}: {val}"
+        out.append(f"{cell:<42}# {text}".rstrip() if text else cell)
+    out.append("  #     }}")
+    return "\n".join(out)
+
+
+def rebuild_template(text, stages):
+    heads = [(m.group(1), m.start(), m.end()) for m in TPL_HEAD.finditer(text)]
+    if not heads:
+        return text, []
+    out, prev, unknown = [], 0, []
+    for i, (name, hs, he) in enumerate(heads):
+        end = heads[i + 1][1] if i + 1 < len(heads) else len(text)
+        out.append(text[prev:hs])
+        st = stages.get(name)
+        if st is None:
+            unknown.append(name)
+            out.append(text[hs:end])
+        else:
+            out.append(render_template_block(name, st) + "\n\n")
+        prev = end
+    out.append(text[prev:])
+    return "".join(out), unknown
+
+
 def main():
     ap = argparse.ArgumentParser(prog="gen_stages_doc")
     ap.add_argument("--check", action="store_true",
                     help="do not write; exit 1 if docs/stages.md has drifted from the parsers")
     ap.add_argument("--src", default=SRC)
+    ap.add_argument("--template", action="store_true",
+                    help="also regenerate plans/TEMPLATE-all-stages.yaml from the parsers")
     ap.add_argument("--no-introspect", action="store_true",
                     help="skip importing the stages; use the AST reader only "
                          "(dependency-free, but dynamic flags are not seen)")
@@ -481,7 +550,17 @@ def main():
         print(f"  note: {cmd} sets prog='{prog}' \u2014 its own --help prints the wrong "
               f"command name")
 
+    tpl_new = tpl_old = None
+    if a.template and os.path.exists(TPL):
+        tpl_old = open(TPL, errors="ignore").read()
+        tpl_new, tpl_unknown = rebuild_template(tpl_old, stages)
+        for n in tpl_unknown:
+            print(f"  note: template block '{n}' has no matching console script")
+
     if a.check:
+        if tpl_new is not None and tpl_new != tpl_old:
+            print(f"DRIFT: {TPL} does not match the argument parsers.")
+            return 1
         if new != doc:
             print(f"DRIFT: {a.doc} does not match the argument parsers. "
                   f"Run: python3 tools/gen_stages_doc.py")
@@ -495,6 +574,12 @@ def main():
         print(f"rewrote {a.doc} from {len(stages)} parsers")
     else:
         print(f"{a.doc} already matches the parsers")
+    if tpl_new is not None:
+        if tpl_new != tpl_old:
+            open(TPL, "w").write(tpl_new)
+            print(f"rewrote {TPL}")
+        else:
+            print(f"{TPL} already matches the parsers")
     return 0
 
 
