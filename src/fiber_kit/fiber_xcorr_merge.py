@@ -172,13 +172,15 @@ def main():
     ap.add_argument("--clu-stage", "--variant", dest="clu_stage", default="backbone_linked",
                     help="input .clu stage tag (e.g. the fiber-backbone-link output)")
     ap.add_argument("--in-clu", default=None, help="explicit input .clu path (overrides --clu-method/--clu-stage)")
-    ap.add_argument("--spk-variant", default="standard", help="waveform axis for templates (curation axis)")
-    ap.add_argument("--out-tag", default="xcorr_merged", help="output .clu stage tag")
+    ap.add_argument("--spk-method", "--spk-variant", dest="spk_variant", default="standard", help="waveform axis for templates (curation axis)")
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="xcorr_merged",
+                    help="post-fiber stage tag of the output .clu")
     ap.add_argument("--refrac-censor-ms", type=float, default=0.0, help="detection censor window (ms)")
     ap.add_argument("--nsamp", type=int, default=None, help="override; default from <session>.yaml")
     ap.add_argument("--nchan", type=int, default=None, help="override; default from <session>.yaml")
     ap.add_argument("--ref-sample", type=int, default=None, help="override; default = peak from <session>.yaml")
-    ap.add_argument("--gt-clu", default=None, help="curated .clu tag/path to score purity+completeness")
+    ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
+                    help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),

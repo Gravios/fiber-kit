@@ -228,15 +228,17 @@ def main():
     ap.add_argument("--clu-stage", "--variant", dest="clu_stage", default="fiber_session",
                     help="fragment .clu stage tag (the fiber-session output)")
     ap.add_argument("--in-clu", default=None, help="explicit fragment .clu path (overrides --clu-method/--clu-stage)")
-    ap.add_argument("--spk-variant", default="standard", help="waveform axis for templates/warp (standard = curation axis)")
+    ap.add_argument("--spk-method", "--spk-variant", dest="spk_variant", default="standard", help="waveform axis for templates/warp (standard = curation axis)")
     ap.add_argument("--channels", default=None, help="pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary")
-    ap.add_argument("--out-tag", default="backbone_linked", help="output .clu stage tag (single token)")
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="backbone_linked",
+                    help="post-fiber stage tag of the output .clu (single token)")
     ap.add_argument("--hierarchy", action="store_true",
                     help="also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp "
                          "(child->parent map), so the chains are browsable/undoable as parents of their "
                          "fragments.  Composes across passes: an input .clc is carried through, so the "
                          "leaves stay the ORIGINAL fiber-session fragments however many times you re-link.")
-    ap.add_argument("--gt-clu", default=None, help="curated .clu to score purity+completeness against")
+    ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
+                    help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness against")
     ap.add_argument("--gt-res", default=None, help="reserved: .res for the GT (unused when GT shares the session res)")
     ap.add_argument("--spk-cap", type=int, default=600, help="spikes per fragment for the template")
     ap.add_argument("--chunk-min", type=float, default=None, help="chunk length (min); default from <session>.yaml or 12")

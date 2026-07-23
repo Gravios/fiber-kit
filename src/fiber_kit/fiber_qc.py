@@ -146,7 +146,8 @@ def main():
                     "interactive HoloViz/Bokeh HTML, with a metrics CSV.")
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine")
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
+                    help="post-fiber stage tag at the end of the .clu name")
     ap.add_argument("--in-clu", default=None, help="explicit .clu path")
     ap.add_argument("--refrac-ms", type=float, default=1.5)
     ap.add_argument("--censor-ms", type=float, default=0.3)

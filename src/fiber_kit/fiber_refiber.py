@@ -160,9 +160,11 @@ def main():
                     "+ template-shape co-gating; write the .clu/.clc/.clp triple.")
     ap.add_argument("base")
     ap.add_argument("group", type=int)
-    ap.add_argument("--variant", default="stderiv")
-    ap.add_argument("--tag", default="microfiber", help="input atom-layer tag")
-    ap.add_argument("--out-tag", default=None,
+    ap.add_argument("--method", "--variant", dest="variant", default="stderiv",
+                    help="method the clu stems from: standard | stderiv | stderiv_C5 (default stderiv)")
+    ap.add_argument("--stage", "--tag", dest="tag", default="microfiber",
+                    help="post-fiber stage tag of the input atom layer")
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default=None,
                     help="output tag (default: same as --tag, i.e. overwrite in place with .bak)")
     ap.add_argument("--session", default=None)
     ap.add_argument("--probe", nargs="+", default=None)

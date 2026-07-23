@@ -195,8 +195,10 @@ def main():
                     "vs vary across the clusters (a merge/curation aid).  Reads <session>.yaml.")
     sy.add_session_args(ap)
     ap.add_argument("--in-clu", default=None, help="sort to analyse (default canonical .clu)")
-    ap.add_argument("--variant", default=None, help="staged .clu method (e.g. stderiv) instead of --in-clu")
-    ap.add_argument("--stage", default=None, help="staged .clu tag (e.g. refine); pair with --variant")
+    ap.add_argument("--clu-method", "--variant", dest="variant", default=None,
+                    help="method the staged .clu stems from (e.g. stderiv, stderiv_C5) instead of --in-clu")
+    ap.add_argument("--clu-stage", "--stage", dest="stage", default=None,
+                    help="post-fiber stage tag of the staged .clu (e.g. refine); pair with --clu-method")
     ap.add_argument("--clusters", default=None,
                     help="comma list of .clu ids to include (default: all ids >= 2 with >= --min-n spikes)")
     ap.add_argument("--spk", choices=["standard", "stderiv"], default="standard",

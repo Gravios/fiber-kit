@@ -80,7 +80,7 @@ def main():
                     "Writes a refreshed <...>.units.npz for fiber-link / fiber-drift / fiber-qc.")
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv", help="feature space of the curated clu")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="curated",
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="curated",
                     help="stage tag of the curated .clu to refit (e.g. 'curated')")
     ap.add_argument("--in-clu", default=None, help="explicit curated .clu path")
     ap.add_argument("--cpos-method", default=None, help="cpos method for positions (default: --clu-method)")

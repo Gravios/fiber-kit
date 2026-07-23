@@ -182,7 +182,7 @@ def main():
                     "the time-warp (spike width) so distinct same-shape cells are held apart.")
     sy.add_session_args(ap)
     ap.add_argument("--clu-method", default="stderiv", help="feature space before the group (default stderiv)")
-    ap.add_argument("--variant", "--clu-stage", dest="variant", default="refine",
+    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
                     help="fiber stage after the group (default refine; '' = none)")
     ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--cos-thr", type=float, default=COS_THR, help="template cosine merge candidate (default 0.92)")
@@ -195,7 +195,8 @@ def main():
     ap.add_argument("--var-scale", type=float, default=1.0,
                     help="multiply the loaded variance allowance (dial the operating point: "
                          ">1 looser/more merging, <1 tighter; floor is conservative, ~1.5-2x reaches the baseline)")
-    ap.add_argument("--out-tag", default=None, help="staged .clu stage tag for the merged result (default 'defrag', single token)")
+    ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default=None,
+                    help="post-fiber stage tag for the merged result (default 'defrag', single token)")
     ap.add_argument("--ccg-refrac-ms", type=float, default=0.0,
                     help="refractory cross-correlogram veto window (ms); 0 disables. ~1.5 to enable. "
                          "Power-aware: abstains where firing rates are too low to show a dip (e.g. g5).")
