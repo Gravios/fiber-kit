@@ -16,6 +16,7 @@
 # skipped, and the skipped kinds are REPORTED rather than silently ignored, so a kind
 # added upstream shows up here as something to look at.
 import os
+import tempfile
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -63,6 +64,21 @@ with open(VECTORS) as fh:
             # variant_family stays consistent with the full parse.
             check(nio.variant_family(token) == want[0],
                   f"variant_family({token!r}) == {want[0]!r}")
+
+        elif kind == "resolve_any":
+            # Shared-artifact resolution: materialise the synthetic directory the
+            # row describes, resolve, then remove it.  Same shape as the resolve
+            # kind the other mirrors run.
+            existing = [x for x in f[1].split(",") if x]
+            with tempfile.TemporaryDirectory() as d:
+                base = os.path.join(d, "sess")
+                for suf in existing:
+                    open(base + "." + suf, "w").close()
+                r = nio.resolve_any(base, f[2], int(f[3]), f[4])
+                check(os.path.basename(r.path) == f[5] and r.found == (f[6] == "1"),
+                      "resolve_any [{}] {}/{}/'{}' -> {} found={} (got {} found={})".format(
+                          f[1], f[2], f[3], f[4], f[5], f[6],
+                          os.path.basename(r.path), int(r.found)))
 
         elif kind == "is_stderiv":
             token, want = f[1], (f[2] == "1")
