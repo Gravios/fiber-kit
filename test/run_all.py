@@ -119,4 +119,10 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        # Ctrl-C during a subprocess otherwise dumps a traceback through
+        # subprocess.communicate, which reads like the runner crashed.
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)

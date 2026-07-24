@@ -29,6 +29,7 @@ fails is a real failure.
 
 Run:  python3 test/test_stage_startup.py [-v]
 """
+import ast
 import os
 import re
 import subprocess
@@ -43,7 +44,7 @@ SRC = os.path.join(ROOT, "src")
 PROBE = r"""
 import sys, argparse, importlib
 sys.path.insert(0, %(src)r)
-_MODULE = sys.argv[1]
+_MODULE, _ENTRY = sys.argv[1], sys.argv[2]
 sys.argv = ["<<probe>>"]
 class _Got(Exception):
     def __init__(self, ap): self.ap = ap
@@ -55,7 +56,7 @@ try:
 except ImportError as e:
     print("SKIP import: %%s" %% str(e)[:90]); raise SystemExit(0)
 try:
-    m.main()
+    getattr(m, _ENTRY)()
     print("FAIL main() returned without building a parser")
 except _Got as g:
     n = len([a for a in g.ap._actions if a.dest != "help"])
@@ -69,6 +70,30 @@ except Exception as e:
 """
 
 
+def entry_parses_args(path, fn="main"):
+    """True when the module's ENTRY function actually reaches argparse.
+
+    Checked on main() specifically, not the whole file: fiber_pipeline_editor
+    builds an ArgumentParser elsewhere for its lint entry point while its main()
+    goes straight to QApplication, so a file-wide search says yes and the probe
+    then runs the GUI.  Checked per ENTRY POINT, since one module can back
+    several commands with different functions.
+    """
+    try:
+        tree = ast.parse(open(path, errors="ignore").read())
+    except (OSError, SyntaxError):
+        return True                      # unreadable: probe it and let it report
+    for n in tree.body:
+        if isinstance(n, ast.FunctionDef) and n.name == fn:
+            for m in ast.walk(n):
+                if isinstance(m, ast.Call) and \
+                        getattr(m.func, "attr", getattr(m.func, "id", "")) in (
+                            "parse_args", "parse_known_args"):
+                    return True
+            return False
+    return True
+
+
 def console_scripts():
     text = open(os.path.join(ROOT, "pyproject.toml"), errors="ignore").read()
     m = re.search(r"^\[project\.scripts\]\s*$(.*?)(?=^\[)", text, re.M | re.S)
@@ -76,7 +101,10 @@ def console_scripts():
     for line in (m.group(1).splitlines() if m else []):
         e = re.match(r'\s*([\w.-]+)\s*=\s*"([\w.]+):(\w+)"', line)
         if e:
-            out[e.group(1)] = e.group(2)
+            # Keep the entry FUNCTION: fiber-plan-lint is
+            # fiber_pipeline_editor:lint_main, and probing main() instead would
+            # test a different program from the one the command runs.
+            out[e.group(1)] = (e.group(2), e.group(3))
     return out
 
 
@@ -85,23 +113,23 @@ def main():
     code = PROBE % {"src": SRC}
     ok = skipped = failed = 0
     problems = []
-    for cmd, mod in sorted(console_scripts().items()):
-        # A stage that never constructs an ArgumentParser has no parser to build
-        # (ndm_fiber-kit reads sys.argv directly).  Detected from the source
-        # rather than an allowlist, so a new one needs no edit here -- and so a
-        # stage that DOES use argparse can never be excused by this branch.
+    for cmd, (mod, fn) in sorted(console_scripts().items()):
+        # Skip a stage whose main() never reaches parse_args -- ndm_fiber-kit reads
+        # sys.argv directly, and the GUI editors build a QApplication and call
+        # app.exec().  The probe stops AT parse_args, so for those it stops nowhere:
+        # it runs the program.  On a machine without PySide6 that surfaced as a
+        # tidy ImportError skip; with Qt installed it OPENS THE EDITOR and blocks
+        # until the window is closed.  Detected from main()'s own body rather than
+        # an allowlist, so a stage that does parse args can never be excused by it.
         src_path = os.path.join(SRC, *mod.split(".")) + ".py"
-        try:
-            uses_argparse = "ArgumentParser(" in open(src_path, errors="ignore").read()
-        except OSError:
-            uses_argparse = True
-        if not uses_argparse:
+        if not entry_parses_args(src_path, fn):
             skipped += 1
             if verbose:
                 print(f"  skip  {cmd:24s} does not use argparse")
             continue
         try:
-            r = subprocess.run([sys.executable, "-c", code, mod],
+            env = dict(os.environ, QT_QPA_PLATFORM="offscreen", MPLBACKEND="Agg")
+            r = subprocess.run([sys.executable, "-c", code, mod, fn], env=env,
                                capture_output=True, text=True, timeout=120)
             line = (r.stdout.strip().splitlines() or [""])[-1]
         except subprocess.TimeoutExpired:

@@ -644,7 +644,23 @@ def _build_qt():
             self.setZValue(1)
 
         def boundingRect(self):
-            return QtCore.QRectF(0, 0, NODE_W, NODE_H)
+            # Must cover EVERYTHING paint() draws, and the ports stick out past the
+            # body: _out_port_rect reaches NODE_W + PORT_R and _in_port_rect starts
+            # at -PORT_R.  With the old (0, 0, NODE_W, NODE_H) the outer half of
+            # each port lay outside the item, so QGraphicsScene::items(scenePos)
+            # did not return the node for a click there -- Scene.mousePressEvent
+            # never got to hit_out_port, the event fell through to the view, and
+            # RubberBandDrag drew a selection rectangle instead of starting a link.
+            # Aiming at the visible centre of a port failed roughly half the time.
+            # Painting outside boundingRect also leaves repaint artefacts, which Qt
+            # documents as undefined behaviour.
+            # PORT_R for the port itself, +4 to match the click tolerance
+            # hit_out_port/hit_in_port apply, +1 for the antialiased edge.  Sizing
+            # it to the tolerance is the point: a margin that only covered the port
+            # would leave the slop region outside the item and therefore unclickable,
+            # which is the bug in a smaller form.
+            m = PORT_R + 4.0 + 1.0
+            return QtCore.QRectF(-m, 0, NODE_W + 2 * m, NODE_H)
 
         def paint(self, p, opt, w=None):
             r = self.boundingRect()
