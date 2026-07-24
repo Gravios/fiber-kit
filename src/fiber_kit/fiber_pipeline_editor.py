@@ -643,6 +643,14 @@ def _build_qt():
             self.setPos(step.x, step.y)
             self.setZValue(1)
 
+        def body_rect(self):
+            """The node as DRAWN.  Separate from boundingRect, which is deliberately
+            larger so the ports and their click tolerance fall inside the item's
+            shape.  paint() used boundingRect directly, so widening it in the port
+            fix also widened the visible body by 22 px -- a rectangle sticking out
+            past the title bar on both sides."""
+            return QtCore.QRectF(0, 0, NODE_W, NODE_H)
+
         def boundingRect(self):
             # Must cover EVERYTHING paint() draws, and the ports stick out past the
             # body: _out_port_rect reaches NODE_W + PORT_R and _in_port_rect starts
@@ -663,7 +671,7 @@ def _build_qt():
             return QtCore.QRectF(-m, 0, NODE_W + 2 * m, NODE_H)
 
         def paint(self, p, opt, w=None):
-            r = self.boundingRect()
+            r = self.body_rect()
             sel = self.isSelected()
             p.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             p.setPen(QtGui.QPen(QtGui.QColor("#e6c14b" if sel else "#3a3a3a"), 2.0))
@@ -748,12 +756,24 @@ def _build_qt():
                         self.temp_line = self.addLine(QtCore.QLineF(it.out_port_scene_pos(), ev.scenePos()),
                                                       QtGui.QPen(QtGui.QColor("#e6c14b"), 2, Qt.PenStyle.DashLine))
                         self.temp_line.setZValue(5)
+                        # Accept, or QGraphicsView treats the press as unhandled and
+                        # starts a rubber band.  While it is rubber-banding, its
+                        # mouseReleaseEvent returns early and NEVER forwards to the
+                        # scene -- so Scene.mouseReleaseEvent, and with it the whole
+                        # drop path, never ran.  That is why the line drew and
+                        # followed the cursor but nothing ever attached.
+                        ev.accept()
+                        # Belt and braces: take the view out of RubberBandDrag for
+                        # the duration, so nothing can start one mid-link.
+                        for v in self.views():
+                            v.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
                         return
             super().mousePressEvent(ev)
 
         def mouseMoveEvent(self, ev):
             if self.temp_line is not None:
                 self.temp_line.setLine(QtCore.QLineF(self.temp_src.out_port_scene_pos(), ev.scenePos()))
+                ev.accept()
                 return
             super().mouseMoveEvent(ev)
 
@@ -787,6 +807,9 @@ def _build_qt():
                         "released on empty canvas -- nothing wired")
                 self.temp_line = None
                 self.temp_src = None
+                for v in self.views():
+                    v.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+                ev.accept()
                 return
             super().mouseReleaseEvent(ev)
 
