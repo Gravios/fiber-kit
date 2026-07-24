@@ -194,9 +194,31 @@ def write_res_file(path, times):
 
 
 def read_res(base, elec, prefer=None):
-    """Resolve and read <base>.res.<elec> (variant-aware).  Defaults to the
-    canonical form first; pass prefer_derived() to prefer a derived .res."""
-    r = resolve_input(base, "res", elec, prefer or prefer_canonical())
+    """Resolve and read <base>.res.<elec>.
+
+    .res is the one artifact that is genuinely SHARED: spike timestamps do not
+    depend on which method extracted the waveforms, and detection may have run
+    under one token while extraction ran under another.  So by default this
+    resolves with resolve_any -- take whichever physical copy exists, whatever
+    token it wears -- rather than walking a fixed preference list that cannot
+    name a suffixed token and would report a present file as missing.
+
+    Passing `prefer` explicitly keeps the old fixed-list behaviour, for a caller
+    that really does want one token's copy or nothing.
+
+    NOTE this is deliberately NOT done for open_spk.  Despite .spk being listed
+    alongside .res as Shared, fiber-kit's .spk tokens hold DIFFERENT CONTENT --
+    .spk.standard is the raw window and .spk.stderiv_C5 is a spatial-derivative
+    transform of it.  Callers needing raw amplitudes (localization, position,
+    raw-PCA) pass prefer_standard(), which the docstring there says must FAIL
+    rather than silently fall back, because the transform breaks the
+    amplitude-distance law.  resolve_any on .spk would hand those callers a
+    transformed waveform and call it success.
+    """
+    if prefer is None:
+        r = resolve_any(base, "res", elec)
+    else:
+        r = resolve_input(base, "res", elec, prefer)
     if not r.found:
         raise FileNotFoundError(f"no .res for {base} elec {elec}")
     return read_res_file(r.path)
