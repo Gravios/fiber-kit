@@ -741,6 +741,32 @@ def _build_qt():
                 self.editor.duplicate_node(self)
             event.accept()
 
+    class LinkAwareView(QtWidgets.QGraphicsView):
+        """QGraphicsView that decides its drag mode BEFORE Qt acts on the press.
+
+        The scene used to switch the view to NoDrag from its own mousePressEvent,
+        which is too late: QGraphicsView has already stored the press and started
+        its rubber-band bookkeeping by the time the scene handler runs, so a
+        selection rectangle appeared for the whole link drag and vanished on
+        release -- "only while dragging", which is the signature of a rubber band
+        rather than anything the node paints.
+
+        Deciding here is ordering-proof: if the press lands on an output port we
+        are starting a link and want no rubber band; anywhere else keeps
+        RubberBandDrag so box-selecting nodes still works.
+        """
+
+        def mousePressEvent(self, ev):
+            on_port = False
+            if ev.button() == Qt.MouseButton.LeftButton:
+                sp = self.mapToScene(ev.position().toPoint())
+                on_port = any(isinstance(it, NodeItem) and it.hit_out_port(sp)
+                              for it in self.scene().items(sp))
+            self.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag if on_port
+                             else QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
+            super().mousePressEvent(ev)
+
+
     class Scene(QtWidgets.QGraphicsScene):
         def __init__(self, editor):
             super().__init__()
@@ -763,10 +789,6 @@ def _build_qt():
                         # drop path, never ran.  That is why the line drew and
                         # followed the cursor but nothing ever attached.
                         ev.accept()
-                        # Belt and braces: take the view out of RubberBandDrag for
-                        # the duration, so nothing can start one mid-link.
-                        for v in self.views():
-                            v.setDragMode(QtWidgets.QGraphicsView.DragMode.NoDrag)
                         return
             super().mousePressEvent(ev)
 
@@ -807,8 +829,6 @@ def _build_qt():
                         "released on empty canvas -- nothing wired")
                 self.temp_line = None
                 self.temp_src = None
-                for v in self.views():
-                    v.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
                 ev.accept()
                 return
             super().mouseReleaseEvent(ev)
@@ -998,7 +1018,7 @@ def _build_qt():
             self.resize(1200, 720)
 
             self.scene = Scene(self)
-            self.view = QtWidgets.QGraphicsView(self.scene)
+            self.view = LinkAwareView(self.scene)
             self.view.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
             self.view.setDragMode(QtWidgets.QGraphicsView.DragMode.RubberBandDrag)
             self.view.setBackgroundBrush(QtGui.QColor("#202329"))
