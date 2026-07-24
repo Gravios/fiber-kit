@@ -86,9 +86,9 @@ def main():
     ntotal, nchan, nsamp, sr = cfg["ntotal"], cfg["nchan"], cfg["nsamp"], cfg["sr"]
     gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
 
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
-    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
     filmm = nio.open_signal(f"{base}.fil", ntotal)
@@ -115,7 +115,7 @@ def main():
     for c, ext, core, tmin in windows:
         res_e = res[ext]
         s0 = int(res_e.min()) - nsamp; s1 = int(res_e.max()) + nsamp + 1
-        W, nmean, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask)
+        W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask)
         waves = np.asarray(spk[ext], dtype=float)
         r = _rows_for_window(waves, res_e, clu[ext], W, nmean, mask, sr, a.n_grid,
                              c, tmin, a.min_cluster, core)

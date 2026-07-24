@@ -17,10 +17,9 @@ import argparse
 import numpy as np
 
 try:
-    from . import (neuro_io as nio, session_yaml as sy, fiber_ccg as ccg,
-                   fiber_session as fs, fiber_score as fsc)
+    from . import (neuro_io as nio, session_yaml as sy, fiber_ccg as ccg, fiber_score as fsc)
 except ImportError:                                              # script / direct execution
-    import neuro_io as nio, session_yaml as sy, fiber_ccg as ccg, fiber_session as fs, fiber_score as fsc
+    import neuro_io as nio, session_yaml as sy, fiber_ccg as ccg, fiber_score as fsc
 
 
 # ───────────────────────────── metric core (pure numpy) ─────────────────────────────

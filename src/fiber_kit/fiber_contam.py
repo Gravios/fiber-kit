@@ -35,9 +35,9 @@ import argparse
 import numpy as np
 
 try:
-    from . import fiber_session as fs, neuro_io as nio, session_yaml as sy
+    from . import neuro_io as nio, session_yaml as sy
 except ImportError:                                              # script / direct execution
-    import fiber_session as fs, neuro_io as nio, session_yaml as sy
+    import neuro_io as nio, session_yaml as sy
 
 WIN_HALF       = 13      # samples either side of peak for the analysis window
 N_PC           = 4       # top within-cluster SVD components scanned for bimodality
@@ -260,9 +260,9 @@ def main():
     base = cfg["base"]; elec = a.group
     nchan, nsamp, sr, peak = cfg["nchan"], cfg["nsamp"], cfg["sr"], cfg["peak"]
 
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
-    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
     print(f"loaded {len(res)} spikes, {len(np.unique(clu[clu > 0]))} clusters ({spkpath})")

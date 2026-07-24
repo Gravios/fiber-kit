@@ -131,7 +131,6 @@ def split_gate(t_a, t_b, duration, refrac, thr=0.3, min_exp=5.0, censor=0):
 def main():
     import argparse
     from . import neuro_io as nio
-    from . import fiber_session as fs
     from . import session_yaml as sy
     ap = argparse.ArgumentParser(
         description="Refractory QC for a group's clustering: per-cluster ISI-violation fraction, and the "
@@ -149,7 +148,7 @@ def main():
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
     base = cfg["base"]; elec = a.group; sr = cfg["sr"]
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     refrac = refrac_samples(a.refrac_ms, sr); censor = refrac_samples(a.censor_ms, sr)
     duration = float(res.max() - res.min())
