@@ -881,7 +881,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
-| `--clu-method` | `stderiv` |  |
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
 | `--clu-stage` (`--variant`) | `refine` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path |
 | `--refrac-ms` | `1.5` |  |
@@ -979,7 +979,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
-| `--clu-method` | `stderiv` |  |
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
 | `--clu-stage` (`--variant`) | `refine` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path |
 | `--refrac-ms` | `1.5` | refractory window (ms, default 1.5) |
