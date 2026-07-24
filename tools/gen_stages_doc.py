@@ -28,38 +28,20 @@ Usage:
 """
 import argparse
 import ast
-import json
+
 import os
-import subprocess
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from stage_probe import console_scripts, introspect  # noqa: E402
 
 SRC = "src/fiber_kit"
 DOC = "docs/stages.md"
 PYPROJECT = "pyproject.toml"
 
 
-def console_scripts(path=PYPROJECT):
-    """command name -> module, from [project.scripts].
 
-    This, not prog=, is what the doc headings are keyed on, and rightly: it is the
-    name a user actually types.  Parsed with a regex rather than tomllib so the
-    generator runs on any Python 3 without an import.
-    """
-    text = open(path, errors="ignore").read()
-    m = re.search(r"^\[project\.scripts\]\s*$(.*?)(?=^\[)", text, re.M | re.S)
-    if not m:
-        return {}
-    out = {}
-    for line in m.group(1).splitlines():
-        e = re.match(r'\s*([\w.-]+)\s*=\s*"([\w.]+):(\w+)"', line)
-        if e:
-            cmd, mod, _fn = e.groups()
-            out[cmd] = mod.split(".")[-1]
-    return out
-
-
-# ── reading the parsers ──────────────────────────────────────────────────────
 def module_constants(tree):
     """Module-level NAME = <literal>, so `default=MIN_SPIKES` can be resolved."""
     out = {}
@@ -109,62 +91,7 @@ def render_default(node, consts, action):
 # missing optional dependency (the PySide6 GUI tools) cannot take the run down --
 # those fall back to the AST reader, which is also what makes this usable in a
 # dependency-free CI job, just with fewer stages introspected.
-PROBE = r"""
-import sys, json, argparse, importlib
-sys.path.insert(0, %(src)r)
-# argparse falls back to basename(sys.argv[0]) when a parser sets no prog=.
-# Pin a sentinel so "did it set prog explicitly?" is answerable.
-_AUTO = "<<autoprog>>"
-_MODULE = sys.argv[1]          # read BEFORE argv is replaced
-sys.argv = [_AUTO]
-class _Got(Exception):
-    def __init__(self, ap): self.ap = ap
-def _stop(self, *a, **k): raise _Got(self)
-argparse.ArgumentParser.parse_args = _stop
-argparse.ArgumentParser.parse_known_args = _stop
-def dump(ap):
-    pos, rows = [], []
-    for a in ap._actions:
-        if a.dest == "help":
-            continue
-        if not a.option_strings:
-            pos.append(a.dest)
-            continue
-        rows.append(dict(flags=list(a.option_strings), dest=a.dest,
-                         default=None if a.default is argparse.SUPPRESS else a.default,
-                         suppressed=a.default is argparse.SUPPRESS,
-                         choices=list(a.choices) if a.choices else None,
-                         help=a.help or "",
-                         const=a.__class__.__name__))
-    return dict(prog=("" if ap.prog == _AUTO else ap.prog),
-                description=ap.description or "",
-                positionals=pos, rows=rows)
-try:
-    m = importlib.import_module(_MODULE)
-    m.main()
-    print("FAIL no parse_args reached")
-except _Got as g:
-    print("JSON" + json.dumps(dump(g.ap)))
-except BaseException as e:
-    print("FAIL %%s: %%s" %% (type(e).__name__, str(e)[:80]))
-"""
 
-
-def introspect(src_dir, module, timeout=90):
-    """Real parser spec via subprocess, or None if the stage cannot be imported."""
-    code = PROBE % {"src": os.path.abspath(src_dir + "/..")}
-    try:
-        r = subprocess.run([sys.executable, "-c", code, module],
-                           capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return None
-    for line in r.stdout.splitlines():
-        if line.startswith("JSON"):
-            try:
-                return json.loads(line[4:])
-            except ValueError:
-                return None
-    return None
 
 
 def rows_from_spec(spec):
@@ -503,13 +430,13 @@ def main():
     # Key every stage by its INSTALLED command name.  A module reachable only as
     # a library (session_yaml, klustakwik) is deliberately absent from the doc and
     # must not be reported as undocumented.
-    cmds = console_scripts()
+    cmds = console_scripts(os.path.dirname(os.path.abspath(__file__)) + '/..')
     stages, progmismatch, mode = {}, [], {}
-    for cmd, mod in sorted(cmds.items()):
-        p = os.path.join(a.src, mod + ".py")
+    for cmd, (mod, fn) in sorted(cmds.items()):
+        p = os.path.join(a.src, mod.split(".")[-1] + ".py")
         if not os.path.exists(p):
             continue
-        spec = None if a.no_introspect else introspect(a.src, "fiber_kit." + mod)
+        spec = None if a.no_introspect else introspect(a.src, mod, fn)
         if spec is not None:
             st = rows_from_spec(spec)
             mode[cmd] = "parser"
