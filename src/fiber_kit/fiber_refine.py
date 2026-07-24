@@ -33,6 +33,10 @@ import argparse
 import os
 import time
 import numpy as np
+try:
+    from . import fiber_split as _fsplit
+except ImportError:
+    import fiber_split as _fsplit
 
 _LP = "\u25b8 fiber-refine"
 _IND = " " * (len(_LP) + 3)
@@ -139,11 +143,11 @@ def _feats(w, ctx, d):
 def _dipsplit_realign(si, waves, ctx, mg, alpha, dim=4, depth=0, maxd=4):
     """Per-node realign dipsplit (refine side of --dip-realign): re-align + re-featurize via
     _feats (which aligns to the node's OWN median) at EACH bisection, so a deeper split is judged
-    on its own alignment, not the parent's.  fs._dipsplit_rec features the whole cluster once and
+    on its own alignment, not the parent's.  _fsplit._dipsplit_rec features the whole cluster once and
     recurses on fixed scores; this re-derives them per node.  Returns index arrays of positions
     within si."""
     n = len(si)
-    if not fs._HAVE_DIP or n < 2 * mg or depth > maxd:
+    if not _fsplit._HAVE_DIP or n < 2 * mg or depth > maxd:
         return [np.arange(n)]
     F = _feats(waves[si], ctx, dim)
     km = fs.KMeans(2, n_init=4, random_state=0).fit(F)
@@ -151,7 +155,7 @@ def _dipsplit_realign(si, waves, ctx, mg, alpha, dim=4, depth=0, maxd=4):
     if len(a) < mg or len(b) < mg:
         return [np.arange(n)]
     dr = km.cluster_centers_[1] - km.cluster_centers_[0]; dr /= np.linalg.norm(dr) + 1e-9
-    _, p = fs._diptest.diptest(np.ascontiguousarray(F @ dr))
+    _, p = _fsplit._diptest.diptest(np.ascontiguousarray(F @ dr))
     if p >= alpha:
         return [np.arange(n)]
     out = []
@@ -256,10 +260,10 @@ def _gated_split(si, waves, res, ctx, mg, vmargin, btol, scorr=1.0,
         return _ccg_ok(_gated_partition(si, sub, pv, pb, waves, res, ctx, mg, vmargin, btol, pmed, scorr))
 
     def _try_dip():
-        if not fs._HAVE_DIP:
+        if not _fsplit._HAVE_DIP:
             return None
         pcs = (_dipsplit_realign(si, waves, ctx, mg, 0.05, 4) if dip_realign
-               else fs._dipsplit_rec(_feats(waves[si], ctx, 4), np.arange(len(si)), mg, 0.05))
+               else _fsplit._dipsplit_rec(_feats(waves[si], ctx, 4), np.arange(len(si)), mg, 0.05))
         if len(pcs) <= 1:
             return None
         sub = np.zeros(len(si), int)
@@ -306,7 +310,7 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
         for c in np.unique(lab[lab >= 0]):
             idx = np.flatnonzero(lab == c)
             if isol[idx].mean() <= 0.7 and len(idx) >= 2 * mg:
-                amps.append(fs._amp_spread(waves[idx], ctx.mask)[0])
+                amps.append(_fsplit._amp_spread(waves[idx], ctx.mask)[0])
         if amps:
             amp_thr = float(np.percentile(amps, nudge_amp_pct))
     for c in np.unique(lab[lab >= 0]):
@@ -315,7 +319,7 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
             out[idx] = nid; nid += 1; continue
         if var_mult and var_mult > 0 and vmed > 0 and fvar.get(c, np.inf) < var_mult * vmed:
             out[idx] = nid; nid += 1; continue                    # below curator split-variance bar -> leave intact
-        pcs = fs._variance_split(waves[idx], ctx.W, ctx.nmean, ctx.mask,
+        pcs = _fsplit._variance_split(waves[idx], ctx.W, ctx.nmean, ctx.mask,
                                  40, vpeak, 0.10, mg, 6, max_depth=vdepth)
         for p in pcs:
             si = idx[p]
@@ -324,9 +328,9 @@ def _split_all(lab, isol, waves, res, ctx, large, mg, vmargin, btol, vpeak, vdep
                                        dip_realign, rkk_realign, rkk_iters, dip_first, ccg_refrac_ms,
                                        rkk_delete=rkk_delete)
                 if how == "iso" and nudge and len(si) >= 2 * mg:    # offset-overlay pass on what isolated
-                    amp, nch = fs._amp_spread(waves[si], ctx.mask)
+                    amp, nch = _fsplit._amp_spread(waves[si], ctx.mask)
                     if amp <= amp_thr and nch >= nudge_min_ch:
-                        npc = fs._nudge_split(waves[si], ctx.mask, 4, mg, nudge_alpha, nudge_max)
+                        npc = _fsplit._nudge_split(waves[si], ctx.mask, 4, mg, nudge_alpha, nudge_max)
                         if len(npc) > 1:                            # accept directly (residual-neutral)
                             fp = [si[q] for q in npc]; how = "nudge"
                 nr += how == "rkk"; nd += how == "dip"; ni += how == "iso"
