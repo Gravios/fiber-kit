@@ -89,3 +89,35 @@ is_stderiv	stderiv_X3	0
 method_of	sess.spk.stderiv_C4.5	stderiv_C4
 method_of	sess.fet.stderiv_S3.5	stderiv_S3
 parse_anchor	sess.spk.stderiv_C4.5	sess	spk	stderiv_C4	5		1
+
+# ── resolve_any: the ONE physical copy of a Shared artifact (res, spk) ───────
+# resolve() walks a fixed method -> standard -> untagged list and so misses a
+# copy written under any other token, including every suffixed one -- which no
+# fixed list can enumerate.  resolve_any scans instead.  Same columns as resolve:
+#   resolve_any  <existing-csv>  <type>  <group>  <preferred>  <expect-basename>  <found 0|1>
+resolve_any	res.standard.5	res	5		sess.res.standard.5	1
+resolve_any	res.stderiv.5	res	5		sess.res.stderiv.5	1
+resolve_any	res.sdiff.5	res	5		sess.res.sdiff.5	1
+# preferred wins when present
+resolve_any	res.standard.5,res.stderiv.5	res	5	stderiv	sess.res.stderiv.5	1
+resolve_any	res.standard.5,res.stderiv.5	res	5	standard	sess.res.standard.5	1
+# preferred absent -> fall through the standard/stderiv/sdiff order
+resolve_any	res.stderiv.5	res	5	standard	sess.res.stderiv.5	1
+resolve_any	res.sdiff.5	res	5	stderiv	sess.res.sdiff.5	1
+# THE POINT: a suffixed token no fixed list names is still found by scanning
+resolve_any	res.stderiv_C5.5	res	5		sess.res.stderiv_C5.5	1
+resolve_any	res.stderiv_C4.5	res	5	standard	sess.res.stderiv_C4.5	1
+resolve_any	res.sdiff_S2.5	res	5		sess.res.sdiff_S2.5	1
+resolve_any	spk.stderiv_C5.5	spk	5		sess.spk.stderiv_C5.5	1
+# a known token still beats an arbitrary one
+resolve_any	res.stderiv_C5.5,res.standard.5	res	5		sess.res.standard.5	1
+# untagged legacy name is the last resort, after every tagged copy
+resolve_any	res.5	res	5		sess.res.5	1
+resolve_any	res.5,res.stderiv_C5.5	res	5		sess.res.stderiv_C5.5	1
+# a longer stage tag is NOT a method token and must not be resolved to
+resolve_any	res.stderiv.5.refine	res	5		sess.res.standard.5	0
+# nothing present -> not found, path points at where the preferred copy would be
+resolve_any		res	5		sess.res.standard.5	0
+resolve_any		res	5	stderiv	sess.res.stderiv.5	0
+# group is part of the match: a copy for another group must not be returned
+resolve_any	res.stderiv.4	res	5		sess.res.standard.5	0

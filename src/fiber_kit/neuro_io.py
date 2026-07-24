@@ -46,7 +46,7 @@ from collections import namedtuple
 import numpy as np
 
 __all__ = [
-    "ResolvedInput", "resolve_input", "prefer_derived", "prefer_canonical",
+    "ResolvedInput", "resolve_input", "resolve_any", "prefer_derived", "prefer_canonical",
     "VariantSpec", "parse_variant_token", "variant_family", "is_stderiv_variant",
     "read_res_file", "write_res_file", "read_res", "write_res",
     "read_clu_file", "write_clu_file", "read_clu", "write_clu",
@@ -262,6 +262,59 @@ def read_clu(base, elec, n_spikes=None, prefer=None):
         raise FileNotFoundError(f"no .clu for {base} elec {elec}")
     return read_clu_file(r.path, n_spikes=n_spikes)
 
+
+
+def resolve_any(base, type_, group, preferred=""):
+    """Find the ONE physical copy of a Shared artifact (.res, .spk), whatever
+    method token it happens to carry.
+
+    Mirror of custody.hpp::resolveAny and ndm_custody's ndm_resolve_any; the three
+    must stay in step, which test/custody_vectors.tsv now enforces.
+
+    resolve_input() is the wrong tool for a Shared artifact: it walks a FIXED
+    preference list, so a copy written under a token that list does not name --
+    any suffixed token, which no fixed list can enumerate -- is missed, and the
+    caller concludes the file is absent when it is sitting right there.
+
+    Order, matching the C++ exactly:
+      1. `preferred`, when given
+      2. standard, stderiv, sdiff (skipping whichever was preferred)
+      3. ANY other method-tagged copy in the directory.  Scanning is what makes a
+         suffixed token work without hard-coding it.
+      4. the untagged legacy name <base>.<type>.<group>
+      5. otherwise not found, with path set to where the preferred copy WOULD be,
+         so the caller can name it in an error.
+
+    @return ResolvedInput(path, variant, dotted, found)
+    """
+    order = [preferred] if preferred else []
+    order += [m for m in ("standard", "stderiv", "sdiff") if m != preferred]
+    for m in order:
+        cand = f"{base}.{type_}.{m}.{group}"
+        if os.path.exists(cand):
+            return ResolvedInput(cand, m, True, True)
+
+    head = f"{os.path.basename(base)}.{type_}."
+    tail = f".{group}"
+    d = os.path.dirname(os.path.abspath(base)) or "."
+    try:
+        names = sorted(os.listdir(d))
+    except OSError:
+        names = []
+    for name in names:
+        if not (name.startswith(head) and name.endswith(tail)):
+            continue
+        tok = name[len(head):len(name) - len(tail)]
+        if not tok or "." in tok:            # a longer stage tag, not a bare token
+            continue
+        return ResolvedInput(os.path.join(d, name), tok, True, True)
+
+    untagged = f"{base}.{type_}.{group}"
+    if os.path.exists(untagged):
+        return ResolvedInput(untagged, "", False, True)
+
+    m = preferred or "standard"
+    return ResolvedInput(f"{base}.{type_}.{m}.{group}", preferred, True, False)
 
 def sibling_variants(base, type_, group, tag="", family=None):
     """Method tokens that actually exist on disk for <base>.<type>.*.<group>[.<tag>].
