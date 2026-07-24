@@ -12,6 +12,7 @@
 #  unit-testable; the PySide6 view is only built when Qt is present.  Run: `fiber-plan-edit [plan.yaml]`.
 
 import sys
+import time as _time
 import os
 from dataclasses import dataclass, field
 
@@ -1099,8 +1100,21 @@ def _build_qt():
             if getattr(self, "preview", None) is None:
                 return
             elec = self.preview.elec.text() or "5"
+            # Show the PLAN as well as the commands.  The plan is what an inspector
+            # edit actually changes; the command line is what the runner makes of
+            # it.  With only the commands visible there is no way to tell an edit
+            # that never reached the plan from one the runner ignored or emitted
+            # twice -- both look like "Refresh did nothing".
+            try:
+                plan = dump_plan(self.steps)
+            except Exception as e:                       # PyYAML missing, bad step
+                plan = "could not serialise the plan: %s" % e
             text, ok = render_dry_run(self.steps, elec=elec)
-            self.preview.out.setPlainText(text)
+            stamp = _time.strftime("%H:%M:%S")
+            self.preview.out.setPlainText(
+                "# ---- plan (what the inspector edits) ---- refreshed %s\n%s\n"
+                "# ---- commands (what the runner would execute) ----\n%s"
+                % (stamp, plan.rstrip(), text))
             self.preview.out.setStyleSheet("" if ok else "QPlainTextEdit{color:#ffb4b4;}")
             self.statusBar().showMessage("dry-run preview refreshed" if ok else "dry-run preview: error")
 
