@@ -361,8 +361,35 @@ list_stages() {   # -l/--list : short per-stage summary
 #   STEP_ARGS  extra per-step flags, appended last so argparse last-wins overrides the knob defaults
 # Unset => the canonical defaults baked into each stage below, so the default pipeline is unchanged.
 _run() {   # run the command, or (dry-run) just print it
-    if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "$@"; printf '\n'
-    else "$@"; fi
+    # Collapse a repeated --flag to its LAST occurrence before printing or running.
+    # Each stage below emits its knob defaults and then appends STEP_ARGS (the
+    # plan's params), so a plan that sets a flag the stage already passes produces
+    # the command twice over: "--chunk-minutes 12 ... --chunk-minutes 18".
+    # argparse already took the last, so BEHAVIOUR is unchanged -- but the printed
+    # command read left to right showed the default that never moves however the
+    # plan is edited, which is indistinguishable from a preview that did not
+    # refresh.  The command now says what it means.
+    #
+    # A flag's values run until the next --flag, not just one token, because
+    # --probe and --stochastic-chunks take nargs='*'.  A leading run of
+    # positionals (session, elec) is kept as is.  Anything not starting with --
+    # is a value, so a negative number stays attached to its flag.
+    local -a argv=("$@") starts=() names=() out=()
+    local i n=${#argv[@]}
+    for ((i = 0; i < n; i++)); do
+        case "${argv[i]}" in --*) starts+=("$i"); names+=("${argv[i]}");; esac
+    done
+    local first=${starts[0]:-$n}
+    for ((i = 0; i < first; i++)); do out+=("${argv[i]}"); done
+    local -A lastidx=()
+    for ((i = 0; i < ${#starts[@]}; i++)); do lastidx["${names[i]}"]=$i; done
+    for ((i = 0; i < ${#starts[@]}; i++)); do
+        [ "${lastidx[${names[i]}]}" = "$i" ] || continue     # an earlier duplicate
+        local s=${starts[i]} e=${starts[i+1]:-$n} j
+        for ((j = s; j < e; j++)); do out+=("${argv[j]}"); done
+    done
+    if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "${out[@]}"; printf '\n'
+    else "${out[@]}"; fi
 }
 clu_path() {   # $1 = clu stage tag ('' = base over-cluster)
     if [ -z "${1:-}" ]; then echo "$SESS.clu.stderiv.$ELEC"; else echo "$SESS.clu.stderiv.$ELEC.$1"; fi
