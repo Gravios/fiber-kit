@@ -1100,7 +1100,15 @@ def _build_qt():
             step = new_step(stage, c.x(), c.y())
             # sensible default out tag so wiring is easy
             if "out" in CATALOG[stage]["tags"] and not step.tags.get("out"):
-                step.tags["out"] = {"fiber-session": "", "fiber-refine": "refine", "fiber-cpos": "refine",
+                # fiber-session defaulted to "" here, which is why a connector
+                # drawn from it never appeared: connect_nodes copies the source's
+                # out tag into the target's in tag, and derive_edges discards an
+                # empty one ("if not t: continue").  So the drag silently wrote
+                # in:'' -- and that is also the WRONG PLAN.  Every shipped plan
+                # wires the first hop as in: fiber_session, and plans/00-prep.yaml
+                # declares {stage: fiber-session, out: fiber_session} explicitly.
+                step.tags["out"] = {"fiber-session": "fiber_session",
+                                    "fiber-refine": "refine", "fiber-cpos": "refine",
                                     "fiber-intrachunk": "refine_intrachunk",
                                     "fiber-link": "refine_linked",
                                     "fiber-refit": "curated_refit"}.get(stage, stage.replace("fiber-", ""))
@@ -1111,6 +1119,14 @@ def _build_qt():
 
         def connect_nodes(self, src_node, dst_node):
             out = src_node.step.tag("out")
+            if not out:
+                # An empty out tag cannot be wired: derive_edges drops it, so the
+                # edge would not be drawn and the emitted plan would say in:''.
+                # Say so rather than appearing to do nothing.
+                self.statusBar().showMessage(
+                    "%s has no 'out' tag -- set one in the inspector, then connect"
+                    % src_node.step.stage)
+                return
             dst_node.step.tags["in"] = out
             dst_node.update()
             self.refresh_edges()
