@@ -145,10 +145,7 @@ def main():
         description="Per-group QC report (rate, ISI violation, SNR, amplitude, presence) rendered as an "
                     "interactive HoloViz/Bokeh HTML, with a metrics CSV.")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
-                    help="post-fiber stage tag at the end of the .clu name")
-    ap.add_argument("--in-clu", default=None, help="explicit .clu path")
+    nio.add_clu_args(ap, stage_default="refine", stage_help="post-fiber stage tag at the end of the .clu name", in_clu_help="explicit .clu path")
     ap.add_argument("--refrac-ms", type=float, default=1.5)
     ap.add_argument("--censor-ms", type=float, default=0.3)
     ap.add_argument("--presence-bins", type=int, default=120)
@@ -167,10 +164,7 @@ def main():
     base = cfg["base"]; elec = a.group
     nchan, nsamp, peak, sr = cfg["nchan"], cfg["nsamp"], cfg["peak"], cfg["sr"]
     res = nio.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spkD, _ = nio.open_spkD(base, elec, nsamp, nchan)
     res_s = res.astype(float) / sr
 

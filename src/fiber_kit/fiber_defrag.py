@@ -181,10 +181,7 @@ def main():
                     "fragments by mutual-nearest-neighbour template merging, gated by cosine AND "
                     "the time-warp (spike width) so distinct same-shape cells are held apart.")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv", help="feature space before the group (default stderiv)")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
-                    help="fiber stage after the group (default refine; '' = none)")
-    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
+    nio.add_clu_args(ap, stage_default="refine", method_help="feature space before the group (default stderiv)", stage_help="fiber stage after the group (default refine; '' = none)", in_clu_help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--cos-thr", type=float, default=COS_THR, help="template cosine merge candidate (default 0.92)")
     ap.add_argument("--warp-max", type=float, default=SMAX, help="|alpha-1| width gate; above this keep separate (default 0.06)")
     ap.add_argument("--amp-gate", type=float, default=AMP_GATE, help="|delta log|F1|| energy gate (default 1.4, wide)")
@@ -213,10 +210,7 @@ def main():
     nchan, nsamp, peak = cfg["nchan"], cfg["nsamp"], cfg["peak"]
 
     res = fs.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"

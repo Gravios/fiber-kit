@@ -55,6 +55,8 @@ __all__ = [
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
     "open_signal",
     "fibers_path",
+    "add_clu_args",
+    "resolve_clu",
 ]
 
 # ── dtypes (little-endian, NeuroSuite on-disk) ──────────────────────────────
@@ -635,6 +637,54 @@ def open_signal(path, nchan, mode="r"):
 
 
 # ── .fibers.<method>.<elec> (dotted-variant npz) ─────────────────────────────
+
+# ── the clu-resolution preamble, once ────────────────────────────────────────
+def add_clu_args(ap, *, method_default="stderiv", stage_default="refine",
+                 stage_dest="variant", stage_alias="--variant", in_clu=True,
+                 method_help=None, stage_help=None, in_clu_help=None):
+    """Declare the three flags every clu-consuming stage needs.
+
+    Nineteen stages were declaring --clu-method / --clu-stage / --in-clu by hand
+    and then repeating the same four-line resolution below.  That duplication is
+    what let the two --variant conventions diverge in the first place: with the
+    names, aliases and dests fixed in one place they could not have disagreed.
+    Mirrors session_yaml.add_session_args, which already does this for the
+    session flags.
+
+    Note --variant aliases the STAGE here, not the method: that is the legacy
+    spelling these stages shipped with, and moving it would break every existing
+    invocation.  New stages should pass stage_alias=None and use --clu-stage.
+
+    @param stage_dest  attribute the stage tag lands on; "variant" for the
+                       existing stages, which read a.variant throughout.
+    """
+    ap.add_argument("--clu-method", default=method_default,
+                    help=method_help or "method the clu stems from: "
+                                        "standard | stderiv | stderiv_C5")
+    stage_flags = ["--clu-stage"] + ([stage_alias] if stage_alias else [])
+    ap.add_argument(*stage_flags, dest=stage_dest, default=stage_default,
+                    help=stage_help or "post-fiber stage tag at the end of the .clu name")
+    if in_clu:
+        ap.add_argument("--in-clu", default=None,
+                        help=in_clu_help or "explicit .clu path, overriding "
+                                            "--clu-method/--clu-stage")
+
+
+def resolve_clu(a, base, elec, n_spikes=None, *, stage_dest="variant"):
+    """Read the clu a stage was pointed at: --in-clu if given, else the
+    method/stage pair.  Returns (n_clusters, labels).
+
+    The explicit path wins because it is the escape hatch for a file that does
+    not follow the naming; everything else goes through the method-pinned
+    read_clu_at, which refuses rather than guessing and now names the tokens
+    present when it misses.
+    """
+    in_clu = getattr(a, "in_clu", None)
+    if in_clu:
+        return read_clu_file(in_clu, n_spikes=n_spikes)
+    return read_clu_at(base, elec, variant=a.clu_method,
+                       tag=getattr(a, stage_dest), n_spikes=n_spikes)
+
 def fibers_path(base, method, elec, stage=""):
     """Path of the per-(chunk,fiber) geometry table, in the canonical form
     <base>.fibers.<method>.<group>[.<stage>].
