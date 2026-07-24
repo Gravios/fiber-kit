@@ -408,8 +408,8 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     [ "$SESSION_NO_NOISE" = "1" ]    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
     _run fiber-session "$SESS" "$ELEC" \
-        --method stderiv --fine-method "$SESSION_FINE_METHOD" \
-        --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
+        --method stderiv --fine-algo "$SESSION_FINE_METHOD" \
+        --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         $SESSION_DETREND_FLAG --resplit-detrend-win "$SESSION_RESPLIT_DETREND_WIN" --resplit-detrend-min-n "$SESSION_RESPLIT_DETREND_MIN_N" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
@@ -421,8 +421,8 @@ fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled d
     local st_args=()
     [ "${STOCH_VERBOSE:-0}" = "1" ] && st_args+=(--stochastic-verbose)
     _run fiber-stochastic "$SESS" "$ELEC" \
-        --method stderiv --fine-method "$SESSION_FINE_METHOD" \
-        --chunk-min "$SESSION_CHUNK_MIN" --merge-method "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
+        --method stderiv --fine-algo "$SESSION_FINE_METHOD" \
+        --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
         --stochastic --stochastic-draws "$STOCH_DRAWS" --stochastic-frac "$STOCH_FRAC" \
@@ -435,7 +435,7 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
     echo "== fiber-realign  (in-place on $(clu_path "${STEP_IN:-}")) =="
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "${STEP_IN:-}")" \
-        --align-method klusters --reextract --refeaturize \
+        --align-algo klusters --reextract --refeaturize \
         --variants standard,stderiv "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -458,7 +458,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
     echo "== fiber-realign  (post-step Klusters re-roll of .${tag:-base} groups; mode=$mode) =="
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "$tag")" \
-        --align-method klusters "${mode_args[@]}" \
+        --align-algo klusters "${mode_args[@]}" \
         --no-emit-clu \
         --variants standard,stderiv
 }
@@ -586,13 +586,13 @@ fiber_backbone_link() {   # link fiber-session fragments on the invariant backbo
     echo "== fiber-backbone-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-backbone_linked}) =="
     _run fiber-backbone-link "$SESS" "$ELEC" \
         --clu-method stderiv --clu-stage "${STEP_IN:-fiber_session}" \
-        --out-tag "${STEP_OUT:-backbone_linked}" \
+        --out-stage "${STEP_OUT:-backbone_linked}" \
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_xcorr_merge() {   # merge clusters by Klusters roll-shift cosine (realign after each merge) -> .xcorr_merged
     echo "== fiber-xcorr-merge  (.${STEP_IN:-backbone_linked} -> .${STEP_OUT:-xcorr_merged}) =="
-    _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method stderiv --clu-stage "${STEP_IN:-backbone_linked}" --out-tag "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+    _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method stderiv --clu-stage "${STEP_IN:-backbone_linked}" --out-stage "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 run_stage() {
