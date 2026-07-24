@@ -92,4 +92,13 @@ ignore = [
     "E701",  # multiple statements on one line (colon) — terse house style
     "E702",  # multiple statements on one line (semicolon) — terse house style
     "E741",  # ambiguous single-char names (l, A, …) — scientific convention
+    # The three below were the config's own stated intent — "skip the ones that
+    # would only flag the intentional style" — and were simply missed.  Together
+    # they were 766 of 891 findings, i.e. the linter was reporting the house style
+    # back at itself and burying the ~90 findings that are about real defects.
+    "E401",  # multiple imports on one line — same terse style as E701/E702
+    "E501",  # line too long — commentary and formulas run long on purpose here;
+             # line-length above governs new code, this stops a mass reflow
+    "C408",  # dict(a=1) over {"a": 1} — deliberate: keyword form reads better for
+             # the config/params dicts this codebase builds constantly
 ]
