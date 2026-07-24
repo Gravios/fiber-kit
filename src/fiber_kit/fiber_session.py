@@ -47,7 +47,24 @@ try:
 except ImportError:
     import fiber_tracer as ft
 from sklearn.mixture import GaussianMixture
-from sklearn.cluster import KMeans
+
+# ── splitting primitives now live in fiber_split ─────────────────────────────
+# Re-exported under their original names so every call site keeps working: this
+# module's own body, and fiber_refine, which reaches them as fs._dipsplit_rec and
+# friends.  fiber_refine should import fiber_split directly (it now does); these
+# aliases exist so the move is invisible to anything else that reached in.
+try:
+    from . import fiber_split as _fsplit
+except ImportError:
+    import fiber_split as _fsplit
+_dipsplit_rec       = _fsplit._dipsplit_rec
+_aligned_pca        = _fsplit._aligned_pca
+_dipsplit_realign   = _fsplit._dipsplit_realign
+_amp_spread         = _fsplit._amp_spread
+_nudge_split        = _fsplit._nudge_split
+_variance_split     = _fsplit._variance_split
+_cfiber_edge_filter = _fsplit._cfiber_edge_filter
+
 try:
     from .klustakwik import klustakwik as _rkk
 except ImportError:
@@ -72,11 +89,12 @@ try:
     from . import fiber_ccg as cg
 except ImportError:
     import fiber_ccg as cg
-try:
-    import diptest as _diptest
-    _HAVE_DIP = True
-except Exception:
-    _HAVE_DIP = False
+# diptest and the availability flag are owned by fiber_split, which is where the
+# functions using them now live.  Re-exported so this module's body and anything
+# that reached fs._HAVE_DIP keep working, and so there is one definition rather
+# than two that can disagree about whether the optional dependency is present.
+_diptest  = _fsplit._diptest
+_HAVE_DIP = _fsplit._HAVE_DIP
 
 P_DIM = len(fl.MASK_FULL) * 8     # default masked feature dim (recomputed per nchan below)
 
@@ -353,66 +371,10 @@ def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
     return [np.where(lab == i)[0] for i in range(len(valid))]
 
 
-def _dipsplit_rec(F, idx, min_size=40, alpha=0.01, depth=0, maxd=4):
-    """Recursive DipSplit: 2-means -> project on the centroid axis -> Hartigan dip
-    test -> split iff p<alpha and both halves substantial.  Catches bimodal clusters
-    BIC left merged.  F: (n,dim) low-dim features; idx: indices into F."""
-    n = len(idx)
-    if not _HAVE_DIP or n < 2 * min_size or depth > maxd: return [idx]
-    km = KMeans(2, n_init=4, random_state=0).fit(F[idx])
-    a = idx[km.labels_ == 0]; b = idx[km.labels_ == 1]
-    if len(a) < min_size or len(b) < min_size: return [idx]
-    dr = km.cluster_centers_[1] - km.cluster_centers_[0]; dr /= np.linalg.norm(dr) + 1e-9
-    _, p = _diptest.diptest(np.ascontiguousarray(F[idx] @ dr))
-    if p < alpha:
-        return (_dipsplit_rec(F, a, min_size, alpha, depth + 1, maxd) +
-                _dipsplit_rec(F, b, min_size, alpha, depth + 1, maxd))
-    return [idx]
 
 
-def _aligned_pca(waves, mask, k, basis=None):
-    """Realign a (sub)cluster to its OWN median by iterated circular cross-correlation
-    (fiber_lib.align_xcorr, the channel-summed sub-sample aligner) and return SHAPE features.
-    If a global ndm_pca `basis` is given the median-aligned waveforms are projected onto it
-    (shared basis across chunks/nodes); else the top-k scores of a per-call local SVD.  The
-    integer dominant-channel fl.realign locks a sub-cluster onto the PARENT's peak; re-aligning
-    to this node's own median before featurizing lets a deeper bisection be measured on correct
-    alignment.  The xcorr realignment itself is unchanged -- only the feature projection moves to
-    the global basis."""
-    al = fl.align_xcorr(waves, ref="median", iters=6, maxlag=6)
-    if basis is not None:
-        F = _fpca.cluster_features(al, basis, realign=False, dims=k)
-        if F is not None:
-            return F
-    w = al[:, mask, :].reshape(len(waves), -1)
-    w = w - w.mean(0)
-    U, S, _ = np.linalg.svd(w, full_matrices=False)
-    return U[:, :k] * S[:k]
 
 
-def _dipsplit_realign(waves, mask, dim, min_size=40, alpha=0.01, depth=0, maxd=4, basis=None):
-    """Recursive DipSplit that REALIGNS EACH NODE to its own median before deciding the split:
-    the 2-means centroid axis and dip test are recomputed from this sub-cluster's median-aligned
-    SHAPE features (_aligned_pca: global ndm_pca basis when given, else local SVD), so every
-    bisection is judged on its own alignment instead of the parent's (the per-step realign).
-    Returns a list of index arrays into `waves`."""
-    n = len(waves)
-    if not _HAVE_DIP or n < 2 * min_size or depth > maxd:
-        return [np.arange(n)]
-    F = _aligned_pca(waves, mask, dim, basis=basis)         # realign THIS node + featurize
-    km = KMeans(2, n_init=4, random_state=0).fit(F)
-    a = np.flatnonzero(km.labels_ == 0); b = np.flatnonzero(km.labels_ == 1)
-    if len(a) < min_size or len(b) < min_size:
-        return [np.arange(n)]
-    dr = km.cluster_centers_[1] - km.cluster_centers_[0]; dr /= np.linalg.norm(dr) + 1e-9
-    _, p = _diptest.diptest(np.ascontiguousarray(F @ dr))
-    if p >= alpha:
-        return [np.arange(n)]
-    out = []
-    for loc in (a, b):
-        for piece in _dipsplit_realign(waves[loc], mask, dim, min_size, alpha, depth + 1, maxd, basis=basis):
-            out.append(loc[piece])
-    return out
 
 
 def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True, basis=None):
@@ -443,114 +405,13 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
     return lab
 
 
-def _amp_spread(waves, mask):
-    """Peak amplitude and number of signal channels of the median-aligned template — the
-    low-amplitude / broad-noise gate for the nudge split."""
-    T = np.median(fl.align_xcorr(waves, ref="median", iters=6, maxlag=6), 0)
-    ptp = T.max(0) - T.min(0)
-    amp = float(ptp.max())
-    nch = int((ptp > 0.25 * amp).sum())
-    return amp, nch
 
 
-def _nudge_split(waves, mask, dim, min_size, alpha, max_nudge=3):
-    """Offset-overlay split for low-amplitude clusters.  Two neurons of similar shape a few
-    samples apart are MERGED by median realignment — it collapses the offset, so the per-node
-    realign dipsplit returns them as one (validated: ARI 0.00).  Split on each spike's alignment
-    LAG to the cluster median instead — the 'nudge' each spike wants: bimodal lags = two
-    temporally-offset sub-units (ARI 0.98).  Self-gating: clean clusters have unimodal lags and
-    are returned whole (0% spurious splits in test).  Each offset sub-cluster is then realigned to
-    its own median and dip-refined (reusing _dipsplit_realign)."""
-    n = len(waves)
-    if not _HAVE_DIP or n < 2 * min_size:
-        return [np.arange(n)]
-    _, sh = fl.align_xcorr(waves, ref="median", iters=6, maxlag=max_nudge, return_shifts=True)
-    parts = _dipsplit_rec(np.asarray(sh, float).reshape(-1, 1), np.arange(n), min_size, alpha)
-    if len(parts) == 1:                                  # unimodal lags -> no offset overlay
-        return [np.arange(n)]
-    out = []
-    for p in parts:                                      # refine each offset sub-unit on its own alignment
-        for piece in _dipsplit_realign(waves[p], mask, dim, min_size, alpha):
-            out.append(p[piece])
-    return out
 
 
-def _variance_split(waves, W, nmean, mask, n_grid, peak, margin, min_n, dims,
-                    depth=0, max_depth=4):
-    """Variance-driven auto-split: recursively bisect a fiber WHILE its per-channel
-    residual-variance profile is peaked (channel-localized contamination) AND each
-    bisection lowers the mean per-channel residual variance by >= margin.
-
-    The measure is the stopping criterion, so it finds the right number of shape
-    sub-units (no rkk over-fragmentation) and never splits on energy (an
-    energy-only difference leaves the trajectory residual flat). Each split is on
-    the trajectory residual WEIGHTED toward the high-variance channels, so the
-    bisection looks where the contamination actually is. Returns a list of index
-    arrays into `waves`."""
-    n = len(waves)
-    if n < 2 * min_n or depth >= max_depth:
-        return [np.arange(n)]
-    prof = ft.channel_residual_profile(waves, W, nmean, mask, n_grid=n_grid)
-    vc = prof['per_channel']; med = float(np.median(vc)) + 1e-12
-    if vc.max() / med < peak:                         # flat profile -> no shape contamination
-        return [np.arange(n)]
-    wch = np.sqrt(np.maximum(vc - med, 0.0))          # weight discriminative channels (excess over floor)
-    if not np.any(wch > 0):
-        return [np.arange(n)]
-    F = (prof['residual'] * wch[None, None, :]).reshape(n, -1); F = F - F.mean(0)
-    U, S, _ = np.linalg.svd(F, full_matrices=False); Fr = U[:, :dims] * S[:dims]
-    km = KMeans(2, n_init=5, random_state=0).fit_predict(Fr)
-    if np.bincount(km).min() < min_n:
-        return [np.arange(n)]
-    _, _, red = ft.split_meanvar(waves, km, W, nmean, mask, n_grid=n_grid, min_n=min_n)
-    if red < margin:                                  # bisection doesn't reduce the measure -> stop
-        return [np.arange(n)]
-    out = []
-    for k in (0, 1):
-        idx = np.flatnonzero(km == k)
-        for piece in _variance_split(waves[idx], W, nmean, mask, n_grid, peak, margin,
-                                     min_n, dims, depth + 1, max_depth):
-            out.append(idx[piece])
-    return out
 
 
-try:
-    from . import fiber_cfiber as fcf
-except ImportError:
-    import fiber_cfiber as fcf
 
-
-def _cfiber_edge_filter(edges, fine, waves, mask, q=0.90, modes=(2, 3, 4, -1, -2, -3)):
-    """Veto candidate fragment-merge edges whose affine-invariant cfiber SHAPE disagrees.
-    cfiber AUC on well-populated g5 units is ~0.998, so a shape mismatch beyond the within-
-    fiber split-half null is strong evidence of two cells.  The veto threshold is CALIBRATED
-    per chunk from that null (quantile q), so it adapts to the chunk's noise rather than a
-    fixed constant.  Edges where either fiber is too small to estimate a stable shape are
-    LEFT ALONE (the gate only vetoes when it is confident).  Returns the filtered edges."""
-    if not edges:
-        return edges
-    theta = fcf.channel_angles(waves.shape[2])
-    mi = np.asarray(mask); win = slice(int(mi.min()), int(mi.max()) + 1)
-    rng = np.random.default_rng(0)
-    def shp(idx):
-        if len(idx) < 6:
-            return None
-        t = fl.realign(waves[idx]).mean(0)
-        z = fcf.complex_loop(t[None], theta, win)[0]
-        s, _, _, _ = fcf.shape_descriptor(z[None], modes)
-        return s[0]
-    nodes = sorted({u for e in edges for u in e})
-    S = {}; nulls = []
-    for u in nodes:
-        ix = np.flatnonzero(fine == u); S[u] = shp(ix)
-        if len(ix) >= 12:
-            pp = rng.permutation(len(ix)); h = len(pp) // 2
-            a = shp(ix[pp[:h]]); b = shp(ix[pp[h:]])
-            if a is not None and b is not None:
-                nulls.append(float(np.linalg.norm(a - b)))
-    thr = float(np.quantile(nulls, q)) if nulls else np.inf
-    return [(i, j) for (i, j) in edges
-            if S.get(i) is None or S.get(j) is None or float(np.linalg.norm(S[i] - S[j])) <= thr]
 
 
 def _gauss1d(x, sig):
