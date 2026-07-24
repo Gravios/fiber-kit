@@ -24,11 +24,11 @@ import itertools
 import numpy as np
 
 try:
-    from . import (fiber_session as fs, neuro_io as nio, session_yaml as sy,
+    from . import ( neuro_io as nio, session_yaml as sy,
                    fiber_cfiber as cf)
     from .fiber_defrag import _baseline, template_cosine, warp_stretch, _energy_log
 except ImportError:                                              # script / direct execution
-    import fiber_session as fs, neuro_io as nio, session_yaml as sy, fiber_cfiber as cf
+    import neuro_io as nio, session_yaml as sy, fiber_cfiber as cf
     from fiber_defrag import _baseline, template_cosine, warp_stretch, _energy_log
 
 FIT_SAMPLE = 60000
@@ -59,9 +59,9 @@ def main():
     nchan, nsamp, peak = cfg["nchan"], cfg["nsamp"], cfg["peak"]
     theta = cf.channel_angles(nchan); ewin = slice(8, min(nsamp, 34))
 
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
-    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     rng = np.random.default_rng(0)
 
     # PC basis fit on a random sample of the whole group (so all unit variances are comparable)

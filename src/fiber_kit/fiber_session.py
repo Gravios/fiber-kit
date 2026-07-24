@@ -77,6 +77,16 @@ try:
     from . import neuro_io as nio
 except ImportError:
     import neuro_io as nio
+
+# ── moved out; re-exported so nothing that reached through this module breaks ──
+# read_res/open_spkD were pure passthroughs to neuro_io (read_res pinned
+# prefer_canonical(), which is already nio.read_res's default) and their callers
+# now call nio directly.  fil_chunk_whitener adapts fiber_lib.chunk_whitener_mm
+# and lives there now.  These names remain so a caller outside the tree still
+# resolves; new code should use neuro_io / fiber_lib.
+read_res           = nio.read_res
+open_spkD          = nio.open_spkD
+fil_chunk_whitener = fl.fil_chunk_whitener
 try:
     from . import fiber_pca as _fpca
 except ImportError:
@@ -1147,15 +1157,8 @@ def link_continuity(gid, nglob, depth, sig, *, depth_gate=14.0, sig_thr=0.6,
     return newg, len(roots)
 
 
-def read_res(base, elec):
-    return nio.read_res(base, elec, prefer=nio.prefer_canonical())
 
-def open_spkD(base, elec, nsamp, nch):
-    return nio.open_spkD(base, elec, nsamp, nch)
 
-def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
-    # memmap path: reads only sampled baseline windows, never the whole span.
-    return fl.chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask)
 
 
 # ── chunk-level parallelism ──────────────────────────────────────────────────

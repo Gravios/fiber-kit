@@ -340,3 +340,13 @@ def location_cy(waveforms, y_um):
     """Energy-weighted depth centroid (µm) from the mean template PTP."""
     m = waveforms.mean(0); ptp = m.max(0) - m.min(0); ptp = np.maximum(ptp, 0)
     return float((ptp * y_um).sum() / ptp.sum())
+
+
+# ── chunk whitener, memmap path ──────────────────────────────────────────────
+# Moved out of fiber_session: it is an adapter over chunk_whitener_mm just below,
+# so its home is here rather than in a CLI stage that four other modules had to
+# import to reach it.  `nsamp` is accepted and unused -- kept in the signature
+# because every existing call site passes it positionally.
+def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
+    # memmap path: reads only sampled baseline windows, never the whole span.
+    return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask)

@@ -29,10 +29,10 @@ import argparse
 import numpy as np
 
 try:
-    from . import (fiber_session as fs, neuro_io as nio, session_yaml as sy,
+    from . import ( neuro_io as nio, session_yaml as sy,
                    fiber_cfiber as cf, fiber_ccg as ccg, fiber_score as fsc)
 except ImportError:                                              # script / direct execution
-    import fiber_session as fs, neuro_io as nio, session_yaml as sy, fiber_cfiber as cf
+    import neuro_io as nio, session_yaml as sy, fiber_cfiber as cf
     import fiber_ccg as ccg, fiber_score as fsc
 
 COS_THR   = 0.92    # mean-template cosine at/above this is a merge candidate
@@ -209,9 +209,9 @@ def main():
     base = cfg["base"]; elec = a.group
     nchan, nsamp, peak = cfg["nchan"], cfg["nsamp"], cfg["peak"]
 
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
-    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
 

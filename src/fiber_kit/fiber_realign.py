@@ -26,10 +26,6 @@ def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
 def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
-    from . import fiber_session as fs
-except ImportError:
-    import fiber_session as fs
-try:
     from . import neuro_io as nio
 except ImportError:
     import neuro_io as nio
@@ -496,7 +492,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
     # character-by-character).  There is no canonical .spk -- only .spk.<variant>.N.
     spk, r = nio.open_spk(base, elec, nsamp, nch, prefer=[variant or "standard"])
     spk_path = r.path
-    res = fs.read_res(base, elec)
+    res = nio.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
     n = min(len(res), len(labels), spk.shape[0])
     if not (len(res) == len(labels) == spk.shape[0]):

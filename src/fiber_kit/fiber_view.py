@@ -26,7 +26,6 @@ import numpy as np
 
 from . import fiber_lib as fl
 from . import fiber_tracer as ft
-from . import fiber_session as fs
 from . import neuro_io as nio
 from . import session_yaml as sy
 
@@ -504,8 +503,8 @@ def load_group(session, group, in_clu=None, channels=None, ntotal=None, nchan=No
     base = cfg["base"]; elec = group
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
     gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
-    res = fs.read_res(base, elec)
-    spk, _ = fs.open_spkD(base, elec, nsamp, nchan)
+    res = nio.read_res(base, elec)
+    spk, _ = nio.open_spkD(base, elec, nsamp, nchan)
     waves = np.asarray(spk[:], dtype=float)
     if in_clu and os.path.exists(in_clu):
         _, ids = nio.read_clu_file(in_clu, n_spikes=len(res))
@@ -520,7 +519,7 @@ def load_group(session, group, in_clu=None, channels=None, ntotal=None, nchan=No
         res = res[keep]; waves = waves[keep]; lab = lab[keep]
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     s0 = int(res.min()) - nsamp; s1 = int(res.max()) + nsamp + 1
-    W, nmean, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
+    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
     return dict(base=base, elec=elec, waves=waves, res=res, lab=lab, W=W, nmean=nmean,
                 mask=mask, sr=sr, gch=gch, nchan=nchan, floor=int(floor))
 

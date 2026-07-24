@@ -33,6 +33,7 @@ import argparse
 import os
 import time
 import numpy as np
+from sklearn.cluster import KMeans
 try:
     from . import fiber_split as _fsplit
 except ImportError:
@@ -150,7 +151,7 @@ def _dipsplit_realign(si, waves, ctx, mg, alpha, dim=4, depth=0, maxd=4):
     if not _fsplit._HAVE_DIP or n < 2 * mg or depth > maxd:
         return [np.arange(n)]
     F = _feats(waves[si], ctx, dim)
-    km = fs.KMeans(2, n_init=4, random_state=0).fit(F)
+    km = KMeans(2, n_init=4, random_state=0).fit(F)
     a = np.flatnonzero(km.labels_ == 0); b = np.flatnonzero(km.labels_ == 1)
     if len(a) < mg or len(b) < mg:
         return [np.arange(n)]
@@ -1019,7 +1020,7 @@ def _init_refine_worker(cfg):
     """Pool initializer (also run for the serial path): stash the static config and open the
     .spkD / .fil memmaps once per worker process.  Mirrors fiber_session._init_chunk_worker."""
     _RCTX.clear(); _RCTX.update(cfg)
-    _RCTX["spk"], _ = fs.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"])
+    _RCTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"])
     _RCTX["filmm"] = nio.open_signal(f'{cfg["base"]}.fil', cfg["ntotal"])
     if cfg.get("need_raw"):                     # standard .spk for the cell-type-aware warp-resid gate
         _RCTX["raw"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"], prefer=["standard"])
@@ -1036,7 +1037,7 @@ def _refine_one_chunk(task):
     waves_e = np.asarray(ctx["spk"][ext], dtype=float)
     raw_e = np.asarray(ctx["raw"][ext], dtype=float) if "raw" in ctx else None
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
-    Wc, nmc, _ = fs.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+    Wc, nmc, _ = fl.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
     labc, _ = refine(waves_e, res_e, Wc, nmc, ctx["mask"], ctx["sr"],
                      init_labels=init_e, min_group=ctx["min_group"], raw_waves=raw_e, verbose=False, **ctx["refine_kw"])
     return c, ext, labc, Wc, nmc
@@ -1442,8 +1443,8 @@ def main():
         _refr = f"{floor} samples ({floor / sr * 1000:.2f} ms) [--refr-floor]"
 
     t0 = time.time()
-    res = fs.read_res(base, elec)
-    spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
+    res = nio.read_res(base, elec)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res), f".res {len(res)} vs {spkpath} {spk.shape[0]}"
     waves = np.asarray(spk[:], dtype=float)
     init = None
@@ -1530,7 +1531,7 @@ def main():
     # whitener from the .fil baseline over the (deduped) spike span
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     s0 = int(res.min()) - nsamp; s1 = int(res.max()) + nsamp + 1
-    W, nmean, _ = fs.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
+    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
 
     snaps = [] if a.track_geometry else None
     raw_waves_ws = None
