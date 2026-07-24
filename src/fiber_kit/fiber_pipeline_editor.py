@@ -760,13 +760,31 @@ def _build_qt():
         def mouseReleaseEvent(self, ev):
             if self.temp_line is not None:
                 self.removeItem(self.temp_line)
-                target = None
+                # Drop anywhere on the target node, not only on its input port.
+                # Requiring hit_in_port here meant releasing inside a 12x12 circle
+                # plus 4 px of slop -- about 3% of a 168x76 node, pinned to its
+                # extreme left edge -- so the natural gesture (drag to the next
+                # stage and let go on it) drew the line and then silently dropped
+                # it.  The port stays as the visual affordance for where the edge
+                # arrives; it is not a target you should have to hit.
+                target = blocked = None
                 for it in self.items(ev.scenePos()):
-                    if isinstance(it, NodeItem) and it is not self.temp_src and it.hit_in_port(ev.scenePos()):
-                        target = it
-                        break
+                    if isinstance(it, NodeItem) and it is not self.temp_src:
+                        if CATALOG[it.step.stage]["input"]:
+                            target = it
+                            break
+                        blocked = blocked or it
                 if target is not None:
                     self.editor.connect_nodes(self.temp_src, target)
+                elif blocked is not None:
+                    # Say why nothing happened.  fiber-session is the only stage
+                    # that takes no input, and silence there is indistinguishable
+                    # from the bug above.
+                    self.editor.statusBar().showMessage(
+                        "%s takes no input -- nothing wired" % blocked.step.stage)
+                else:
+                    self.editor.statusBar().showMessage(
+                        "released on empty canvas -- nothing wired")
                 self.temp_line = None
                 self.temp_src = None
                 return
