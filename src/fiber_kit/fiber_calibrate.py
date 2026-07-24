@@ -43,10 +43,7 @@ def main():
         description="Learn the variance/energy envelope of a curated group's single units "
                     "and write an .npz budget for `fiber-defrag --var-budget`.")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv", help="feature space before the group (default stderiv)")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="",
-                    help="curated fiber stage tag after the group (default none)")
-    ap.add_argument("--in-clu", default=None, help="explicit curated .clu path (overrides --clu-method/--variant)")
+    nio.add_clu_args(ap, stage_default="", method_help="feature space before the group (default stderiv)", stage_help="curated fiber stage tag after the group (default none)", in_clu_help="explicit curated .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--n-pc", type=int, default=10, help="number of PCs for the feature space (default 10)")
     ap.add_argument("--min-cluster", type=int, default=60, help="ignore curated units below this many spikes")
     ap.add_argument("--floor", action="store_true",
@@ -63,10 +60,7 @@ def main():
     theta = cf.channel_angles(nchan); ewin = slice(8, min(nsamp, 34))
 
     res = fs.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
     rng = np.random.default_rng(0)
 

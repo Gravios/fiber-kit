@@ -79,10 +79,7 @@ def main():
                     "MANUALLY CURATED .clu, taking the curator's grouping as final (no re-merge/split). "
                     "Writes a refreshed <...>.units.npz for fiber-link / fiber-drift / fiber-qc.")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv", help="feature space of the curated clu")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="curated",
-                    help="stage tag of the curated .clu to refit (e.g. 'curated')")
-    ap.add_argument("--in-clu", default=None, help="explicit curated .clu path")
+    nio.add_clu_args(ap, stage_default="curated", method_help="feature space of the curated clu", stage_help="stage tag of the curated .clu to refit (e.g. 'curated')", in_clu_help="explicit curated .clu path")
     ap.add_argument("--cpos-method", default=None, help="cpos method for positions (default: --clu-method)")
     ap.add_argument("--cpos-stage", default=None, help="cpos stage for positions (default: --variant)")
     ap.add_argument("--relocalize", action="store_true",
@@ -101,10 +98,7 @@ def main():
     nchan, nsamp, peak, sr = cfg["nchan"], cfg["nsamp"], cfg["peak"], cfg["sr"]
 
     res = nio.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spkD, _ = nio.open_spkD(base, elec, nsamp, nchan)
     assert spkD.shape[0] == len(res) == len(clu), \
         ".res %d / .clu %d / .spk %d mismatch" % (len(res), len(clu), spkD.shape[0])

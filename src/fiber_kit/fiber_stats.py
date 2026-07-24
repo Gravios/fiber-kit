@@ -66,12 +66,7 @@ def main():
         description="Extract per-(chunk,cluster) fiber statistics from an existing "
                     "sort (no re-clustering). Reads <session>.yaml for channels/sr (no probe needed; depth is energy-weighted).")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv",
-                    help="feature space BEFORE the group (standard|stderiv|...); default stderiv")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
-                    help="fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> "
-                         "(default: refine; '' = no stage)")
-    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
+    nio.add_clu_args(ap, stage_default="refine", method_help="feature space BEFORE the group (standard|stderiv|...); default stderiv", stage_help="fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> " "(default: refine; '' = no stage)", in_clu_help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--chunk-min", type=float, default=12.0)
     ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--whole-session", action="store_true",
@@ -92,10 +87,7 @@ def main():
     gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
 
     res = fs.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"

@@ -240,12 +240,7 @@ def main():
                     "checks miss, via the per-channel derivative-distribution bimodality of the "
                     "stderiv spikes (amplitude/burst axis rejected).  No re-clustering.")
     sy.add_session_args(ap)
-    ap.add_argument("--clu-method", default="stderiv",
-                    help="feature space before the group (default stderiv)")
-    ap.add_argument("--clu-stage", "--variant", dest="variant", default="refine",
-                    help="fiber stage after the group: read <base>.clu.<clu-method>.<elec>.<variant> "
-                         "(default refine; '' = no stage)")
-    ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--variant)")
+    nio.add_clu_args(ap, stage_default="refine", method_help="feature space before the group (default stderiv)", stage_help="fiber stage after the group: read <base>.clu.<clu-method>.<elec>.<variant> " "(default refine; '' = no stage)", in_clu_help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--min-cluster", type=int, default=MIN_SPIKES, help="skip clusters smaller than this")
     ap.add_argument("--n-pc", type=int, default=N_PC, help="top within-cluster SVD components scanned")
     ap.add_argument("--n-null", type=int, default=N_NULL, help="single-mode surrogate draws for the null")
@@ -266,10 +261,7 @@ def main():
     nchan, nsamp, sr, peak = cfg["nchan"], cfg["nsamp"], cfg["sr"], cfg["peak"]
 
     res = fs.read_res(base, elec)
-    if a.in_clu:
-        _, clu = nio.read_clu_file(a.in_clu, n_spikes=len(res))
-    else:
-        _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.variant, n_spikes=len(res))
+    _, clu = nio.resolve_clu(a, base, elec, n_spikes=len(res))
     spk, spkpath = fs.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
