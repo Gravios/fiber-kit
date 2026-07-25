@@ -53,6 +53,8 @@ _KNOBS = {
     "FK_XCM_SPK_CAP": ("spk_cap", int, 300),
     "FK_XCM_CX_SCALE": ("complexity_scale", float, 0.0),
     "FK_XCM_BAND_THR": ("band_thr", float, 0.5),
+    "FK_XCM_OFF_THR": ("off_thr", float, 0.0),
+    "FK_XCM_OFF_AMP_FRAC": ("off_amp_frac", float, 0.3),
 }
 
 
@@ -99,10 +101,20 @@ def roll_cos_row(t, T, shift):
 
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
-                refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0):
+                refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0,
+                off_thr=0.0, off_amp_frac=0.3):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
     If cx_scale>0 the required cosine is raised for LOW-complexity (shift-insensitive) pairs, whose
-    high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto)."""
+    high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto).
+
+    off_thr>0 adds an INTER-CHANNEL-TIMING co-veto (fiber_geometry.interchannel_offsets +
+    offset_distance): the roll-cosine already scores the amplitude FOOTPRINT, but two co-located
+    cells at slightly different positions can match in footprint while differing in per-channel
+    spike timing -- the drift-robust half of identity.  A merge is refused when the RMS inter-channel
+    offset difference of the two mean templates exceeds off_thr samples.  Requires RAW/standard
+    templates (which this module builds), because the stderiv trough timing is noisy; the offsets
+    are recomputed after each merge, like the template.  Scale note: this uses the "xcorr" method,
+    so off_thr is on that lag scale (~0.2-0.3), NOT the trough scale (~1.0).  0 = off (unchanged)."""
     m = len(ids)
     _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng) for k in range(m)]
     T = np.stack([t for t, _ in _ms]); SD = np.stack([sd for _, sd in _ms])
@@ -110,6 +122,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
     np.fill_diagonal(C, -np.inf)
     cx = np.array([fg.waveform_complexity(T[k]) for k in range(m)]) if cx_scale > 0 else None
     cx_ref = (float(np.median(cx)) + 1e-9) if cx is not None else 1.0
+    off = ([fg.interchannel_offsets(T[k], amp_frac=off_amp_frac, method="xcorr") for k in range(m)]
+           if off_thr > 0 else None)
     parent = list(range(m)); alive = np.ones(m, bool)
     idx = [idx0[k].copy() for k in range(m)]; tt = [times0[k] for k in range(m)]
     vetoed = set(); n_merge = n_veto = 0
@@ -129,6 +143,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         if refrac > 0 and cg.refractory_gate(tt[i], tt[j], duration, refrac, thr=refrac_thr,
                                               min_exp=refrac_min_exp, censor=censor)["verdict"] == "veto":
             vetoed.add((i, j)); C[i, j] = C[j, i] = -np.inf; n_veto += 1; continue
+        if off is not None and fg.offset_distance(off[i], off[j]) > off_thr:  # inter-channel timing disagrees -> distinct cells
+            C[i, j] = C[j, i] = -np.inf; n_veto += 1; continue
         if band_thr > 0:                                   # median+/-sigma band-overlap co-gate (backbone-link method)
             bov = fg.band_overlap(T[i], SD[i], T[j], SD[j])
             if not np.isfinite(bov) or bov < band_thr:
@@ -140,6 +156,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         alive[j] = False; parent[j] = i; n_merge += 1
         if cx is not None:
             cx[i] = fg.waveform_complexity(T[i])
+        if off is not None:
+            off[i] = fg.interchannel_offsets(T[i], amp_frac=off_amp_frac, method="xcorr")
         ci = roll_cos_row(T[i], T, shift); ci[~alive] = -np.inf; ci[i] = -np.inf
         C[i, :] = ci; C[:, i] = ci; C[j, :] = -np.inf; C[:, j] = -np.inf
 
@@ -215,7 +233,8 @@ def main():
     mapping, n_merge, n_veto = agglomerate(spk, big, idx0, times0, duration, cos_thr=a.cos_thr, shift=a.shift,
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
                                            censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
-                                           cx_scale=a.complexity_scale, band_thr=a.band_thr)
+                                           cx_scale=a.complexity_scale, band_thr=a.band_thr,
+                                           off_thr=a.off_thr, off_amp_frac=a.off_amp_frac)
     new = clu.copy().astype(np.int64)
     for u in big:
         if mapping[u] != u:
