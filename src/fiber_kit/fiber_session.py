@@ -46,6 +46,10 @@ try:
     from . import fiber_tracer as ft
 except ImportError:
     import fiber_tracer as ft
+try:
+    from . import fiber_geometry as fg
+except ImportError:
+    import fiber_geometry as fg
 from sklearn.mixture import GaussianMixture
 
 # ── splitting primitives now live in fiber_split ─────────────────────────────
@@ -546,6 +550,37 @@ def _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, s
     return newfine, geoms
 
 
+def _offset_edge_filter(edges, fine, waves_std, off_thr, amp_frac=0.3):
+    """Drop Block-A merge edges whose two fibers disagree in INTER-CHANNEL TIMING.
+
+    The edges came from amplitude-FOOTPRINT correlation (mean-template / sliding cosine);
+    two co-located cells can match in footprint yet differ in per-channel spike timing --
+    the drift-robust, position-encoding half of identity that footprint cosine is blind to.
+    Timing is read from RAW/STANDARD templates (waves_std), never stderiv: stderiv's spatial
+    common-mode removal (C*raw_c - sum_j raw_j) mixes channels, so per-channel timing on the
+    stderiv waveform is not the cell's true timing.  Uses the validated fiber_geometry pair --
+    interchannel_offsets(method='xcorr') + offset_distance -- and keeps an edge only when the
+    RMS inter-channel offset difference is <= off_thr samples (xcorr LAG scale, ~0.2-0.3, not
+    the trough ~1.0).  A fiber whose timing can't be measured (too few spikes / one channel)
+    is never vetoed on that basis (offset_distance -> inf only blocks; None passes)."""
+    if not edges or waves_std is None or off_thr <= 0:
+        return edges
+    off = {}
+    for u in {v for e in edges for v in e}:
+        w = waves_std[np.flatnonzero(fine == u)]
+        if len(w) < 2:
+            off[u] = None
+            continue
+        T = fl.realign(np.asarray(w, float)).mean(0)          # RAW mean template (nsamp, nchan)
+        off[u] = fg.interchannel_offsets(T, amp_frac=amp_frac, method="xcorr")
+    keep = []
+    for a, b in edges:
+        oa, ob = off.get(a), off.get(b)
+        if oa is None or ob is None or fg.offset_distance(oa, ob) <= off_thr:
+            keep.append((a, b))
+    return keep
+
+
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15, coarse_seed_density=0.0,
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
@@ -553,7 +588,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
                        nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
-                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90,
+                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90, off_thr=0.0, off_amp_frac=0.3, waves_std=None,
                        profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
                        resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
                        resplit_detrend_episode=False, resplit_detrend_win=90.0, resplit_detrend_min_n=100,
@@ -792,6 +827,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             edges = list(zip(*np.where(np.triu(C, 1) > merge_corr)))
         if cfiber_gate:
             edges = _cfiber_edge_filter(edges, fine, waves, mask, q=cfiber_q)
+        if off_thr > 0 and waves_std is not None:                # inter-channel-TIMING co-veto (raw templates)
+            edges = _offset_edge_filter(edges, fine, waves_std, off_thr, amp_frac=off_amp_frac)
         fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
     # ── Block B: same-neuron grouping by energy-resolved DIRECTION PROFILE d(r).
     #    Direction is the validated same-neuron signal (AUC ~0.98 same-fiber-halves
@@ -1213,6 +1250,13 @@ def _init_chunk_worker(cfg):
         _bk.use_gpu(True)
     _CTX["spk"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
                                   prefer=nio.prefer_derived())
+    _CTX["spk_std"] = None
+    if float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:      # inter-channel-timing gate needs RAW templates
+        try:
+            _CTX["spk_std"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                              prefer=nio.prefer_standard())
+        except FileNotFoundError:
+            _CTX["spk_std"] = None                            # no .spk.standard -> gate silently inert
     _CTX["filmm"] = nio.open_signal(cfg["fil"], cfg["ntotal"])
 
 
@@ -1222,6 +1266,7 @@ def _process_chunk(task):
     c, ext, res_e = task
     ctx = _CTX; kw = ctx["cf"]
     waves = np.asarray(ctx["spk"][ext], dtype=float)
+    waves_std = np.asarray(ctx["spk_std"][ext], dtype=float) if ctx.get("spk_std") is not None else None
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
     if ctx.get("no_whiten"):
         # Whitening OFF: cluster in the raw (mask-selected, mean-centred) feature space.  Every
@@ -1238,7 +1283,7 @@ def _process_chunk(task):
     cand = []
     sd = {}
     lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
-                                    candidates_out=cand, shed=sd, **kw)
+                                    candidates_out=cand, shed=sd, waves_std=waves_std, **kw)
     sd["_unsorted_ext"] = int((lab < 0).sum())
     return c, ext, lab, geoms, cand, sd
 
@@ -1310,6 +1355,13 @@ def add_core_arguments(ap):
                          "unreliable on small groups")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
+    ap.add_argument("--off-thr", dest="off_thr", type=float, default=0.0,
+                    help="inter-channel-TIMING co-veto on Block-A fragment merges: refuse a footprint-correlation "
+                         "merge whose two fibers' RAW-template inter-channel offsets disagree by more than this "
+                         "(xcorr LAG samples, ~0.2-0.3; NOT the trough ~1.0). Reads .spk.standard for raw templates "
+                         "(stderiv timing is channel-mixed); inert if that file is absent. 0 = OFF (default)")
+    ap.add_argument("--off-amp-frac", dest="off_amp_frac", type=float, default=0.3,
+                    help="channels below this fraction of the dominant peak-to-peak carry no reliable timing for --off-thr")
     ap.add_argument("--merge-algo", "--merge-method", dest="merge_method", choices=["template","sliding","profile"], default="template")
     ap.add_argument("--sliding-nwin", type=int, default=14)
     ap.add_argument("--profile-thr", type=float, default=None,
@@ -1439,6 +1491,7 @@ def build_cf(a, meth, cluster_basis):
         resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
         resplit_detrend_episode=a.resplit_detrend_episode, resplit_detrend_win=a.resplit_detrend_win, resplit_detrend_min_n=a.resplit_detrend_min_n,
         cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
+        off_thr=getattr(a, "off_thr", 0.0), off_amp_frac=getattr(a, "off_amp_frac", 0.3),
         profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
         profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
         refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
