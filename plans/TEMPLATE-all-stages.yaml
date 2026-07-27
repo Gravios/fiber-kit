@@ -57,6 +57,8 @@ pipeline:
   #       resplit-detrend-min-n: 100      # skip the detrend below this many spikes -- the axis is a covariance estimate and is unreliable on small groups
   #       cfiber-gate: false              # veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)
   #       cfiber-q: 0.9                   # quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold
+  #       off-thr: 0.0                    # inter-channel-TIMING co-veto on Block-A merges: refuse a footprint-correlation merge whose two fibers' RAW-template inter-channel offsets disagree by more than this (xcorr LAG samples, ~0.2-0.25; g5 same-cell ~0.11, distinct co-located ~0.26). Reads .spk.standard for raw templates (stderiv timing is channel-mixed); inert if absent. FK_SESSION_OFF_THR. 0 = off
+  #       off-amp-frac: 0.3               # channels below this fraction of the dominant peak-to-peak carry no reliable timing for off-thr. FK_SESSION_OFF_AMP_FRAC
   #       merge-algo: template            # choices: `template`, `sliding`, `profile`
   #       sliding-nwin: 14
   #       profile-thr: ""                 # profile-merge direction-distance threshold; default = auto same-neuron floor
@@ -398,6 +400,24 @@ pipeline:
   #       channel-pitch: 20.0             # axial channel pitch (um) for --complete-edge
   #       complete-field: inv_sq          # spatial field model for off-probe completion (1/r^2 default) — choices: `inv_sq`, `inv`
   #       complete-edge-frac: 0.5         # array-end amplitude fraction above which a footprint counts as truncated
+  #     }}
+
+  # ===== fiber-xcorr-merge : Confidence-ordered KLUSTERS roll-shift cosine merge (realign after each merge) with a refractory veto and an optional inter-channel-timing co-veto. Pure clu relabel (.res/.spk untouched); meant to run AFTER fiber-backbone-link to fuse near-identical chains. =====
+  # - {stage: fiber-xcorr-merge, in: <tag>, out: <tag>, params: {
+  #       cos-thr: 0.99                   # roll-shift cosine merge threshold (conservative; below ~0.995 fuses co-located same-site fragments on g5). FK_XCM_COS_THR
+  #       shift: 4                        # roll-shift half-window (samples). FK_XCM_SHIFT
+  #       refrac-ms: 2.0                  # refractory CCG veto window (ms); a POWERED no-dip CCG = two co-located INDEPENDENT cells -> veto. FK_XCM_REFRAC_MS
+  #       refrac-thr: 0.3                 # coincidence ratio above which the pair is 'two neurons'. FK_XCM_REFRAC_THR
+  #       refrac-min-exp: 5.0             # min expected coincidences for the refractory test to be powered. FK_XCM_REFRAC_MIN_EXP
+  #       off-thr: 0.0                    # inter-channel-TIMING co-veto: refuse a merge whose two mean STANDARD templates' inter-channel offsets disagree by more than this (xcorr LAG samples, ~0.2-0.25; g5 same-cell ~0.11, distinct co-located ~0.26). Complements the footprint cosine (the orthogonal, drift-robust half of identity). FK_XCM_OFF_THR. 0 = off
+  #       off-amp-frac: 0.3               # channels below this fraction of the dominant peak-to-peak carry no reliable timing for off-thr. FK_XCM_OFF_AMP_FRAC
+  #       band-thr: 0.5                   # median+/-sigma band-overlap footprint co-gate (0 = off). FK_XCM_BAND_THR
+  #       complexity-scale: 0.0           # raise the required cosine for LOW-complexity (shift-insensitive) pairs, whose high roll-cosine is weak evidence (0 = off). FK_XCM_CX_SCALE
+  #       min-n: 40                       # min spikes/cluster to consider for merging. FK_XCM_MIN_N
+  #       spk-cap: 300                    # spikes sampled per template. FK_XCM_SPK_CAP
+  #       clu-stage: backbone_linked      # input .clu stage tag (e.g. the fiber-backbone-link output)
+  #       spk-variant: standard           # waveform axis for templates (curation/raw axis; required for off-thr timing)
+  #       out: ""
   #     }}
 
   # ===== fiber-backbone-link : Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. =====

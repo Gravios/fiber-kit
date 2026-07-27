@@ -50,6 +50,10 @@ try:
     from . import fiber_geometry as fg
 except ImportError:
     import fiber_geometry as fg
+try:
+    from . import config as cfgmod
+except ImportError:
+    import config as cfgmod
 from sklearn.mixture import GaussianMixture
 
 # ── splitting primitives now live in fiber_split ─────────────────────────────
@@ -1291,6 +1295,13 @@ def _process_chunk(task):
 def add_core_arguments(ap):
     """Register every fiber-session clusterer argument on `ap` (after sy.add_session_args).
     Shared by main() and the stochastic harness so both expose an identical clusterer."""
+    _gcfg = cfgmod.load_global_config()
+    def _fk_default(name, fb):
+        """CLI default = global fiber-kit.yaml (FK_SESSION_*) if set, else FK_* env, else fallback."""
+        v = _gcfg.get(name)
+        if v in (None, ""):
+            v = os.environ.get(name, "")
+        return fb if v in (None, "") else float(v)
     ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="gmm")
@@ -1355,13 +1366,13 @@ def add_core_arguments(ap):
                          "unreliable on small groups")
     ap.add_argument("--cfiber-gate", action="store_true", help="veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q)")
     ap.add_argument("--cfiber-q", type=float, default=0.90, help="quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold")
-    ap.add_argument("--off-thr", dest="off_thr", type=float, default=0.0,
+    ap.add_argument("--off-thr", dest="off_thr", type=float, default=_fk_default("FK_SESSION_OFF_THR", 0.0),
                     help="inter-channel-TIMING co-veto on Block-A fragment merges: refuse a footprint-correlation "
                          "merge whose two fibers' RAW-template inter-channel offsets disagree by more than this "
                          "(xcorr LAG samples, ~0.2-0.3; NOT the trough ~1.0). Reads .spk.standard for raw templates "
-                         "(stderiv timing is channel-mixed); inert if that file is absent. 0 = OFF (default)")
-    ap.add_argument("--off-amp-frac", dest="off_amp_frac", type=float, default=0.3,
-                    help="channels below this fraction of the dominant peak-to-peak carry no reliable timing for --off-thr")
+                         "(stderiv timing is channel-mixed); inert if that file is absent. FK_SESSION_OFF_THR. 0 = OFF (default)")
+    ap.add_argument("--off-amp-frac", dest="off_amp_frac", type=float, default=_fk_default("FK_SESSION_OFF_AMP_FRAC", 0.3),
+                    help="channels below this fraction of the dominant peak-to-peak carry no reliable timing for --off-thr. FK_SESSION_OFF_AMP_FRAC")
     ap.add_argument("--merge-algo", "--merge-method", dest="merge_method", choices=["template","sliding","profile"], default="template")
     ap.add_argument("--sliding-nwin", type=int, default=14)
     ap.add_argument("--profile-thr", type=float, default=None,
