@@ -103,6 +103,14 @@ FK_SESSION_LINK:         0        # 0 | 0/1.  0 = --no-link: fiber-session does 
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).
 FK_SESSION_CFIBER_GATE:  1        # 1 | 0/1.  cfiber affine-invariant SHAPE veto on coarse fragment merges (precision).
+FK_SESSION_OFF_THR:      0        # 0 | 0 or 0.2-0.25 (xcorr LAG samples).  Inter-channel TIMING veto on Block-A merges --
+                                  #   the drift-robust complement to the CFIBER shape gate above (footprint+shape can match
+                                  #   while per-channel spike timing differs).  Reads .spk.standard (stderiv timing is
+                                  #   channel-mixed); inert if absent.  g5: same-cell ~0.11, distinct co-located ~0.26.  0 = off.
+FK_SESSION_OFF_AMP_FRAC: 0.3      # channels below this fraction of the dominant peak-to-peak carry no reliable timing.
+FK_XCM_OFF_THR:          0        # 0 | 0 or 0.2-0.25.  Same inter-channel TIMING veto in fiber-xcorr-merge (the post-link
+                                  #   cosine merge); complements its footprint cosine.  Same scale/calibration as above.  0 = off.
+FK_XCM_OFF_AMP_FRAC:     0.3      # as FK_SESSION_OFF_AMP_FRAC, for fiber-xcorr-merge.
 FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the
                                   #   downstream stages have the real cells to stitch, not a pre-merged blob.
 FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fiber inclusion radius by ASSIGNING them to
