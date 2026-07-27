@@ -41,6 +41,11 @@ FK_SESSION_FINE_METHOD:  rkk      # rkk | kk.  Per-fiber fine clusterer; rkk = m
 FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.
+FK_SESSION_OVERLAP_MIN:  4        # 4 | 0 or 3-8 (min).  Overlap between adjacent chunks for OVERLAP-ANCHOR cross-chunk
+                                  #   linking: the same physical spikes fall in both chunks' overlap, so two fibers that
+                                  #   share those spikes are the same unit (drift-free identity).  Needs enough shared
+                                  #   spikes (~>=50 for the slowest cells) so keep it a few minutes; 0 DISABLES cross-chunk
+                                  #   linking (fragments stay per-chunk).  Read by fiber-session and fiber-backbone-link.
 FK_SESSION_RKK_DELETE:   0        # 0 | 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters
                                   #   so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old
                                   #   behaviour; sheds fragments into the artifact bin -- not what session is for).
