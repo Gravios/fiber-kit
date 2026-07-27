@@ -1302,7 +1302,7 @@ def add_core_arguments(ap):
         if v in (None, ""):
             v = os.environ.get(name, "")
         return fb if v in (None, "") else float(v)
-    ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=12.0); ap.add_argument("--overlap-min", type=float, default=4.0)
+    ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=_fk_default("FK_SESSION_CHUNK_MIN", 12.0)); ap.add_argument("--overlap-min", type=float, default=_fk_default("FK_SESSION_OVERLAP_MIN", 4.0))
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="gmm")
     ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)
