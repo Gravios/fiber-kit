@@ -76,23 +76,63 @@ def warp_ok(A, B, *, warp_thr, amp_thr, resid_thr):
     return True
 
 
-def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_gap, veto, warp_kw, cx_scale=0.0):
+def _compose_transform(R, t, k0, k1):
+    """Compose the per-adjacent-pair rigid transforms from chunk k0 to k1 (k1 > k0):
+    p_{k1} = p_{k0} @ Rc.T + tc.  Indices outside R's range are skipped (identity)."""
+    if R.ndim != 3 or R.shape[0] == 0:
+        return None, None
+    K = R.shape[1]; Rc = np.eye(K); tc = np.zeros(K)
+    for c in range(k0, k1):
+        if 0 <= c < R.shape[0]:
+            Rc = R[c] @ Rc; tc = tc @ R[c].T + t[c]
+    return Rc, tc
+
+
+def _apply_drift(med, Rc, tc, basis, mean):
+    """Drift-correct a RAW template by the predicted between-chunk displacement.  The transform
+    lives in the PCA subspace; only that in-subspace displacement is added to the FULL template,
+    so waveform detail outside the subspace is preserved (no lossy reconstruction)."""
+    flat = med.ravel().astype(float)
+    p = (flat - mean) @ basis.T
+    delta = ((p @ Rc.T + tc) - p) @ basis
+    return (flat + delta).reshape(med.shape)
+
+
+def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_gap, veto, warp_kw, cx_scale=0.0, drift=None):
     """Conservative adjacent-chunk (+ one-chunk gap) MUTUAL-NN CI-overlap links with the warp veto.
     Within each chunk boundary the fragments are considered HIGH-SNR FIRST, so the cleanest clusters
     anchor their links before the noisier ones.  (The high-SNR RESTRICTION -- linking only the clean
     backbone this pass, deferring low-SNR/contaminated fragments -- is applied by the caller via the
-    SNR floor.)  Union-find over the accepted links; returns a label per fragment index."""
+    SNR floor.)  Union-find over the accepted links; returns a label per fragment index.
+
+    If `drift` is given (dict with basis (K,D), mean (D,), R (nP,K,K), t (nP,K) -- fiber-session's
+    overlap-anchor transform), the SOURCE fragment's RAW template is drift-corrected to the target
+    chunk's frame before BOTH the band-overlap score AND the warp veto, so the match is drift-
+    invariant.  drift=None (default) reproduces the original behaviour byte-for-byte."""
     uf = list(range(len(frags)))
     cx_ref = (float(np.median([f["cx"] for f in frags])) + 1e-9) if (cx_scale > 0 and frags) else 1.0
+    chunk_of = {i: k for k in byc for i in byc[k]}       # fragment index -> chunk (for drift indexing)
 
     def find(x):
         while uf[x] != x:
             uf[x] = uf[uf[x]]; x = uf[x]
         return x
 
+    def _corrected(i, j):
+        """frag i's template drift-corrected toward frag j's chunk (identity if drift is None)."""
+        Ai = frags[i]
+        if drift is not None:
+            ki, kj = chunk_of.get(i), chunk_of.get(j)
+            if ki is not None and kj is not None and kj > ki:
+                Rc, tc = _compose_transform(drift["R"], drift["t"], ki, kj)
+                if Rc is not None:
+                    Ai = dict(Ai, med=_apply_drift(Ai["med"], Rc, tc, drift["basis"], drift["mean"]))
+        return Ai
+
     def score(i, j):
-        ch = pair_channels(frags[i], frags[j], pinned, prim_frac)
-        return ci_overlap(frags[i], frags[j], ch, z=z, win=win, slide=slide, iou_thr=iou_thr)
+        Ai = _corrected(i, j)
+        ch = pair_channels(Ai, frags[j], pinned, prim_frac)
+        return ci_overlap(Ai, frags[j], ch, z=z, win=win, slide=slide, iou_thr=iou_thr)
 
     linked_fwd = set()
     for gap in range(1, max_gap + 1):
@@ -115,7 +155,7 @@ def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_ga
                 back = [(s, i2) for s, i2 in back if np.isfinite(s)]
                 if not back or max(back)[1] != i:                 # mutual-NN
                     continue
-                if veto and not warp_ok(frags[i], frags[j], **warp_kw):
+                if veto and not warp_ok(_corrected(i, j), frags[j], **warp_kw):
                     continue
                 uf[find(i)] = find(j); linked_fwd.add(i)
     return [find(i) for i in range(len(frags))]
