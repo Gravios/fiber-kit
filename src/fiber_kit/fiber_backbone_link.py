@@ -72,6 +72,7 @@ _KNOBS = {
     "FK_BBLINK_MAX_GAP": ("max_gap", int, 1),
     "FK_BBLINK_CX_SCALE": ("complexity_scale", float, 0.0),
     "FK_BBLINK_MIN_SNR_Q": ("min_snr_q", float, 0.0),
+    "FK_BBLINK_DRIFT": ("drift", int, 0),
 }
 
 
@@ -144,6 +145,9 @@ def main():
     ap.add_argument("--spk-cap", type=int, default=600, help="spikes per fragment for the template")
     ap.add_argument("--chunk-min", type=float, default=None, help="chunk length (min); default from <session>.yaml or 12")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--drift-fibers", default=None,
+                    help="path to the .fibers npz carrying fiber-session's overlap-anchor drift transform "
+                         "(default: derive from --clu-method); only consulted when --drift=1")
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
@@ -197,9 +201,34 @@ def main():
           f"(>= {a.min_frag} spk) over {len(byc)} chunks"
           + (f" | channels pinned {a.channels}" if a.channels else " | per-pair shared-primary channels"))
 
+    # ── optional drift correction: consume fiber-session's overlap-anchor transform ──
+    #   Projects each source fragment's RAW template through the emitted PCA basis and applies the
+    #   per-chunk-pair rigid transform, so the band-overlap + warp comparison is drift-invariant.
+    #   Needs standard .spk (the drift basis is raw).  chunk indices align: both stages bin by the
+    #   same chunk-min and t_min (=res.min()) << chunk_s, so a fragment's median chunk matches.
+    drift = None
+    if a.drift:
+        if a.spk_variant != "standard":
+            print(f"[backbone-link] --drift ignored: needs standard .spk (drift basis is raw), got {a.spk_variant}")
+        else:
+            fibp = a.drift_fibers or nio.fibers_path(base, a.clu_method, elec)
+            try:
+                dz = np.load(fibp)
+                if "drift_R" in dz.files and dz["drift_R"].shape[0] and dz["drift_pca_basis"].shape[0]:
+                    drift = dict(basis=dz["drift_pca_basis"].astype(float), mean=dz["drift_pca_mean"].astype(float),
+                                 R=dz["drift_R"].astype(float), t=dz["drift_t"].astype(float))
+                    _na = dz["drift_nanchor"]; _rs = dz["drift_resid"]
+                    _mr = float(np.nanmedian(_rs)) if np.isfinite(_rs).any() else float("nan")
+                    print(f"[backbone-link] drift ON: {int(np.sum(_na > 0))}/{len(_na)} chunk-pairs, "
+                          f"median resid {_mr:.2f} (from {fibp})")
+                else:
+                    print(f"[backbone-link] --drift ignored: no transform emitted in {fibp}")
+            except FileNotFoundError:
+                print(f"[backbone-link] --drift ignored: {fibp} not found (run fiber-session with overlap first)")
+
     labels = flc.link(frags, byc, pinned=pinned, prim_frac=a.prim_frac, z=a.z, win=a.win, slide=a.slide,
                   iou_thr=a.iou_thr, floor=a.floor, max_gap=a.max_gap, veto=True, cx_scale=a.complexity_scale,
-                  warp_kw=dict(warp_thr=a.warp_thr, amp_thr=a.amp_thr, resid_thr=a.resid_thr))
+                  warp_kw=dict(warp_thr=a.warp_thr, amp_thr=a.amp_thr, resid_thr=a.resid_thr), drift=drift)
     # component -> new contiguous unit id (>=2); fragments below min_frag / unlinked keep their own id
     comp_units = {}
     nxt = 2

@@ -447,6 +447,8 @@ pipeline:
   #       max-gap: 1                      # FK_BBLINK_MAX_GAP (default 1)
   #       complexity-scale: 0.0           # FK_BBLINK_CX_SCALE (default 0.0)
   #       min-snr-q: 0.0                  # FK_BBLINK_MIN_SNR_Q (default 0.0)
+  #       drift: 0                        # FK_BBLINK_DRIFT (default 0). 1 = consume fiber-session's overlap-anchor drift transform (from the .fibers) and drift-correct each source fragment's RAW template to the target chunk before the band-overlap + warp match -> drift-invariant linking that reaches cells the anchor missed across drift. Needs the standard .spk (drift basis is raw) and a fiber-session run with overlap>0. RECALL mechanism (not a precision gate) -- enable only after checking drift_resid / drift_nanchor in the .fibers.
+  #       drift-fibers: ""                # explicit .fibers path for the drift transform (default: derive from clu-method); only consulted when drift=1
   #     }}
 
   # ===== fiber-refit : Refit the fiber model (per-unit, per-chunk templates / positions / signatures) to a MANUALLY CURATED .clu, taking the curator's grouping as final (no re-merge/split). Writes a refreshed <...>.units.npz for fiber-link / fiber-drift / fiber-qc. =====
