@@ -544,14 +544,14 @@ FK_BBLINK_MIN_FRAG:      40       # 40 | 30-60.  Min spikes for a fragment to ca
 FK_BBLINK_MAX_GAP:       1        # 1 | 1-2 (chunks).  Bridge a cell silent for up to this many chunks.
 FK_BBLINK_CX_SCALE:      0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling of the mutual-NN overlap floor: simpler (shift-
                                   #   insensitive) fragments must overlap harder.  0=off (opt-in; mild effect, tune on review).
-FK_BBLINK_DRIFT:         0        # 0 | 0/1.  Consume fiber-session's OVERLAP-ANCHOR drift transform (emitted to the
+FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-ANCHOR drift transform (emitted to the
                                   #   .fibers): drift-correct each source fragment's RAW template to the target chunk's
                                   #   frame before the band-overlap + warp match, so linking is drift-invariant and reaches
                                   #   cells the spike-anchor missed across drift.  Needs the standard .spk (the drift basis
-                                  #   is raw) and a fiber-session run with overlap>0.  OFF by default -- unlike the precision
-                                  #   gates this is a RECALL mechanism, so enable only after checking drift_resid /
-                                  #   drift_nanchor in the .fibers show a well-determined transform (few chunk-pairs, high
-                                  #   residual = do not trust it).
+                                  #   is raw) and a fiber-session run with overlap>0.  ENABLED here for experimental testing.
+                                  #   Unlike the precision gates this is a RECALL mechanism, so watch for OVER-merges: check
+                                  #   drift_resid / drift_nanchor in the .fibers (few chunk-pairs / high residual = the
+                                  #   transform is weak -- do not trust it) and score against a curated .clu.  Set 0 to disable.
 
 # ----- fiber-xcorr-merge : fuse near-identical clusters by Klusters roll-shift cosine -----------------------
 # Runs AFTER fiber-backbone-link: the highest roll-shift-cosine pair (max cosine over circular time shifts of
