@@ -374,7 +374,7 @@ def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
         for j, gi in enumerate(ei):
             if core[gi]:
                 core_band[gi] = b; core_local[gi] = int(sub[j])
-    gid, _ = link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5)
+    gid, _, _ = link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5)
     glob = np.array([gid.get((core_band[i], core_local[i]), -1) for i in range(N)])
     valid = np.unique(glob[glob >= 0])
     if len(valid) <= 1:
@@ -1111,6 +1111,7 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
         ra, rb = find(a), find(b)
         if ra != rb: parent[rb] = ra
     nC = len(ext_idx)
+    anchor_links = [[] for _ in range(max(nC - 1, 0))]   # per adjacent pair: the accepted (f,g) matches (exact shared-spike correspondences)
     for c in range(nC):
         for l in {int(x) for x in ext_lab[c] if x >= 0}: find((c, l))
     for c in range(nC - 1):
@@ -1125,12 +1126,40 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
             if cnt < min_anchor or cnt < frac * sum(row.values()): continue
             f2, cnt2 = ba[g].most_common(1)[0]
             if f2 != f or cnt2 < frac * sum(ba[g].values()): continue
-            union((c, f), (c + 1, g))
+            union((c, f), (c + 1, g)); anchor_links[c].append((int(f), int(g)))
     roots = {}; gid = {}
     for c in range(nC):
         for l in {int(x) for x in ext_lab[c] if x >= 0}:
             r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
-    return gid, len(roots)
+    return gid, len(roots), anchor_links
+
+
+def fit_drift_transforms(pos, anchor_links, K):
+    """Per-adjacent-chunk-pair RIGID (rotation+translation) Procrustes fit of the fiber-template
+    constellation, using the overlap-anchors as EXACT shared-spike correspondences.  Purely
+    DIAGNOSTIC -- emitted to .fibers, never used for linking.  Because the anchors are the same
+    physical spikes in both chunks, the fit is drift-free training data: it recovers the collective
+    drift (a small, possibly-reversing rotation of the constellation + a translation) that a
+    consumer can apply to drift-correct sparse cells.  `pos` maps (chunk,label) -> a K-vector of
+    RAW-template PCA coords (raw only: stderiv breaks the amplitude-distance law and mutes drift).
+    Returns per-pair R (KxK), t (K), the residual FRACTION of the chunk-to-chunk motion left after
+    the rigid fit, and the anchor count used."""
+    nP = len(anchor_links)
+    R = np.stack([np.eye(K) for _ in range(nP)]) if nP else np.zeros((0, K, K))
+    t = np.zeros((nP, K)); resid = np.full(nP, np.nan); na = np.zeros(nP, int)
+    for c in range(nP):
+        keep = [(f, g) for f, g in anchor_links[c] if (c, f) in pos and (c + 1, g) in pos]
+        na[c] = len(keep)
+        if len(keep) < K + 1:                                    # too few anchors to fit a K-dim rotation
+            continue
+        P = np.array([pos[(c, f)] for f, g in keep]); Q = np.array([pos[(c + 1, g)] for f, g in keep])
+        cP, cQ = P.mean(0), Q.mean(0); Pc, Qc = P - cP, Q - cQ
+        U, S, Vt = np.linalg.svd(Pc.T @ Qc)
+        Rk = Vt.T @ U.T
+        if np.linalg.det(Rk) < 0: Vt = Vt.copy(); Vt[-1] *= -1; Rk = Vt.T @ U.T   # reflect -> proper rotation
+        R[c] = Rk; t[c] = cQ - cP @ Rk.T
+        resid[c] = float(np.linalg.norm(Qc - Pc @ Rk.T) / (np.linalg.norm(Q - P) + 1e-12))
+    return R, t, resid, na
 
 
 def link_continuity(gid, nglob, depth, sig, *, depth_gate=14.0, sig_thr=0.6,
@@ -1634,13 +1663,14 @@ def main():
         print(f"{IND}{'─' * (lw + 1 + nw)}")
         det("total", f"{uns:>{nw},}", lw)
 
+    anchor_links = []
     if a.no_link:
         gid = {}; n = 0
         for c in range(nchunks):
             for l in sorted({int(x) for x in ext_lab[c] if x >= 0}): gid[(c, l)] = n; n += 1
         nglob = n; mode = "chunk-disjoint"
     else:
-        gid, nglob = link_chunks(ext_idx, ext_lab, min_anchor=a.min_anchor)
+        gid, nglob, anchor_links = link_chunks(ext_idx, ext_lab, min_anchor=a.min_anchor)
         mode = f"overlap-anchor linked (min_anchor={a.min_anchor})"
     log(f"{nglob:,} global fibers across {nchunks} chunks")
     det("linking", mode)
@@ -1677,6 +1707,40 @@ def main():
         det("hierarchy", f"{len(parent)} atoms -> {len(set(parent.values()))} fibers (.clu/.clc/.clp)")
     else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
+
+    # ── drift-transform fit from the overlap-anchors (DIAGNOSTIC; NOT used for linking) ──
+    #   The anchors are exact shared-spike correspondences, so a per-adjacent-chunk-pair rigid
+    #   Procrustes fit of the fiber-template constellation recovers the collective drift
+    #   (rotation+translation) a consumer (e.g. fiber-backbone-link) can apply to drift-correct.
+    #   RAW/standard templates ONLY -- stderiv breaks the amplitude-distance law and mutes drift.
+    KDRIFT = 6; nP = max(nchunks - 1, 0)
+    drift_basis = np.zeros((0, a.nsamp * a.nchan), np.float32); drift_mean = np.zeros(a.nsamp * a.nchan, np.float32)
+    drift_R = (np.stack([np.eye(KDRIFT, dtype=np.float32) for _ in range(nP)]) if nP else np.zeros((0, KDRIFT, KDRIFT), np.float32))
+    drift_t = np.zeros((nP, KDRIFT), np.float32); drift_resid = np.full(nP, np.nan, np.float32); drift_nanchor = np.zeros(nP, int)
+    try:
+        _spk_std, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan, prefer=nio.prefer_standard())
+    except FileNotFoundError:
+        _spk_std = None                                          # no .spk.standard -> emit identity transforms
+    if _spk_std is not None and nP and any(anchor_links):
+        _rng = np.random.default_rng(0)
+        keys = sorted({(c, f) for c in range(nP) for f, g in anchor_links[c]}
+                      | {(c + 1, g) for c in range(nP) for f, g in anchor_links[c]})
+        rt = {}
+        for (c, f) in keys:
+            gi = ext_idx[c][ext_lab[c] == f]
+            if gi.size == 0: continue
+            gi = np.sort(_rng.choice(gi, 400, replace=False) if gi.size > 400 else gi)
+            rt[(c, f)] = fl.realign(np.asarray(_spk_std[gi], float)).mean(0).ravel()   # RAW mean template
+        if len(rt) >= KDRIFT + 2:
+            X = np.array(list(rt.values())); drift_mean = X.mean(0).astype(np.float32)
+            basis = np.linalg.svd(X - X.mean(0), full_matrices=False)[2][:KDRIFT]
+            drift_basis = basis.astype(np.float32)
+            posK = {k: (v - X.mean(0)) @ basis.T for k, v in rt.items()}
+            R, t, resid, na = fit_drift_transforms(posK, anchor_links, KDRIFT)
+            drift_R = R.astype(np.float32); drift_t = t.astype(np.float32)
+            drift_resid = resid.astype(np.float32); drift_nanchor = na
+        _med = float(np.nanmedian(drift_resid)) if np.isfinite(drift_resid).any() else float('nan')
+        det("drift-fit", f"{int(np.sum(drift_nanchor > 0))}/{nP} pairs, median resid {_med:.2f}")
 
     # ── .fibers.<method>.<elec> : per (chunk,fiber) geometry, tagged with gid ──
     rows = []
@@ -1715,7 +1779,9 @@ def main():
         dir=np.stack([r['dir'] for r in rows]) if M else np.zeros((0, a.n_grid, p), np.float32),
         meta_elec=a.elec, meta_channels=gch, meta_sr=a.sr, meta_mask=np.asarray(mask),
         meta_n_grid=a.n_grid, meta_p=p, meta_nsamp=a.nsamp, meta_nchan=a.nchan,
-        meta_method=a.method, meta_chunk_min=a.chunk_min, meta_overlap_min=a.overlap_min)
+        meta_method=a.method, meta_chunk_min=a.chunk_min, meta_overlap_min=a.overlap_min,
+        drift_pca_basis=drift_basis, drift_pca_mean=drift_mean, drift_R=drift_R, drift_t=drift_t,
+        drift_resid=drift_resid, drift_nanchor=drift_nanchor, meta_drift_k=KDRIFT)
     with open(fib_out, "wb") as f:
         np.savez_compressed(f, **arrs)
     log("wrote")
