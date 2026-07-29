@@ -79,18 +79,18 @@ fi
 
 # ===================== algorithm knobs (all env-overridable) ===========
 CFIBER_Q="${FK_SESSION_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
-FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
-SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
+FOLD_OFF_THR="${FK_REFINE_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
+SPLIT_VAR_MULT="${FK_REFINE_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
 # fiber-intrachunk tuning now lives in the per-session <session>.yaml `fiber_kit.intrachunk` section
 # (config.py IntrachunkConfig).  The pipeline passes `--profile recommended` (the tuned baseline);
 # that block, an exported FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* env
 # var, or a direct --flag override it.  `fiber-kit-session-config` emits a starter block.
 # fiber-refine: how to handle stale leftover per-spike files (.clu/.fet from a prior, differently-counted
 # run) that a fresh dedup cannot subset.  quarantine (default) renames each aside as <file>.stalebkp and
-# proceeds (re-runnable, non-destructive); error blocks; skip leaves them.  Legacy FK_DEDUP_STRICT: 1->error, 0->skip.
-if [ -n "${FK_DEDUP_STALE:-}" ]; then DEDUP_STALE="$FK_DEDUP_STALE"
-elif [ "${FK_DEDUP_STRICT:-}" = "1" ]; then DEDUP_STALE="error"
-elif [ "${FK_DEDUP_STRICT:-}" = "0" ]; then DEDUP_STALE="skip"
+# proceeds (re-runnable, non-destructive); error blocks; skip leaves them.  Legacy FK_REFINE_DEDUP_STRICT: 1->error, 0->skip.
+if [ -n "${FK_REFINE_DEDUP_STALE:-}" ]; then DEDUP_STALE="$FK_REFINE_DEDUP_STALE"
+elif [ "${FK_REFINE_DEDUP_STRICT:-}" = "1" ]; then DEDUP_STALE="error"
+elif [ "${FK_REFINE_DEDUP_STRICT:-}" = "0" ]; then DEDUP_STALE="skip"
 else DEDUP_STALE="quarantine"; fi
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
@@ -159,7 +159,7 @@ REFINE_DEDUP="${FK_REFINE_DEDUP:-0}"               # 0 = NO spike dedup (default
                                                    #   re-indexes the spike list so the output clu no longer aligns
                                                    #   1:1 with the canonical .res -- which breaks round-tripping of
                                                    #   curated clu files.  1 (--dedup) re-enables the pass.
-RKK_DELETE="${FK_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min-group sub-clusters during a
+RKK_DELETE="${FK_REFINE_RKK_DELETE:-1}"                   # 1 = rkk (CEM) culls sub-min-group sub-clusters during a
                                                    #   split; 0 (--no-rkk-delete) keeps small non-singular
                                                    #   pieces so the cascade stops shedding them to the
                                                    #   residual/artifact bin (use if artifact cluster is bloated)
