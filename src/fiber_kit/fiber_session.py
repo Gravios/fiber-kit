@@ -1727,8 +1727,10 @@ def main():
                       | {(c + 1, g) for c in range(nP) for f, g in anchor_links[c]})
         rt = {}
         for (c, f) in keys:
+            lo_c = t_min + c * chunk_s; hi_c = t_min + (c + 1) * chunk_s
             gi = ext_idx[c][ext_lab[c] == f]
-            if gi.size == 0: continue
+            gi = gi[(res[gi] >= lo_c) & (res[gi] < hi_c)]        # CORE spikes only: adjacent-chunk templates then
+            if gi.size == 0: continue                            #   share NO spikes, so the fit sees the true drift
             gi = np.sort(_rng.choice(gi, 400, replace=False) if gi.size > 400 else gi)
             rt[(c, f)] = fl.realign(np.asarray(_spk_std[gi], float)).mean(0).ravel()   # RAW mean template
         if len(rt) >= KDRIFT + 2:
