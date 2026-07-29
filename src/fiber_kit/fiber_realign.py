@@ -583,6 +583,13 @@ def main():
                     help="stage tag for committed outputs (default: empty -> overwrite the canonical "
                          ".res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). "
                          "Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned")
+    ap.add_argument("--variant", default="",
+                    help="feature variant the .clu/.spk/.fet adhere to (e.g. stderiv_C5): drives which "
+                         ".spk is aligned and which .fet is refreshed, OVERRIDING the --clu-name inference. "
+                         "The pipeline hard-codes 'stderiv' in the clu path, so a custom-sdiffPairs session "
+                         "(stderiv_C5) needs this to name its real variant instead of leaning on "
+                         "family-matching.  The .res stays the single shared copy (resolve_any).  "
+                         "(FK_REALIGN_VARIANT)")
     ap.add_argument("--out-variant", default=None,
                     help="variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; "
                          "falls back to standard).  There is one .res/.clu under this variant; .spk/.fet "
@@ -608,7 +615,9 @@ def main():
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
     # the clu's variant (e.g. stderiv) drives BOTH which .spk is aligned and which variant is committed
     cv, _ctag = _parse_clu_variant_tag(a.clu, base, group) if a.clu else ("", "")
-    out_variant = a.out_variant if a.out_variant is not None else (cv or "standard")
+    # --variant (explicit) wins over the clu-name inference and --out-variant, so a stderiv_C5 session
+    # names its real variant instead of the hard-coded 'stderiv' the pipeline puts in the clu path.
+    out_variant = a.variant or (a.out_variant if a.out_variant is not None else (cv or "standard"))
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
         method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample,
