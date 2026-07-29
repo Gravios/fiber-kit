@@ -43,6 +43,10 @@ try:
 except ImportError:
     import fiber_lib as fl
 try:
+    from . import fiber_link_core as flc
+except ImportError:
+    import fiber_link_core as flc
+try:
     from . import fiber_tracer as ft
 except ImportError:
     import fiber_tracer as ft
@@ -1134,34 +1138,6 @@ def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
     return gid, len(roots), anchor_links
 
 
-def fit_drift_transforms(pos, anchor_links, K):
-    """Per-adjacent-chunk-pair RIGID (rotation+translation) Procrustes fit of the fiber-template
-    constellation, using the overlap-anchors as EXACT shared-spike correspondences.  Purely
-    DIAGNOSTIC -- emitted to .fibers, never used for linking.  Because the anchors are the same
-    physical spikes in both chunks, the fit is drift-free training data: it recovers the collective
-    drift (a small, possibly-reversing rotation of the constellation + a translation) that a
-    consumer can apply to drift-correct sparse cells.  `pos` maps (chunk,label) -> a K-vector of
-    RAW-template PCA coords (raw only: stderiv breaks the amplitude-distance law and mutes drift).
-    Returns per-pair R (KxK), t (K), the residual FRACTION of the chunk-to-chunk motion left after
-    the rigid fit, and the anchor count used."""
-    nP = len(anchor_links)
-    R = np.stack([np.eye(K) for _ in range(nP)]) if nP else np.zeros((0, K, K))
-    t = np.zeros((nP, K)); resid = np.full(nP, np.nan); na = np.zeros(nP, int)
-    for c in range(nP):
-        keep = [(f, g) for f, g in anchor_links[c] if (c, f) in pos and (c + 1, g) in pos]
-        na[c] = len(keep)
-        if len(keep) < K + 1:                                    # too few anchors to fit a K-dim rotation
-            continue
-        P = np.array([pos[(c, f)] for f, g in keep]); Q = np.array([pos[(c + 1, g)] for f, g in keep])
-        cP, cQ = P.mean(0), Q.mean(0); Pc, Qc = P - cP, Q - cQ
-        U, S, Vt = np.linalg.svd(Pc.T @ Qc)
-        Rk = Vt.T @ U.T
-        if np.linalg.det(Rk) < 0: Vt = Vt.copy(); Vt[-1] *= -1; Rk = Vt.T @ U.T   # reflect -> proper rotation
-        R[c] = Rk; t[c] = cQ - cP @ Rk.T
-        resid[c] = float(np.linalg.norm(Qc - Pc @ Rk.T) / (np.linalg.norm(Q - P) + 1e-12))
-    return R, t, resid, na
-
-
 def link_continuity(gid, nglob, depth, sig, *, depth_gate=14.0, sig_thr=0.6,
                     max_gap=2, use_sig=True):
     """Drift-predicted, signature-gated continuity fallback that runs AFTER the
@@ -1738,11 +1714,19 @@ def main():
             basis = np.linalg.svd(X - mu, full_matrices=False)[2][:KDRIFT]
             drift_basis = basis.astype(np.float32)
             posK = {k: (v - mu) @ basis.T for k, v in rt.items()}
-            R, t, resid, na = fit_drift_transforms(posK, anchor_links, KDRIFT)
+            R, t, resid, na = flc.fit_drift_transforms(posK, anchor_links, KDRIFT)
             drift_R = R.astype(np.float32); drift_t = t.astype(np.float32)
             drift_resid = resid.astype(np.float32); drift_nanchor = na
         _med = float(np.nanmedian(drift_resid)) if np.isfinite(drift_resid).any() else float('nan')
         det("drift-fit", f"{int(np.sum(drift_nanchor > 0))}/{nP} pairs, median resid {_med:.2f}")
+
+    # Exact overlap-anchor correspondences as ATOM pairs (c, atom_c, atom_c+1). These are res-based
+    # (same physical spikes), so they SURVIVE fiber-realign's reextraction -- letting a consumer
+    # re-fit the drift transform in ITS OWN post-realign feature space. The basis/R/t emitted above
+    # are fit on the PRE-realign templates and are kept only as a fiber-session-space diagnostic.
+    drift_anchor_pairs = np.array(
+        [(c, atom_of[(c, f)], atom_of[(c + 1, g)]) for c in range(nP) for f, g in anchor_links[c]
+         if (c, f) in atom_of and (c + 1, g) in atom_of], int).reshape(-1, 3)
 
     # ── .fibers.<method>.<elec> : per (chunk,fiber) geometry, tagged with gid ──
     rows = []
@@ -1783,7 +1767,8 @@ def main():
         meta_n_grid=a.n_grid, meta_p=p, meta_nsamp=a.nsamp, meta_nchan=a.nchan,
         meta_method=a.method, meta_chunk_min=a.chunk_min, meta_overlap_min=a.overlap_min,
         drift_pca_basis=drift_basis, drift_pca_mean=drift_mean, drift_R=drift_R, drift_t=drift_t,
-        drift_resid=drift_resid, drift_nanchor=drift_nanchor, meta_drift_k=KDRIFT)
+        drift_resid=drift_resid, drift_nanchor=drift_nanchor, meta_drift_k=KDRIFT,
+        drift_anchor_pairs=drift_anchor_pairs)
     with open(fib_out, "wb") as f:
         np.savez_compressed(f, **arrs)
     log("wrote")

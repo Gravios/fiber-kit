@@ -206,6 +206,9 @@ def main():
     #   per-chunk-pair rigid transform, so the band-overlap + warp comparison is drift-invariant.
     #   Needs standard .spk (the drift basis is raw).  chunk indices align: both stages bin by the
     #   same chunk-min and t_min (=res.min()) << chunk_s, so a fragment's median chunk matches.
+    #   The transform is RE-FIT HERE from fiber-session's res-based anchor pairs, on the .spk this
+    #   stage reads (post-fiber-realign / reextracted) -- so the basis matches the waveforms it
+    #   corrects, rather than fiber-session's stale pre-realign basis.
     drift = None
     if a.drift:
         if a.spk_variant != "standard":
@@ -214,15 +217,41 @@ def main():
             fibp = a.drift_fibers or nio.fibers_path(base, a.clu_method, elec)
             try:
                 dz = np.load(fibp)
-                if "drift_R" in dz.files and dz["drift_R"].shape[0] and dz["drift_pca_basis"].shape[0]:
+                pairs = dz["drift_anchor_pairs"] if "drift_anchor_pairs" in dz.files else np.zeros((0, 3), int)
+                if pairs.shape[0]:
+                    K = int(dz["meta_drift_k"])
+                    nP = int(dz["drift_R"].shape[0]) if "drift_R" in dz.files else int(pairs[:, 0].max() + 2)
+                    clc = nio.read_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method,
+                                                             tag=a.clu_stage), n_spikes=res.size)[1]
+                    rng2 = np.random.default_rng(a.seed); at_tpl = {}
+                    for atom in np.unique(pairs[:, 1:]):
+                        idx = np.flatnonzero(clc == int(atom))
+                        if idx.size == 0: continue
+                        idx = np.sort(rng2.choice(idx, a.spk_cap, replace=False) if idx.size > a.spk_cap else idx)
+                        at_tpl[int(atom)] = fl.realign(np.asarray(spk[idx], float)).mean(0).ravel()   # RAW, aligned
+                    if len(at_tpl) >= K + 2:
+                        X = np.array(list(at_tpl.values())); mu = X.mean(0)
+                        basis = np.linalg.svd(X - mu, full_matrices=False)[2][:K]
+                        pos = {}
+                        for c, ac, ag in pairs:
+                            if int(ac) in at_tpl: pos[(int(c), int(ac))] = (at_tpl[int(ac)] - mu) @ basis.T
+                            if int(ag) in at_tpl: pos[(int(c) + 1, int(ag))] = (at_tpl[int(ag)] - mu) @ basis.T
+                        alk = [[] for _ in range(nP)]
+                        for c, ac, ag in pairs:
+                            if 0 <= int(c) < nP: alk[int(c)].append((int(ac), int(ag)))
+                        R, t, resid, na = flc.fit_drift_transforms(pos, alk, K)
+                        drift = dict(basis=basis, mean=mu, R=R, t=t)
+                        _mr = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
+                        print(f"[backbone-link] drift ON (re-fit from {pairs.shape[0]} anchors on aligned spk): "
+                              f"{int(np.sum(na > 0))}/{nP} chunk-pairs, median resid {_mr:.2f}")
+                    else:
+                        print(f"[backbone-link] --drift ignored: too few anchored atoms to re-fit ({len(at_tpl)})")
+                elif "drift_R" in dz.files and dz["drift_R"].shape[0] and dz["drift_pca_basis"].shape[0]:
                     drift = dict(basis=dz["drift_pca_basis"].astype(float), mean=dz["drift_pca_mean"].astype(float),
-                                 R=dz["drift_R"].astype(float), t=dz["drift_t"].astype(float))
-                    _na = dz["drift_nanchor"]; _rs = dz["drift_resid"]
-                    _mr = float(np.nanmedian(_rs)) if np.isfinite(_rs).any() else float("nan")
-                    print(f"[backbone-link] drift ON: {int(np.sum(_na > 0))}/{len(_na)} chunk-pairs, "
-                          f"median resid {_mr:.2f} (from {fibp})")
+                                 R=dz["drift_R"].astype(float), t=dz["drift_t"].astype(float))   # fallback: no anchors
+                    print(f"[backbone-link] drift ON (pre-realign transform, no anchor pairs to re-fit): from {fibp}")
                 else:
-                    print(f"[backbone-link] --drift ignored: no transform emitted in {fibp}")
+                    print(f"[backbone-link] --drift ignored: no transform or anchors in {fibp}")
             except FileNotFoundError:
                 print(f"[backbone-link] --drift ignored: {fibp} not found (run fiber-session with overlap first)")
 
