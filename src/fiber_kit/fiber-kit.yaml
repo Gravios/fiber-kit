@@ -297,6 +297,8 @@ FK_INTRA_GATE:           cfiber   # cfiber | cosine | mmd | kcov.  Shape gate.  
                                   #   mutual-centre-dependent cosine and self-calibrates from the split-half null; it is
                                   #   marginally better on the hard look-alike subset (cosine>0.85) -- the regime that
                                   #   matters under drift.  Set cosine to revert.
+FK_INTRA_BAND_THR:       ""       # "" | 0.4-0.6.  gate=band only: min energy-scaled median+/-sigma band-overlap IoU
+                                  #   to merge two fragments.  Empty defaults to 0.5.  Inert unless FK_INTRA_GATE=band.
 FK_INTRA_COS_THR:        0.85     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
                                   #   decision is the gate above).
 FK_INTRA_OFF_THR:        1.0      # 1.0 | 0.8-1.2 (samples).  Inter-channel offset RMS gate: fragments of one neuron share
@@ -388,6 +390,10 @@ FK_LINK_TAN_THR:         ""       # "" = off | 0.5 recommended.  Energy-tangent 
 FK_LINK_DR_CANDIDATES:   0        # 0 | 0/1.  1 = template-DR candidate space; 0 = legacy physical position-NN.
 FK_LINK_DR_K:            10       # 10 | 6-16.  Template-DR dimensionality (~96% variance on g5).
 FK_LINK_DR_THR:          ""       # "" = no DR-space NN distance cap (the cosine/cfiber/pos/amp co-gates do the filtering).
+FK_LINK_DRIFT_METHOD:    ""       # "" | accumulated | global.  Cross-chunk drift-correction method used in
+                                  #   linking (overrides --drift-algo); empty = the stage default.
+FK_LINK_COMPLETE_EDGE:   ""       # "" | 0/1.  1 = complete truncated (off-probe) footprints before the link edge test
+                                  #   so a same-neuron partner that drifted further on-array still compares; empty/0 = off.
 
 # ----- fiber-link : variance-bounded bundling (anti-over-merge, patch 0023) -
 # FIRST-ATTEMPT operating point for the cross-chunk over-merge seen in the linked sorts (e.g. sp_linked):
