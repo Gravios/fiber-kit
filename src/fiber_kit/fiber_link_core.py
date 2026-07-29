@@ -98,6 +98,35 @@ def _apply_drift(med, Rc, tc, basis, mean):
     return (flat + delta).reshape(med.shape)
 
 
+def fit_drift_transforms(pos, anchor_links, K):
+    """Per-adjacent-chunk-pair RIGID (rotation+translation) Procrustes fit of the fiber-template
+    constellation, from the overlap-anchor correspondences (the same physical spikes in both
+    chunks -> drift-free training data).  `pos` maps (chunk,label) -> a K-vector of RAW-template
+    PCA coords (raw only: stderiv breaks the amplitude-distance law and mutes drift).
+    `anchor_links` is per-adjacent-pair [(label_c, label_c+1), ...].  Returns per-pair R (KxK),
+    t (K), the residual FRACTION of the chunk-to-chunk motion left after the fit, and the anchor
+    count used.  Fitting lives HERE (shared) so the consumer can fit in ITS OWN feature space:
+    fiber-session discovers the anchors, but backbone-link -- which runs AFTER fiber-realign's
+    reextraction -- fits on the aligned waveforms it will actually correct, avoiding the stale
+    pre-realign basis."""
+    nP = len(anchor_links)
+    R = np.stack([np.eye(K) for _ in range(nP)]) if nP else np.zeros((0, K, K))
+    t = np.zeros((nP, K)); resid = np.full(nP, np.nan); na = np.zeros(nP, int)
+    for c in range(nP):
+        keep = [(f, g) for f, g in anchor_links[c] if (c, f) in pos and (c + 1, g) in pos]
+        na[c] = len(keep)
+        if len(keep) < K + 1:                                    # too few anchors to fit a K-dim rotation
+            continue
+        P = np.array([pos[(c, f)] for f, g in keep]); Q = np.array([pos[(c + 1, g)] for f, g in keep])
+        cP, cQ = P.mean(0), Q.mean(0); Pc, Qc = P - cP, Q - cQ
+        U, S, Vt = np.linalg.svd(Pc.T @ Qc)
+        Rk = Vt.T @ U.T
+        if np.linalg.det(Rk) < 0: Vt = Vt.copy(); Vt[-1] *= -1; Rk = Vt.T @ U.T   # reflect -> proper rotation
+        R[c] = Rk; t[c] = cQ - cP @ Rk.T
+        resid[c] = float(np.linalg.norm(Qc - Pc @ Rk.T) / (np.linalg.norm(Q - P) + 1e-12))
+    return R, t, resid, na
+
+
 def link(frags, byc, *, pinned, prim_frac, z, win, slide, iou_thr, floor, max_gap, veto, warp_kw, cx_scale=0.0, drift=None):
     """Conservative adjacent-chunk (+ one-chunk gap) MUTUAL-NN CI-overlap links with the warp veto.
     Within each chunk boundary the fragments are considered HIGH-SNR FIRST, so the cleanest clusters
