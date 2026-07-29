@@ -169,42 +169,42 @@ FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers --
                                   #   downstream stages have the real cells to stitch, not a pre-merged blob.
 FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fiber inclusion radius by ASSIGNING them to
                                   #   that fiber (kept in the sort) instead of dropping them to the unsorted/artifact bin.
-                                  #   FK_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
+                                  #   FK_SESSION_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
                                   #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
 FK_SESSION_NO_NOISE:     0        # 0 | 0/1.  1 = sweep every remaining noise spike (below the inclusion radius /
                                   #   rejected / collision junk) into a single UNDEFINED FIBER -- a real cluster, not the
                                   #   noise cluster -- instead of dropping it.  For clean stderiv data; the undefined fiber
                                   #   is heterogeneous and gets cleaned/re-split in later steps.  0 = leave in the noise cluster.
-FK_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
+FK_SESSION_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
                                   #   (affine-invariant Fourier descriptor) distance exceeds the Q-quantile of the
                                   #   fiber's OWN split-half null.  0.90 = tolerate up to the 90th-pct self-jitter.
                                   #   Higher = stricter veto (purer, fewer accepted).
-FK_FEATURE_ALIGN:        xcorr    # xcorr | centroid | off.  Sub-sample align of the channel-summed waveform before
+FK_SESSION_FEATURE_ALIGN:        xcorr    # xcorr | centroid | off.  Sub-sample align of the channel-summed waveform before
                                   #   featurizing.  A misalignment of d samples decorrelates two identical spikes by
                                   #   ~(d/W)^2 (W = spike width); for narrow interneurons (W~4 samp) even d=1 hurts.
                                   #   The #1 lever for separating subtle look-alike shapes.  xcorr aligns to the
                                   #   summed template; centroid uses the energy centroid; off disables.
-FK_INCLUSION_K:          2.0      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
+FK_SESSION_INCLUSION_K:          2.0      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
                                   #   Gaussian MAD=0.6745*sigma, so k=2.5 -> median+1.69*sigma (~91% of a unimodal
                                   #   core).  Lower k = purer cores (drop contaminant tails); higher = more inclusive.
-FK_DIP_DIM:              4        # 6 | 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint /
+FK_SESSION_DIP_DIM:              4        # 6 | 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint /
                                   #   secondary PCs that separate co-located pairs; too many adds pure-noise dims.
-FK_DIP_ALPHA:            0.02     # 0.02 | 0.01-0.03.  Dip-test p to REJECT unimodality and bisect.  Statistical gate:
+FK_SESSION_DIP_ALPHA:            0.02     # 0.02 | 0.01-0.03.  Dip-test p to REJECT unimodality and bisect.  Statistical gate:
                                   #   >0.05 starts splitting on sampling noise; <0.01 misses real bimodality.
-FK_DIP_MIN:              30       # 30 | 30-60.  Min spikes to attempt a dip bisection (need enough for a stable dip
+FK_SESSION_DIP_MIN:              30       # 30 | 30-60.  Min spikes to attempt a dip bisection (need enough for a stable dip
                                   #   statistic; below this the test is underpowered).
 # energy-band split: partition an energy-CONFOUNDED coarse fiber into log10-energy bands, cluster per
 # band, relink by overlap-anchor.  Surfaces shape sub-units the amplitude/drift axis masks.
 FK_EBAND:                1        # 1=on (validated) | 0=off (falls back to --fine-method per fiber).
-FK_EBAND_WIDTH:          0.40     # 0.45 | 0.35-0.60 (decades).  Band width; 0.45 dec ~ factor 2.8 in amplitude.
+FK_SESSION_EBAND_WIDTH:          0.40     # 0.45 | 0.35-0.60 (decades).  Band width; 0.45 dec ~ factor 2.8 in amplitude.
                                   #   Narrower = more, finer but sparser bands.
-FK_EBAND_OVERLAP:        0.2      # 0.20 | 0.15-0.25 (decades).  Band overlap so the overlap-anchor relink has shared
+FK_SESSION_EBAND_OVERLAP:        0.2      # 0.20 | 0.15-0.25 (decades).  Band overlap so the overlap-anchor relink has shared
                                   #   spikes to stitch adjacent bands.
-FK_EBAND_CONFOUND:       0.4      # 0.40 | 0.30-0.50.  Band a fiber only if PC1 R^2 vs log-energy >= this (its main
+FK_SESSION_EBAND_CONFOUND:       0.4      # 0.40 | 0.30-0.50.  Band a fiber only if PC1 R^2 vs log-energy >= this (its main
                                   #   shape axis IS energy).  Avoids banding shape-clean fibers.
-FK_EBAND_MIN_SPAN:       0.6      # 0.60 | 0.50-0.80 (decades).  Band only if the fiber spans >= this many decades
+FK_SESSION_EBAND_MIN_SPAN:       0.6      # 0.60 | 0.50-0.80 (decades).  Band only if the fiber spans >= this many decades
                                   #   (~4x); below that there is nothing to band.
-FK_EBAND_LOW_ASSIGN:     0.2      # 0.20 | 0.0-0.3.  Bottom fraction of the energy range made ASSIGNMENT-ONLY (noise-
+FK_SESSION_EBAND_LOW_ASSIGN:     0.2      # 0.20 | 0.0-0.3.  Bottom fraction of the energy range made ASSIGNMENT-ONLY (noise-
                                   #   floor spikes are assigned from the bands above, never used to seed a band).
 
 # ----- fiber-realign : per-spike alignment, in-place commit ----------------

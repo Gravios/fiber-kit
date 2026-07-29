@@ -78,7 +78,7 @@ PYCFG
 fi
 
 # ===================== algorithm knobs (all env-overridable) ===========
-CFIBER_Q="${FK_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
+CFIBER_Q="${FK_SESSION_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
 FOLD_OFF_THR="${FK_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
 SPLIT_VAR_MULT="${FK_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split only clusters w/ top-3 feat-var > x median
 # fiber-intrachunk tuning now lives in the per-session <session>.yaml `fiber_kit.intrachunk` section
@@ -203,22 +203,22 @@ REALIGN_ALGO="${FK_REALIGN_ALGO:-klusters}"        # per-spike alignment algorit
                                                    #   centroid, no template).  NOTE centroid ignores labels, so the
                                                    #   post-step re-roll would centre on the POPULATION centroid, not
                                                    #   the unit template -- use klusters/template if you rely on it.
-DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
-DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
+DIP_DIM="${FK_SESSION_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
+DIP_ALPHA="${FK_SESSION_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
                                                    #   statistical (>0.05 starts splitting on noise)
-DIP_MIN="${FK_DIP_MIN:-30}"                         # session min cluster size to bisect (stock 40)
-INCLUSION_K="${FK_INCLUSION_K:-2.5}"                # session per-fiber radius median+k*MAD (stock 3.0): purer cores
-FEATURE_ALIGN="${FK_FEATURE_ALIGN:-xcorr}"          # sub-sample channel-summed align before featurize: the #1
+DIP_MIN="${FK_SESSION_DIP_MIN:-30}"                         # session min cluster size to bisect (stock 40)
+INCLUSION_K="${FK_SESSION_INCLUSION_K:-2.5}"                # session per-fiber radius median+k*MAD (stock 3.0): purer cores
+FEATURE_ALIGN="${FK_SESSION_FEATURE_ALIGN:-xcorr}"          # sub-sample channel-summed align before featurize: the #1
                                                    #   lever for subtle shapes (misalignment blurs them together)
 EBAND="${FK_EBAND:-0}"                              # session energy-band split (1=on): partition each ENERGY-
                                                    #   CONFOUNDED coarse fiber by log10-energy band, split per band,
                                                    #   relink by overlap-anchor -- surfaces shape sub-units the drift
                                                    #   axis masks (off by default; falls back to --fine-method per fiber)
-EBAND_WIDTH="${FK_EBAND_WIDTH:-0.45}"              # band width (decades of energy)
-EBAND_OVERLAP="${FK_EBAND_OVERLAP:-0.2}"           # band overlap (decades) for the overlap-anchor link
-EBAND_CONFOUND="${FK_EBAND_CONFOUND:-0.4}"         # band a fiber only if PC1 R^2 vs log-energy >= this
-EBAND_MIN_SPAN="${FK_EBAND_MIN_SPAN:-0.6}"         # band a fiber only if it spans >= this many decades
-EBAND_LOW_ASSIGN="${FK_EBAND_LOW_ASSIGN:-0}"       # bottom fraction of the energy range made ASSIGNMENT-ONLY
+EBAND_WIDTH="${FK_SESSION_EBAND_WIDTH:-0.45}"              # band width (decades of energy)
+EBAND_OVERLAP="${FK_SESSION_EBAND_OVERLAP:-0.2}"           # band overlap (decades) for the overlap-anchor link
+EBAND_CONFOUND="${FK_SESSION_EBAND_CONFOUND:-0.4}"         # band a fiber only if PC1 R^2 vs log-energy >= this
+EBAND_MIN_SPAN="${FK_SESSION_EBAND_MIN_SPAN:-0.6}"         # band a fiber only if it spans >= this many decades
+EBAND_LOW_ASSIGN="${FK_SESSION_EBAND_LOW_ASSIGN:-0}"       # bottom fraction of the energy range made ASSIGNMENT-ONLY
                                                    #   (noise-floor angle): assign those spikes from the bands above
 
 # ===================== stage gates (previously hardcoded, now exposed) ==
@@ -269,7 +269,7 @@ SESSION_DIPSPLIT="${FK_SESSION_DIPSPLIT:-1}"             # 1 = dip-bimodal split
 SESSION_NO_NOISE="${FK_SESSION_NO_NOISE:-0}"           # 1 = sweep remaining noise into one undefined fiber (not the noise cluster)
 SESSION_INCL_ASSIGN="${FK_SESSION_INCL_ASSIGN:-1}"      # 1 = keep spikes beyond the per-fiber inclusion radius (assign
                                                          #   them to that fiber) instead of dropping them to the unsorted
-                                                         #   bin.  The radius (FK_INCLUSION_K) still defines the pure core
+                                                         #   bin.  The radius (FK_SESSION_INCLUSION_K) still defines the pure core
                                                          #   for geometry/templates; this just stops good high-amplitude
                                                          #   tail spikes (~6-7%) being lost to artifact.  0 = legacy drop.
 REFINE_SPLIT_MIN_CORR="${FK_REFINE_SPLIT_MIN_CORR:-0.93}" # fiber-refine min split-piece corr to keep a split
