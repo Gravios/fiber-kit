@@ -154,15 +154,16 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
 # Initial value is read from the FIBER_ALIGN env var so it reaches forked/spawned pool workers; the
 # fiber-session / fiber-refine --feature-align flag sets both the env var and set_feature_align().
 _FEATURE_ALIGN = _os.environ.get("FIBER_ALIGN", "xcorr")
-if _FEATURE_ALIGN not in ("xcorr", "centroid"):     # ignore a malformed env value
+if _FEATURE_ALIGN not in ("xcorr", "centroid", "off"):     # ignore a malformed env value
     _FEATURE_ALIGN = "xcorr"
 
 
 def set_feature_align(mode):
-    """Select the feature-building alignment: 'xcorr' (default) or 'centroid' (pure, no refine)."""
+    """Select the feature-building alignment: 'xcorr' (default), 'centroid' (pure, no refine), or
+    'off' (skip the sub-sample align entirely -- features built from the windows as extracted)."""
     global _FEATURE_ALIGN
-    if mode not in ("xcorr", "centroid"):
-        raise ValueError("feature align mode must be 'xcorr' or 'centroid'")
+    if mode not in ("xcorr", "centroid", "off"):
+        raise ValueError("feature align mode must be 'xcorr', 'centroid', or 'off'")
     _FEATURE_ALIGN = mode
 
 
@@ -201,7 +202,10 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=N
     fast (the seed needs only one or two refine passes) and robust to large initial jitter.  This
     replaces the former dominant-channel single-pass trough lock.
 
-    Honours set_feature_align('centroid') -> pure centroid, no refine.  Because the centroid seed is
+    Honours set_feature_align('centroid') -> pure centroid, no refine.  set_feature_align('off') ->
+    NO alignment: the windows are returned exactly as extracted (the sub-sample align is the #1 feature
+    lever, so 'off' is a deliberate A/B / diagnostic, not a normal operating point).  Because the centroid
+    seed is
     sub-sample, the returned waveforms are sub-sample (Fourier) aligned rather than exact integer rolls
     -- which is what the feature/template builders that call realign want anyway.  For an exact integer
     roll use align_xcorr(..., init='cold', subsample=False).  `lo`/`hi` are retained for signature
@@ -215,6 +219,8 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=N
     same/different cosine AUC ~0.97 -> ~0.985 (pooled) at native sample count -- matching or beating
     2x Fourier upsampling without doubling the feature length."""
     sub = _REALIGN_SUBSAMPLE if subsample is None else bool(subsample)
+    if _FEATURE_ALIGN == "off":                          # off: skip the sub-sample align; windows as extracted
+        return np.asarray(waveforms, float)
     return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=sub)
 
 
