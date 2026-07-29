@@ -12,7 +12,7 @@
 #      explicit CLI flag  >  exported FK_* env var  >  THIS FILE  >  <session>.yaml
 #      fiber_kit.<stage> section  >  built-in default
 #  => this global file OVERRIDES the per-session <session>.yaml tuning when present.
-#     A one-off sweep still wins:   FK_ALIGN_LAG=2 fiber-pipeline 5 fiber-intrachunk
+#     A one-off sweep still wins:   FK_INTRA_ALIGN_LAG=2 fiber-pipeline 5 fiber-intrachunk
 #     An empty value ("")  means "fall back to the next layer down / built-in default".
 #
 #  Copy next to a session (or point FK_CONFIG at it) and edit.  Values below are the
@@ -290,7 +290,7 @@ FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to pa
 
 
 # ----- fiber-intrachunk : within-chunk merge (TYPED; overrides <session>.yaml) -----
-# These FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* keys are the typed
+# These FK_INTRA_* keys are the typed
 # IntrachunkConfig (config.py).  Set here, they OVERRIDE the <session>.yaml fiber_kit.intrachunk
 # section.  Values below are the `recommended` profile the pipeline runs.
 FK_INTRA_GATE:           cfiber   # cfiber | band | cosine | mmd | kcov.  Shape gate.  cfiber (default, affine-invariant)
@@ -308,9 +308,9 @@ FK_INTRA_DEPTH_GATE:     35.0     # 35 | 25-45 (um).  Depth gate.  On 20-um pitc
                                   #   wanders < ~1.5 sites; 35 um ~ 1.75 sites caps drift and rejects far-apart merges.
 FK_INTRA_AMP_GATE:       1.10     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
                                   #   caps a merge to <=3x amplitude ratio (a single unit's drift amplitude range).
-FK_REFRAC_CEILING:       1.0      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
+FK_INTRA_REFRAC_CEILING:       1.0      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
                                   #   exceeds this percent -- two genuine units merged manufacture cross-refractory spikes.
-FK_PRE_MERGE_COS:        0.97     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
+FK_INTRA_PRE_MERGE_COS:        0.97     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
                                   #   the full gate (cheap, safe consolidation that shrinks the agglomeration).
 FK_INTRA_LINKAGE:        complete # complete | dynamic | ms | kk.  Agglomeration linkage.  complete (farthest-point) yields tight,
                                   #   conservative clusters; dynamic/ms are density-adaptive.
@@ -336,15 +336,15 @@ FK_INTRA_KK_STRIP:       0        # 0 = off, 1 = on.  OPT-IN per-channel polynom
 FK_INTRA_KK_STRIP_DEG:   4        # 4 | 3-5.  Legendre degree for the strip (4 best; 3 under-cleans, 5 over-strips).
 FK_INTRA_KK_STRIP_Z:     4.0      # 4.0 | 3-5.  robust-z (MAD-scaled) outlier threshold on the per-channel poly coefficients.
 FK_INTRA_KK_STRIP_MAXBAD: 1       # 1 | 0-2.  strip a spike if it is a poly-coeff outlier on MORE than this many signal channels.
-FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
+FK_INTRA_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
-FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
+FK_INTRA_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
                                   #   1 = native-rate search.  Higher = finer alignment at compute cost.
 FK_INTRA_CFIBER_Q:       0.90     # 0.90 | 0.85-0.95.  cfiber self-calibration quantile: threshold = Q-quantile of the
                                   #   per-fragment split-half null.  Higher = stricter.
-FK_CFIBER_NULL:          order    # order | energy.  Split-half null basis.  order splits a fragment by spike time (drift-
+FK_INTRA_CFIBER_NULL:          order    # order | energy.  Split-half null basis.  order splits a fragment by spike time (drift-
                                   #   robust); energy splits by amplitude (sensitive to amplitude structure).
-FK_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self-calibrated cfiber threshold, guarding against a
+FK_INTRA_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self-calibrated cfiber threshold, guarding against a
                                   #   pathologically tight null on a very clean fragment.
 FK_INTRA_SIG_CAP:        8000     # 8000 | "" = no cap.  Per-fragment spikes used for the mean template; beyond ~8000 the
                                   #   template is already stable, so the cap only bounds compute.

@@ -12,7 +12,7 @@
 #      explicit CLI flag  >  exported FK_* env var  >  THIS FILE  >  <session>.yaml
 #      fiber_kit.<stage> section  >  built-in default
 #  => this global file OVERRIDES the per-session <session>.yaml tuning when present.
-#     A one-off sweep still wins:   FK_ALIGN_LAG=2 fiber-pipeline 5 fiber-intrachunk
+#     A one-off sweep still wins:   FK_INTRA_ALIGN_LAG=2 fiber-pipeline 5 fiber-intrachunk
 #     An empty value ("")  means "fall back to the next layer down / built-in default".
 #
 #  Copy next to a session (or point FK_CONFIG at it) and edit.  Values below are the
@@ -60,7 +60,7 @@
 #    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk); the
 #      runner always invokes fiber-link with --from-units, so the link names the produced
 #      exp_chunk.units.npz.  The overlap-backbone in that units.npz carries the 0080
-#      standard-cosine + (here ON) warp co-gate -- see FK_BACKBONE_* below.
+#      standard-cosine + (here ON) warp co-gate -- see FK_INTRA_BACKBONE_* below.
 #    * exp_linked    : the linked output; a final realign re-extracts it for curation.
 # ============================================================================
 pipeline:
@@ -352,7 +352,7 @@ FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to pa
 
 
 # ----- fiber-intrachunk : within-chunk merge (TYPED; overrides <session>.yaml) -----
-# These FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* keys are the typed
+# These FK_INTRA_* keys are the typed
 # IntrachunkConfig (config.py).  Set here, they OVERRIDE the <session>.yaml fiber_kit.intrachunk
 # section.  Values below are the `recommended` profile the pipeline runs.
 FK_INTRA_GATE:           band     # band | cfiber | cosine | mmd | kcov.  Shape gate.  band = energy-scaled median+/-sigma
@@ -369,9 +369,9 @@ FK_INTRA_DEPTH_GATE:     10.0     # 35 | 25-45 (um).  Depth gate.  On 20-um pitc
                                   #   wanders < ~1.5 sites; 35 um ~ 1.75 sites caps drift and rejects far-apart merges.
 FK_INTRA_AMP_GATE:       0.90     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
                                   #   caps a merge to <=3x amplitude ratio (a single unit's drift amplitude range).
-FK_REFRAC_CEILING:       0.5      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
+FK_INTRA_REFRAC_CEILING:       0.5      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
                                   #   exceeds this percent -- two genuine units merged manufacture cross-refractory spikes.
-FK_PRE_MERGE_COS:        0.98     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
+FK_INTRA_PRE_MERGE_COS:        0.98     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
                                   #   the full gate (cheap, safe consolidation that shrinks the agglomeration).
 FK_INTRA_LINKAGE:        complete # complete | dynamic | ms | kk.  Agglomeration linkage.  complete (farthest-point) yields tight,
                                   #   conservative clusters; dynamic/ms are density-adaptive.
@@ -397,15 +397,15 @@ FK_INTRA_KK_STRIP:       0        # 0 = off, 1 = on.  OPT-IN per-channel polynom
 FK_INTRA_KK_STRIP_DEG:   4        # 4 | 3-5.  Legendre degree for the strip (4 best; 3 under-cleans, 5 over-strips).
 FK_INTRA_KK_STRIP_Z:     4.0      # 4.0 | 3-5.  robust-z (MAD-scaled) outlier threshold on the per-channel poly coefficients.
 FK_INTRA_KK_STRIP_MAXBAD: 1       # 1 | 0-2.  strip a spike if it is a poly-coeff outlier on MORE than this many signal channels.
-FK_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
+FK_INTRA_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
-FK_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
+FK_INTRA_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
                                   #   1 = native-rate search.  Higher = finer alignment at compute cost.
 FK_INTRA_CFIBER_Q:       0.95     # 0.90 | 0.85-0.95.  cfiber self-calibration quantile: threshold = Q-quantile of the
                                   #   per-fragment split-half null.  Higher = stricter.
-FK_CFIBER_NULL:          order    # order | energy.  Split-half null basis.  order splits a fragment by spike time (drift-
+FK_INTRA_CFIBER_NULL:          order    # order | energy.  Split-half null basis.  order splits a fragment by spike time (drift-
                                   #   robust); energy splits by amplitude (sensitive to amplitude structure).
-FK_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self-calibrated cfiber threshold, guarding against a
+FK_INTRA_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self-calibrated cfiber threshold, guarding against a
                                   #   pathologically tight null on a very clean fragment.
 FK_INTRA_SIG_CAP:        8000     # 8000 | "" = no cap.  Per-fragment spikes used for the mean template; beyond ~8000 the
                                   #   template is already stable, so the cap only bounds compute.
@@ -415,9 +415,9 @@ FK_INTRA_SIG_CAP:        8000     # 8000 | "" = no cap.  Per-fragment spikes use
 # stderiv boundary templates, which are near-blind to depth/amplitude -- so different co-located units
 # can seed a bad anchor (g4: 25% of seeds had standard cosine <0.75, some anti-correlated).  These
 # co-gate every accepted seed on the RAW standard axis the stderiv transform collapses.
-FK_BACKBONE_STD_COS:     0.75     # 0.75 | 0.5-0.85 (0=off).  STANDARD median-template cosine a seed must also clear.
+FK_INTRA_BACKBONE_STD_COS:     0.75     # 0.75 | 0.5-0.85 (0=off).  STANDARD median-template cosine a seed must also clear.
                                   #   On g4 keeps 100% of same-unit seeds, rejects 100% of the anti-correlated ones.
-FK_BACKBONE_WARP:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay (warp) coherence co-gate on the seed, ON here.
+FK_INTRA_BACKBONE_WARP:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay (warp) coherence co-gate on the seed, ON here.
                                   #   NOTE (validated g4): on this octrode most units span <=2 channels, so the per-channel
                                   #   group-delay is degenerate and warp is NOT discriminative (same/diff both ~0) -- at 0.3
                                   #   this REJECTS most seeds, shrinking the backbone.  That is deliberately conservative: it

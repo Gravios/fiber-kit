@@ -138,9 +138,9 @@ class IntrachunkConfig(StageConfig):
     amp_gate: float = knob(0.0, "absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x (0=off)",
                            env="FK_INTRA_AMP_GATE", recommended=1.10)
     refrac_ceiling: float = knob(None, "reject merge if combined 2ms-ISI violation > this percent (empty=off)",
-                                 env="FK_REFRAC_CEILING", recommended=1.0)
+                                 env="FK_INTRA_REFRAC_CEILING", recommended=1.0)
     pre_merge_cos: float = knob(0.0, "pre-collapse obvious mutual-NN pairs at cosine>=this (0=off)",
-                                env="FK_PRE_MERGE_COS", recommended=0.97)
+                                env="FK_INTRA_PRE_MERGE_COS", recommended=0.97)
     n_iter: int = knob(1, "iterate group->re-estimate->regroup this many passes (1=single pass); >1 keeps the tight "
                        "gate but re-merges DENOISED units across passes, consolidating over-split fragments a single "
                        "pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in "
@@ -186,16 +186,16 @@ class IntrachunkConfig(StageConfig):
                                 "outlier on MORE than this many signal channels (0 = strictest).",
                                 env="FK_INTRA_KK_STRIP_MAXBAD", type=int)
     align_lag: int = knob(6, "merge-time best-lag half-window, NATIVE samples (0=off)",
-                          env="FK_ALIGN_LAG", type=int)
+                          env="FK_INTRA_ALIGN_LAG", type=int)
     align_upsample: int = knob(1, "cubic-spline upsampling factor for the align-lag search",
-                               env="FK_ALIGN_UPSAMPLE", type=int)
+                               env="FK_INTRA_ALIGN_UPSAMPLE", type=int)
     cfiber_q: float = knob(0.90, "cfiber self-calibration quantile", env="FK_INTRA_CFIBER_Q")
     cfiber_null: str = knob("order", "cfiber split-half null basis: order|energy",
-                            env="FK_CFIBER_NULL", choices=("order", "energy"), type=str)
+                            env="FK_INTRA_CFIBER_NULL", choices=("order", "energy"), type=str)
     band_thr: float = knob(None, "gate='band': min energy-scaled median+/-sigma band-overlap IoU to merge (empty -> 0.5)",
                            env="FK_INTRA_BAND_THR")
     cfiber_thr_floor: float = knob(0.0, "absolute floor on the self-calibrated cfiber threshold (0=off)",
-                                   env="FK_CFIBER_THR_FLOOR")
+                                   env="FK_INTRA_CFIBER_THR_FLOOR")
     sig_cap: int = knob(None, "per-fragment spikes for the mean template (empty = no cap)", env="FK_INTRA_SIG_CAP", type=int, recommended=8000)
     warp_thr: float = knob(None, "group-delay WARP coherence gate (Omlor-Giese): merge only if the cross-channel "
                            "correlation of the two fragments' per-channel group-delay profiles >= this. Same-neuron "
