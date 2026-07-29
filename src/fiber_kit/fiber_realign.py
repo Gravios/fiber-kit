@@ -614,7 +614,13 @@ def main():
         method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample,
         variant=out_variant)
 
-    res_out = nio.write_res(base, group, res_corr, variant=out_variant, tag=a.out_tag)
+    # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
+    # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose
+    # res is .res.stderiv.N under a stderiv_C5 clu (out_variant=stderiv_C5) spawns a SECOND .res.stderiv_C5.N
+    # -- two res per folder, which breaks the single-res invariant.  A stage-tagged commit keeps the tag.
+    _rr = nio.resolve_any(base, "res", group)
+    _res_variant = _rr.variant if getattr(_rr, "found", False) else out_variant
+    res_out = nio.write_res(base, group, res_corr, variant=_res_variant, tag=a.out_tag)
     np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
     if a.out_res:                                          # optional extra explicit copy
         nio.write_res_file(a.out_res, res_corr)
