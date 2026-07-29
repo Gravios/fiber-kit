@@ -41,6 +41,10 @@ try:
     from . import fiber_stderiv as fst
 except ImportError:
     import fiber_stderiv as fst
+try:
+    from . import fiber_pca as fpca
+except ImportError:
+    import fiber_pca as fpca
 
 
 def _read_clu(path):
@@ -63,66 +67,6 @@ def _parse_clu_variant_tag(clu_path, base, group):
         return "", ""
     gi = toks.index(g)
     return ".".join(toks[:gi]), ".".join(toks[gi + 1:])
-
-
-def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
-                     subsample=True, noise_label=0):
-    """Compute per-spike sub-sample offsets aligning each spike to its unit's
-    multichannel template.
-
-    spk     : (N, T, C) float/int waveforms (sample-major, peak near T//2)
-    labels  : (N,) per-spike unit id (noise_label is left at offset 0)
-    returns : off (N,) float32 sub-sample offset, ioff (N,) int32 rounded offset.
-    res_corrected = res + ioff.
-    """
-    spk = np.asarray(spk, np.float32)
-    N, T, C = spk.shape
-    ms = int(max_shift)
-    off = np.zeros(N, np.float32)
-    Tcore = T - 2 * ms
-    lags = np.arange(-ms, ms + 1)
-
-    by = {}
-    for i, l in enumerate(labels):
-        by.setdefault(int(l), []).append(i)
-
-    for u, rows in by.items():
-        if u == noise_label or len(rows) < min_n:
-            continue
-        idx = np.asarray(rows)
-        W = spk[idx]                                     # (n,T,C)
-        cur = np.zeros(len(idx), int)                    # current integer lag
-        corr = None
-        for _ in range(max(1, iters)):
-            # template from currently-aligned spikes (robust median), core region.
-            # Vectorized gather of each spike's lag-shifted core (was a per-spike
-            # Python loop); identical result, O(n) interpreter calls removed.
-            gidx = np.arange(Tcore)[None, :] + (ms + cur)[:, None]   # (n, Tcore)
-            al = np.take_along_axis(W, gidx[:, :, None], axis=1).astype(np.float32)
-            templ = np.median(al, axis=0)                # (Tcore,C)
-            tc = templ - templ.mean(axis=0, keepdims=True)
-            # correlation at every lag (n, nLags)
-            corr = np.empty((len(idx), len(lags)), np.float32)
-            for k, L in enumerate(lags):
-                seg = W[:, ms + L:T - ms + L, :]
-                seg = seg - seg.mean(axis=1, keepdims=True)
-                corr[:, k] = np.einsum('ntc,tc->n', seg, tc)
-            cur = lags[np.argmax(corr, axis=1)]
-        # sub-sample refinement: parabola through (k-1,k,k+1) of the correlation
-        kbest = np.argmax(corr, axis=1)
-        frac = np.zeros(len(idx), np.float32)
-        if subsample:
-            ok = (kbest > 0) & (kbest < len(lags) - 1)
-            a = corr[np.arange(len(idx)), np.clip(kbest - 1, 0, len(lags) - 1)]
-            b = corr[np.arange(len(idx)), kbest]
-            c = corr[np.arange(len(idx)), np.clip(kbest + 1, 0, len(lags) - 1)]
-            den = (a - 2 * b + c)
-            good = ok & (np.abs(den) > 1e-6)
-            frac[good] = 0.5 * (a[good] - c[good]) / den[good]
-            frac = np.clip(frac, -0.5, 0.5)
-        off[idx] = lags[kbest] + frac
-    ioff = np.rint(off).astype(np.int32)
-    return off, ioff
 
 
 def _upsample_spline(W, factor):
@@ -269,10 +213,6 @@ def refeaturize(spk_new, res_corr, basis):
     sort used, via fiber_pca.read_pca) to refresh the .fet, and append the corrected
     timestamp as the final feature column (the neurosuite .fet time convention).  Returns
     an int64 (n, nCh*nComp + 1) array ready for neuro_io.write_fet."""
-    try:
-        from . import fiber_pca as fpca
-    except ImportError:
-        import fiber_pca as fpca
     win = fpca.extract_windows(np.asarray(spk_new, np.float64), basis["recShift"], basis["data2use"])
     fet = fpca.project(win, basis)                         # (n, nCh*nComp), channel-major
     full = np.empty((len(fet), fet.shape[1] + 1), np.int64)
@@ -301,10 +241,6 @@ def _variant_present(base, group, variant):
             return True
     except Exception:
         pass
-    try:
-        from . import fiber_pca as fpca
-    except ImportError:
-        import fiber_pca as fpca
     try:
         fpca.read_pca(base, group, prefer=[variant])
         return True
@@ -358,7 +294,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
         off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample)
     else:
-        off, ioff = template_offsets(spk, labels, max_shift, iters, min_n)
+        off, ioff = fl.template_offsets(spk, labels, max_shift, iters, min_n)
         align_peak = None
     res_corr = res + ioff.astype(np.int64)
     if verbose:
@@ -490,10 +426,6 @@ def main():
         _det("clu", "re-emit skipped (--no-emit-clu); base over-cluster intact")
 
     if a.shift_spk:
-        try:
-            from . import fiber_pca as fpca
-        except ImportError:
-            import fiber_pca as fpca
         if a.reextract:
             raise SystemExit("[realign] --shift-spk and --reextract are mutually exclusive (one reads the "
                              ".fil, the other rolls the existing .spk)")
@@ -527,10 +459,6 @@ def main():
                 fet_out = nio.write_fet(base, group, fet, variant=vout, tag=a.out_tag)
                 _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
     elif a.reextract or a.refeaturize:
-        try:
-            from . import fiber_pca as fpca
-        except ImportError:
-            import fiber_pca as fpca
         fil = a.fil or f"{base}.fil"
         filmm = nio.open_signal(fil, cfg["ntotal"])
         # read the window PLUS one preceding sample (peak+1, nsamp+1) so the stderiv temporal diff

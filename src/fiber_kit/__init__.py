@@ -28,7 +28,7 @@ from . import neuro_io
 from . import backend
 from .backend import use_gpu, gpu_enabled, backend_name
 from .fiber_tracer import trajectory, predict, predict_many, channel_residual_profile, split_meanvar
-from .fiber_lib import align_xcorr  # realign primitive stays under fk.fiber_lib.realign
+from .fiber_lib import align_xcorr, template_offsets  # realign primitive stays under fk.fiber_lib.realign
 from .klustakwik import klustakwik
 from .fiber_split import recursive_split, total_residual_energy, accept_split
 from .session_yaml import find_session_yaml, load_session, resolve_session_params, add_session_args, SessionCfg
@@ -37,7 +37,7 @@ from .fiber_session import (
     read_res, open_spkD, fil_chunk_whitener,
 )
 from .fiber_relink import relink, rewrite_clu, write_report
-from .fiber_realign import template_offsets, realign, write_outputs
+from .fiber_realign import realign, write_outputs
 from .fiber_localize import load_geometry, localize, localize_unit
 from .fiber_drift import drift_curve, decentralized_drift, write_drift_table
 from .fiber_position import (

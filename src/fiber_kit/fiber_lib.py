@@ -224,6 +224,66 @@ def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=N
     return align_xcorr(waveforms, ref=ref, iters=iters, maxlag=maxlag, subsample=sub)
 
 
+def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
+                     subsample=True, noise_label=0):
+    """Compute per-spike sub-sample offsets aligning each spike to its unit's
+    multichannel template.
+
+    spk     : (N, T, C) float/int waveforms (sample-major, peak near T//2)
+    labels  : (N,) per-spike unit id (noise_label is left at offset 0)
+    returns : off (N,) float32 sub-sample offset, ioff (N,) int32 rounded offset.
+    res_corrected = res + ioff.
+    """
+    spk = np.asarray(spk, np.float32)
+    N, T, C = spk.shape
+    ms = int(max_shift)
+    off = np.zeros(N, np.float32)
+    Tcore = T - 2 * ms
+    lags = np.arange(-ms, ms + 1)
+
+    by = {}
+    for i, l in enumerate(labels):
+        by.setdefault(int(l), []).append(i)
+
+    for u, rows in by.items():
+        if u == noise_label or len(rows) < min_n:
+            continue
+        idx = np.asarray(rows)
+        W = spk[idx]                                     # (n,T,C)
+        cur = np.zeros(len(idx), int)                    # current integer lag
+        corr = None
+        for _ in range(max(1, iters)):
+            # template from currently-aligned spikes (robust median), core region.
+            # Vectorized gather of each spike's lag-shifted core (was a per-spike
+            # Python loop); identical result, O(n) interpreter calls removed.
+            gidx = np.arange(Tcore)[None, :] + (ms + cur)[:, None]   # (n, Tcore)
+            al = np.take_along_axis(W, gidx[:, :, None], axis=1).astype(np.float32)
+            templ = np.median(al, axis=0)                # (Tcore,C)
+            tc = templ - templ.mean(axis=0, keepdims=True)
+            # correlation at every lag (n, nLags)
+            corr = np.empty((len(idx), len(lags)), np.float32)
+            for k, L in enumerate(lags):
+                seg = W[:, ms + L:T - ms + L, :]
+                seg = seg - seg.mean(axis=1, keepdims=True)
+                corr[:, k] = np.einsum('ntc,tc->n', seg, tc)
+            cur = lags[np.argmax(corr, axis=1)]
+        # sub-sample refinement: parabola through (k-1,k,k+1) of the correlation
+        kbest = np.argmax(corr, axis=1)
+        frac = np.zeros(len(idx), np.float32)
+        if subsample:
+            ok = (kbest > 0) & (kbest < len(lags) - 1)
+            a = corr[np.arange(len(idx)), np.clip(kbest - 1, 0, len(lags) - 1)]
+            b = corr[np.arange(len(idx)), kbest]
+            c = corr[np.arange(len(idx)), np.clip(kbest + 1, 0, len(lags) - 1)]
+            den = (a - 2 * b + c)
+            good = ok & (np.abs(den) > 1e-6)
+            frac[good] = 0.5 * (a[good] - c[good]) / den[good]
+            frac = np.clip(frac, -0.5, 0.5)
+        off[idx] = lags[kbest] + frac
+    ioff = np.rint(off).astype(np.int32)
+    return off, ioff
+
+
 def centroid_shift(waves, peak, weight="energy"):
     """Reference-free per-spike alignment shift via the circular centroid of the energy envelope.
 

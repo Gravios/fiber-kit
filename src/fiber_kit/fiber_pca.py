@@ -5,7 +5,7 @@
 #  Makes fiber-kit self-contained for the Klusters-style realign + reproject that
 #  process_pca / process_alignspikes_pca (ndmanager-plugins) provide in C++, so the
 #  package does not depend on the state of that pipeline.  Pairs with
-#  fiber_realign.template_offsets, which already implements Stage 1 (per-spike
+#  fiber_lib.template_offsets, which already implements Stage 1 (per-spike
 #  cross-correlation alignment to the cluster template, iters=2, max_shift=5).
 #
 #  ── .pca.N / .pcaD.N binary layout — PCAE (mirror of libneurosuite-core) ──
@@ -330,7 +330,7 @@ def _shift_spikes(spk, shift_per_spike):
 def realign_pca(spk, clu, res, basis, *, max_shift=5, iters=2, min_n=20, max_global=4):
     """Full standalone Klusters-style realign on in-memory arrays.
 
-    Stage 1 — per-spike xcorr alignment to the cluster template (fiber_realign.template_offsets).
+    Stage 1 — per-spike xcorr alignment to the cluster template (fiber_lib.template_offsets).
     Stage 2 — per-cluster rigid shift to the PCA-projection-energy maximum (this module).
     Then reproject the realigned windows onto `basis` to refresh features.
 
@@ -339,11 +339,11 @@ def realign_pca(spk, clu, res, basis, *, max_shift=5, iters=2, min_n=20, max_glo
     To align a waveform to its template we roll by -ioff (the inverse of the measured lag);
     the .res convention res+ioff matches fiber_realign."""
     try:
-        from . import fiber_realign as fr
+        from . import fiber_lib as fl
     except ImportError:
-        import fiber_realign as fr
+        import fiber_lib as fl
     spk = np.asarray(spk, np.float64)
-    off, ioff = fr.template_offsets(spk, clu, max_shift=max_shift, iters=iters, min_n=min_n)
+    off, ioff = fl.template_offsets(spk, clu, max_shift=max_shift, iters=iters, min_n=min_n)
     spk1 = _shift_spikes(spk, -ioff)                       # canonicalize waveform to template
     s2 = np.zeros(len(clu), np.int32)
     by = {}
