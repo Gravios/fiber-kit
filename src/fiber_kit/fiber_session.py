@@ -1476,11 +1476,12 @@ def add_core_arguments(ap):
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
     ap.add_argument("--jobs", "-j", type=int, default=1,
                     help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
-    ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid"], default=None,
-                    help="feature-building alignment: xcorr (default) or centroid (pure, no refine -- "
+    ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid", "off"], default=None,
+                    help="feature-building alignment: xcorr (default), centroid (pure, no refine -- "
                          "adds the trough-position-vs-asymmetry structure to the clustering/linking "
-                         "features).  Does NOT touch committing alignment or fiber-realign.  Overrides "
-                         "the FIBER_ALIGN env var.")
+                         "features), or off (skip the sub-sample align entirely; features are built from "
+                         "the windows exactly as extracted).  Does NOT touch committing alignment or "
+                         "fiber-realign.  Overrides the FIBER_ALIGN env var.")
     ap.add_argument("--subsample", dest="subsample", action=argparse.BooleanOptionalAction, default=None,
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
