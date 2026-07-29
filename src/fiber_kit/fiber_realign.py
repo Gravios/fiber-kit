@@ -272,7 +272,7 @@ def refeaturize(spk_new, res_corr, basis):
     win = fpca.extract_windows(np.asarray(spk_new, np.float64), basis["recShift"], basis["data2use"])
     fet = fpca.project(win, basis)                         # (n, nCh*nComp), channel-major
     full = np.empty((len(fet), fet.shape[1] + 1), np.int64)
-    full[:, :-1] = np.rint(fet).astype(np.int64)
+    full[:, :-1] = _round_half_away(fet).astype(np.int64)   # ns3 process_pca uses llround (half-away); np.rint is half-even
     full[:, -1] = np.asarray(res_corr, np.int64)           # time feature (last column)
     return full
 
