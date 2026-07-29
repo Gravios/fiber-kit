@@ -250,6 +250,12 @@ FK_REALIGN_VARIANT:      ""       # "" | e.g. stderiv_C5.  Feature variant fiber
                                   #   empty = infer from the clu name (family-matches).  Set to the real token on a
                                   #   custom-sdiffPairs session so the .spk/.fet name their variant explicitly rather than
                                   #   leaning on the clu path's hard-coded 'stderiv'.  The .res stays the one shared copy.
+FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike alignment algorithm (both the fiber-realign
+                                  #   stage AND the post-step re-roll): klusters (default, iterative normalised-xcorr to
+                                  #   the unit template), template (legacy median/un-normalised), centroid (reference-free
+                                  #   energy-centroid, no template/labels).  centroid is reference-free, so in the re-roll it
+                                  #   centres on the POPULATION centroid rather than the unit template -- prefer klusters/
+                                  #   template if you rely on the re-roll.
 FK_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters whose top-3 feature variance exceeds this x the
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
 FK_REFINE_SPLIT_MIN_CORR: 0.95    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent

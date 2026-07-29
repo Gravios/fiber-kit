@@ -197,6 +197,12 @@ REALIGN_VARIANT="${FK_REALIGN_VARIANT:-}"          # feature variant fiber-reali
                                                    #   from the clu name, which family-matches).  Set to the real
                                                    #   token (e.g. stderiv_C5) on a custom-sdiffPairs session so the
                                                    #   .spk/.fet name their variant explicitly; .res stays shared.
+REALIGN_ALGO="${FK_REALIGN_ALGO:-klusters}"        # per-spike alignment algorithm: klusters (default, iterative
+                                                   #   normalised-xcorr to the unit template), template (legacy
+                                                   #   median/un-normalised), or centroid (reference-free energy-
+                                                   #   centroid, no template).  NOTE centroid ignores labels, so the
+                                                   #   post-step re-roll would centre on the POPULATION centroid, not
+                                                   #   the unit template -- use klusters/template if you rely on it.
 DIP_DIM="${FK_DIP_DIM:-6}"                          # session dip-test PCA dims (stock 4): expose footprint PCs
 DIP_ALPHA="${FK_DIP_ALPHA:-0.02}"                   # session dip p (stock 0.01): mildly more permissive; keep
                                                    #   statistical (>0.05 starts splitting on noise)
@@ -441,7 +447,7 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
     [ -n "$REALIGN_VARIANT" ] && rv_args=(--variant "$REALIGN_VARIANT")
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "${STEP_IN:-}")" \
-        --align-algo klusters --reextract --refeaturize \
+        --align-algo "$REALIGN_ALGO" --reextract --refeaturize \
         --variants standard,"${REALIGN_VARIANT:-stderiv}" \
         "${rv_args[@]+"${rv_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
@@ -465,7 +471,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
     echo "== fiber-realign  (post-step Klusters re-roll of .${tag:-base} groups; mode=$mode) =="
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "$tag")" \
-        --align-algo klusters "${mode_args[@]}" \
+        --align-algo "$REALIGN_ALGO" "${mode_args[@]}" \
         --no-emit-clu \
         --variants standard,stderiv
 }
