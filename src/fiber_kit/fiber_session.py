@@ -1531,7 +1531,7 @@ def build_cf(a, meth, cluster_basis):
         resplit_passes=a.resplit_passes, resplit_residual_thr=a.resplit_residual_thr, resplit_topch=a.resplit_topch, resplit_min_reduction=a.resplit_min_reduction, resplit_merge_corr=a.resplit_merge_corr,
         resplit_detrend_episode=a.resplit_detrend_episode, resplit_detrend_win=a.resplit_detrend_win, resplit_detrend_min_n=a.resplit_detrend_min_n,
         cfiber_gate=a.cfiber_gate, cfiber_q=a.cfiber_q,
-        off_thr=getattr(a, "off_thr", 0.0), off_amp_frac=getattr(a, "off_amp_frac", 0.3),
+        off_thr=a.off_thr, off_amp_frac=a.off_amp_frac,
         profile_thr=a.profile_thr, profile_floor_pct=a.profile_floor_pct,
         profile_min_n=a.profile_min_n, emit_candidates=a.emit_merge_candidates,
         refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
@@ -1589,8 +1589,8 @@ def main():
 
     chunk_s = a.chunk_min * 60.0 * a.sr; ov_s = a.overlap_min * 60.0 * a.sr
     t_min, t_max = int(res.min()), int(res.max())
-    nchunks = int(np.ceil((t_max - t_min) / chunk_s))
-    ext_idx = [np.array([], int)] * nchunks; ext_lab = [np.array([], int)] * nchunks
+    nchunks = max(1, int(np.ceil((t_max - t_min) / chunk_s)))    # >=1 even for a degenerate single-timestamp session
+    ext_idx = [np.array([], int) for _ in range(nchunks)]; ext_lab = [np.array([], int) for _ in range(nchunks)]
     chunk_geoms = [[] for _ in range(nchunks)]; chunk_tmin = [0.0] * nchunks
     chunk_candidates = [[] for _ in range(nchunks)]
 
@@ -1732,10 +1732,10 @@ def main():
             gi = np.sort(_rng.choice(gi, 400, replace=False) if gi.size > 400 else gi)
             rt[(c, f)] = fl.realign(np.asarray(_spk_std[gi], float)).mean(0).ravel()   # RAW mean template
         if len(rt) >= KDRIFT + 2:
-            X = np.array(list(rt.values())); drift_mean = X.mean(0).astype(np.float32)
-            basis = np.linalg.svd(X - X.mean(0), full_matrices=False)[2][:KDRIFT]
+            X = np.array(list(rt.values())); mu = X.mean(0); drift_mean = mu.astype(np.float32)
+            basis = np.linalg.svd(X - mu, full_matrices=False)[2][:KDRIFT]
             drift_basis = basis.astype(np.float32)
-            posK = {k: (v - X.mean(0)) @ basis.T for k, v in rt.items()}
+            posK = {k: (v - mu) @ basis.T for k, v in rt.items()}
             R, t, resid, na = fit_drift_transforms(posK, anchor_links, KDRIFT)
             drift_R = R.astype(np.float32); drift_t = t.astype(np.float32)
             drift_resid = resid.astype(np.float32); drift_nanchor = na
