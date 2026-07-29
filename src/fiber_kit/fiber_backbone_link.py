@@ -73,6 +73,7 @@ _KNOBS = {
     "FK_BBLINK_CX_SCALE": ("complexity_scale", float, 0.0),
     "FK_BBLINK_MIN_SNR_Q": ("min_snr_q", float, 0.0),
     "FK_BBLINK_DRIFT": ("drift", int, 0),
+    "FK_BBLINK_DRIFT_RECENTER": ("drift_recenter", int, 1),
 }
 
 
@@ -229,6 +230,20 @@ def main():
                         if idx.size == 0: continue
                         idx = np.sort(rng2.choice(idx, a.spk_cap, replace=False) if idx.size > a.spk_cap else idx)
                         at_tpl[int(atom)] = fl.realign(np.asarray(spk[idx], float)).mean(0).ravel()   # RAW, aligned
+                    if a.drift_recenter and len(at_tpl) >= 3:
+                        # Re-center the anchored atom templates to a SHARED sub-sample frame before the
+                        # fit.  On saddle cells ~1 in 5 same-cell cross-chunk pairs sit up to a whole
+                        # sample apart (measured on g4) from which channel the per-cluster centering
+                        # locked to, and that offset reads as drift.  It MUST be sub-sample: an integer
+                        # re-roll inherits the same 21/22 knife-edge and does not collapse the offset
+                        # (verified -- median pairwise lag 0.19->0.20), whereas sub-sample puts every
+                        # atom at a consistent phase (0.19->0.04, >=0.5-sample offsets 18%->0%).  A
+                        # time-shift cannot move an amplitude change, so the spatial redistribution --
+                        # the real drift -- survives untouched.
+                        _kk = list(at_tpl.keys())
+                        _al = fl.align_xcorr(np.stack([at_tpl[k].reshape(NS, NC) for k in _kk]),
+                                             init="cold", subsample=True)
+                        at_tpl = {k: _al[i].ravel() for i, k in enumerate(_kk)}
                     if len(at_tpl) >= K + 2:
                         X = np.array(list(at_tpl.values())); mu = X.mean(0)
                         basis = np.linalg.svd(X - mu, full_matrices=False)[2][:K]
@@ -242,7 +257,8 @@ def main():
                         R, t, resid, na = flc.fit_drift_transforms(pos, alk, K)
                         drift = dict(basis=basis, mean=mu, R=R, t=t)
                         _mr = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
-                        print(f"[backbone-link] drift ON (re-fit from {pairs.shape[0]} anchors on aligned spk): "
+                        _rc = "recentered, " if a.drift_recenter else ""
+                        print(f"[backbone-link] drift ON ({_rc}re-fit from {pairs.shape[0]} anchors on aligned spk): "
                               f"{int(np.sum(na > 0))}/{nP} chunk-pairs, median resid {_mr:.2f}")
                     else:
                         print(f"[backbone-link] --drift ignored: too few anchored atoms to re-fit ({len(at_tpl)})")
