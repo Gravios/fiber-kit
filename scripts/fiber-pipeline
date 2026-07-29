@@ -401,8 +401,11 @@ _run() {   # run the command, or (dry-run) just print it
     if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "${out[@]}"; printf '\n'
     else "${out[@]}"; fi
 }
-clu_path() {   # $1 = clu stage tag ('' = base over-cluster)
-    if [ -z "${1:-}" ]; then echo "$SESS.clu.stderiv.$ELEC"; else echo "$SESS.clu.stderiv.$ELEC.$1"; fi
+clu_path() {   # $1 = clu stage tag ('' = base over-cluster).  Variant from REALIGN_VARIANT (a CLI --variant or
+    #   FK_REALIGN_VARIANT), default stderiv -- a custom-sdiffPairs session (e.g. stderiv_C5) whose clu is
+    #   .clu.stderiv_C5.<ELEC> needs the real token here, not the hard-coded 'stderiv'.
+    local _v="${REALIGN_VARIANT:-stderiv}"
+    if [ -z "${1:-}" ]; then echo "$SESS.clu.$_v.$ELEC"; else echo "$SESS.clu.$_v.$ELEC.$1"; fi
 }
 
 # ------------------------------- stages -------------------------------------
@@ -818,6 +821,13 @@ main() {
     SESS="${FK_SESS:-$(basename "$DIR")}"
     [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
     cd "$DIR"
+
+    # A single-stage CLI override may carry --variant <v> (a fiber-realign passthrough); honour it for the
+    # clu path too -- not only as a passthrough -- so `... fiber-realign --variant stderiv_C5` resolves the
+    # stderiv_C5 clu.  A CLI --variant wins over FK_REALIGN_VARIANT; empty leaves clu_path's stderiv default.
+    for ((_vi = 0; _vi < ${#OVERRIDE_ARGS[@]}; _vi++)); do
+        [ "${OVERRIDE_ARGS[_vi]}" = "--variant" ] && REALIGN_VARIANT="${OVERRIDE_ARGS[_vi+1]:-$REALIGN_VARIANT}"
+    done
 
     # --plan: run the ordered (possibly-repeating) plan and stop.  With no --plan, an embedded
     # `pipeline:` section in $FK_CONFIG (fiber-kit.yaml) is the PRIMARY plan and runs by default.
