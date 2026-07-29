@@ -1362,8 +1362,9 @@ def main():
     ap.add_argument("--knn-dims", type=int, default=16)
     ap.add_argument("--fold-thr", type=float, default=0.9,
                     help="non-normalised median-xcorr above which a peeled bucket is folded (else kept as new)")
-    ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm", "fiber", "none"], default="gmm",
-                    help="method for the initial fine sort when no --in-clu is given")
+    ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm", "rkk", "fiber", "none"], default="gmm",
+                    help="method for the initial fine sort when no --in-clu is given (rkk = masked-EM KlustaKwik, "
+                         "the same cluster_chunk_fine backend fiber-session's --fine-algo uses)")
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=0.0,
                     help="drift-aware mode: window the session into CORE chunks of this many minutes, "
                          "refine each in its own whitened frame, and link fibers across windows by "
