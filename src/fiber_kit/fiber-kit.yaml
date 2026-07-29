@@ -36,8 +36,10 @@
 # Deliberately OVER-clusters (many small, clean fragments) so the downstream merge
 # (intrachunk + link, or fiber-defrag) can reassemble units; over-split is recoverable,
 # over-merge is not.
-FK_SESSION_FINE_METHOD:  rkk      # rkk | kk.  Per-fiber fine clusterer; rkk = masked-EM KlustaKwik with
-                                  #   BIC model selection (robust to unequal covariances). Categorical.
+FK_SESSION_FINE_METHOD:  rkk      # rkk | gmm | fiber | none.  Per-fiber fine clusterer.  rkk (default) = masked-EM
+                                  #   KlustaKwik with per-cluster realign + BIC model selection (robust to unequal
+                                  #   covariances); gmm = Gaussian-mixture split; fiber = fiber-kit's native cluster_chunk;
+                                  #   none = no fine split (keep the coarse cluster whole).  Categorical.
 FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.

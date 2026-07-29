@@ -1309,7 +1309,11 @@ def add_core_arguments(ap):
         return fb if v in (None, "") else float(v)
     ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=_fk_default("FK_SESSION_CHUNK_MIN", 12.0)); ap.add_argument("--overlap-min", type=float, default=_fk_default("FK_SESSION_OVERLAP_MIN", 4.0))
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
-    ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="gmm")
+    ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="rkk",
+                    help="per-fiber fine clusterer: rkk (default, masked-EM KlustaKwik with per-cluster "
+                         "realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture "
+                         "split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the "
+                         "coarse cluster whole)")
     ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)
     ap.add_argument("--rkk-realign", dest="rkk_realign", action="store_true", default=True,
                     help="interleave rkk (CEM) with per-cluster realignment (per-step; default on)")
