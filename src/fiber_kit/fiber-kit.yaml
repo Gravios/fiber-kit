@@ -293,10 +293,11 @@ FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to pa
 # These FK_INTRA_*/FK_ALIGN_*/FK_REFRAC_CEILING/FK_PRE_MERGE_COS/FK_CFIBER_* keys are the typed
 # IntrachunkConfig (config.py).  Set here, they OVERRIDE the <session>.yaml fiber_kit.intrachunk
 # section.  Values below are the `recommended` profile the pipeline runs.
-FK_INTRA_GATE:           cfiber   # cfiber | cosine | mmd | kcov.  Shape gate.  cfiber (affine-invariant) replaces the
-                                  #   mutual-centre-dependent cosine and self-calibrates from the split-half null; it is
-                                  #   marginally better on the hard look-alike subset (cosine>0.85) -- the regime that
-                                  #   matters under drift.  Set cosine to revert.
+FK_INTRA_GATE:           cfiber   # cfiber | band | cosine | mmd | kcov.  Shape gate.  cfiber (default, affine-invariant)
+                                  #   replaces the mutual-centre-dependent cosine and self-calibrates from the split-half
+                                  #   null; marginally better on the hard look-alike subset (cosine>0.85) -- the regime that
+                                  #   matters under drift.  band = energy-scaled median+/-sigma band-overlap (the exp
+                                  #   default).  Set cosine to revert.
 FK_INTRA_BAND_THR:       ""       # "" | 0.4-0.6.  gate=band only: min energy-scaled median+/-sigma band-overlap IoU
                                   #   to merge two fragments.  Empty defaults to 0.5.  Inert unless FK_INTRA_GATE=band.
 FK_INTRA_COS_THR:        0.85     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
