@@ -171,8 +171,8 @@ class IntrachunkConfig(StageConfig):
                               "gate is the reject option a Mahalanobis assignment lacks -- a tiny fragment of a "
                               "real cell folds in, a tiny distinct/noise atom stays out (holds zero false-merge).",
                               env="FK_INTRA_KK_FOLD_THR")
-    kk_strip: int = knob(0, "kk linkage: OPT-IN per-channel polynomial-coefficient contamination strip run "
-                          "after the split (0 = off, 1 = on). Fits each spike's per-channel waveform with a "
+    kk_strip: int = knob(1, "kk linkage: per-channel polynomial-coefficient contamination strip run "
+                          "after the split (0 = off, 1 = on; ON by default). Fits each spike's per-channel waveform with a "
                           "Legendre polynomial (smooths per-sample stderiv noise into stable coeffs) and moves "
                           "robust-z outlier spikes to the reserve. Cleans most contaminated units while keeping "
                           "clean units usable (raw per-sample strips cannot -- stderiv self-correlation ~0.6 "
