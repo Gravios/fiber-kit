@@ -570,6 +570,11 @@ FK_BBLINK_MIN_FRAG:      40       # 40 | 30-60.  Min spikes for a fragment to ca
 FK_BBLINK_MAX_GAP:       1        # 1 | 1-2 (chunks).  Bridge a cell silent for up to this many chunks.
 FK_BBLINK_CX_SCALE:      0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling of the mutual-NN overlap floor: simpler (shift-
                                   #   insensitive) fragments must overlap harder.  0=off (opt-in; mild effect, tune on review).
+FK_BBLINK_HIERARCHY:     1        # 1 | 0/1.  ON by default: also write the Klusters hierarchy siblings .clc (per-spike
+                                  #   CHILD id) + .clp (child->parent map) beside the .clu, so the linked chains are
+                                  #   browsable/undoable as parents of their fragments and the output loads as a TRIPLE.
+                                  #   Composes across passes: an input .clc is carried through, so the leaves stay the
+                                  #   ORIGINAL fiber-session fragments however many times you re-link.  0 = .clu only.
 FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-ANCHOR drift transform (emitted to the
                                   #   .fibers): drift-correct each source fragment's RAW template to the target chunk's
                                   #   frame before the band-overlap + warp match, so linking is drift-invariant and reaches

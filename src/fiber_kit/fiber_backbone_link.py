@@ -74,6 +74,11 @@ _KNOBS = {
     "FK_BBLINK_MIN_SNR_Q": ("min_snr_q", float, 0.0),
     "FK_BBLINK_DRIFT": ("drift", int, 0),
     "FK_BBLINK_DRIFT_RECENTER": ("drift_recenter", int, 1),
+    # 1 = also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp (child->parent
+    # map), so the chains are browsable/undoable as parents of their fragments.  Composes across
+    # passes: an input .clc is carried through, so the leaves stay the ORIGINAL fiber-session
+    # fragments however many times you re-link.  0 writes the .clu alone.
+    "FK_BBLINK_HIERARCHY": ("hierarchy", int, 1),
 }
 
 
@@ -135,11 +140,6 @@ def main():
     ap.add_argument("--channels", default=None, help="pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary")
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="backbone_linked",
                     help="post-fiber stage tag of the output .clu (single token)")
-    ap.add_argument("--hierarchy", action="store_true",
-                    help="also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp "
-                         "(child->parent map), so the chains are browsable/undoable as parents of their "
-                         "fragments.  Composes across passes: an input .clc is carried through, so the "
-                         "leaves stay the ORIGINAL fiber-session fragments however many times you re-link.")
     ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
                     help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness against")
     ap.add_argument("--gt-res", default=None, help="reserved: .res for the GT (unused when GT shares the session res)")
