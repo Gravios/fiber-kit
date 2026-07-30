@@ -1150,7 +1150,7 @@ def main():
             # so clean spikes look as 'off' as contaminants); the polynomial fit is what beats that floor.
             # Validated on the pooled small-atom units: keeps ~100% of clean units usable (median ~83% of
             # their spikes, none reduced below viability) while cleaning most contaminated units; barely
-            # touches the already-clean big-atom units (~88% kept).  Off by default.
+            # touches the already-clean big-atom units (~88% kept).  On by default.
             for u in np.unique(out_lab):
                 if u <= 1:
                     continue
