@@ -1151,17 +1151,14 @@ def main():
             # Validated on the pooled small-atom units: keeps ~100% of clean units usable (median ~83% of
             # their spikes, none reduced below viability) while cleaning most contaminated units; barely
             # touches the already-clean big-atom units (~88% kept).  Off by default.
-            S = w1 - w0
-            _tg = np.linspace(-1.0, 1.0, S)
-            _vp = np.linalg.pinv(np.polynomial.legendre.legvander(_tg, a.kk_strip_deg))
             for u in np.unique(out_lab):
                 if u <= 1:
                     continue
                 ui = np.flatnonzero(out_lab == u)
                 if len(ui) < max(3 * a.min_n, 30):         # too small to estimate a stable per-channel band
                     continue
-                Wu = fl.realign(spkD[ui].astype(float), _m.realign_lo, _m.realign_hi)[:, w0:w1, :]  # (n,S,C)
-                coef = np.stack([_vp @ Wu[i] for i in range(len(ui))])          # (n, deg+1, C)
+                Wu = fl.realign(spkD[ui].astype(float), _m.realign_lo, _m.realign_hi)      # (n,T,C)
+                coef = fl.legendre_coeffs(Wu, a.kk_strip_deg, w0, w1)           # (n, deg+1, C)
                 med = np.median(coef, 0); mad = np.median(np.abs(coef - med), 0) + 1e-9
                 sig = np.ptp(med, 0) >= 0.05 * np.abs(med).max()               # (C,) real-signal channels
                 bad = np.zeros((len(ui), Wu.shape[2]), bool)
