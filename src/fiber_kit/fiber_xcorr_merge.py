@@ -57,6 +57,13 @@ _KNOBS = {
     "FK_XCM_BAND_THR": ("band_thr", float, 0.5),
     "FK_XCM_OFF_THR": ("off_thr", float, 0.0),
     "FK_XCM_OFF_AMP_FRAC": ("off_amp_frac", float, 0.3),
+    # drift transform emitted from this stage's own cross-chunk merges (see the --emit-drift block in
+    # main): 1 = fit + write <base>.fibers.<method>.<group>.<out-stage> for fiber-backbone-link
+    # --drift-fibers, 0 = off.  drift_k is the transform dimensionality; drift_chunk_min must match the
+    # chunking the consumer bins by.
+    "FK_XCM_EMIT_DRIFT": ("emit_drift", int, 1),
+    "FK_XCM_DRIFT_K": ("drift_k", int, 6),
+    "FK_XCM_DRIFT_CHUNK_MIN": ("drift_chunk_min", float, 12.0),
 }
 
 
@@ -201,14 +208,6 @@ def main():
     ap.add_argument("--ref-sample", type=int, default=None, help="override; default = peak from <session>.yaml")
     ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
                     help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness")
-    ap.add_argument("--emit-drift", action="store_true",
-                    help="fit + emit the fiber-session drift object (drift_pca_basis/mean/R/t + quality) "
-                         "from THIS stage's own cross-chunk merges, to <base>.fibers.<method>.<group>.<out-stage>; "
-                         "feed it to fiber-backbone-link --drift-fibers")
-    ap.add_argument("--drift-k", type=int, default=6, help="drift transform dimensionality (--emit-drift)")
-    ap.add_argument("--drift-chunk-min", type=float, default=12.0,
-                    help="chunk length (min) used to bin clusters into chunks for the drift fit (--emit-drift); "
-                         "must match the chunking the consumer uses")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
