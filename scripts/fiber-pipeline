@@ -401,10 +401,16 @@ _run() {   # run the command, or (dry-run) just print it
     if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "${out[@]}"; printf '\n'
     else "${out[@]}"; fi
 }
-clu_path() {   # $1 = clu stage tag ('' = base over-cluster).  Variant from REALIGN_VARIANT (a CLI --variant or
-    #   FK_REALIGN_VARIANT), default stderiv -- a custom-sdiffPairs session (e.g. stderiv_C5) whose clu is
-    #   .clu.stderiv_C5.<ELEC> needs the real token here, not the hard-coded 'stderiv'.
-    local _v="${REALIGN_VARIANT:-stderiv}"
+clu_variant() {   # THE feature/method token for this session -- one source of truth.
+    #   From a CLI --method/--variant or FK_REALIGN_VARIANT; default 'stderiv'.  A custom-sdiffPairs
+    #   session (e.g. stderiv_C5) names every artifact .<type>.stderiv_C5.<ELEC>, so every stage below
+    #   must pass THIS, never a literal 'stderiv'.  A local copy of the token is how the banner and the
+    #   invocation drifted apart before: fiber-session ran on stderiv_C5 and the banner announced stderiv.
+    echo "${REALIGN_VARIANT:-stderiv}"
+}
+
+clu_path() {   # $1 = clu stage tag ('' = base over-cluster).
+    local _v="$(clu_variant)"
     if [ -z "${1:-}" ]; then echo "$SESS.clu.$_v.$ELEC"; else echo "$SESS.clu.$_v.$ELEC.$1"; fi
 }
 
@@ -421,7 +427,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     [ "$SESSION_NO_NOISE" = "1" ]    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
     _run fiber-session "$SESS" "$ELEC" \
-        --method stderiv --fine-algo "$SESSION_FINE_METHOD" \
+        --method "$(clu_variant)" --fine-algo "$SESSION_FINE_METHOD" \
         --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         $SESSION_DETREND_FLAG --resplit-detrend-win "$SESSION_RESPLIT_DETREND_WIN" --resplit-detrend-min-n "$SESSION_RESPLIT_DETREND_MIN_N" \
@@ -434,7 +440,7 @@ fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled d
     local st_args=()
     [ "${STOCH_VERBOSE:-0}" = "1" ] && st_args+=(--stochastic-verbose)
     _run fiber-stochastic "$SESS" "$ELEC" \
-        --method stderiv --fine-algo "$SESSION_FINE_METHOD" \
+        --method "$(clu_variant)" --fine-algo "$SESSION_FINE_METHOD" \
         --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
@@ -451,7 +457,7 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "${STEP_IN:-}")" \
         --align-algo "$REALIGN_ALGO" --reextract --refeaturize \
-        --variants standard,"${REALIGN_VARIANT:-stderiv}" \
+        --variants standard,"$(clu_variant)" \
         "${rv_args[@]+"${rv_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -476,7 +482,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
         --clu "$(clu_path "$tag")" \
         --align-algo "$REALIGN_ALGO" "${mode_args[@]}" \
         --no-emit-clu \
-        --variants standard,stderiv
+        --variants standard,"$(clu_variant)"
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
@@ -495,7 +501,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN" --ab-sigcap "$AB_SIGCAP" --ab-jobs "$AB_JOBS")  # opt-in contamination reclaim
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-}")" \
-        --out-method stderiv --out-stage "${STEP_OUT:-refine}" \
+        --out-method "$(clu_variant)" --out-stage "${STEP_OUT:-refine}" \
         --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" --drop-min "$REFINE_DROP_MIN" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
         --merge-min-sim "$REFINE_MERGE_MIN_SIM" --merge-budget "$REFINE_MERGE_BUDGET" \
@@ -509,7 +515,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
 fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragments (IN-PLACE relabel on .refine)
     echo "== fiber-peel  (consolidate .${STEP_IN:-refine} fragments by footprint+refractory, in-place) =="
     _run fiber-peel "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-refine}" \
         --out-stage "${STEP_OUT:-${STEP_IN:-refine}}" \
         --foot-hi "$PEEL_FOOT_HI" --foot-lo "$PEEL_FOOT_LO" \
         --refrac-ms "$PEEL_REFRAC_MS" --refrac-thr "$PEEL_REFRAC_THR" \
@@ -520,9 +526,9 @@ fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragmen
 fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk
     echo "== fiber-cpos  (on .${STEP_IN:-refine}, from raw .spk.${STEP_SPK:-standard}) =="
     _run fiber-cpos "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-refine}" \
         --spk-method "${STEP_SPK:-standard}" \
-        --out-method stderiv --out-stage "${STEP_OUT:-refine}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        --out-method "$(clu_variant)" --out-stage "${STEP_OUT:-refine}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
@@ -531,8 +537,8 @@ fiber_intrachunk() {  # 5. within-chunk merge + emit .units.npz for linking
     [ -n "$BACKBONE_STD_COS" ] && backbone_args+=(--backbone-std-cos "$BACKBONE_STD_COS")
     [ -n "$BACKBONE_WARP" ]    && backbone_args+=(--backbone-warp "$BACKBONE_WARP")
     _run fiber-intrachunk "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
-        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-refine}" \
+        --cpos-method "$(clu_variant)" --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --profile recommended --emit-units \
         "${backbone_args[@]+"${backbone_args[@]}"}" \
         --out-stage "${STEP_OUT:-refine_intrachunk}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
@@ -558,8 +564,8 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         [ -n "$LINK_DR_THR" ] && dr_args+=(--dr-thr "$LINK_DR_THR")
     fi
     _run fiber-link "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-refine}" \
-        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-refine}" \
+        --cpos-method "$(clu_variant)" --cpos-stage "${STEP_CPOS:-${STEP_IN:-refine}}" \
         --from-units "$units" \
         --cos-thr "$LINK_COS_THR" --pos-thr "$LINK_POS_THR" --off-thr "$LINK_OFF_THR" --max-gap "$LINK_MAX_GAP" \
         --amp-gate "$LINK_AMP_GATE" --min-a "$LINK_MIN_A" --amp-span "$LINK_AMP_SPAN" \
@@ -573,8 +579,8 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
 fiber_refit() {       # post-curation: rebuild the per-unit/per-chunk model from a CURATED clu (no regrouping)
     echo "== fiber-refit  (curated .${STEP_IN:-curated} + cpos .${STEP_CPOS:-${STEP_IN:-curated}} -> .${STEP_OUT:-${STEP_IN:-curated}_refit}.units) =="
     _run fiber-refit "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-curated}" \
-        --cpos-method stderiv --cpos-stage "${STEP_CPOS:-${STEP_IN:-curated}}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-curated}" \
+        --cpos-method "$(clu_variant)" --cpos-stage "${STEP_CPOS:-${STEP_IN:-curated}}" \
         --out-stage "${STEP_OUT:-${STEP_IN:-curated}_refit}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -601,14 +607,14 @@ fiber_backbone_link() {   # link fiber-session fragments on the invariant backbo
     # exported env; per-step plan `params:` (e.g. channels, min-snr-q) override via argparse last-wins.
     echo "== fiber-backbone-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-backbone_linked}) =="
     _run fiber-backbone-link "$SESS" "$ELEC" \
-        --clu-method stderiv --clu-stage "${STEP_IN:-fiber_session}" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-fiber_session}" \
         --out-stage "${STEP_OUT:-backbone_linked}" \
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_xcorr_merge() {   # merge clusters by Klusters roll-shift cosine (realign after each merge) -> .xcorr_merged
     echo "== fiber-xcorr-merge  (.${STEP_IN:-backbone_linked} -> .${STEP_OUT:-xcorr_merged}) =="
-    _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method stderiv --clu-stage "${STEP_IN:-backbone_linked}" --out-stage "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+    _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-backbone_linked}" --out-stage "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 run_stage() {
@@ -822,11 +828,15 @@ main() {
     [ -d "$DIR" ]  || { echo "error: session dir not found: $DIR (set FK_DIR)" >&2; exit 2; }
     cd "$DIR"
 
-    # A single-stage CLI override may carry --variant <v> (a fiber-realign passthrough); honour it for the
-    # clu path too -- not only as a passthrough -- so `... fiber-realign --variant stderiv_C5` resolves the
-    # stderiv_C5 clu.  A CLI --variant wins over FK_REALIGN_VARIANT; empty leaves clu_path's stderiv default.
+    # A single-stage CLI override may name the variant two ways: --variant <v> (fiber-realign's flag) or
+    # --method <v> (fiber-session's flag for the same token).  Honour BOTH for the clu path, not merely as
+    # passthroughs, so `... fiber-session --method stderiv_C5` resolves the stderiv_C5 clu instead of
+    # announcing and composing a plain 'stderiv' one.  Scanning only --variant is what let the banner and
+    # the actual run disagree.  A CLI value wins over FK_REALIGN_VARIANT; empty keeps the stderiv default.
     for ((_vi = 0; _vi < ${#OVERRIDE_ARGS[@]}; _vi++)); do
-        [ "${OVERRIDE_ARGS[_vi]}" = "--variant" ] && REALIGN_VARIANT="${OVERRIDE_ARGS[_vi+1]:-$REALIGN_VARIANT}"
+        case "${OVERRIDE_ARGS[_vi]}" in
+            --variant|--method) REALIGN_VARIANT="${OVERRIDE_ARGS[_vi+1]:-$REALIGN_VARIANT}" ;;
+        esac
     done
 
     # --plan: run the ordered (possibly-repeating) plan and stop.  With no --plan, an embedded
