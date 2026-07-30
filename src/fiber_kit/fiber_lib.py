@@ -284,6 +284,29 @@ def template_offsets(spk, labels, max_shift=5, iters=2, min_n=20,
     return off, ioff
 
 
+def legendre_coeffs(waves, deg=4, lo=None, hi=None):
+    """Per-channel Legendre polynomial coefficients of a spike window -- the noise-robust SHAPE
+    representation.
+
+    `waves` is (n, T, C), already realigned; the fit runs over samples [lo, hi) mapped onto [-1, 1]
+    and returns (n, deg+1, C).  Fitting a smooth low-order polynomial per channel averages the
+    per-sample noise into a few stable coefficients, which is why it beats raw per-sample shape
+    comparisons on the stderiv axis, where the ~0.6 self-correlation drowns a per-sample signal
+    (the finding that motivated the contamination strip).  deg=4 is the validated operating point:
+    3 under-fits, 5 starts tracking noise.
+
+    Shared so the strip and any other consumer fit the SAME basis -- a locally re-expressed
+    legvander/pinv is exactly the kind of copy that goes stale.
+    """
+    W = np.asarray(waves, float)
+    lo = 0 if lo is None else int(lo)
+    hi = W.shape[1] if hi is None else int(hi)
+    W = W[:, lo:hi, :]
+    vp = np.linalg.pinv(np.polynomial.legendre.legvander(
+        np.linspace(-1.0, 1.0, W.shape[1]), int(deg)))
+    return np.matmul(vp, W)          # (deg+1,S) @ (n,S,C) -> (n,deg+1,C); bit-identical to a per-spike loop
+
+
 def centroid_shift(waves, peak, weight="energy"):
     """Reference-free per-spike alignment shift via the circular centroid of the energy envelope.
 
