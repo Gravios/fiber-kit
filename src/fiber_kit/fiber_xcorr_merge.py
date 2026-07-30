@@ -253,6 +253,24 @@ def main():
     nio.write_clu(base, elec, new, variant=a.clu_method, tag=a.out_tag)
     print(f"{_LP} · wrote {os.path.basename(nio.session_path(base, 'clu', elec, variant=a.clu_method, tag=a.out_tag))}")
 
+    # ── carry the .clc/.clp hierarchy through the merge ──
+    #   A merge changes only WHICH FIBER a child belongs to, never the atoms, so the child layer is
+    #   copied verbatim and each child's parent goes through the SAME mapping the .clu did.  Without
+    #   this the out-stage has a .clu with no matching .clc/.clp and the triple cannot be loaded as a
+    #   unit (FiberHierarchy.load raises on the missing sibling).
+    from .fiber_refiberize import FiberHierarchy as _FH
+    try:
+        _hier = _FH.load(base, elec, variant=a.clu_method, tag=a.clu_stage)
+    except (FileNotFoundError, OSError):
+        _hier = None
+        print(f"{_LP} · no .clc/.clp at .{a.clu_stage} - wrote .clu only (no hierarchy to carry)")
+    if _hier is not None:
+        _newpar = {c: int(mapping.get(int(f), int(f))) for c, f in _hier.parent.items()}
+        _FH(_hier.child, _newpar).save(base, elec, variant=a.clu_method, tag=a.out_tag,
+                                       renumber=False, backup=False)
+        print(f"{_LP} · hierarchy carried: {len(_newpar):,} children -> "
+              f"{len(set(_newpar.values())):,} fibers (.clc unchanged, .clp remapped)")
+
     # ── optional: fit + emit the drift transform from OUR OWN cross-chunk merges ──
     #   An accepted merge between clusters living in different chunks IS a same-cell correspondence --
     #   the xcorr-merge analog of fiber-session's overlap anchors -- so this stage can fit the very same
