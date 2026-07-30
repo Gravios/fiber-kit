@@ -36,9 +36,11 @@ from collections import defaultdict
 
 try:
     from . import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy, fiber_ccg as cg
+    from . import fiber_link_core as flc
     from . import config as cfgmod
 except ImportError:
     import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy, fiber_ccg as cg
+    import fiber_link_core as flc
     import config as cfgmod
 
 _LP = "\u25b8 fiber-xcorr-merge"
@@ -199,6 +201,14 @@ def main():
     ap.add_argument("--ref-sample", type=int, default=None, help="override; default = peak from <session>.yaml")
     ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
                     help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness")
+    ap.add_argument("--emit-drift", action="store_true",
+                    help="fit + emit the fiber-session drift object (drift_pca_basis/mean/R/t + quality) "
+                         "from THIS stage's own cross-chunk merges, to <base>.fibers.<method>.<group>.<out-stage>; "
+                         "feed it to fiber-backbone-link --drift-fibers")
+    ap.add_argument("--drift-k", type=int, default=6, help="drift transform dimensionality (--emit-drift)")
+    ap.add_argument("--drift-chunk-min", type=float, default=12.0,
+                    help="chunk length (min) used to bin clusters into chunks for the drift fit (--emit-drift); "
+                         "must match the chunking the consumer uses")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
@@ -243,6 +253,59 @@ def main():
     print(f"{_LP} · merged {n_in - n_out} clusters ({n_in} -> {n_out}); merges {n_merge}, refractory vetoes {n_veto}")
     nio.write_clu(base, elec, new, variant=a.clu_method, tag=a.out_tag)
     print(f"{_LP} · wrote {os.path.basename(nio.session_path(base, 'clu', elec, variant=a.clu_method, tag=a.out_tag))}")
+
+    # ── optional: fit + emit the drift transform from OUR OWN cross-chunk merges ──
+    #   An accepted merge between clusters living in different chunks IS a same-cell correspondence --
+    #   the xcorr-merge analog of fiber-session's overlap anchors -- so this stage can fit the very same
+    #   drift object without fiber-session having linked at all.  Shared primitive (flc.fit_drift_transforms),
+    #   shared key names, so fiber-backbone-link consumes it unchanged via --drift-fibers.
+    if a.emit_drift:
+        if a.spk_variant != "standard":
+            print(f"{_LP} · --emit-drift skipped: the drift basis is RAW (stderiv breaks the "
+                  f"amplitude-distance law and mutes drift), got {a.spk_variant}")
+        else:
+            K = int(a.drift_k)
+            chunk_s = float(a.drift_chunk_min) * 60.0 * SR
+            t0 = float(res.min()) if res.size else 0.0
+            ch_of = {u: int((float(np.median(res[ix])) - t0) // chunk_s) for u, ix in zip(big, idx0)}
+            nP = max((max(ch_of.values()) + 1 if ch_of else 0) - 1, 0)
+            grp = defaultdict(list)
+            for u in big:
+                grp[mapping[u]].append(u)
+            anchor_links = [[] for _ in range(nP)]
+            for _g, ms in grp.items():                       # every merged group = one cell
+                byc = defaultdict(list)
+                for u in ms:
+                    byc[ch_of[u]].append(u)
+                for c in sorted(byc):
+                    if c + 1 in byc and 0 <= c < nP:
+                        for f in byc[c]:
+                            for g2 in byc[c + 1]:
+                                anchor_links[c].append((f, g2))
+            npair = sum(len(x) for x in anchor_links)
+            # RAW mean templates -- the same recipe fiber-session fits on (realign, no denoise/centering)
+            rt = {}
+            for u, ix in zip(big, idx0):
+                sel = np.sort(rng.choice(ix, a.spk_cap, replace=False) if ix.size > a.spk_cap else ix)
+                rt[(ch_of[u], u)] = fl.realign(np.asarray(spk[sel], float)).mean(0).ravel()
+            if len(rt) >= K + 2 and npair:
+                X = np.array(list(rt.values())); mu = X.mean(0)
+                basis = np.linalg.svd(X - mu, full_matrices=False)[2][:K]
+                pos = {k: (v - mu) @ basis.T for k, v in rt.items()}
+                R, t, resid, na = flc.fit_drift_transforms(pos, anchor_links, K)
+                dpath = nio.fibers_path(base, a.clu_method, elec, stage=a.out_tag)
+                np.savez(dpath, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
+                         drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
+                         drift_resid=resid.astype(np.float32), drift_nanchor=na,
+                         meta_drift_k=np.array(K), meta_chunk_min=np.array(float(a.drift_chunk_min)))
+                _med = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
+                print(f"{_LP} · drift fit from {npair} cross-chunk merges: {int(np.sum(na > 0))}/{max(nP, 1)} "
+                      f"chunk-pairs fit, median residual {_med:.2f}, anchors/pair median "
+                      f"{int(np.median(na)) if na.size else 0}")
+                print(f"{_LP} · wrote {os.path.basename(dpath)}  (fiber-backbone-link --drift-fibers)")
+            else:
+                print(f"{_LP} · --emit-drift: too few cross-chunk merges to fit ({npair} anchor pairs, "
+                      f"{len(rt)} templates; need >= {K + 2} templates and >= 1 pair)")
 
     if a.gt_clu:
         _, gt = (nio.read_clu_file(a.gt_clu, n_spikes=res.size) if (os.path.sep in a.gt_clu or a.gt_clu.endswith(".clu"))
