@@ -177,6 +177,41 @@ def peel_clu(src, res, spk, sr, *, min_n=15, **gate):
     return out, n_merged
 
 
+def _carry_hierarchy(base, elec, clu_method, clu_stage, out_stage, src, out):
+    """Carry the .clc/.clp hierarchy through peel's relabel.
+
+    peel merges whole fragments -- every spike of a source fragment gets the same new id -- so the
+    ATOM layer (.clc) is unchanged and only each child's PARENT moves.  Without this the peeled .clu
+    and the stage's .clc/.clp describe different labellings; because peel defaults to relabelling
+    IN PLACE, that leaves a triple which still loads but whose parent_of(child[i]) no longer equals
+    clu[i] -- wrong rather than missing, which is the worse failure.
+
+    Refuses (writes nothing, warns) if the relabel is not a clean per-fragment map, rather than
+    guessing a parent: ids <= 1 are reserved and fragments below --min-n keep their original id, so
+    a collision between a kept id and a new group id would otherwise be silently mis-mapped.
+    """
+    from .fiber_refiberize import FiberHierarchy as _FH
+    try:
+        hier = _FH.load(base, elec, variant=clu_method, tag=clu_stage)
+    except (FileNotFoundError, OSError):
+        _log(f"no .clc/.clp at .{clu_stage} - wrote .clu only (no hierarchy to carry)")
+        return
+    src = np.asarray(src); out = np.asarray(out)
+    remap = {}
+    for u in np.unique(src[src > 1]):
+        tgt = np.unique(out[src == u])
+        if tgt.size != 1:
+            _log(f"WARNING fragment {int(u)} split across {tgt.size} output ids - "
+                 f"hierarchy NOT written (peel is expected to be a pure per-fragment relabel)")
+            return
+        remap[int(u)] = int(tgt[0])
+    newpar = {c: remap.get(int(f), int(f)) for c, f in hier.parent.items()}
+    _FH(hier.child, newpar).save(base, elec, variant=clu_method, tag=out_stage,
+                                 renumber=False, backup=False)
+    _log(f"hierarchy carried: {len(newpar):,} children -> {len(set(newpar.values())):,} fibers "
+         f"(.clc unchanged, .clp remapped)")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="fiber-peel: consolidate over-split refine fragments by "
@@ -228,6 +263,7 @@ def main():
     ncl = int(out.max()) + 1
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
     nio.write_clu_file(out_path, out, n_clusters=ncl)
+    _carry_hierarchy(base, elec, clu_method, clu_stage, out_stage, src, out)
     n_in = len(np.unique(src[src > 1]))
     n_out = len(np.unique(out[out > 1]))
     _log(f"{n_in:,} fragments → {n_out:,} units  ({n_merged:,} merges)")
