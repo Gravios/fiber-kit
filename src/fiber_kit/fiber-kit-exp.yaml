@@ -584,6 +584,34 @@ FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-AN
                                   #   drift_resid / drift_nanchor in the .fibers (few chunk-pairs / high residual = the
                                   #   transform is weak -- do not trust it) and score against a curated .clu.  Set 0 to disable.
 
+# ----- fiber-flag-artifacts : cluster-free artifact flagging (PREPROCESSING) --------------------------------
+# Runs BEFORE fiber-session so a glitch cannot shape the cluster it would land in.  The per-cluster
+# |z| test cannot be used here: "far from the unit it was assigned to" needs an assignment, and the
+# cluster-free version of it either flags 33k spikes to reach 1.5k or recovers 3% of them (measured,
+# sirotaA-jg-000005-20120312 g4).  These are per-spike intrinsics instead -- window only.
+FK_FLAG_HF_FRAC:         0.90     # 0.90 | 0.75-0.95.  RMS(dx/dt)/RMS(x) on the channel with the largest |dx|,
+                                  #   from the UNWHITENED first difference.  A glitch is high-frequency and
+                                  #   shape-incoherent; a spike is smooth and repeatable.  At 0.90: 30 spikes,
+                                  #   split-half template cosine 0.060 (they share NO waveform -- the artifact
+                                  #   signature) and ISI co-occurrence ~12,000x Poisson.  At 0.75: 412 spikes,
+                                  #   cosine 0.435 -- still artifact-dominated but beginning to mix.
+FK_FLAG_D_CREST:         0.0      # 0.0 = off | 4.5-5.2.  Optional AND-gate on peak(dx)/RMS(dx).  Off by default:
+                                  #   hf_frac alone is already specific at 0.90 and the two overlap heavily.
+FK_FLAG_SAT_ADU:         32000    # 32000 | 0 = off.  Saturation is unambiguous, so it is OR-ed in regardless.
+                                  #   The ONLY amplitude condition here: the flagged events are SMALL (median
+                                  #   peak 0.34x normal), and every amplitude rule tried instead removed the
+                                  #   high-amplitude tail of real units (|peak|>8000: split-half 0.974, zero
+                                  #   refractory violations -- a clean cell, not an artifact).
+FK_FLAG_BATCH:           50000    # 50000.  Spikes per pass over the .spk memmap.
+FK_FLAG_STAGE:           artifact # stage tag of the emitted mask .clu (0 = keep, 1 = artifact).
+FK_FLAG_SPK:             standard # waveform axis the flagger measures; the mask is named for it.
+FK_SESSION_EXCLUDE:      0        # 0 | 0/1.  1 = fiber-session passes --exclude-clu <mask>, so masked spikes
+                                  #   never enter a chunk and are emitted as cluster 0.  Opt-in: the coupling is
+                                  #   explicit rather than inferred from a file existing.
+FK_ALINK_ARTIFACT:       0        # 0 | 0/1.  1 = fiber-anchor-link passes --artifact-clu <mask>, withholding the
+                                  #   masked spikes from --promote-noise so a promoted cell is the genuine
+                                  #   unassigned population only.  Set together with FK_SESSION_EXCLUDE.
+
 # ----- fiber-anchor-link : anchor-seeded linking on a within-session calibrated null -------------------------
 # Sibling to fiber-backbone-link, same inputs (fiber-session hierarchy + standard .spk), three differences:
 # it SEEDS with the .fibers overlap anchors (links made from the same physical spikes -- correct by
