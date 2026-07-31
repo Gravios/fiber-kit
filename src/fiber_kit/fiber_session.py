@@ -1509,6 +1509,10 @@ def add_core_arguments(ap):
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
+    ap.add_argument("--exclude-clu", default=None,
+                    help="per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- "
+                         "e.g. fiber-flag-artifacts' output.  Excluded spikes never enter a chunk, so they "
+                         "cannot shape a cluster; they are emitted as cluster 0.")
     ap.add_argument("--no-cluster-basis", action="store_true",
                     help="ignore the global .pca basis for the fine-split shape features and use a "
                          "per-call local SVD (legacy behaviour)")
@@ -1598,10 +1602,20 @@ def main():
 
     t0 = time.time()
     res = read_res(a.base, a.elec); nspk = len(res)
+    keep = np.ones(nspk, bool)
+    if a.exclude_clu:
+        _, _ex = nio.read_clu_file(a.exclude_clu, n_spikes=nspk)
+        _ex = np.asarray(_ex)
+        if _ex.size != nspk:
+            raise SystemExit(f"--exclude-clu has {_ex.size} labels, .res has {nspk}")
+        keep = _ex == 0
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
     assert spk.shape[0] == nspk, f".res {nspk} vs {spkpath} {spk.shape[0]}"
     filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
     log(f"group {a.elec} \u00b7 {a.method} \u00b7 {nspk:,} spikes")
+    if a.exclude_clu:
+        det("exclude", f"{int((~keep).sum()):,} spikes ({100 * (~keep).mean():.4f}%) from "
+                       f"{os.path.basename(a.exclude_clu)} -- emitted as cluster 0")
     det("source", spkpath)
     det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
     det("feature-align", fl.get_feature_align())
@@ -1634,7 +1648,7 @@ def main():
     for c in range(nchunks):
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
         chunk_tmin[c] = (lo_s - t_min) / a.sr / 60.0
-        ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s))
+        ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s) & keep)   # excluded spikes never enter a chunk
         ncore = int(((res[ext] >= lo_s) & (res[ext] < hi_s)).sum()); ncore_of[c] = ncore
         if len(ext) < 2 * a.min_group:
             print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore:>7,} core   \u2192  skipped (too few)"); continue
