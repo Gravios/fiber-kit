@@ -48,6 +48,13 @@ FK_SESSION_OVERLAP_MIN:  4        # 4 | 0 or 3-8 (min).  Overlap between adjacen
                                   #   share those spikes are the same unit (drift-free identity).  Needs enough shared
                                   #   spikes (~>=50 for the slowest cells) so keep it a few minutes; 0 DISABLES cross-chunk
                                   #   linking (fragments stay per-chunk).  Read by fiber-session and fiber-backbone-link.
+FK_SESSION_EXCLUDE:      0        # 0 | 0/1.  1 = pass --exclude-clu <mask> to fiber-session: the masked spikes
+                                  #   never enter a chunk, so they cannot shape a cluster, and are emitted as
+                                  #   cluster 0.  The mask is any per-spike .clu (nonzero = drop) aligned to the
+                                  #   .res -- typically fiber-flag-artifacts' output (FK_FLAG_*, experimental
+                                  #   template), but a hand-made one works.  Removing a glitch AFTER clustering
+                                  #   is too late: it has already contributed to the covariance and the split
+                                  #   decisions of whatever cluster absorbed it.
 FK_SESSION_RKK_DELETE:   0        # 0 | 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters
                                   #   so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old
                                   #   behaviour; sheds fragments into the artifact bin -- not what session is for).
