@@ -321,8 +321,8 @@ def main():
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="anchor_linked",
                     help="post-fiber stage tag of the output .clu (single token)")
     ap.add_argument("--hierarchy", type=int, default=1, help="1 = also write the .clc/.clp sibling hierarchy")
-    ap.add_argument("--promote-noise", type=int, default=0,
-                    help="1 = treat cluster 0 as a real cell (give it its own atom + cell) instead of noise")
+    ap.add_argument("--promote-noise", type=int, default=1,
+                    help="1 (default) = treat cluster 0 as a real cell (its own atom + cell); 0 = leave it as noise")
     ap.add_argument("--chunk-min", type=float, default=None, help="chunk length (min); default from yaml or 12")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
