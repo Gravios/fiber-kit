@@ -584,6 +584,44 @@ FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-AN
                                   #   drift_resid / drift_nanchor in the .fibers (few chunk-pairs / high residual = the
                                   #   transform is weak -- do not trust it) and score against a curated .clu.  Set 0 to disable.
 
+# ----- fiber-anchor-link : anchor-seeded linking on a within-session calibrated null -------------------------
+# Sibling to fiber-backbone-link, same inputs (fiber-session hierarchy + standard .spk), three differences:
+# it SEEDS with the .fibers overlap anchors (links made from the same physical spikes -- correct by
+# construction, and the positive class for calibration); it CALIBRATES the accept floor per session against
+# the within-chunk score distribution (two fragments in one chunk are different cells by construction, so
+# that is a free negative class) instead of a fixed constant; and it gates the candidate POOL before the
+# mutual-NN selection, so a cell whose best partner fails a gate still gets its runner-up.
+FK_ALINK_TARGET_FPR:     2.0      # 2.0 | 0.5-5.0 (percent).  Accept floor = this false-positive rate against the
+                                  #   WITHIN-CHUNK (different-cell) null.  A fixed floor does not transfer: 0.5 sat at
+                                  #   the MEDIAN of that null on the reference session, gating nothing.
+FK_ALINK_RATE_DEV:       2.0      # 2.0 | 1.0-3.0 (|log2|).  Max change in a fragment's RELATIVE firing rate (its share
+                                  #   of its chunk's spike rate) across a link.  Waveform-independent, and the only gate
+                                  #   that catches a small fragment welded onto a large cell's tail -- which passes every
+                                  #   shape test because its template is right.  2.0 keeps >=98% of verified anchors.
+FK_ALINK_HI_NSPK:        300      # 300 | 150-600 (spikes).  High-rate cut: the backbone pass links only these, and the
+                                  #   warp veto is applied ONLY when both fragments clear it (below the cut the
+                                  #   group-delay term is unmeasurable and vetoes what it cannot see).
+FK_ALINK_WARP_THR:       0.0      # 0.0 = OFF | 0.3-0.9.  Omlor-Giese group-delay coherence.  OFF by default: it needs
+                                  #   >=3 channels with finite delay in BOTH profiles and warp_correlation returns 0.0
+                                  #   for "unmeasurable", which reads as "incoherent".  Enable where the geometry
+                                  #   supports a real group-delay estimate.
+FK_ALINK_AMP_THR:        0.85     # 0.85 | 0.75-0.92.  Omlor-Giese amplitude-profile correlation, as backbone-link.
+FK_ALINK_PRIM_FRAC:      0.15     # 0.15 | 0.1-0.4.  Compared channels = p2p >= frac*max in BOTH fragments.  LOWER than
+                                  #   backbone's 0.30: on a probe whose units span few sites, 0.30 discarded usable ones.
+FK_ALINK_Z:              0.5      # 0.5 | 0.4-1.5 (sigma).  Band half-width, median +/- z*sigma.  Tighter than backbone.
+FK_ALINK_WIN:            12       # 12 | 8-14 (samples).  Half-window around the fragment's RMS-energy centre.
+FK_ALINK_SLIDE:          2        # 2 | 1-6 (samples).  +/- lag search.  LOWER than backbone's 4: on already-realigned
+                                  #   templates the extra lag freedom mostly helps impostors.
+FK_ALINK_IOU_THR:        0.3      # 0.3 | 0.3-0.5.  Per (sample x channel) interval-IoU counted at >= this.
+FK_ALINK_MAX_GAP:        4        # 4 | 1-4 (chunks).  Bridge a cell silent for up to this many chunks.  Rounds relax the
+                                  #   gap progressively; the yield comes from relaxing it, not from iterating at a fixed one.
+FK_ALINK_MIN_FRAG:       15       # 15 | 15-40.  Min spikes for a fragment to carry a template (else left as its own cell).
+FK_ALINK_SPK_CAP:        1500     # 1500 | 600-3000.  Spikes per fragment for the template.
+#   PRIM_FRAC/Z/WIN/SLIDE/IOU_THR above are a coordinate search against the anchors (positives) and the
+#   within-chunk pairs (negatives) on the reference session: TPR at 1% FPR 67% -> 79%, AUC 0.9745 -> 0.9810
+#   versus the backbone defaults.  Fitted on 63 anchors with NO held-out split, so treat as that session's
+#   operating point, not a general default, until a leave-fold-out repeat confirms them.
+
 # ----- fiber-xcorr-merge : fuse near-identical clusters by Klusters roll-shift cosine -----------------------
 # Runs AFTER fiber-backbone-link: the highest roll-shift-cosine pair (max cosine over circular time shifts of
 # the two mean waveforms) at/above cos-thr fuses first, the combined spikes are RE-ALIGNED and the merged
