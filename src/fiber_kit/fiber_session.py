@@ -399,6 +399,46 @@ def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
 
 
 
+# rkk parity knobs.  klustakwik.py is now in parity with kiloklustakwik's classic branch, whose
+# default penalty is AIC (PenaltyMix=0); the pre-parity rkk used BIC.  FK_SESSION_RKK_PENALTY_MIX=1
+# restores BIC if a session needs the old cluster counts.
+_RKK_PENALTY_MIX = float(os.environ.get("FK_SESSION_RKK_PENALTY_MIX", "0.0"))
+_RKK_SPLITS      = int(os.environ.get("FK_SESSION_RKK_SPLITS", "1"))
+
+
+def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
+    """rkk, mapped onto fiber-session's label convention.
+
+    klustakwik() now returns the CLASSIC labelling: 0 is the uniform NOISE cluster (the reject
+    option, KK.cpp:295-300) and real clusters run 1..K.  fiber-session's convention is 0-based real
+    labels with -1 = none, so noise maps to -1 and the rest shift down.  Without this the reject
+    bucket would be emitted as a spurious fragment -- the exact inversion of why the noise cluster
+    was added.
+
+    min_clusters is pinned to max_clusters so a single starting K is used.  The classic driver
+    sweeps every K in [MinClusters, MaxClusters] keeping the best score, which is O(K) full CEMs;
+    that is affordable in OpenMP C++ and not here, and it would also silently change what
+    `max_clusters` has always meant at these call sites.
+
+    min_size is applied HERE rather than inside the CEM.  Classic KlustaKwik's only size rule is
+    nClassMembers <= nDims (KK.cpp:189), far below the stage's fine min-group, so a cluster under
+    min_size is moved to the RESERVE instead of being kept -- which is what these callers have
+    always assumed min_size did.  A deliberate deviation, in the caller, leaving the parity
+    implementation itself untouched.
+    """
+    lab = _rkk(F, max_clusters=max_clusters, min_clusters=max_clusters, seed=seed,
+               penalty_mix=_RKK_PENALTY_MIX, splits=bool(_RKK_SPLITS), noise=True)
+    out = np.asarray(lab, int) - 1                     # 0 (noise) -> -1 ; 1..K -> 0..K-1
+    if min_size and int(min_size) > 1:
+        for c in np.unique(out[out >= 0]):
+            m = out == c
+            if int(m.sum()) < int(min_size):
+                out[m] = -1
+    uniq = [c for c in np.unique(out) if c >= 0]        # renumber survivors densely
+    remap = {c: i for i, c in enumerate(uniq)}
+    return np.array([remap.get(int(v), -1) for v in out], dtype=int)
+
+
 def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True, basis=None):
     """rkk (CEM) interleaved with per-cluster realignment -- the per-step realign analog for the
     flat KK split.  rkk assigns all spikes in one EM run, so there is no recursive node; instead
@@ -408,10 +448,12 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
     project onto the global ndm_pca basis when given, else a per-call local SVD.  Stops early
     when the cluster count is unchanged.  Returns per-spike sub-labels."""
     F = _aligned_pca(waves, mask, dims, basis=basis)       # whole-group median align + features (seed)
-    lab = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
+    lab = _rkk_labels(F, max_clusters, min_size, seed=42, delete=delete)
     for _ in range(max(0, iters)):
         Wal = np.array(waves, dtype=float)
         for c in np.unique(lab):                           # realign each cluster to its OWN median
+            if c < 0:                                      # -1 = reserve, not a cluster
+                continue
             idx = np.flatnonzero(lab == c)
             if len(idx) >= 8:
                 Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
@@ -419,7 +461,7 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
         if F is None:
             w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
             U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
-        new = _rkk(F, max_clusters=max_clusters, min_size=min_size, seed=42, delete=delete)
+        new = _rkk_labels(F, max_clusters, min_size, seed=42, delete=delete)
         stop = len(np.unique(new)) == len(np.unique(lab))
         lab = new
         if stop:
@@ -654,7 +696,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 if Fc is None:
                     wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
                     Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
-                sub = _rkk(Fc, max_clusters=rkk_max, min_size=fine_mg, seed=42, delete=rkk_delete)
+                sub = _rkk_labels(Fc, rkk_max, fine_mg, seed=42, delete=rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
             sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
