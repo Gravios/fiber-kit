@@ -302,7 +302,15 @@ def main():
     ap = argparse.ArgumentParser(prog="fiber-anchor-link",
                                  description="Link fiber-session fragments across chunks, seeded by the overlap "
                                              "anchors and gated on a within-session calibrated null.")
-    ap.add_argument("session"); ap.add_argument("elec", type=int)
+    # Session args come from the SHARED helper (sy.add_session_args) rather than hand-rolled here --
+    # its own docstring exists because ~15 tools re-declared them and drifted.  Only the POSITIONAL
+    # arity is stage-specific: <session> is optional, so the same folder convention fiber-pipeline
+    # documents (FK_DIR, default $PWD; FK_SESS, default its basename) works on a direct call too --
+    # `cd <session-dir> && fiber-anchor-link 4` resolves without repeating the session name.
+    sy.add_session_args(ap, positional=False, nchan=False, sr=False)
+    ap.add_argument("args", nargs="*", metavar="[session] group",
+                    help="1-based spike group, optionally preceded by the session basename/folder; "
+                         "session defaults to $FK_SESS, else the basename of $FK_DIR (default $PWD)")
     ap.add_argument("--clu-method", default="stderiv", help="fragment .clu feature space (before the group)")
     ap.add_argument("--clu-stage", dest="clu_stage", default="fiber_session", help="fragment .clu stage tag")
     ap.add_argument("--in-clu", default=None, help="explicit fragment .clu path (overrides --clu-method/--clu-stage)")
@@ -324,7 +332,21 @@ def main():
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 
-    cfg = sy.resolve_session_params(a.session, a.elec)
+    if os.environ.get("FK_DIR"):
+        os.chdir(os.environ["FK_DIR"])                    # same contract as fiber-pipeline's DIR
+    if len(a.args) == 2:
+        a.session, grp = a.args[0], a.args[1]
+    elif len(a.args) == 1:
+        a.session = os.environ.get("FK_SESS") or os.path.basename(os.path.abspath(os.getcwd()))
+        grp = a.args[0]
+    else:
+        ap.error("expected '<session> <group>' or just '<group>' (session inferred from $FK_SESS / the folder)")
+    try:
+        a.elec = int(grp)
+    except ValueError:
+        ap.error(f"group must be an integer, got {grp!r}")
+
+    cfg = sy.resolve_session_params(a.session, a.elec, channels=a.channels, ntotal=a.ntotal, nsamp=a.nsamp)
     base, elec = cfg["base"], a.elec
     NS, NC, PK, SR = cfg["nsamp"], cfg["nchan"], cfg["peak"], cfg["sr"]
     # CLI > FK_* env > $FK_CONFIG > default, as the banner claims.  (fiber_backbone_link.py:162
