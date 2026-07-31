@@ -323,6 +323,10 @@ def main():
     ap.add_argument("--hierarchy", type=int, default=1, help="1 = also write the .clc/.clp sibling hierarchy")
     ap.add_argument("--promote-noise", type=int, default=1,
                     help="1 (default) = treat cluster 0 as a real cell (its own atom + cell); 0 = leave it as noise")
+    ap.add_argument("--artifact-clu", default=None,
+                    help="per-spike artifact mask in .clu form (nonzero = artifact), the SAME mask given to "
+                         "fiber-session --exclude-clu.  Masked spikes are withheld from --promote-noise and "
+                         "left in cluster 0, so a promoted cell is the genuine unassigned population only.")
     ap.add_argument("--chunk-min", type=float, default=None, help="chunk length (min); default from yaml or 12")
     ap.add_argument("--seed", type=int, default=0)
     for name, (dest, typ, fb) in _KNOBS.items():
@@ -427,11 +431,28 @@ def main():
 
     # ── atom -> cell over ALL atoms; unlinked and sub-min-frag atoms keep their own cell ──
     n_atoms = int(frag_clu.max())
-    noise_atom = None
     child = frag_clu.copy()
-    if a.promote_noise and (frag_clu == 0).any():
-        noise_atom = n_atoms + 1; n_atoms = noise_atom
-        child[frag_clu == 0] = noise_atom
+    # Order matters: WITHHOLD the artifacts, PROMOTE what remains at 0, then LEAVE the artifacts at 0.
+    # fiber-session --exclude-clu drops masked spikes to cluster 0, which is also where genuinely
+    # unassigned spikes land -- and cluster 0 has been seen to hold a real unit (split-half template
+    # cosine 0.990 on the reference session).  Promoting cluster 0 wholesale would therefore hand the
+    # artifacts a cell.  Withholding them first keeps the two populations apart without needing a second
+    # reserved label: 0 = noise + artifact (Klusters treats it as a reserve atom either way).
+    art = np.zeros(child.size, bool)
+    if a.artifact_clu:
+        _, _am = nio.read_clu_file(a.artifact_clu, n_spikes=child.size)
+        _am = np.asarray(_am)
+        if _am.size != child.size:
+            raise SystemExit(f"--artifact-clu has {_am.size} labels, .res has {child.size}")
+        art = _am != 0
+    if a.promote_noise:
+        promo = (frag_clu == 0) & ~art
+        if promo.any():
+            n_atoms += 1
+            child[promo] = n_atoms
+            print(f"[anchor-link] promoted {int(promo.sum())} unassigned spikes to their own cell"
+                  + (f"; withheld {int((art & (frag_clu == 0)).sum())} artifact spikes, left in cluster 0"
+                     if art.any() else ""))
     groups = defaultdict(list)
     for i, l in enumerate(lab):
         groups[int(l)].append(keep[i])
