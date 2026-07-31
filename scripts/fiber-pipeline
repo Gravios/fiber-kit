@@ -323,8 +323,9 @@ PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragmen
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
+PRE_STAGES=(fiber-flag-artifacts)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
 ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
-KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}")
+KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
 STAGE_SUMMARY=(
@@ -338,6 +339,9 @@ STAGE_SUMMARY=(
 )
 CURATED_SUMMARY=(
     "post-curation: rebuild the per-unit/per-chunk model from a curated .clu (no regrouping)"
+)
+PRE_SUMMARY=(
+    "flag acquisition artifacts from the unwhitened derivative -> a per-spike exclusion mask (run BEFORE fiber-session)"
 )
 ALT_SUMMARY=(
     "link fiber-session fragments on the invariant backbone (CI-overlap + warp veto); alt to intrachunk+link"
@@ -410,12 +414,26 @@ clu_variant() {   # THE feature/method token for this session -- one source of t
     echo "${REALIGN_VARIANT:-stderiv}"
 }
 
+# ----- artifact mask (fiber-flag-artifacts) -------------------------------------
+# The mask is keyed on the SPK variant it was measured from (standard), not the clu variant.
+FLAG_STAGE="${FK_FLAG_STAGE:-artifact}"                 # stage tag of the emitted mask .clu
+FLAG_SPK="${FK_FLAG_SPK:-standard}"                     # waveform axis the flagger reads
+SESSION_EXCLUDE="${FK_SESSION_EXCLUDE:-0}"              # 1 = fiber-session drops the masked spikes to cluster 0
+ALINK_ARTIFACT="${FK_ALINK_ARTIFACT:-0}"                # 1 = fiber-anchor-link withholds them from --promote-noise
+mask_path() { echo "$SESS.clu.$FLAG_SPK.$ELEC.$FLAG_STAGE"; }
+
 clu_path() {   # $1 = clu stage tag ('' = base over-cluster).
     local _v="$(clu_variant)"
     if [ -z "${1:-}" ]; then echo "$SESS.clu.$_v.$ELEC"; else echo "$SESS.clu.$_v.$ELEC.$1"; fi
 }
 
 # ------------------------------- stages -------------------------------------
+fiber_flag_artifacts() {   # PREPROCESSING: flag acquisition artifacts -> per-spike exclusion mask
+    echo "== fiber-flag-artifacts  (-> $(mask_path)) =="
+    _run fiber-flag-artifacts "$SESS" "$ELEC" --spk-method "$FLAG_SPK" --out-stage "$FLAG_STAGE" \
+        "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
     echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-}")) =="
     local eband_args=()
@@ -427,7 +445,10 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_DIPSPLIT" = "1" ]   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
     [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     [ "$SESSION_NO_NOISE" = "1" ]    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
+    local excl_args=()
+    [ "$SESSION_EXCLUDE" = "1" ] && excl_args+=(--exclude-clu "$(mask_path)")
     _run fiber-session "$SESS" "$ELEC" \
+        "${excl_args[@]+"${excl_args[@]}"}" \
         --method "$(clu_variant)" --fine-algo "$SESSION_FINE_METHOD" \
         --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
@@ -619,7 +640,10 @@ fiber_anchor_link() {   # link fiber-session fragments seeded by the overlap anc
     # It additionally consumes the .fibers overlap anchors as verified seeds and the .res for the rate gate.
     # FK_ALINK_* knobs come from $FK_CONFIG / the exported env; per-step plan `params:` override last-wins.
     echo "== fiber-anchor-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-anchor_linked}) =="
+    local art_args=()
+    [ "$ALINK_ARTIFACT" = "1" ] && art_args+=(--artifact-clu "$(mask_path)")
     _run fiber-anchor-link "$SESS" "$ELEC" \
+        "${art_args[@]+"${art_args[@]}"}" \
         --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-fiber_session}" \
         --out-stage "${STEP_OUT:-anchor_linked}" \
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
@@ -645,6 +669,7 @@ run_stage() {
         fiber-intrachunk) fiber_intrachunk "${ov[@]}" ;;
         fiber-link)       fiber_link       "${ov[@]}" ;;
         fiber-refit)      fiber_refit      "${ov[@]}" ;;
+        fiber-flag-artifacts) fiber_flag_artifacts "${ov[@]}" ;;
         fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
         fiber-anchor-link) fiber_anchor_link "${ov[@]}" ;;
         fiber-xcorr-merge) fiber_xcorr_merge "${ov[@]}" ;;
@@ -665,6 +690,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-link)       fiber_link       ;;
         fiber-stochastic) fiber_stochastic ;;
         fiber-refit)      fiber_refit      ;;
+        fiber-flag-artifacts) fiber_flag_artifacts ;;
         fiber-backbone-link) fiber_backbone_link ;;
         fiber-anchor-link) fiber_anchor_link ;;
         fiber-xcorr-merge) fiber_xcorr_merge ;;
@@ -687,7 +713,7 @@ except Exception as e:
 steps = doc.get("pipeline") if isinstance(doc, dict) else doc
 if not isinstance(steps, list) or not steps:
     sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge"}
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-flag-artifacts"}
 def field(st, k):
     v = st.get(k, "")
     return "" if v is None else str(v)
