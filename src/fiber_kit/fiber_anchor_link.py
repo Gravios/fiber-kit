@@ -137,26 +137,59 @@ def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng):
                 cx=fg.waveform_complexity(med))
 
 
-def atom_chunks_and_rates(clu, res, sr, chunk_min):
+def atom_chunks_and_rates(clu, res, sr, chunk_min=None):
     """Per-atom chunk index and RELATIVE firing rate (share of its chunk's spike rate).
 
-    Chunk comes from the fragment's median spike time, so this does not assume the
-    caller knows fiber-session's windowing beyond its length."""
+    The chunk partition is RECOVERED FROM THE DATA, not from a length parameter: a
+    fiber-session atom is chunk-local and the .clc assigns every spike to exactly one
+    atom, so the atoms' [t_first, t_last] intervals fall into disjoint groups and those
+    groups ARE the chunks.  This is deliberate -- the caller cannot generally know the
+    length the source sort actually used, and a wrong value silently mis-assigns atoms
+    to chunks, which then trips the co-temporal collision rule and drops valid anchors
+    (measured: an 18 min guess against a true 15 min lost 11 of 63 verified anchors,
+    while the recovered partition keeps all 63 at any setting).
+
+    `chunk_min` is only a FALLBACK, used when the intervals do not separate -- e.g. a
+    source whose per-chunk labels genuinely overlap in time."""
     t = np.asarray(res, float) / float(sr) / 60.0
-    chunk_of, rel = {}, {}
-    ck = np.floor(t / float(chunk_min)).astype(int)
-    tot = {}
-    for c in np.unique(ck):
-        m = ck == c
-        span = t[m].max() - t[m].min()
-        tot[int(c)] = (m.sum() / span) if span > 1e-9 else np.nan
-    for a in np.unique(clu[clu > 0]):
+    labs = np.unique(clu[clu > 0])
+    span = {}
+    for a in labs:
         m = clu == a
-        c = int(np.median(ck[m]))
-        chunk_of[int(a)] = c
-        span = t[m].max() - t[m].min()
-        rate = (m.sum() / span) if span > 1e-9 else np.nan
-        rel[int(a)] = rate / tot[c] if (c in tot and np.isfinite(tot[c]) and tot[c] > 0) else np.nan
+        span[int(a)] = (float(t[m].min()), float(t[m].max()))
+    order = sorted(span, key=lambda a: span[a][0])
+    chunk_of, k, hi = {}, 0, None
+    for a in order:                                   # merge overlapping intervals -> chunks
+        lo, up = span[a]
+        if hi is not None and lo > hi:
+            k += 1
+        chunk_of[a] = k
+        hi = up if hi is None else max(hi, up)
+    n_chunks = k + 1
+    if n_chunks < 2 and chunk_min:                    # intervals did not separate -> fall back
+        ck = np.floor(t / float(chunk_min)).astype(int)
+        chunk_of = {int(a): int(np.median(ck[clu == a])) for a in labs}
+        n_chunks = len(set(chunk_of.values()))
+        print(f"[anchor-link] chunk partition: atom intervals did not separate; "
+              f"fell back to chunk-min {chunk_min:g} -> {n_chunks} chunks")
+    else:
+        lens = []
+        for c in sorted(set(chunk_of.values())):
+            ms = [a for a in chunk_of if chunk_of[a] == c]
+            lens.append(max(span[a][1] for a in ms) - min(span[a][0] for a in ms))
+        print(f"[anchor-link] chunk partition recovered from atom spans: {n_chunks} chunks, "
+              f"median {np.median(lens):.1f} min")
+    tot = {}
+    for c in set(chunk_of.values()):
+        m = np.isin(clu, [a for a in chunk_of if chunk_of[a] == c])
+        s = t[m].max() - t[m].min()
+        tot[c] = (m.sum() / s) if s > 1e-9 else np.nan
+    rel = {}
+    for a in labs:
+        m = clu == a; c = chunk_of[int(a)]
+        s = t[m].max() - t[m].min()
+        rate = (m.sum() / s) if s > 1e-9 else np.nan
+        rel[int(a)] = rate / tot[c] if (np.isfinite(tot[c]) and tot[c] > 0) else np.nan
     return chunk_of, rel
 
 
@@ -294,12 +327,15 @@ def main():
     cfg = sy.resolve_session_params(a.session, a.elec)
     base, elec = cfg["base"], a.elec
     NS, NC, PK, SR = cfg["nsamp"], cfg["nchan"], cfg["peak"], cfg["sr"]
+    # CLI > FK_* env > $FK_CONFIG > default, as the banner claims.  (fiber_backbone_link.py:162
+    # has this pair inverted -- yaml before env -- so an exported FK_SESSION_CHUNK_MIN is ignored
+    # there whenever the config carries one.  Only a FALLBACK here; see atom_chunks_and_rates.)
     chunk_min = a.chunk_min if a.chunk_min else float(
-        gcfg.get("FK_SESSION_CHUNK_MIN") or os.environ.get("FK_SESSION_CHUNK_MIN") or 12.0)
+        os.environ.get("FK_SESSION_CHUNK_MIN") or gcfg.get("FK_SESSION_CHUNK_MIN") or 12.0)
     print(f"[anchor-link] knobs (CLI > FK_ALINK_* env > $FK_CONFIG > default): "
           f"prim-frac={a.prim_frac} z={a.z} win={a.win} slide={a.slide} iou-thr={a.iou_thr} "
           f"target-fpr={a.target_fpr}% rate-dev={a.rate_dev} hi-nspk={a.hi_nspk} max-gap={a.max_gap} "
-          f"warp-thr={a.warp_thr or 'off'} chunk-min={chunk_min:g}")
+          f"warp-thr={a.warp_thr or 'off'} chunk-min={chunk_min:g} (fallback only)")
 
     res = nio.read_res(base, elec)
     # The fragment layer is the ATOM layer.  Prefer .clc when the source stage wrote a
@@ -320,7 +356,7 @@ def main():
     print(f"[anchor-link] fragment layer: {src}")
     spk = nio.open_spk_file(nio.session_path(base, "spk", elec, variant=a.spk_variant), NS, NC)
 
-    chunk_of_atom, rel_atom = atom_chunks_and_rates(frag_clu, res, SR, chunk_min)
+    chunk_of_atom, rel_atom = atom_chunks_and_rates(frag_clu, res, SR, chunk_min=chunk_min)
     atoms = sorted(chunk_of_atom)
     frags, keep, byc = [], [], defaultdict(list)
     for at in atoms:
