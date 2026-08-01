@@ -435,7 +435,7 @@ fiber_flag_artifacts() {   # PREPROCESSING: flag acquisition artifacts -> per-sp
 }
 
 fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
-    echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-}")) =="
+    echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-fiber_session}")) =="
     local eband_args=()
     [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
     local sess_args=()
@@ -448,6 +448,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     local excl_args=()
     [ "$SESSION_EXCLUDE" = "1" ] && excl_args+=(--exclude-clu "$(mask_path)")
     _run fiber-session "$SESS" "$ELEC" \
+        --clu-stage "${STEP_OUT:-fiber_session}" \
         "${excl_args[@]+"${excl_args[@]}"}" \
         --method "$(clu_variant)" --fine-algo "$SESSION_FINE_METHOD" \
         --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
@@ -473,11 +474,11 @@ fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled d
 }
 
 fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-extract raw+stderiv from .fil)
-    echo "== fiber-realign  (in-place on $(clu_path "${STEP_IN:-}")) =="
+    echo "== fiber-realign  (in-place on $(clu_path "${STEP_IN:-fiber_session}")) =="
     local -a rv_args=()
     [ -n "$REALIGN_VARIANT" ] && rv_args=(--variant "$REALIGN_VARIANT")
     _run fiber-realign "$SESS" "$ELEC" \
-        --clu "$(clu_path "${STEP_IN:-}")" \
+        --clu "$(clu_path "${STEP_IN:-fiber_session}")" \
         --align-algo "$REALIGN_ALGO" --reextract --refeaturize \
         --variants standard,"$(clu_variant)" \
         "${rv_args[@]+"${rv_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
@@ -485,6 +486,7 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
 
 stage_out_tag() {     # default output clu tag of a stage in canonical 'all' order (matches each stage's STEP_OUT default)
     case "$1" in
+        fiber-session)    echo "fiber_session" ;;    # fiber_session.py --clu-stage default; realign_after needs it too
         fiber-refine)     echo "refine" ;;
         fiber-peel)       echo "refine" ;;            # peel relabels .refine in place
         fiber-intrachunk) echo "refine_intrachunk" ;;
@@ -508,7 +510,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine
-    echo "== fiber-refine  ($(clu_path "${STEP_IN:-}") -> .${STEP_OUT:-refine}) =="
+    echo "== fiber-refine  ($(clu_path "${STEP_IN:-fiber_session}") -> .${STEP_OUT:-refine}) =="
     local warp_args=()
     [ -n "$MERGE_WARP_RECALL" ] && warp_args+=(--merge-warp-recall "$MERGE_WARP_RECALL" --merge-amp-thr "$MERGE_AMP_THR")
     [ -n "$MERGE_WARP_THR" ]    && warp_args+=(--merge-warp-thr "$MERGE_WARP_THR")
@@ -522,7 +524,7 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     local ab_args=()
     [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN" --ab-sigcap "$AB_SIGCAP" --ab-jobs "$AB_JOBS")  # opt-in contamination reclaim
     _run fiber-refine "$SESS" "$ELEC" \
-        --in-clu "$(clu_path "${STEP_IN:-}")" \
+        --in-clu "$(clu_path "${STEP_IN:-fiber_session}")" \
         --out-method "$(clu_variant)" --out-stage "${STEP_OUT:-refine}" \
         --large "$REFINE_LARGE" --min-group "$REFINE_MIN_GROUP" --drop-min "$REFINE_DROP_MIN" \
         --nudge-split --feature-align "$FEATURE_ALIGN" \
