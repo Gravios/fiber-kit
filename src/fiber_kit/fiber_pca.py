@@ -226,6 +226,42 @@ def read_cluster_basis(base, elec, method="standard"):
     return b
 
 
+def lag_basis(basis, lag, *, keep_pc2=True):
+    """Express the lagged-PC1 space as an ORDINARY PCAE basis on a widened window.
+
+    PC1 evaluated at window offset k is the same number as PC1 PLACED at offset k inside a
+    window widened by `lag` on each side.  So the whole construction is a standard
+    (means, evec, recShift, data2use) basis -- which means Klusters, process_pca and
+    ndm_refeaturize consume it with no special case, and the .fet a run emits is exactly the
+    projection of this file rather than something only fiber-kit knows how to reproduce.
+
+        recShift' = recShift - lag        data2use' = data2use + 2*lag
+        evec'[ch] = [PC1 @0, PC1 @lag, PC1 @2*lag] (+ [PC2 @lag])
+
+    centered=0 deliberately.  A widened window has a widened mean, and no slice of the narrow
+    per-channel mean is the correct mean for all three lags at once, so keeping centered=1 would
+    make the emitted .fet disagree with this basis by a per-column constant.  Dropping the mean
+    subtraction makes the two exactly consistent; the resulting DC offset is a pure translation of
+    the feature space, removed anyway by cluster_features' top-`dims` SVD, and irrelevant to both
+    KlustaKwik and a Klusters feature plot."""
+    evec, rs, d2u = basis["evec"], int(basis["recShift"]), int(basis["data2use"])
+    nCh, nComp, _ = evec.shape
+    lag = int(lag)
+    if nComp < 2:
+        keep_pc2 = False
+    per = 3 + (1 if keep_pc2 else 0)
+    wide = d2u + 2 * lag
+    E = np.zeros((nCh, per, wide))
+    for ch in range(nCh):
+        for k in range(3):
+            E[ch, k, k * lag:k * lag + d2u] = evec[ch][0]
+        if keep_pc2:
+            E[ch, 3, lag:lag + d2u] = evec[ch][1]
+    return dict(means=np.zeros((nCh, wide)), evec=E, recShift=rs - lag,
+                data2use=wide, centered=0,
+                method=basis.get("method", 0), _lag=lag, _lag_pc2=bool(keep_pc2))
+
+
 def lag_project(windows_fn, basis, lag, *, keep_pc2=True):
     """PC1 sampled at three time lags per channel, optionally plus PC2 at lag 0.
 
@@ -304,8 +340,8 @@ def cluster_features(spk, basis, *, realign=True, dims=None):
     rs, d2u = int(basis["recShift"]), int(basis["data2use"])
     lag = int(basis.get("_lag", 0) or 0)                  # set by the caller; 0 = classic basis
     if lag > 0 and rs - lag >= 0 and rs + d2u + lag <= w.shape[1]:
-        F = lag_project(lambda sh: w[:, rs + sh:rs + sh + d2u, :], basis,
-                        lag, keep_pc2=bool(basis.get("_lag_pc2", True)))
+        lb = lag_basis(basis, lag, keep_pc2=bool(basis.get("_lag_pc2", True)))
+        F = project(extract_windows(w, int(lb["recShift"]), int(lb["data2use"])), lb)
     else:
         if lag > 0:
             warnings.warn(f"feature lag {lag} does not fit the PCA window "
