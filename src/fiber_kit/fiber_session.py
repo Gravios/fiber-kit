@@ -1665,12 +1665,12 @@ def main():
     if cluster_basis is not None:
         if a.feat_lag > 0:
             per = 3 + (1 if a.feat_lag_pc2 else 0)
-            log(f"fine-split shape features: global basis '{a.method}' "
+            log(f"fine-split shape features: global basis '{cluster_basis.get('_variant') or a.method}' "
                 f"({cluster_basis['evec'].shape[0]}ch x {per}) "
                 f"= PC1 at -{a.feat_lag}/0/+{a.feat_lag} samples"
                 + (" + PC2" if a.feat_lag_pc2 else ""))
         else:
-            log(f"fine-split shape features: global basis '{a.method}' "
+            log(f"fine-split shape features: global basis '{cluster_basis.get('_variant') or a.method}' "
                 f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
     cf = build_cf(a, meth, cluster_basis)
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,

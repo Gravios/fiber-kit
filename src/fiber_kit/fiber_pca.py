@@ -26,6 +26,7 @@
 import argparse
 import enum
 import struct
+import os
 import warnings
 import numpy as np
 
@@ -214,7 +215,18 @@ def read_cluster_basis(base, elec, method="standard"):
     the window come from the basis header (= the session.yaml `nFeatures` the basis was fit
     with), so regenerating the basis at a different nFeatures (2 -> 4) or with --varimax
     propagates into clustering without any code change here."""
-    prefer = nio.prefer_standard() if method in (None, "standard") else [method]
+    req = "standard" if method in (None, "") else str(method)
+    if req == "standard":
+        prefer = nio.prefer_standard()
+    else:
+        # A .pca is MethodSpecific: it must never be satisfied from another FAMILY, because the
+        # basis would then have been fit against a different transform than the waveforms it is
+        # about to project -- silently, since the projection is a valid linear map either way.
+        # But a SUFFIXED token of the same family is the right file: a session extracted as
+        # stderiv_C5 has .pca.stderiv_C5.<g> and no .pca.stderiv.<g>, and a caller asking for
+        # 'stderiv' wants exactly that.  Discover them by scanning, as resolve_any does for
+        # Shared artifacts -- no fixed list can enumerate the suffixes.
+        prefer = [req] + _same_family_variants(base, elec, req)
     try:
         r = nio.resolve_input(base, "pca", elec, prefer)
     except Exception:
@@ -223,7 +235,35 @@ def read_cluster_basis(base, elec, method="standard"):
         return None
     b = read_pcad(r.path)
     b["_path"] = r.path
+    b["_variant"] = getattr(r, "variant", "") or ""
+    if b["_variant"] and b["_variant"] != req:
+        # Say so once, here, rather than in each of the six callers' banners.
+        print(f"[pca] basis request '{req}' resolved to {os.path.basename(r.path)} (same family)")
     return b
+
+
+def _same_family_variants(base, elec, req):
+    """Tokens of <base>.pca.<tok>.<elec> on disk whose FAMILY matches `req`, longest first.
+
+    Family = the token up to its first underscore, matching the custody grammar
+    (<family>[_<kind><order>]).  A malformed/opaque token is its own family and so can only
+    ever satisfy itself, which is the intended containment."""
+    fam = req.split("_", 1)[0]
+    d = os.path.dirname(os.path.abspath(base)) or "."
+    stem = os.path.basename(base) + ".pca."
+    tail = "." + str(elec)
+    out = []
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    for n in names:
+        if not (n.startswith(stem) and n.endswith(tail)):
+            continue
+        tok = n[len(stem):-len(tail)]
+        if tok and tok != req and tok.split("_", 1)[0] == fam:
+            out.append(tok)
+    return sorted(out, key=lambda t: (-len(t), t))
 
 
 def lag_basis(basis, lag, *, keep_pc2=True):
