@@ -1514,6 +1514,9 @@ def add_core_arguments(ap):
                          "--method-named copies.  READS are unaffected (the .pca basis and .spk still "
                          "resolve under --method), so an alias like stderiv_C5_D34 can name a feature "
                          "space without needing its own basis or waveform file.")
+    ap.add_argument("--emit-pca", action="store_true",
+                    help="with --emit-fet: also write <base>.pca.<out-variant or method>.<elec>, the basis "
+                         "the .fet is the projection of, so Klusters can realign/reproject in that space")
     ap.add_argument("--emit-fet", action="store_true",
                     help="write <base>.fet.<out-variant or method>.<elec> -- the FULL-WIDTH session-wide "
                          "projection on the global basis (the feature space the fine split used, before "
@@ -1812,8 +1815,27 @@ def main():
             F = np.vstack(cols)
             # half-away-from-zero, matching ns3's llround (see the refeaturize rounding fix)
             Fi = np.sign(F) * np.floor(np.abs(F) + 0.5)
+            # Klusters requires the TIMESTAMP as the last column (data.cpp: "timestamp is last
+            # column"; nFeat = nbDimensions - 1).  Without it Klusters reads the final FEATURE as a
+            # time, and is left one feature short of what nFeatures implies -- which is how a .fet
+            # of the wrong width corrupts its heap instead of being rejected.
+            Fi = np.column_stack([Fi, np.asarray(res, np.int64)])
             fp_out = nio.write_fet(a.base, a.elec, Fi, variant=fvar)
-            det("fet", f"{os.path.basename(fp_out)}  ({F.shape[1]} columns x {F.shape[0]} spikes)")
+            nfeat_ch = F.shape[1] // a.nchan
+            det("fet", f"{os.path.basename(fp_out)}  ({F.shape[1]} features + 1 timestamp "
+                       f"= {Fi.shape[1]} columns x {Fi.shape[0]} spikes)")
+            det("", f"set nFeatures={nfeat_ch} for group {a.elec} in the session yaml, else Klusters "
+                    f"sizes on nChannels x nFeatures and disagrees with this file")
+            if a.emit_pca:
+                wb = _fpca.lag_basis(cluster_basis, lg,
+                                     keep_pc2=bool(cluster_basis.get("_lag_pc2", True))) if lg > 0 \
+                     else cluster_basis
+                pca_out = nio.session_path(a.base, "pca", a.elec, variant=fvar)
+                _fpca.write_pcad(pca_out, wb["means"], wb["evec"], int(wb["recShift"]),
+                                 centered=int(wb["centered"]),
+                                 method=int(cluster_basis.get("method", 0) or 0))
+                det("pca", f"{os.path.basename(pca_out)}  ({wb['evec'].shape[1]} comp x "
+                           f"{wb['data2use']} samples, recShift {wb['recShift']})")
 
     # ── drift-transform fit from the overlap-anchors (DIAGNOSTIC; NOT used for linking) ──
     #   The anchors are exact shared-spike correspondences, so a per-adjacent-chunk-pair rigid
