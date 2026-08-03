@@ -1509,6 +1509,22 @@ def add_core_arguments(ap):
     ap.add_argument("--no-link", action="store_true")
     ap.add_argument("--n-grid", type=int, default=40)
     ap.add_argument("--method", default="stderiv", help="extraction method tag in the .fibers filename")
+    ap.add_argument("--out-variant", default=None,
+                    help="ALSO write .clu/.clc/.clp under this variant token, in addition to the "
+                         "--method-named copies.  READS are unaffected (the .pca basis and .spk still "
+                         "resolve under --method), so an alias like stderiv_C5_D34 can name a feature "
+                         "space without needing its own basis or waveform file.")
+    ap.add_argument("--emit-fet", action="store_true",
+                    help="write <base>.fet.<out-variant or method>.<elec> -- the FULL-WIDTH session-wide "
+                         "projection on the global basis (the feature space the fine split used, before "
+                         "its per-chunk reduction), so Klusters can display it.")
+    ap.add_argument("--feat-lag", type=int,
+                    default=int(os.environ.get("FK_SESSION_FEAT_LAG") or
+                                (cfgmod.load_global_config() or {}).get("FK_SESSION_FEAT_LAG") or 0),
+                    help="FK_SESSION_FEAT_LAG. >0 = fine-split shape features become PC1 sampled at "
+                         "-N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3.  0 = classic.")
+    ap.add_argument("--feat-lag-pc2", type=int, default=1,
+                    help="with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only")
     ap.add_argument("--exclude-clu", default=None,
                     help="per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- "
                          "e.g. fiber-flag-artifacts' output.  Excluded spikes never enter a chunk, so they "
@@ -1636,9 +1652,23 @@ def main():
     # SHAPE features for the fine GMM split: the GLOBAL ndm_pca basis (shared across chunks),
     # so a basis change (nFeatures, varimax) propagates; None -> per-call local SVD fallback.
     cluster_basis = None if a.no_cluster_basis else _fpca.read_cluster_basis(a.base, a.elec, a.method)
+    if cluster_basis is not None and a.feat_lag > 0:
+        # Carried ON THE BASIS rather than threaded through cluster_chunk_fine: the lag is a property
+        # of the feature space this basis defines, and every downstream builder (_rkk_realign,
+        # _dipsplit_realign, gmm_split) already receives the basis, so no signature changes and no
+        # call site can be missed.
+        cluster_basis["_lag"] = int(a.feat_lag)
+        cluster_basis["_lag_pc2"] = bool(a.feat_lag_pc2)
     if cluster_basis is not None:
-        log(f"fine-split shape features: global basis '{a.method}' "
-            f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
+        if a.feat_lag > 0:
+            per = 3 + (1 if a.feat_lag_pc2 else 0)
+            log(f"fine-split shape features: global basis '{a.method}' "
+                f"({cluster_basis['evec'].shape[0]}ch x {per}) "
+                f"= PC1 at -{a.feat_lag}/0/+{a.feat_lag} samples"
+                + (" + PC2" if a.feat_lag_pc2 else ""))
+        else:
+            log(f"fine-split shape features: global basis '{a.method}' "
+                f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
     cf = build_cf(a, meth, cluster_basis)
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
@@ -1744,6 +1774,46 @@ def main():
         det("hierarchy", f"{len(parent)} atoms -> {len(set(parent.values()))} fibers (.clu/.clc/.clp)")
     else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
+
+    # ── optional ALIAS copies under a second variant token ──
+    #   Klusters resolves .fet/.clu/.spk by the SAME token, so viewing a clustering in a differently
+    #   named feature space needs the clu under that name too.  Written as a copy rather than a move:
+    #   the --method-named artifacts stay canonical and keep their real chain of custody.
+    if a.out_variant and not a.out:
+        if a.emit_hierarchy:
+            from .fiber_refiberize import FiberHierarchy
+            ap2 = FiberHierarchy(child, parent).save(a.base, a.elec, variant=a.out_variant,
+                                                     tag=a.clu_stage, backup=False)
+            det("alias", f"{os.path.basename(ap2['clu'])} (+ .clc/.clp)")
+        else:
+            det("alias", os.path.basename(nio.write_clu(a.base, a.elec, clu,
+                                                        variant=a.out_variant, tag=a.clu_stage)))
+    # ── optional .fet for Klusters ──
+    if a.emit_fet:
+        fvar = a.out_variant or a.method
+        if cluster_basis is None:
+            log("--emit-fet: no global .pca basis resolved; skipped")
+        else:
+            rs, d2u = int(cluster_basis["recShift"]), int(cluster_basis["data2use"])
+            lg = int(cluster_basis.get("_lag", 0) or 0)
+            cols = []
+            for s0 in range(0, nspk, 20000):
+                e0 = min(nspk, s0 + 20000)
+                w = fl.realign(np.asarray(spk[s0:e0], np.float64))
+                nb = cluster_basis["evec"].shape[0]
+                if w.shape[2] == nb + 1:
+                    w = w[:, :, :nb]
+                if lg > 0 and rs - lg >= 0 and rs + d2u + lg <= w.shape[1]:
+                    cols.append(_fpca.lag_project(lambda sh: w[:, rs + sh:rs + sh + d2u, :],
+                                                  cluster_basis, lg,
+                                                  keep_pc2=bool(cluster_basis.get("_lag_pc2", True))))
+                else:
+                    cols.append(_fpca.project(_fpca.extract_windows(w, rs, d2u), cluster_basis))
+            F = np.vstack(cols)
+            # half-away-from-zero, matching ns3's llround (see the refeaturize rounding fix)
+            Fi = np.sign(F) * np.floor(np.abs(F) + 0.5)
+            fp_out = nio.write_fet(a.base, a.elec, Fi, variant=fvar)
+            det("fet", f"{os.path.basename(fp_out)}  ({F.shape[1]} columns x {F.shape[0]} spikes)")
 
     # ── drift-transform fit from the overlap-anchors (DIAGNOSTIC; NOT used for linking) ──
     #   The anchors are exact shared-spike correspondences, so a per-adjacent-chunk-pair rigid

@@ -584,6 +584,25 @@ FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-AN
                                   #   drift_resid / drift_nanchor in the .fibers (few chunk-pairs / high residual = the
                                   #   transform is weak -- do not trust it) and score against a curated .clu.  Set 0 to disable.
 
+# ----- fiber-session : lagged-PC1 fine-split feature space (EXPERIMENTAL) ----------------------------------
+# Replaces the (PC1,PC2,PC3) columns of the .fet with PC1 sampled at three time lags plus PC2, so the
+# sub-sample SHIFT structure is explicit instead of leaking into a shape component.  On the reference
+# session the classic PC3 is almost pure alignment jitter (|cos| 0.82 with the template derivative, 7.8%
+# of between-cluster difference variance), which is why it is the one dropped and PC2 is not.
+FK_SESSION_FEAT_LAG:     0        # 0 = classic (PC1,PC2,PC3) | 2-4 (samples).  >0 switches the fine-split
+                                  #   shape features to PC1 at -N/0/+N plus PC2 = 4 per channel.  Pick on the
+                                  #   BASIS TIMEBASE, not by copying: the triple must span a real derivative
+                                  #   basis, not three near-duplicates.  At 32552 Hz / 25-sample window the
+                                  #   basis condition number is 10.6 at lag 1, 2.4 at lag 2, 1.8 at lag 3.
+                                  #   MEASURED, and the two directions disagree -- cross-chunk template
+                                  #   matching improves sharply (AUC 0.931 -> 0.990, TPR@1%FPR 45% -> 79%
+                                  #   against 62 overlap-verified anchors) while WITHIN-chunk splitting does
+                                  #   not: on 2 small chunks it reached the same or more clusters with more
+                                  #   near-duplicate templates and dropped the lowest-amplitude units.  Treat
+                                  #   as a linking-side win under test on the splitting side.
+#   --out-variant / --emit-fet are CLI-only (no FK_ knob): they exist to name and view an experiment, so
+#   pinning them in a config would silently rename a production run's artifacts.
+
 # ----- fiber-flag-artifacts : cluster-free artifact flagging (PREPROCESSING) --------------------------------
 # Runs BEFORE fiber-session so a glitch cannot shape the cluster it would land in.  The per-cluster
 # |z| test cannot be used here: "far from the unit it was assigned to" needs an assignment, and the
