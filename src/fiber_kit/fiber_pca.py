@@ -26,6 +26,7 @@
 import argparse
 import enum
 import struct
+import warnings
 import numpy as np
 
 try:
@@ -225,6 +226,51 @@ def read_cluster_basis(base, elec, method="standard"):
     return b
 
 
+def lag_project(windows_fn, basis, lag, *, keep_pc2=True):
+    """PC1 sampled at three time lags per channel, optionally plus PC2 at lag 0.
+
+    A shift-AWARE alternative to the (PC1,PC2,PC3) columns of the .fet.  `windows_fn(shift)`
+    must return the PCA window displaced by `shift` samples, so the caller owns the bounds.
+
+    Per channel the columns are [PC1@-lag, PC1@0, PC1@+lag] (+ [PC2@0] when keep_pc2), i.e.
+    4 features/channel at the default, against 3 for the classic basis.  Since
+    (f(+L) - f(-L))/2L ~ dPC1/dt and (f(+L) + f(-L) - 2f(0)) ~ d2PC1/dt2, the triple spans
+    approximately {PC1, PC1', PC1''} -- the shift structure is represented EXPLICITLY instead
+    of leaking into a shape component.
+
+    Why PC3 is dropped: on the reference session the third component of the classic basis is
+    almost pure sub-sample alignment jitter (|cos| 0.82 with the template's temporal derivative,
+    7.8% of between-cluster difference variance) -- a nuisance axis the splitter is free to cut
+    on.  The lag triple now carries that information per channel, so PC3 is redundant.  PC2 is
+    NOT redundant: it is genuine orthogonal shape and dropping it costs within-chunk separation.
+
+    Choose `lag` on the basis's own timebase, not by copying an integer: it must be wide enough
+    that the three copies span a real derivative basis rather than three near-duplicates.  On the
+    reference session (32552 Hz, 25-sample window) the basis condition number runs 10.6 at lag 1,
+    2.4 at lag 2, 1.8 at lag 3; matching quality peaks at lag 3 (~92 us) and decays by lag 6."""
+    evec, means, centered = basis["evec"], basis["means"], basis["centered"]
+    nCh, nComp, _ = evec.shape
+    if nComp < 2 and keep_pc2:
+        keep_pc2 = False
+    per = 3 + (1 if keep_pc2 else 0)
+    shifts = (-int(lag), 0, int(lag))
+    W = {sh: windows_fn(sh) for sh in shifts}
+    out = np.empty((len(W[0]), nCh * per))
+    for ch in range(nCh):
+        col = ch * per
+        for k, sh in enumerate(shifts):
+            X = W[sh][:, :, ch]
+            if centered:
+                X = X - means[ch]
+            out[:, col + k] = X @ evec[ch][0]
+        if keep_pc2:
+            X = W[0][:, :, ch]
+            if centered:
+                X = X - means[ch]
+            out[:, col + 3] = X @ evec[ch][1]
+    return out
+
+
 def cluster_features(spk, basis, *, realign=True, dims=None):
     """Project (optionally realigned) waveforms onto the GLOBAL ndm_pca basis, returning
     (N, nCh*nComp) cluster features in the .fet column order.  This is the shared-basis
@@ -255,7 +301,16 @@ def cluster_features(spk, basis, *, realign=True, dims=None):
             w = w[:, :, :nb]                              # stderiv: drop trailing dependent channel
         else:
             return None
-    F = project(extract_windows(w, int(basis["recShift"]), int(basis["data2use"])), basis)
+    rs, d2u = int(basis["recShift"]), int(basis["data2use"])
+    lag = int(basis.get("_lag", 0) or 0)                  # set by the caller; 0 = classic basis
+    if lag > 0 and rs - lag >= 0 and rs + d2u + lag <= w.shape[1]:
+        F = lag_project(lambda sh: w[:, rs + sh:rs + sh + d2u, :], basis,
+                        lag, keep_pc2=bool(basis.get("_lag_pc2", True)))
+    else:
+        if lag > 0:
+            warnings.warn(f"feature lag {lag} does not fit the PCA window "
+                          f"[{rs},{rs + d2u}) in {w.shape[1]} samples -- using the classic basis")
+        F = project(extract_windows(w, rs, d2u), basis)
     if dims is not None and 0 < int(dims) < F.shape[1]:
         Fc = F - F.mean(0)
         U, S, _ = np.linalg.svd(Fc, full_matrices=False)

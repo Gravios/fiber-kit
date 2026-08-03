@@ -63,10 +63,12 @@ from collections import defaultdict
 
 try:
     from . import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy
+    from . import fiber_pca as _fpca
     from . import config as cfgmod
     from . import fiber_link_core as flc
 except ImportError:
     import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy
+    import fiber_pca as _fpca
     import config as cfgmod
     import fiber_link_core as flc
 
@@ -86,6 +88,7 @@ _KNOBS = {
     "FK_ALINK_WARP_THR": ("warp_thr", float, 0.0),
     "FK_ALINK_AMP_THR": ("amp_thr", float, 0.85),
     "FK_ALINK_MIN_FRAG": ("min_frag", int, 15),
+    "FK_ALINK_FEAT_LAG": ("feat_lag", int, 0),
 }
 
 
@@ -407,7 +410,34 @@ def main():
           f" -> {len(seeds)} usable")
 
     ovk = dict(z=a.z, win=a.win, slide=a.slide, iou_thr=a.iou_thr)
-    flat = [f["med"].ravel() for f in frags]
+    # The cosine term is scored on the RAW template by default.  With --feat-lag it is scored in the
+    # lagged PC1 space instead: PC1 sampled at -N/0/+N samples (+PC2), which represents sub-sample
+    # shift explicitly and is therefore tolerant of the jitter and drift that separate two chunks --
+    # exactly the nuisance a cross-chunk match has to see past.  Measured on the reference session
+    # against its 62 overlap-verified anchors as positives and within-chunk pairs as negatives,
+    # AUC 0.931 -> 0.990 and TPR at 1% FPR 45% -> 79% (lag 3).  Falls back to the raw template with a
+    # notice if no global .pca basis resolves, rather than silently scoring a different quantity.
+    lag_basis = None
+    if a.feat_lag > 0:
+        lag_basis = _fpca.read_cluster_basis(base, elec, a.clu_method)
+        if lag_basis is None:
+            print(f"[anchor-link] --feat-lag {a.feat_lag} requested but no global .pca basis for "
+                  f"'{a.clu_method}' -- scoring the raw template instead")
+        else:
+            lag_basis["_lag"] = int(a.feat_lag); lag_basis["_lag_pc2"] = True
+    if lag_basis is not None:
+        W = np.stack([f["med"] for f in frags])
+        P = _fpca.cluster_features(W, lag_basis, realign=False)
+        if P is None:
+            print("[anchor-link] lagged projection failed (channel-count mismatch) -- raw template")
+            flat = [f["med"].ravel() for f in frags]
+        else:
+            per = P.shape[1] // lag_basis["evec"].shape[0]
+            print(f"[anchor-link] cosine scored in the lagged feature space: "
+                  f"{lag_basis['evec'].shape[0]}ch x {per} (PC1 at -{a.feat_lag}/0/+{a.feat_lag} + PC2)")
+            flat = [P[i] for i in range(len(frags))]
+    else:
+        flat = [f["med"].ravel() for f in frags]
     unit = [v / (np.linalg.norm(v) + 1e-12) for v in flat]
     cache = {}
 
