@@ -34,11 +34,13 @@ try:
     from . import morpho_input as mi, morpho_archetype as ma
     from . import morpho_envelope as mv
     from . import morpho_chan_ca1 as mca
+    from . import morpho_validate as mvd
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
     import morpho_envelope as mv
     import morpho_chan_ca1 as mca
+    import morpho_validate as mvd
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -580,6 +582,93 @@ def cmd_shape(args):
         print(f"\nwrote {args.out}")
 
 
+# ── validate ────────────────────────────────────────────────────────────────
+def cmd_validate(args):
+    """Confront the model with a curated sort."""
+    s = mvd.Sort(args.base, args.group, args.nsamp, args.nchan,
+                 variant=args.variant, tag=args.tag)
+    sr = args.sr
+    sizes = s.sizes()
+    print(f"group {args.group}: {len(s.res)} spikes, {len(sizes)} clusters")
+    for k, (path, var) in s.provenance.items():
+        print(f"  {k:<4s}{os.path.basename(path):<62s}[{var}]")
+
+    main = args.main
+    if main is None:
+        main = max(sizes, key=lambda k: sizes[k])
+        print(f"\nmain cluster not given; using the largest, {main} "
+              f"({sizes[main]} spikes)")
+    frags = ([int(v) for v in args.fragments.split(",")] if args.fragments else
+             [k for k in sorted(sizes) if k != main
+              and abs(k - main) <= args.neighbours and sizes[k] >= args.min_spikes])
+    Tm = s.template(main)
+    tb = mvd.time_budget(s, main, args.nblock)
+    budget = float(np.nanmax(tb))
+    nf_main = mvd.split_half_noise(s, main)
+    ref0 = mvd.refractory(s, [main], sr, args.ref_ms)
+
+    print(f"\nmain {main}: n={sizes[main]}  p2p={mvd.p2p(Tm):.0f}  "
+          f"split-half {nf_main:.4f}  ISI<{args.ref_ms:.0f}ms {100*ref0:.3f}%")
+    print(f"time budget across {args.nblock} blocks of {main}: max 1-cos "
+          f"{budget:.4f}  (the within-unit variation this sort already accepts)")
+
+    print(f"\n{'clu':>6s}{'n':>7s}{'1-cos':>9s}{'noise':>8s}{'d/noise':>8s}"
+          f"{'vs budget':>10s}{'lat%':>7s}{'chance%':>8s}{'merge ISI%':>11s}"
+          f"{'t5-t95 min':>12s}")
+    rows = []
+    for k in frags:
+        if sizes.get(k, 0) < 8:
+            continue
+        T = s.template(k)
+        d = mvd.cos_dist(T, Tm)
+        nf = mvd.split_half_noise(s, k)
+        lat, ch = mvd.latency_enrichment(s, main, k, sr, args.window_ms)
+        rf = mvd.refractory(s, [main, k], sr, args.ref_ms)
+        t = s.minutes(k, sr)
+        lo, hi = np.percentile(t, [5, 95])
+        print(f"{k:>6d}{sizes[k]:>7d}{d:>9.4f}{nf:>8.4f}{d/max(nf,1e-9):>8.1f}"
+              f"{d/max(budget,1e-9):>10.1f}{100*lat:>7.1f}{100*ch:>8.1f}"
+              f"{100*rf:>11.3f}{f'{lo:.0f}-{hi:.0f}':>12s}")
+        rows.append((k, sizes[k], d, nf, lat, ch, rf, lo, hi))
+
+    if args.recovery:
+        ks = [main] + [r[0] for r in rows]
+        try:
+            rec, base, niso = mvd.recovery_curve(s, ks, sr)
+        except ValueError as e:
+            print(f"\nrecovery: {e}")
+        else:
+            print(f"\nrecovery over {main} + {len(rows)} fragments "
+                  f"(normalised to {niso} spikes with ISI > 200 ms, p2p {base:.0f})")
+            print(f"{'preceding ISI':>16s}{'n':>8s}{'amp ratio':>11s}{'1-cos':>9s}")
+            for lo, hi, n, r, dd in rec:
+                lab = f"{lo:.0f}-{hi:.0f} ms" if np.isfinite(hi) else f">{lo:.0f} ms"
+                print(f"{lab:>16s}{n:>8d}{r:>11.3f}{dd:>9.4f}")
+            print("\nIf amp ratio is flat, adaptation is not moving this unit's "
+                  "amplitude and\na gate built on predicted amplitude ratio does not "
+                  "apply to it.  Compare the\n1-cos column with the fragment "
+                  "distances above: firing state has to account\nfor them, or "
+                  "something else does.")
+
+    print("\nNo verdict is printed on purpose.  The refractory column has almost no "
+          "power at\na few hundred spikes; latency enrichment is shared by a burst "
+          "continuation and by\na synaptically driven partner; and a fragment inside "
+          "its own split-half noise has\nnot been shown to deviate at all.  These are "
+          "inputs to a decision, not one.")
+    if args.out:
+        np.savez_compressed(args.out, main=main, budget=budget,
+                            clu=np.array([r[0] for r in rows]),
+                            n=np.array([r[1] for r in rows]),
+                            cosd=np.array([r[2] for r in rows]),
+                            noise=np.array([r[3] for r in rows]),
+                            lat=np.array([r[4] for r in rows]),
+                            chance=np.array([r[5] for r in rows]),
+                            refrac=np.array([r[6] for r in rows]),
+                            t5=np.array([r[7] for r in rows]),
+                            t95=np.array([r[8] for r in rows]), tb=tb)
+        print(f"\nwrote {args.out}")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _common(p):
     p.add_argument("--cells", default="archetype:pyramidal",
@@ -696,6 +785,28 @@ def main(argv=None):
     sh.add_argument("--detect", type=float, default=50.0)
     sh.add_argument("--v-thresh", type=float, default=0.0, dest="v_thresh")
     sh.set_defaults(func=cmd_shape)
+
+    va = sub.add_parser("validate", help="confront the model with a curated sort")
+    va.add_argument("--base", required=True, help="session base path (no extension)")
+    va.add_argument("--group", type=int, required=True)
+    va.add_argument("--variant", default="", help="method token, e.g. stderiv.C5.D34")
+    va.add_argument("--tag", default="", help="fiber stage, e.g. anchor_linked")
+    va.add_argument("--nsamp", type=int, default=42)
+    va.add_argument("--nchan", type=int, default=8)
+    va.add_argument("--sr", type=float, default=32552.0)
+    va.add_argument("--main", type=int, default=None,
+                    help="the accepted cluster; default is the largest")
+    va.add_argument("--fragments", default=None,
+                    help="explicit candidate ids; default is neighbours by id")
+    va.add_argument("--neighbours", type=int, default=16,
+                    help="id distance from --main to sweep when --fragments is absent")
+    va.add_argument("--min-spikes", type=int, default=8, dest="min_spikes")
+    va.add_argument("--nblock", type=int, default=6, help="time blocks for the budget")
+    va.add_argument("--window-ms", type=float, default=10.0, dest="window_ms")
+    va.add_argument("--ref-ms", type=float, default=2.0, dest="ref_ms")
+    va.add_argument("--recovery", type=int, default=1)
+    va.add_argument("--out", default=None)
+    va.set_defaults(func=cmd_validate)
 
     a = ap.parse_args(argv)
     return a.func(a)
