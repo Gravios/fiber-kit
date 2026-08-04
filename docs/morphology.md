@@ -1282,6 +1282,82 @@ low-amplitude channel, which is exactly where the state-axis waveform difference
 is largest. The two cannot be separated with two channels.
 
 
+## Fast-spiking interneurons: morphologies and Kv3
+
+### Six reconstructed basket cells
+
+`k_140789` (Nörenberg, Hu, Vida, Bartos & Jonas 2010, PNAS 107:894) supplies six
+**detailed reconstructions of fast-spiking basket cells**, 19,791–61,922 3-D
+points each, including the full axonal arbor:
+
+| cell | sections | comps | axon | dendrite | axon share of length |
+|---|---|---|---|---|---|
+| BC1 | 1506 | 2678 | 26,682 µm | 1,718 | **94%** |
+| BC2 | 1017 | 2201 | 17,461 | 3,756 | 82% |
+| BC3 | 3171 | 3171 | 26,715 | 4,283 | 86% |
+| BC4 | 3154 | 3154 | 32,564 | 5,602 | 85% |
+| BC5 | 2888 | 2990 | 45,549 | 3,673 | 92% |
+| BC6 | 2717 | 2923 | 51,122 | 4,238 | 92% |
+
+**These are dentate gyrus, not CA1.** PV+ basket morphology is broadly
+comparable across subfields, but the region differs and results should say so.
+
+**82–94% of the cable is axon**, which matters directly. Simulated on the
+session's real geometry, the axon contributes **22–27% of the extracellular
+field on the somatic peak channels but 46–109% on distal ones** — the same
+spatial pattern as the state axis (5.5% relative change on the peak channel,
+64% on ch6). A basket cell's off-peak field is largely axonal, so
+activity-dependent axonal excitability is a mechanism that would move exactly
+those channels.
+
+### The loader fix that made them usable
+
+Neurolucida exports use hoc's **brace-less single-statement loop**:
+
+```
+for i = 1, 5 connect axon[i](0), axon[i-1](1)
+```
+
+`_expand_for` handled only the braced form, so 920 connect lines were partly
+ignored and BC1 loaded as **977 disconnected roots**. It failed loudly rather
+than simulating fragments — the `require_connected` refusal from patch 0320
+doing its job — but it failed. Both forms are now expanded.
+
+### Kv3 was a missing channel, not a wrong density
+
+Sweeping the existing fast rectifier `Kdrfast` over **7.7×** (0.013 → 0.100
+S/cm²) on BC1 moved the extracellular trough-to-peak only 0.614 → 0.461 ms and
+saturated. The real g5 interneuron measures **0.271 ms**. Conductance density
+cannot buy a time constant.
+
+`Kv3` is transcribed from Akemann et al. (2009) as implemented by Zang &
+De Schutter (2021), whose constants are least-squares fits to the interneuron K
+current data of Martina et al. (2007). n⁴, high threshold, and much faster:
+
+| v | Kv3 τ | Kdrfast τ |
+|---|---|---|
+| −70 mV | **0.177 ms** | 1.926 ms |
+| −40 mV | **0.48 ms** | 3.505 ms |
+| 0 mV | 0.581 ms | 0.706 ms |
+
+The 11× faster deactivation at rest is what permits high-frequency firing.
+Its absence is why patch 0330 gave basket cells *broader* spikes than pyramidal
+cells — flagged there as backwards and unexplained. The model had no mechanism
+for fast spiking at all.
+
+It is placed uniformly, soma and axon: in a cell that is 90% axon by membrane, a
+soma-only placement would leave the spike broad exactly where most of the field
+is generated.
+
+**Not established: whether Kv3 closes the width gap.** A 20× sweep of `gkv3`
+left the measured trough-to-peak at exactly 0.430 ms while peak-to-peak rose
+64.7 → 75.6 µV — so the channel acts, but the width measure is integer-sample
+quantised (0.031 ms at 32552 Hz) and cannot resolve the change. The two sweeps
+above are also not directly comparable: the first passed `axon_na_mult=1.0`, the
+second used the default 5.0. Sub-sample width estimation on both is the next
+step, and until then no claim is made that the model reproduces 0.271 ms.
+
+
 ## Confronting the model with the sort
 
 ```bash

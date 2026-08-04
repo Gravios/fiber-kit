@@ -1037,5 +1037,59 @@ check(r2["sd"][1] / r2["mad_sd"][1] > 1.10,
 check(r["sd"][1] / r["mad_sd"][1] < 1.06,
       f"negative control: clean Gaussian noise does not ({r['sd'][1]/r['mad_sd'][1]:.3f})")
 
+# ── 21. brace-less hoc loops and Kv3 ────────────────────────────────────────
+print("[21] brace-less for loops, Kv3 kinetics")
+_tpl2 = """
+create soma, axon[6], dend[3]
+proc topol() { local i
+  connect axon(0), soma(0.5)
+  for i = 1, 5 connect axon[i](0), axon[i-1](1)
+  for i = 0, 2 connect dend[i](0), soma(0)
+}
+proc geom() {
+  soma { L = 20 diam = 12 }
+  axon[0] { L = 30 diam = 1 }
+  axon[1] { L = 30 diam = 1 }
+  axon[2] { L = 30 diam = 1 }
+  axon[3] { L = 30 diam = 1 }
+  axon[4] { L = 30 diam = 1 }
+  axon[5] { L = 30 diam = 1 }
+  dend[0] { L = 90 diam = 2 }
+  dend[1] { L = 90 diam = 2 }
+  dend[2] { L = 90 diam = 2 }
+}
+"""
+with _tf.TemporaryDirectory() as td3:
+    tp3 = os.path.join(td3, "bc.hoc"); open(tp3, "w").write(_tpl2)
+    secs3 = mg.load_cable_template(tp3)
+    c3 = mg.compartmentalize(secs3)
+    check(int((c3.parent < 0).sum()) == 1,
+          "a brace-less `for i = 1, 5 connect ...` chain gives ONE root — without "
+          "expanding it the cell loads as disconnected stubs")
+    check(len(secs3) == 10, f"all ten sections are created ({len(secs3)})")
+    nax = sum(1 for s_ in secs3 if s_.type == mg.AXON)
+    check(nax == 6, f"the six-section axon chain is present ({nax})")
+
+try:
+    from fiber_kit import morpho_chan_ca1 as mca
+except ImportError:
+    import morpho_chan_ca1 as mca
+
+(kn, kt), = mca.Kv3(34.0).rates(np.array([-70.0, -40.0, 0.0, 20.0]))
+(dn, dt2), = mca.KdrFast("kdrfast", 34.0).rates(np.array([-70.0, -40.0, 0.0, 20.0]))
+check(np.all(np.diff(kn) > 0) and kn[0] < 0.05 and kn[-1] > 0.9,
+      "Kv3 activation is monotonic and saturating")
+check(kt[1] < dt2[1] / 3,
+      f"Kv3 is much faster than Kdrfast near threshold ({kt[1]:.2f} vs {dt2[1]:.2f} ms) "
+      "— the property a conductance density cannot buy")
+check(kt[0] < dt2[0] / 5,
+      f"and deactivates far faster at rest ({kt[0]:.3f} vs {dt2[0]:.3f} ms), which is "
+      "what permits high-frequency firing")
+check(mca.Kv3(34.0).g([np.array([0.5])])[0] == 0.5 ** 4, "Kv3 conducts as n^4")
+ch_fs = [c_[1] for c_ in mca.channels("pvbasket")]
+check("kv3" in ch_fs, "the fast-spiking types now carry Kv3")
+check("kv3" not in [c_[1] for c_ in mca.channels("pyramidal")],
+      "negative control: the pyramidal type does not")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

@@ -66,7 +66,7 @@ class Biophys:
                  gna=0.025, axon_na_mult=5.0, gkdr=0.01, gka=0.03, ka_scale=1.0,
                  ka_slope_per_100um=1.0, ka_dist_max=350.0, ka_prox_lim=100.0,
                  ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0,
-                 ca1_type=None):
+                 ca1_type=None, gkv3=0.0):
         self.__dict__.update(locals()); del self.__dict__["self"]
 
     def densities(self, cmp_):
@@ -85,7 +85,12 @@ class Biophys:
         gka_p[cmp_.type == mg.AXON] = self.gka * self.ka_scale
         gka_d[cmp_.type == mg.AXON] = 0.0
         Ra = np.where(cmp_.type == mg.AXON, self.Ra_axon, self.Ra)
-        return dict(na=gna, kdr=gkdr, ka_prox=gka_p, ka_dist=gka_d, Ra=Ra)
+        # Kv3 is uniform.  In fast-spiking cells it is expressed somatically AND
+        # axonally, and since a basket cell's axon is ~90% of its membrane, a
+        # soma-only placement would leave the spike broad exactly where most of
+        # the extracellular field is generated.
+        gkv3 = np.full(n, float(self.gkv3))
+        return dict(na=gna, kdr=gkdr, ka_prox=gka_p, ka_dist=gka_d, kv3=gkv3, Ra=Ra)
 
 
 # ── tree scheduling ─────────────────────────────────────────────────────────
