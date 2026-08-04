@@ -35,12 +35,14 @@ try:
     from . import morpho_envelope as mv
     from . import morpho_chan_ca1 as mca
     from . import morpho_validate as mvd
+    from . import morpho_features as mf
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
     import morpho_envelope as mv
     import morpho_chan_ca1 as mca
     import morpho_validate as mvd
+    import morpho_features as mf
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -669,6 +671,94 @@ def cmd_validate(args):
         print(f"\nwrote {args.out}")
 
 
+# ── span ────────────────────────────────────────────────────────────────────
+def cmd_span(args):
+    """Model-predicted within-cell span, per cell type, in the session's features.
+
+    Reported as radius / |template|, which is dimensionless.  That is not
+    fastidiousness: the model produces microvolts and the recording produces
+    ADU, so an absolute comparison would be reporting the acquisition gain.  The
+    ratio is also the quantity that should be constant across cells if the span
+    is a fixed fraction of amplitude, and constant in ABSOLUTE terms if it is
+    not -- so publishing the ratio lets the reader check which.
+    """
+    pca = mf.load_pca(args.pca)
+    xy = _sites(args)
+    sets = me.parse_sdiff_sets(args.sdiff_pairs) if args.sdiff_pairs else None
+    pats = args.patterns.split(",")
+    pw = {p.pre: p for p in mi.load_table(post="pyramidalcell")}
+    drives = [None] + [(k, f) for k in args.drive_pathways.split(",") if k
+                       for f in [float(x) for x in args.drive_fractions.split(",")]]
+    print(f"{'cell':<20s}{'type':<14s}{'states':>7s}{'radius':>9s}{'|templ|':>9s}"
+          f"{'r/|t|':>8s}{'rel':>7s}  per-channel var fraction")
+    base = None
+    for spec in args.cells.split(","):
+        # Split the CA1 type off the RIGHT: a spec is "<morphology>[:<type>]" and
+        # the morphology may itself contain colons ("template:/path/x.hoc"), so
+        # partitioning from the left eats the path.  Only strip the suffix when it
+        # actually names a type, or a plain path with no type would be truncated.
+        name, kind = spec, "pyramidal"
+        head, sep, tail = spec.rpartition(":")
+        if sep and tail in mca.CA1_TYPES:
+            name, kind = head, tail
+        c = _load_cell_laminar(name, args)
+        W = []
+        for pat in pats:
+            times = mv.train_times(pat)
+            nt = int(round((max(times) + 6.0) / args.dt))
+            for d in drives:
+                drive = None
+                if d is not None and d[0] in pw:
+                    drive = mi.Drive([pw[d[0]]], c, args.dt, nt,
+                                     {d[0]: np.array([max(times[0] - 3.0, 0.5)])},
+                                     active_fraction=d[1],
+                                     rng=np.random.default_rng(args.seed))
+                    if len(drive) == 0:
+                        drive = None
+                cell = mc.Cell(c, mca.biophys(kind))
+                _, im, v = mv.simulate_train(cell, times, dt=args.dt,
+                                             stim_amp=args.stim, drive=drive)
+                sites = me.sites_3d(xy - np.array([0.0, args.depth]), z=args.lateral)
+                Wk, _ = mv.train_footprints(im, c, sites, times, args.dt, sr=args.sr,
+                                            nsamp=args.nsamp, peak=args.peak,
+                                            sigma=args.sigma, v=v, v_thresh=0.0)
+                if len(Wk):
+                    W.append(Wk)
+        if not W:
+            print(f"{os.path.basename(name):<20s}{kind:<14s}   no spikes survived extraction")
+            continue
+        W = np.concatenate(W)
+        F = mf.to_features(W, pca, sdiff_sets=sets)
+        mu = F.mean(0)
+        R = float(np.sqrt(((F - mu) ** 2).sum(1).mean()))
+        q = R / max(float(np.linalg.norm(mu)), 1e-30)
+        if base is None:
+            base = q
+        vc = ((F - mu) ** 2).mean(0).reshape(pca.nch, pca.ncomp).sum(1)
+        vc = vc / max(vc.sum(), 1e-30)
+        print(f"{os.path.basename(name):<20s}{kind:<14s}{len(W):>7d}{R:>9.1f}"
+              f"{np.linalg.norm(mu):>9.0f}{q:>8.3f}{q/base:>7.2f}  {np.round(vc, 3)}")
+    print("\nThis is the PHYSIOLOGICAL span only — the model has no recording noise,\n"
+          "so it is a lower bound on a cluster's observed radius, and the per-channel\n"
+          "fractions are the discriminator: physiological variance CONCENTRATES on the\n"
+          "channels carrying the state-dependent current, while additive noise spreads\n"
+          "uniformly.  Compare against `fiber-morpho validate` on a curated unit.")
+
+
+def _load_cell_laminar(name, args):
+    """Load a morphology, without re-orienting a cable template.
+
+    A cable template's layout is already laminar (morpho_geom places it from the
+    section names), so orient()'s axis search would stand a symmetric cell
+    upright.  Reconstructions carry no laminar convention and do need it.
+    """
+    if name.startswith("template:"):
+        secs = mg.load_cable_template(name.split(":", 1)[1])
+        return mg.orient(mg.compartmentalize(secs, d_lambda=args.d_lambda),
+                         axis=(0.0, 1.0, 0.0))
+    return _load_cell(name, args.d_lambda, args.max_comp)
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _common(p):
     p.add_argument("--cells", default="archetype:pyramidal",
@@ -807,6 +897,17 @@ def main(argv=None):
     va.add_argument("--recovery", type=int, default=1)
     va.add_argument("--out", default=None)
     va.set_defaults(func=cmd_validate)
+
+    sp = _probe(_common(sub.add_parser("span",
+                                       help="model-predicted within-cell span per cell type")))
+    sp.add_argument("--pca", required=True, help="the session's PCAE .pca basis")
+    sp.add_argument("--patterns", default="single,burst4_4,burst4_6,burst3_10,tonic_50_5")
+    sp.add_argument("--drive-pathways", default="ca3cell,eccell", dest="drive_pathways")
+    sp.add_argument("--drive-fractions", default="0.01,0.02", dest="drive_fractions")
+    sp.add_argument("--depth", type=float, default=40.0)
+    sp.add_argument("--lateral", type=float, default=30.0)
+    sp.add_argument("--seed", type=int, default=0)
+    sp.set_defaults(func=cmd_span)
 
     a = ap.parse_args(argv)
     return a.func(a)

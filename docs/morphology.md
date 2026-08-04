@@ -761,6 +761,55 @@ empirical target it has to hit is the near-uniform per-channel variance
 in the previous section.
 
 
+### Cell types have different spans — and the data cannot currently show it
+
+`fiber-morpho span` runs each cell type's state ensemble through the identical
+chain into the session's 32 feature columns. Reported as **radius / |template|**,
+which is dimensionless — the model produces microvolts and the recording ADU, so
+an absolute comparison would be reporting the acquisition gain.
+
+| cell | biophys | states | radius / \|template\| | rel | per-channel variance fraction |
+|---|---|---|---|---|---|
+| CA1PC | pyramidal | 85 | **0.434** | 1.00 | 0.08 0.09 0.22 0.27 0.07 0.09 0.04 0.15 |
+| CA1BSC | bistratified | 85 | **0.431** | 0.99 | 0.08 0.17 0.37 0.12 0.09 0.01 0.14 0.03 |
+| CA1OLM | pvbasket | 80 | **0.216** | 0.50 | 0.10 0.10 0.48 0.21 0.00 0.01 0.08 0.02 |
+| CA1BC | pvbasket | 80 | **0.196** | 0.45 | 0.13 0.08 0.37 0.13 0.09 0.01 0.15 0.05 |
+
+**A 2.2× spread in span between cell types** — the cells with dendrites spanning
+both oriens and radiatum (pyramidal, bistratified) vary about twice as much as
+the compact ones (basket, OLM), which is what a footprint dominated by a
+state-dependent dendritic contribution should do.
+
+Against the data, dimensionlessly: the curated cell 2103 sits at **0.72**, the
+population median at 0.87 (IQR 0.63–1.14). So the model's physiological span is
+**0.20–0.43 against an observed 0.72** — roughly 8–36% of the observed
+*variance* depending on type. Physiology is **not** negligible here, which
+corrects a first, unscaled reading of these numbers that put it near 1%.
+
+**But the per-channel signature says the observed span is not mostly
+physiological.** The model concentrates variance on the channels carrying the
+state-dependent current (0.003 to 0.48 across channels); the data is nearly
+uniform (0.113–0.135). Uniform is the signature of additive noise. Together with
+the radius being constant and energy-independent, the observed ~890 reads as a
+noise floor with a physiological component inside it — which is also why
+over-split fragments come out *under*-dispersed: they are sub-samples of a noise
+ball.
+
+**Typing the clusters to test this directly is not currently possible.** Of 197
+clusters with ≥ 300 spikes and > 10 min lifespan, **zero** meet an interneuron
+firing-rate criterion — median rate is **0.17 Hz**, because on an over-split sort
+a cluster's rate is the *fragment's* rate, not the cell's. Trough-to-peak width
+is no help either: it is measured here on the differenced waveform, where the
+literature's narrow/broad thresholds do not apply, and the model's own widths
+come out backwards (see above). So the type-dependent span is a **prediction
+awaiting a curated sort**, not a measured result.
+
+Two things would test it: a sort with cells assembled, so rates become
+meaningful; and `.spk.standard.5`, so width is measured where the thresholds
+apply and a noise estimate can be propagated analytically through the known
+linear transform to separate the uniform component from the concentrated one.
+
+
 ## Confronting the model with the sort
 
 ```bash
