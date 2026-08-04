@@ -505,3 +505,152 @@ def translate(cmp_, dx):
     for k in ("p0", "p1", "mid"):
         setattr(out, k, getattr(cmp_, k) + np.asarray(dx, float))
     return out
+
+
+# ── cable templates (L/diam, no 3-D points) ─────────────────────────────────
+# Laminar direction hints from NEURON section-name stems.  Reduced CA1 templates
+# name their sections after the layer the compartment lies in -- radT/radM/radt
+# for radiatum thick/medium/thin, lm* for lacunosum-moleculare, ori* for oriens
+# -- so the names carry real anatomy that L and diam alone do not.  A layout that
+# ignored them would put oriens dendrites above the soma.
+_LAMINAR = [
+    ("lm", (0.0, 1.0, 0.0), APICAL),        # lacunosum-moleculare: distal apical
+    ("rad", (0.0, 1.0, 0.0), APICAL),       # radiatum: apical
+    ("ori", (0.0, -1.0, 0.0), BASAL),       # oriens: basal
+    ("axon", (0.0, -1.0, 0.0), AXON),
+    ("soma", (0.0, 1.0, 0.0), SOMA),
+    ("apic", (0.0, 1.0, 0.0), APICAL),
+    ("dend", (1.0, 0.0, 0.0), BASAL),       # unqualified: horizontal (OLM-like)
+]
+
+
+def _laminar(name):
+    low = name.lower()
+    for stem, d, t in _LAMINAR:
+        if low.startswith(stem):
+            return np.array(d, float), t
+    return np.array([1.0, 0.0, 0.0]), BASAL
+
+
+_RE_TEMPLATE = re.compile(r"begintemplate\s+(\w+)(.*?)endtemplate", re.S)
+_RE_LDIAM = re.compile(r"([A-Za-z_]\w*(?:\[\s*\d+\s*\])?)\s*\{[^{}]*?\bL\s*=\s*([\d.eE+-]+)"
+                       r"[^{}]*?\bdiam\s*=\s*([\d.eE+-]+)", re.S)
+
+
+def load_cable_template(path, template=None, spread_deg=25.0):
+    """Load a NEURON cell template that has L/diam but NO pt3dadd.
+
+    Reduced multi-compartment models -- the Santhakumar / Cutsuridis / Bezaire
+    CA1 interneuron lineage among them -- specify geometry as lengths and
+    diameters plus a connect topology, and leave 3-D placement to NEURON's
+    define_shape().  load_hoc() refuses these on purpose, because a morphology
+    that silently loads with no geometry is worse than one that fails.  This is
+    the deliberate path for them.
+
+    The layout is ALREADY in laminar coordinates -- +y is apical by construction,
+    because that is what the name hints encode -- so callers must NOT re-orient
+    one of these with orient()'s default axis search.  Doing so rotates a cell
+    whose dendritic mass is symmetric (an OLM's two opposed horizontal dendrites,
+    for instance) onto an arbitrary axis and stands it upright.  Use
+    orient(c, axis=(0, 1, 0)) to centre on the soma without rotating.
+
+    The result is a STYLIZED layout, not a reconstruction: cable dimensions and
+    topology are the published ones, but the 3-D positions are laid out here
+    from the section names' laminar hints.  Sibling branches are fanned by
+    spread_deg so they do not superimpose, which is a drawing choice with no
+    anatomical content.  Never report one of these as a reconstruction, and
+    expect its extracellular footprint to be smoother than a real cell's --
+    it has no branch-point clutter.
+    """
+    with open(path, errors="ignore") as fh:
+        raw = fh.read()
+    txt = re.sub(r"/\*.*?\*/", " ", raw, flags=re.S)
+    txt = re.sub(r"//[^\n]*", " ", txt)
+    tmpls = _RE_TEMPLATE.findall(txt)
+    if tmpls:
+        body = None
+        for nm, b in tmpls:
+            if template is None or nm == template:
+                body = b; template = nm; break
+        if body is None:
+            raise ValueError(f"{path}: template {template!r} not found; "
+                             f"have {[n for n, _ in tmpls]}")
+        txt = body
+
+    dims = {}
+    for m in _RE_LDIAM.finditer(txt):
+        dims.setdefault(_norm(m.group(1)), (float(m.group(2)), float(m.group(3))))
+    if not dims:
+        raise ValueError(f"{path}: no 'sec {{ L=.. diam=.. }}' assignments found")
+
+    flat = _expand_for(txt).replace("{", "\n").replace("}", "\n").replace(";", "\n")
+    order = []
+    for line in flat.split("\n"):
+        m = _RE_CREATE.search(line)
+        if m and "connect" not in line:
+            for decl in m.group(1).split(","):
+                mm = re.match(r"\s*([A-Za-z_]\w*)\s*(?:\[\s*([\d.]+)\s*\])?", decl)
+                if mm and mm.group(1):
+                    for k in range(int(float(mm.group(2) or 1))):
+                        n = _norm(f"{mm.group(1)}[{k}]")
+                        if n not in order:
+                            order.append(n)
+    order = [n for n in order if n in dims]
+    if not order:
+        raise ValueError(f"{path}: create statements and L/diam names do not intersect")
+    idx = {n: i for i, n in enumerate(order)}
+
+    parent = [-1] * len(order)
+    parent_x = [1.0] * len(order)
+    for line in flat.split("\n"):
+        m = _RE_CONNECT.search(line)
+        if not m:
+            continue
+        _, child, cx, rest = m.groups()
+        mr = _RE_SECREF.search(rest)
+        if not mr:
+            continue
+        c, p = _norm(child), _norm(mr.group(1))
+        if c in idx and p in idx:
+            parent[idx[c]] = idx[p]
+            parent_x[idx[c]] = float(mr.group(2))
+
+    # place: walk parents-first, each section leaving its parent's attachment end
+    secs = [None] * len(order)
+    nchild = {}
+    for i, p in enumerate(parent):
+        if p >= 0:
+            nchild[p] = nchild.get(p, 0) + 1
+    seen = {}
+    remaining = list(range(len(order)))
+    guard = 0
+    while remaining and guard < 10 * len(order):
+        guard += 1
+        i = remaining.pop(0)
+        p = parent[i]
+        if p >= 0 and secs[p] is None:
+            remaining.append(i); continue
+        L, d = dims[order[i]]
+        u, typ = _laminar(order[i])
+        if p < 0:
+            start = np.zeros(3)
+        else:
+            pp = np.asarray(secs[p].points, float)
+            start = pp[-1, :3] if parent_x[i] > 0.5 else pp[0, :3]
+            k = seen.get(p, 0); seen[p] = k + 1
+            if nchild.get(p, 1) > 1:                      # fan siblings apart
+                a = np.radians(spread_deg) * (k - (nchild[p] - 1) / 2.0)
+                c, s = np.cos(a), np.sin(a)
+                u = np.array([u[0] * c - u[1] * s, u[0] * s + u[1] * c, u[2]])
+        sec = Section(order[i], typ)
+        if typ == SOMA:
+            sec.points = [[start[0], start[1] - L / 2, start[2], d],
+                          [start[0], start[1] + L / 2, start[2], d]]
+        else:
+            end = start + u * L
+            sec.points = [[*start, d], [*end, d]]
+        sec.parent = p; sec.parent_x = parent_x[i]
+        secs[i] = sec
+    if any(s is None for s in secs):
+        raise ValueError(f"{path}: could not place every section (cyclic connect?)")
+    return secs

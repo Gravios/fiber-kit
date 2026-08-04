@@ -601,6 +601,95 @@ next thing to try, by the same argument that keeps localization on
 `.spk.standard`; it needs `.spk.standard.5`, which is not available here.
 
 
+## Interneuron morphologies, and separation in feature space
+
+### Cable templates
+
+`morpho_geom.load_cable_template` loads NEURON cell templates that give **L and
+diam plus a `connect` topology and no `pt3dadd`** — the form the Santhakumar /
+Cutsuridis / Bezaire CA1 interneuron lineage uses. `load_hoc` still refuses
+these, on purpose; this is the deliberate path.
+
+From ModelDB 181967, all five load with a single root and total cable lengths
+matching each template's own `geom()` exactly:
+
+| template | sections | comps | total L | note |
+|---|---|---|---|---|
+| CA1PC | 19 | 75 | 2060 µm | obliques, SLM tuft |
+| CA1BC (basket) | 17 | 73 | 1820 µm | |
+| CA1AAC (axo-axonic) | 17 | 73 | 1820 µm | **identical geometry to BC** |
+| CA1BSC (bistratified) | 13 | 53 | 1420 µm | no `lm*` sections — correct, it does not reach SLM |
+| CA1OLM | 4 | 22 | 670 µm | two opposed horizontal dendrites |
+
+3-D placement comes from the **section names**: `rad*` → radiatum (+y), `lm*` →
+lacunosum-moleculare (+y, distal), `ori*` → oriens (−y), bare `dend` →
+horizontal. That is real anatomy the cable dimensions do not carry.
+
+Two warnings that are load-bearing:
+
+- **This is a stylized layout, not a reconstruction.** Topology and cable
+  dimensions are published; the coordinates are laid out here. Sibling fanning
+  is a drawing choice with no anatomical content, and these cells have none of
+  the branch-point clutter that shapes a real extracellular footprint.
+- **Do not re-orient them.** The layout is already in laminar coordinates, so
+  `orient()`'s default axis search stands a symmetric cell upright — it rotated
+  the OLM's two horizontal oriens dendrites to vertical. Use
+  `orient(c, axis=(0,1,0))`.
+
+Simulated on g5's real geometry, soma 40 µm below site 0 and 30 µm off the
+shank plane:
+
+| cell | biophys | V soma | p2p | trough-to-peak |
+|---|---|---|---|---|
+| CA1PC | pyramidal | 66.3 | 58.4 µV | 0.430 ms |
+| CA1BC | pvbasket | 58.4 | 85.3 µV | **0.614 ms** |
+| CA1BSC | bistratified | 53.7 | 79.0 µV | 0.430 ms |
+| CA1OLM | pvbasket | 60.0 | 67.0 µV | 0.369 ms |
+
+**The basket cell comes out broader than the pyramidal cell, which is backwards**
+from the narrow-spiking/broad-spiking dichotomy. It is recorded here rather than
+explained; the interneuron widths should not be used until it is understood.
+Candidates: `CA1_TYPES["pvbasket"]` uses `nav` at 0.15 S/cm² where the source
+template uses `ch_Navaxonp`, and BC and PC are running on stylized somata of the
+same 10 µm diameter.
+
+### Separation in the sort's own metric
+
+Redone in the 32-dim `.fet` rather than on waveforms. Within-2103 covariance is
+well conditioned (cond 220, participation ratio 16.2), so Mahalanobis is
+well posed. The principled threshold is **χ²(32, 0.9999) = 70.6** — and
+χ²(30, 0.9999) = 67.6, matching the value already established for 30-dim data.
+
+| clu | n | D²(frag → 2103) | D²(2103 → frag) |
+|---|---|---|---|
+| 2102 | 796 | 1.0 | 1.2 |
+| 2108 | 744 | 1.7 | 4.4 |
+| 2101 | 892 | 2.0 | 3.2 |
+| 2094 | 728 | 2.0 | 2.6 |
+| 2097 | 2496 | 2.2 | 1.5 |
+| 2098 | 865 | 2.9 | 4.0 |
+| 2105 | 1324 | 2.1 | 3.7 |
+| **2100** | 142 | **35.3** | **79.7** |
+| 2093 | 32 | 3.0 | 170.0 |
+| 2095 | 29 | 5.0 | 442.6 |
+
+**The asymmetry is the whole story.** Every fragment's centroid sits deep inside
+2103's cloud (D² ≤ 5 for all the well-sampled ones, against a threshold of 70.6),
+while 2103's centroid can be far outside *theirs*. That is the signature of a
+compact sub-blob inside a broad cloud — over-splitting, not two cells.
+
+It also names the over-merge risk directly: **a gate that uses only the large
+cluster's covariance will absorb anything**, because a small tight cluster always
+looks close in a broad metric. Use `max` of the two directions, not the pooled
+distance, which is dominated by the larger cluster's n.
+
+**But the reverse direction needs n ≫ 32.** The 170 and 443 for clusters of 32
+and 29 spikes are artifacts — you cannot estimate a 32-dim covariance from 29
+samples, and the regularizer is then setting the answer. Applying an n ≥ 10 d
+rule leaves 2094, 2097, 2098, 2101, 2102, 2104, 2105, 2108, all with max D² ≤ 5.5.
+Only **2100** is separated by this test as well as by shape.
+
+
 ## Confronting the model with the sort
 
 ```bash

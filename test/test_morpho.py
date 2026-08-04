@@ -542,5 +542,67 @@ check(hit > 0.95, f"align_shifts recovers an imposed shift ({100*hit:.0f}%)")
 check(float((mf.align_shifts(np.stack([base_t] * 50), base_t)[0] == 0).mean()) == 1.0,
       "negative control: identical spikes get zero shift")
 
+# ── 12. cable templates (L/diam, no 3-D points) ─────────────────────────────
+print("[12] cable-template morphologies")
+_tpl = """
+begintemplate TestCell
+create soma, radT1, radM1, oriT1, oriT2, axon
+proc topol() {
+  connect radT1(0), soma(1)
+  connect radM1(0), radT1(1)
+  connect oriT1(0), soma(0)
+  connect oriT2(0), soma(0)
+  connect axon(0), soma(0)
+}
+proc geom() {
+  soma  { L = 20  diam = 10 }
+  radT1 { L = 100 diam = 4 }
+  radM1 { L = 150 diam = 3 }
+  oriT1 { L = 80  diam = 2 }
+  oriT2 { L = 80  diam = 2 }
+  axon  { L = 200 diam = 1 }
+}
+endtemplate TestCell
+"""
+with _tf.TemporaryDirectory() as td:
+    tp = os.path.join(td, "t.hoc")
+    open(tp, "w").write(_tpl)
+    secs_t = mg.load_cable_template(tp)
+    check(len(secs_t) == 6, f"all six sections are created ({len(secs_t)})")
+    tot = sum(s.length() for s in secs_t)
+    check(abs(tot - 630.0) < 1.0,
+          f"total cable length matches the template's own geom() ({tot:.0f} vs 630)")
+    ct = mg.orient(mg.compartmentalize(secs_t), axis=(0.0, 1.0, 0.0))
+    check(int((ct.parent < 0).sum()) == 1, "the connect topology gives a single root")
+
+    # the laminar name hints must actually place radiatum above and oriens below
+    yr = ct.mid[[i for i in range(len(ct)) if secs_t[ct.sec[i]].name.startswith("rad")], 1]
+    yo = ct.mid[[i for i in range(len(ct)) if secs_t[ct.sec[i]].name.startswith("ori")], 1]
+    check(float(yr.mean()) > 0 > float(yo.mean()),
+          f"rad* is placed apical (+{yr.mean():.0f}) and ori* basal ({yo.mean():.0f}) — "
+          "the section names carry anatomy that L and diam do not")
+    check(ct.type[ct.sec == 5][0] == mg.AXON, "the axon is typed from its name")
+
+    # a template with 3-D points must NOT be routed here silently, and a
+    # pt3d-free file must NOT be accepted by load_hoc
+    try:
+        mg.load_hoc(tp); ok_ref = False
+    except ValueError:
+        ok_ref = True
+    check(ok_ref, "load_hoc still refuses a pt3d-free template rather than "
+                  "returning a cell with no geometry")
+
+    # orient()'s default axis search must NOT be used on these: a symmetric cell
+    # gets stood upright.  Confirm the two paths actually differ, so the warning
+    # in the docstring is about something real.
+    sym = _tpl.replace("oriT1 { L = 80  diam = 2 }", "oriT1 { L = 250 diam = 3 }")
+    sym = sym.replace("oriT2 { L = 80  diam = 2 }", "oriT2 { L = 250 diam = 3 }")
+    sp = os.path.join(td, "sym.hoc"); open(sp, "w").write(sym)
+    cs = mg.compartmentalize(mg.load_cable_template(sp))
+    a_free = mg.orient(cs)
+    a_fix = mg.orient(cs, axis=(0.0, 1.0, 0.0))
+    check(float(np.abs(a_free.mid - a_fix.mid).max()) > 1.0,
+          "orient()'s axis search rotates a laminar layout — hence axis=(0,1,0)")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
