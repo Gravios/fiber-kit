@@ -449,7 +449,7 @@ rather than choosing between.
 ### On the real probe, in the real feature space
 
 The numbers above use an octrode stand-in and raw footprints. With the session's
-own `probe.0.probe` geometry for group 5 (channels 40–47: staggered ±11 µm,
+own `probe.0.probe` geometry for group 5 (channels 32–39: staggered ±11 µm,
 20 µm pitch, 140 µm span — **tighter** than the stand-in's ±12.5 / 21.65 / 151.5)
 and the session's order-5 `sdiffPairs` applied so simulated footprints live in
 the same stderiv space as the recorded `.spk`/`.fet`:
@@ -1165,6 +1165,63 @@ spatially structured at that scale, so a null measured 400 µm away is weaker
 than a null measured on the units' own shank. **This does not rule out dendritic
 integration; it rules out a relationship to gamma 400 µm away.** Two channels
 from shank 5 would make it decisive.
+
+
+## Correction: which channels group 5 is
+
+`.clu.stderiv.C5.D34.**5**` is the **1-based** group 5 — `spikeDetection`
+group index 4 — which is **channels 32–39**, shank index 4 at x ≈ 794.5 µm.
+Not channels 40–47. Earlier sections used 40–47.
+
+Every variance, span and shape number stands: all eight shanks are identical
+staggered octrodes (±11 µm, 20 µm pitch, 140 µm span) and the geometry is
+re-referenced to site 0, so the relative layout used in the simulations is
+unchanged. What changes is the channel list to pass on a command line, and one
+caveat that was understated — the first LFP slice (`g8rc`, channels 56–63) is
+group 8, shank index 7 at x ≈ 1400 µm, so it sat **605 µm** from the units, not
+400.
+
+## Gamma on the units' own shank
+
+With the local slice (`g5rc`, channels 32 and 39), correlations do clear the
+circular-shift null — unlike at 605 µm:
+
+| band | PC0 | PC2 | PC3 | PC5 | null p95 |
+|---|---|---|---|---|---|
+| 25–30 Hz | −0.010 | −0.005 | +0.004 | −0.004 | 0.010 |
+| 30–40 Hz | −0.016 | −0.008 | +0.001 | −0.001 | 0.009 |
+| 60–80 Hz | −0.014 | **−0.013** | +0.006 | **−0.013** | 0.008 |
+| 80–100 Hz | −0.017 | **−0.014** | **+0.010** | +0.008 | 0.007 |
+| 180–240 Hz | **−0.029** | **−0.019** | **+0.019** | **−0.014** | 0.008 |
+
+state variance: PC0 0.02%, PC2 0.67%, PC3 0.81%, PC5 0.81%
+
+**|r| grows monotonically with frequency**, strongest in the ripple band — which
+is the signature of spike bleed-through into the LFP, not of synaptic drive.
+
+### The superposition control
+
+Detected multi-unit coincidences within ±1.5 ms are rare: mean 0.017 per spike,
+1.7% of spikes have any. They correlate with **PC0 (−0.018) and PC1 (+0.014)**,
+both above null, and **not** with the state axes (|r| ≤ 0.004, below null). So
+superposition is real, and it lives on the no-state axes — a second, independent
+identification of one `V_fast` component.
+
+But partialling MU out barely moves the band correlations (180–240 Hz PC0:
+−0.029 → −0.028; PC2: −0.019 → −0.019), and corr(band power, MU) is only +0.066
+at 180–240 Hz. **Discrete superposition is not the mediator.** Undetected
+multi-unit activity — spikes below threshold, or from cells off this shank —
+would raise high-band power without producing a detected coincidence, and is not
+excluded.
+
+### What it amounts to
+
+There *is* a local-LFP relationship for the state axes at 60–240 Hz, and it is
+tiny: |r| ≤ 0.019 is under 0.04% of cluster variance, against state axes that
+carry 0.56–0.81% each. So local high-frequency field explains a few percent of
+the state variance at most. Dendritic integration is weakly supported at high
+frequency and cannot account for the bulk; **AHP recovery remains the leading
+candidate for the 10–50 ms structure.**
 
 
 ## Confronting the model with the sort
