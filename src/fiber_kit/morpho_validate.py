@@ -324,3 +324,71 @@ def dispersion_verdict(radius, expected, lo=0.80, hi=1.25):
     q = radius / expected
     return ("under (fragment?)" if q < lo else
             "over (contaminated?)" if q > hi else "one cell"), q
+
+
+# ── fast / slow decomposition ───────────────────────────────────────────────
+def fast_slow(features, times_s, max_gap_s=1.0, nblock=12):
+    """Split a cluster's feature variance into fast, drift and slow-residual.
+
+    The estimator uses only TEMPORAL ADJACENCY, and that is the point.  A pair of
+    spikes from the same cell separated by under a second shares the electrode
+    position, the dendritic state and the behavioural context, so whatever
+    differs between them is spike-independent:
+
+        V_fast = E[ |F_i - F_j|^2 ] / 2   over adjacent pairs
+
+    Nothing about the waveform, the baseline or a noise model enters.  That
+    matters because the obvious alternative -- estimating noise from the
+    pre-spike samples of a .spk window -- is unsafe on detected spikes: the
+    window's leading samples already contain the spike's rising phase, and in a
+    dense band they routinely contain other units' spikes, so it measures
+    multi-unit activity and calls it a noise floor.
+
+    V_fast is NOT "recording noise".  It is electrode noise plus spike
+    superposition plus cluster contamination, three things a merge gate should
+    treat differently and which this decomposition does not separate.  Only the
+    claim that it is spike-independent is supported.
+
+    Returns dict with v_total, v_fast, v_drift (between nblock time blocks),
+    v_slow (total - fast), and the corresponding radii normalised by the
+    template norm.
+    """
+    X = np.asarray(features, float)
+    t = np.asarray(times_s, float)
+    o = np.argsort(t); X, t = X[o], t[o]
+    mu = X.mean(0)
+    tn = float(np.linalg.norm(mu))
+    V = float(((X - mu) ** 2).sum(1).mean())
+    d = np.diff(t)
+    m = d < max_gap_s
+    if m.sum() < 40:
+        return dict(v_total=V, v_fast=np.nan, v_drift=np.nan, v_slow=np.nan,
+                    n_pairs=int(m.sum()), template_norm=tn)
+    vf = float(((X[1:][m] - X[:-1][m]) ** 2).sum(1).mean() / 2.0)
+    e = np.percentile(t, np.linspace(0, 100, nblock + 1))
+    vd = 0.0
+    for j in range(nblock):
+        b = (t >= e[j]) & (t <= e[j + 1])
+        if b.sum():
+            vd += b.sum() * float(((X[b].mean(0) - mu) ** 2).sum())
+    vd /= len(X)
+    vs = max(V - vf, 0.0)
+    return dict(v_total=V, v_fast=vf, v_drift=vd, v_slow=vs, n_pairs=int(m.sum()),
+                template_norm=tn,
+                q_fast=np.sqrt(vf) / max(tn, 1e-30),
+                q_drift=np.sqrt(vd) / max(tn, 1e-30),
+                q_slow=np.sqrt(vs) / max(tn, 1e-30),
+                q_slow_nodrift=np.sqrt(max(vs - vd, 0.0)) / max(tn, 1e-30))
+
+
+def tail_index(features):
+    """99.9th percentile of the squared residual norm, in units of its mean.
+
+    Gaussian residuals in d dimensions give chi2_d, whose 99.9th percentile is
+    about 2.0 for d = 32.  A larger value means a minority of spikes sit far out,
+    which is the signature of superposition or contamination rather than of
+    additive noise, and it is a reason not to call V_fast a noise floor.
+    """
+    X = np.asarray(features, float)
+    n2 = ((X - X.mean(0)) ** 2).sum(1)
+    return float(np.percentile(n2, 99.9) / max(n2.mean(), 1e-30))
