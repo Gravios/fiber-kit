@@ -423,5 +423,124 @@ spread = max(r[3] for r in rows3) - min(r[3] for r in rows3)
 check(spread < 0.05,
       f"negative control: an ISI-independent unit gives a flat curve (spread {spread:.3f})")
 
+# ── 11. session feature space ───────────────────────────────────────────────
+print("[11] session feature space (PCAE basis, lagged projection)")
+try:
+    from fiber_kit import morpho_features as mf
+except ImportError:
+    import morpho_features as mf
+
+import struct as _st
+import tempfile as _tf2
+
+
+def _write_pcae(path, nch, d2u, ncomp, rec, cen, method, evec, means):
+    with open(path, "wb") as fh:
+        fh.write(_st.pack("<9i", mf.PCAE_MAGIC, 2, nch, d2u, ncomp, rec,
+                          1 if cen else 0, method, nch))
+        for ch in range(nch):
+            fh.write(np.asarray(means[ch], np.float64).tobytes())
+        for ch in range(nch):
+            fh.write(np.asarray(evec[ch], np.float64).tobytes())
+
+
+rngf = np.random.default_rng(23)
+NCH, D2U, NCOMP, REC = 4, 21, 4, 5
+# build a basis with the session's own structure: one shape at three lags, plus
+# a second shape at lag 0.  The loader must RECOVER that structure from the file.
+pc1 = np.zeros(D2U); pc1[3:18] = np.sin(np.linspace(0, 2 * np.pi, 15))
+pc2 = np.zeros(D2U); pc2[3:18] = np.cos(np.linspace(0, 2 * np.pi, 15))
+ev = np.zeros((NCH, NCOMP, D2U))
+for ch in range(NCH):
+    ev[ch, 0] = pc1
+    ev[ch, 1] = np.concatenate([np.zeros(3), pc1[:-3]])   # zero-padded, as the
+    ev[ch, 2] = np.concatenate([np.zeros(6), pc1[:-6]])   # real basis stores it
+    ev[ch, 3] = pc2
+mn = rngf.normal(0, 1, (NCH, D2U))
+
+with _tf2.TemporaryDirectory() as td:
+    pth = os.path.join(td, "s.pca.1")
+    _write_pcae(pth, NCH, D2U, NCOMP, REC, False, 8, ev, mn)
+    b = mf.load_pca(pth)
+    check(b.nch == NCH and b.data2use == D2U and b.ncomp == NCOMP and b.rec_shift == REC,
+          "PCAE header round-trips")
+    check(b.method == 8 and b.method_tag == "stderiv_C5" and b.temporal_diff,
+          "method 8 is stderiv_C5 and applies the temporal difference")
+    check(np.allclose(b.evec, ev) and np.allclose(b.means, mn),
+          "block-wise body (all means, then all eigenvectors) is read correctly")
+
+    ls = b.lag_structure()[0]
+    check([r[1] for r in ls] == [0, 0, 0, 3] and [r[2] for r in ls] == [0, -3, -6, 0],
+          f"the lag triple is RECOVERED from the basis, not assumed ({ls})")
+
+    # negative control: an interleaved reader would mangle the body, so confirm
+    # the loader is not silently accepting a wrong layout
+    bad = os.path.join(td, "bad.pca.1")
+    with open(pth, "rb") as fh:
+        raw = fh.read()
+    with open(bad, "wb") as fh:
+        fh.write(raw[:28] + _st.pack("<i", 99) + raw[32:])   # method -> invalid
+    try:
+        mf.load_pca(bad); ok_rej = False
+    except ValueError:
+        ok_rej = True
+    check(ok_rej, "an invalid method in the header is refused, not coerced")
+
+    NS = 40
+    w = rngf.normal(0, 30, (25, NS, NCH))
+    F = mf.project(w, b)
+    check(F.shape == (25, NCH * NCOMP), f"projection is channel-major {F.shape}")
+    # channel-major order: dim 4*ch+k must depend ONLY on channel ch
+    w2 = w.copy(); w2[:, :, 1] = 0.0
+    F2 = mf.project(w2, b)
+    touched = np.flatnonzero(np.abs(F - F2).max(0) > 1e-9)
+    check(set(touched.tolist()) == {4, 5, 6, 7},
+          f"zeroing channel 1 changes exactly dims 4-7 ({touched.tolist()})")
+
+    # the lag triple must behave like a lag: shifting the WAVEFORM by 3 samples
+    # should map component k's value onto component k-1's
+    sh = np.roll(w, 3, axis=1)
+    Fs = mf.project(sh, b)
+    a0 = np.corrcoef(Fs[:, 1], F[:, 0])[0, 1]
+    check(a0 > 0.99, f"a 3-sample waveform shift moves PC1@lag onto its neighbour "
+                     f"(corr {a0:.3f}) — the triple really is a lag basis")
+
+    # Shifting the extraction window IS, in the interior, the same operation as
+    # reading a different lag.  Asserted the opposite on the first pass and the
+    # test caught it; recorded here because it kills a tempting explanation for
+    # why window-shift realignment perturbs this space.  Whatever the mechanism
+    # is, it is not that the two operations differ algebraically.
+    Fw = mf.project(w, b, shift=-3)
+    agree = float(np.corrcoef(Fw[:, 1], F[:, 0])[0, 1])
+    check(agree > 0.99,
+          f"a window shift moves along the SAME lag axis as the filter shift "
+          f"(corr {agree:.3f}) — they are not independent knobs")
+
+    check(abs(mf.project(w, b)[0, 0] - float(w[0, REC:REC + D2U, 0] @ ev[0, 0])) < 1e-9,
+          "a projected value equals the explicit dot product over [recShift, +data2use)")
+
+    # session_transform: order is channel-difference then temporal difference
+    sets = [[1, 2], [2, 3], [3, 0], [0, 1]]
+    tw = mf.session_transform(w, sets, temporal_diff=True)
+    check(tw.shape == w.shape, "session_transform preserves the sample count "
+                               "(so peakSampleIndex still means what it says)")
+    car = mf.session_transform(w, sets, temporal_diff=False)
+    check(abs(float(car.sum(-1).mean())) < abs(float(w.sum(-1).mean())) + 1e-9,
+          "the channel difference removes common mode")
+    d = np.diff(car, axis=-2)
+    check(np.allclose(tw[:, 1:, :], d), "the temporal step is x[t]-x[t-1], applied AFTER "
+                                        "the channel difference")
+
+# alignment: a known imposed shift must be recovered
+base_t = np.zeros((40, 3)); base_t[20, 1] = -500.0; base_t[24, 1] = 150.0
+imposed = rngf.integers(-2, 3, 300)
+wav = np.stack([np.roll(base_t, int(s), axis=0) for s in imposed]).astype(float)
+wav += rngf.normal(0, 5, wav.shape)
+got, sc = mf.align_shifts(wav, base_t, max_shift=3)
+hit = max(float((got == imposed).mean()), float((got == -imposed).mean()))
+check(hit > 0.95, f"align_shifts recovers an imposed shift ({100*hit:.0f}%)")
+check(float((mf.align_shifts(np.stack([base_t] * 50), base_t)[0] == 0).mean()) == 1.0,
+      "negative control: identical spikes get zero shift")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
