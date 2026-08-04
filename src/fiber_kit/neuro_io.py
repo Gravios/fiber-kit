@@ -705,6 +705,35 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
 
 
 # ── .dat / .fil / .lfp (interleaved int16) ───────────────────────────────────
+def session_rates(yaml_path):
+    """nChannels and the two sampling rates, from the session yaml.
+
+    Needed to turn a .res timestamp into an index in an LFP file, and to pass the
+    right nChannels to neurosuite-3's process_extractchannels.  Reading them here
+    rather than retyping them is the point: a wrong nChannels does not fail, it
+    shears the interleave.
+    """
+    import yaml as _yaml
+    d = _yaml.safe_load(open(yaml_path))
+    acq = d.get("acquisitionSystem", {})
+    fp = d.get("fieldPotentials", {})
+    return dict(n_channels=int(acq["nChannels"]),
+                sampling_rate=float(acq["samplingRate"]),
+                lfp_rate=float(fp.get("lfpSamplingRate", 0)) or None,
+                n_bits=int(acq.get("nBits", 16)))
+
+
+def lfp_index(res, sampling_rate, lfp_rate, first_record=0):
+    """Map .res timestamps (acquisition samples) to LFP sample indices.
+
+    first_record subtracts the offset of an extracted segment, so a range pulled
+    with `process_extractchannels -s N` indexes from zero.
+    """
+    return np.rint(np.asarray(res, np.float64) * (float(lfp_rate) / float(sampling_rate))
+                   - float(first_record) * (float(lfp_rate) / float(sampling_rate))
+                   ).astype(np.int64)
+
+
 def open_signal(path, nchan, mode="r"):
     """Memmap an interleaved int16 wideband/LFP file as (nSamples, nchan).
     Used for .fil/.dat baseline reads (neurofileio::readDatWindow analogue)."""
