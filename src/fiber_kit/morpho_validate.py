@@ -679,3 +679,96 @@ def band_dependence(projections, lfp, index, bands, sr=1250.0, n_shift=24, rng=N
                         null_max=nul.max(1), null_p95=np.percentile(nul, 95, axis=1)))
         del env
     return out
+
+
+# ── state waveform contrast ─────────────────────────────────────────────────
+def state_waveform_contrast(waves, projection, q=25.0, peak_chan=None, sr=32552.0):
+    """Mean RAW waveform difference between the extremes of a feature axis.
+
+    Answers what a state axis actually DOES to the waveform, which no variance
+    number can.  Run on the raw .spk.standard, not the transformed one: the
+    difference is then in the units the biophysics is stated in, and a change in
+    the temporal derivative is not mistaken for a change in the waveform.
+
+    Returns per-channel amplitude changes, the change as a fraction of each
+    channel's own peak-to-peak, and the sample at which the difference peaks --
+    on g5 cluster 2103 that sample sits one BEFORE the trough, i.e. on the edge,
+    which a pure gain change could not produce.
+    """
+    W = np.asarray(waves, np.float64)
+    p = np.asarray(projection, float)
+    hi = W[p > np.percentile(p, 100.0 - q)].mean(0)
+    lo = W[p < np.percentile(p, q)].mean(0)
+    T = W.mean(0)
+    d = hi - lo
+    p2p = T.max(0) - T.min(0)
+    ch = int(np.argmax(p2p)) if peak_chan is None else int(peak_chan)
+
+    def _p2p(w):
+        return float(w[:, ch].max() - w[:, ch].min())
+
+    def _width(w):
+        a = int(np.argmin(w[:, ch])); b = a + int(np.argmax(w[a:, ch]))
+        return (b - a) / sr * 1e3
+
+    return dict(hi=hi, lo=lo, diff=d, peak_chan=ch,
+                d_p2p_frac=float(_p2p(hi) / max(_p2p(lo), 1e-12) - 1.0),
+                d_width_ms=float(_width(hi) - _width(lo)),
+                d_trough_samples=int(np.argmin(hi[:, ch]) - np.argmin(lo[:, ch])),
+                per_chan=np.abs(d).max(0),
+                per_chan_frac=np.abs(d).max(0) / np.maximum(p2p, 1e-12),
+                argmax_sample=int(np.argmax(np.abs(d[:, ch]))),
+                trough_sample=int(np.argmin(T[:, ch])))
+
+
+# ── wideband noise floor ────────────────────────────────────────────────────
+def ndm_bandpass(x, sr=32552.0, half=16, lowcut=6000.0, ntaps=65):
+    """Replicate ndm_bandpass: subtract a (2*half+1) moving average, then lowpass.
+
+    A Butterworth is NOT a substitute.  The pipeline's high pass is a moving-
+    average subtraction, whose transfer function has nulls at multiples of
+    sr/(2*half+1) and a quite different roll-off; a noise floor measured through
+    the wrong filter cannot be compared with waveforms produced through this one.
+    """
+    from scipy import signal as _sig
+    x = np.asarray(x, np.float64)
+    if x.ndim == 1:
+        x = x[:, None]
+    k = np.ones(2 * int(half) + 1) / (2 * int(half) + 1)
+    hp = x - np.stack([np.convolve(x[:, c], k, mode="same") for c in range(x.shape[1])], 1)
+    lp = _sig.firwin(int(ntaps), float(lowcut) / (sr / 2))
+    return np.stack([np.convolve(hp[:, c], lp, mode="same") for c in range(hp.shape[1])], 1)
+
+
+def wideband_noise(dat, res, offset=0, sr=32552.0, guard=30, filt=True, **kw):
+    """Noise floor from SPIKE-FREE epochs of a wideband slice.
+
+    This is the estimate the .spk leading samples cannot give: a detected spike's
+    window already contains its own rising phase, and in a dense band it contains
+    other units' spikes too.  Here every sample within `guard` of any detected
+    spike is excluded outright.
+
+    Both SD and a robust MAD-based SD are returned because their RATIO is
+    informative: what remains after excluding detected spikes still contains
+    undetected ones, and they inflate the SD far more than the median absolute
+    deviation.  Measured on g5, SD exceeds MAD by 4% on the peak-adjacent channel
+    and 14% on the far one -- a direct measurement of residual multi-unit
+    activity, which is otherwise only ever an unexcluded possibility.
+    """
+    x = np.asarray(dat)
+    n = len(x)
+    f = ndm_bandpass(x, sr, **kw) if filt else np.asarray(x, np.float64)
+    loc = np.asarray(res, np.int64) - int(offset)
+    loc = loc[(loc >= 0) & (loc < n)]
+    mask = np.zeros(n, bool)
+    for d in range(-int(guard), int(guard) + 1):
+        j = loc + d
+        mask[j[(j >= 0) & (j < n)]] = True
+    clean = ~mask
+    if clean.sum() < 1000:
+        raise ValueError(f"only {clean.sum()} spike-free samples; widen the slice")
+    v = f[clean]
+    med = np.median(v, axis=0)
+    return dict(sd=v.std(0), mad_sd=1.4826 * np.median(np.abs(v - med), axis=0),
+                clean_fraction=float(clean.mean()), n_spikes=int(len(loc)),
+                rate_hz=float(len(loc) / (n / sr)))

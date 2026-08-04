@@ -1224,6 +1224,64 @@ frequency and cannot account for the bulk; **AHP recovery remains the leading
 candidate for the 10–50 ms structure.**
 
 
+## What the state axes do to the waveform
+
+Variance numbers cannot say *what* changes. Splitting cluster 2103 at the
+quartiles of each residual axis and averaging the **raw** `.spk.standard`
+waveforms does:
+
+| PC | state % | Δp2p on peak ch | Δt_trough | largest Δ |
+|---|---|---|---|---|
+| **0** | 0.02% | **+10.9%** | 0 samples | ch3 (peak), 244 ADU |
+| 2 | 0.67% | −3.4% | 0 | ch7 |
+| 3 | 0.81% | −2.3% | 0 | ch4, 233 ADU |
+| 5 | 0.81% | +13.7% | 0 | ch4 |
+
+For PC3, the difference as a fraction of **each channel's own** peak-to-peak:
+
+| ch0 | ch1 | ch2 | **ch3 (peak)** | ch4 | ch5 | **ch6** | ch7 |
+|---|---|---|---|---|---|---|---|
+| 25.6% | 5.7% | 3.8% | **5.5%** | 18.9% | 29.9% | **64.2%** | 39.3% |
+
+**A dissociation.** The noise axis PC0 scales the *peak* channel — a gain change.
+The state axes change the *distal, low-amplitude* channels, up to 64% of their
+own p2p, while barely touching the peak. On ch3 the PC3 difference peaks at
+sample 22, one **before** the trough at 23 — on the edge, which a gain change
+cannot produce. `Δt_trough` is 0 everywhere, so none of this is alignment.
+
+Total per-channel variance looked uniform because noise dominates it. The
+*state-specific* part is strongly non-uniform and sits away from the soma —
+which is where a dendritic contribution shows. So the signature is dendritic
+even though the *timing* does not track local gamma.
+
+## The real noise floor
+
+The 20-minute `.emgclean.dat` slice (channels 32 and 39, t = 10800–12000 s)
+gives the estimate the `.spk` leading samples could not. Filtering replicates
+`ndm_bandpass` exactly — subtract a 33-sample moving average (`windowHalfLength
+16`), then low-pass at 6 kHz. A Butterworth is not a substitute: their responses
+differ by 61% below 2 kHz, and the moving-average high pass passes ~fully at
+986 Hz where a Butterworth would be well into its stopband.
+
+Excluding every sample within 30 of a detected spike leaves 95.5% of the slice
+(29,334 spikes, 24.4 Hz on the group):
+
+| | group ch0 | group ch7 |
+|---|---|---|
+| **true, spike-free wideband** | 149.9 (MAD 144.0) | 199.1 (MAD **174.5**) |
+| `.spk` baseline, across-spike centring | 157.5 (**+5%**) | 232.8 (**+17%**) |
+| `.spk` baseline, within-spike centring | 119.0 (**−21%**) | 162.7 (**−18%**) |
+
+The centring fix of patch 0333 moved the estimator from ~20% low to 5–17% high —
+so it errs conservatively now, over-attributing variance to noise.
+
+**And SD exceeds MAD by 14% on ch7** against 4% on ch0. Gaussian noise gives
+~0%. That gap is residual **undetected** multi-unit activity surviving the
+spike guard, measured rather than merely conceded — and it is worse on the far,
+low-amplitude channel, which is exactly where the state-axis waveform difference
+is largest. The two cannot be separated with two channels.
+
+
 ## Confronting the model with the sort
 
 ```bash

@@ -956,5 +956,86 @@ check(abs(bd[0]["r"][0]) > 5 * bd[0]["null_p95"][0],
 check(abs(bd[0]["r"][1]) < 5 * max(bd[0]["null_p95"][1], 1e-6),
       "negative control: an unrelated axis does not")
 
+# ── 20. state waveform contrast and the wideband noise floor ────────────────
+print("[20] state waveform contrast, wideband noise floor")
+rngw = np.random.default_rng(113)
+NW, NS2, NC2 = 6000, 42, 8
+base_w2 = np.zeros((NS2, NC2))
+base_w2[23, 3] = -1400.0; base_w2[28, 3] = 380.0
+base_w2[23, 2] = -900.0; base_w2[23, 4] = -1100.0
+base_w2[23, 6] = -260.0
+# a state axis that adds a DISTAL-channel deflection without touching the peak,
+# and a separate gain axis that scales everything: the contrast must tell them apart
+distal = np.zeros((NS2, NC2)); distal[22:26, 6] = -160.0; distal[22:26, 7] = -120.0
+sstate = rngw.normal(size=NW); sgain = rngw.normal(size=NW)
+Wq = (base_w2[None] * (1 + 0.10 * sgain[:, None, None])
+      + distal[None] * sstate[:, None, None]
+      + rngw.normal(0, 25, (NW, NS2, NC2)))
+
+cs = mvd.state_waveform_contrast(Wq, sstate)
+cg = mvd.state_waveform_contrast(Wq, sgain)
+check(cs["peak_chan"] == 3, f"the peak channel is identified (ch{cs['peak_chan']})")
+check(abs(cs["d_p2p_frac"]) < 0.05,
+      f"a distal state axis barely moves the peak channel ({100*cs['d_p2p_frac']:+.1f}%)")
+check(abs(cg["d_p2p_frac"]) > 0.15,
+      f"a gain axis moves it a lot ({100*cg['d_p2p_frac']:+.1f}%)")
+check(int(np.argmax(cs["per_chan_frac"])) in (6, 7),
+      f"the state axis's largest relative change is on a DISTAL channel "
+      f"(ch{int(np.argmax(cs['per_chan_frac']))})")
+check(int(np.argmax(cg["per_chan"])) == 3,
+      f"the gain axis's largest ABSOLUTE change is on the peak channel "
+      f"(ch{int(np.argmax(cg['per_chan']))})")
+check(abs(cs["d_trough_samples"]) <= 1 and abs(cg["d_trough_samples"]) <= 1,
+      "neither is a timing shift")
+
+# ndm_bandpass: a moving-average high pass has NULLS a Butterworth does not
+imp = np.zeros(2048); imp[1024] = 1.0
+H = np.abs(np.fft.rfft(mvd.ndm_bandpass(imp, 32552.0)[:, 0]))
+fr = np.fft.rfftfreq(2048, 1 / 32552.0)
+check(H[0] < 0.02 * H.max(), f"DC is removed ({H[0]/H.max():.4f} of peak)")
+# The moving-average high pass is 1 - MA(f).  MA nulls at multiples of
+# sr/(2*half+1), so 1 - MA PEAKS there rather than dipping -- I asserted the
+# opposite first and the test caught it.  What matters for the claim in the
+# docstring is that the response differs materially from a Butterworth of
+# matched cutoff across the band where spike energy lives.
+from scipy import signal as _sg2
+bw = _sg2.filtfilt(*_sg2.butter(2, [300 / (32552 / 2), 6000 / (32552 / 2)], btype="band"), imp)
+Hb = np.abs(np.fft.rfft(bw))
+band = (fr > 100) & (fr < 2000)
+Hn = H / H.max(); Hbn = Hb / Hb.max()
+rel = float(np.max(np.abs(Hn[band] - Hbn[band])))
+check(rel > 0.15,
+      f"the moving-average response differs from a matched Butterworth by "
+      f"{100*rel:.0f}% below 2 kHz — a Butterworth is not a substitute")
+check(Hn[np.argmin(np.abs(fr - 32552.0 / 33))] > 0.8,
+      f"and it passes ~fully at sr/(2*half+1) = {32552.0/33:.0f} Hz, where the "
+      "moving average nulls")
+
+# wideband_noise must recover a known SD and exclude the spikes
+sr2 = 32552.0
+nn = 400_000
+noise_true = rngw.normal(0, 100.0, (nn, 2))
+spk_at = np.sort(rngw.choice(np.arange(200, nn - 200), 3000, replace=False))
+wb = noise_true.copy()
+for j in spk_at:
+    wb[j - 5:j + 5, 0] -= 3000.0
+r = mvd.wideband_noise(wb, spk_at, guard=30, filt=False)
+check(r["clean_fraction"] > 0.5, f"most samples survive the guard ({100*r['clean_fraction']:.0f}%)")
+check(abs(r["sd"][0] / 100.0 - 1.0) < 0.10,
+      f"the true noise SD is recovered on the spiking channel ({r['sd'][0]:.1f} vs 100)")
+r_noguard = mvd.wideband_noise(wb, spk_at, guard=0, filt=False)
+check(r_noguard["sd"][0] > r["sd"][0] * 1.3,
+      f"negative control: without the guard the spikes inflate it "
+      f"({r_noguard['sd'][0]:.0f} vs {r['sd'][0]:.0f})")
+# heavy contamination must open an SD/MAD gap
+wb2 = noise_true.copy()
+hit = rngw.choice(nn, 4000, replace=False)
+wb2[hit, 1] -= 600.0
+r2 = mvd.wideband_noise(wb2, spk_at, guard=30, filt=False)
+check(r2["sd"][1] / r2["mad_sd"][1] > 1.10,
+      f"undetected events open an SD/MAD gap ({r2['sd'][1]/r2['mad_sd'][1]:.2f})")
+check(r["sd"][1] / r["mad_sd"][1] < 1.06,
+      f"negative control: clean Gaussian noise does not ({r['sd'][1]/r['mad_sd'][1]:.3f})")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
