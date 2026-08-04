@@ -217,3 +217,79 @@ def normalize(w):
 def cosine(a, b):
     a, b = normalize(a).ravel(), normalize(b).ravel()
     return float(a @ b)
+
+
+# ── stderiv (SDIFF_CUSTOM_CAR) ──────────────────────────────────────────────
+def parse_sdiff_sets(spec):
+    """Parse an order-5 sdiffPairs spec 'a-b+c,...' into per-channel reference sets.
+
+    Mirrors parseSdiffSets in neurosuite-3's sdiff_pairs.h.  A fourth mirror of a
+    shared grammar is exactly the drift risk this codebase keeps hitting, so this
+    one is deliberately minimal and refuses rather than guessing: every channel
+    must carry a non-empty set and no channel may reference itself, the same two
+    invariants the C++ enforces.
+    """
+    toks = []
+    maxpos = 0
+    for tok in str(spec).split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        if "-" not in tok:
+            raise ValueError(f"bad sdiffPairs token {tok!r} (want a-b[+c...])")
+        a_s, rhs = tok.split("-", 1)
+        a = int(a_s)
+        refs = [int(m) for m in rhs.split("+") if m != ""]
+        if a < 0 or not refs or a in refs:
+            raise ValueError(f"bad sdiffPairs token {tok!r}")
+        maxpos = max(maxpos, a + 1, max(refs) + 1)
+        toks.append((a, refs))
+    sets = [None] * maxpos
+    for a, refs in toks:
+        if sets[a] is not None:
+            raise ValueError(f"sdiffPairs channel {a} specified twice")
+        sets[a] = refs
+    missing = [i for i, s in enumerate(sets) if s is None]
+    if missing:
+        raise ValueError(f"sdiffPairs channels {missing} have no reference set")
+    return sets
+
+
+def stderiv(x, sets, drop_last=False):
+    """Apply the order-5 spatial derivative: out[a] = x[a] - mean(x[set(a)]).
+
+    MEAN, not sum: the C++ calls this SDIFF_CUSTOM_CAR and documents the
+    singleton case as reducing to the order-4 bipolar x[a] - x[b], which only
+    holds for the mean.
+
+    This exists because a simulated footprint and a recorded one must live in the
+    SAME space before their cosines mean anything.  The session's .spk/.fet are
+    stderiv; the model produces raw extracellular potential; the transform is a
+    linear map that does NOT preserve angles, so a cosine threshold calibrated on
+    raw footprints is simply not the threshold that applies to stderiv features.
+
+    drop_last mirrors SDIFF_PASS, which drops the last channel downstream at PCA.
+    It is False here because the .spk on disk is full width -- the drop happens at
+    the PCA stage, not on the waveform.
+    """
+    x = np.asarray(x, float)
+    out = np.empty_like(x)
+    for a, refs in enumerate(sets):
+        out[..., a] = x[..., a] - x[..., refs].mean(axis=-1)
+    return out[..., :-1] if drop_last else out
+
+
+def group_geometry(probe_path, channels):
+    """Site xy (nchan, 2) in um for a spike group, straight from a .probe file.
+
+    Also returns nothing else on purpose: the caller supplies the group's global
+    channel ids from the session yaml, because inferring them from index
+    arithmetic is the specific mistake the probe files exist to prevent.
+    """
+    import yaml
+    g = yaml.safe_load(open(probe_path))["probeFile"]["sites"]["geometry"]
+    g = np.asarray(g, float)
+    ch = np.asarray(channels, int)
+    if ch.max() >= len(g):
+        raise ValueError(f"channel {ch.max()} beyond probe with {len(g)} sites")
+    return g[ch]

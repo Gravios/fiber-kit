@@ -62,11 +62,37 @@ def _load_cell(spec, d_lambda=0.1, max_comp=2500):
 
 
 def _sites(args):
-    if args.probe:
-        xy = me.load_probe(args.probe.split(","), [int(v) for v in args.channels.split(",")])
-    else:
-        xy = me.staggered_octrode(n=args.nchan)
-    return xy
+    if getattr(args, "probe", None):
+        ch = [int(v) for v in args.channels.split(",")] if args.channels else None
+        if ch is None:
+            raise SystemExit("--probe requires --channels (site ids are never inferred "
+                             "from index arithmetic; that is what the probe file is for)")
+        try:
+            xy = me.group_geometry(args.probe.split(",")[0], ch)
+        except Exception:
+            xy = me.load_probe(args.probe.split(","), ch)
+        # Re-reference to the group's own site 0.  A .probe file gives absolute
+        # coordinates on the array -- group 5 of a Buzsaki64L sits at x ~ 1000 um
+        # -- and the cell is simulated at the origin, so using them unshifted puts
+        # the electrode a millimetre away and every spike falls below detection.
+        # Within-group geometry is the only part that matters for one group.
+        return np.asarray(xy, float) - np.asarray(xy, float)[0]
+    return me.staggered_octrode(n=args.nchan)
+
+
+def _post(args, W):
+    """Push simulated footprints into the recorded feature space, if asked.
+
+    A cosine threshold calibrated on raw footprints is NOT the threshold that
+    applies to stderiv features: the transform is linear but not orthogonal, so
+    it does not preserve angles.  Any comparison against a session whose .spk and
+    .fet are stderiv has to happen after this.
+    """
+    spec = getattr(args, "sdiff_pairs", None)
+    if not spec:
+        return W
+    sets = me.parse_sdiff_sets(spec)
+    return me.stderiv(np.asarray(W, float), sets, drop_last=bool(getattr(args, "drop_last", False)))
 
 
 def _spike(cell_cmp, bio, dt, t_stop, amp):
@@ -83,7 +109,8 @@ def _footprint(im, cmp_, xy, soma_y, lateral, dt, args, rot=0.0):
                       sigma=args.sigma)
     if out["wave"] is None:
         return None, None
-    return out["wave"], me.metrics(out["wave"], xy, sr=args.sr)
+    w = _post(args, out["wave"])
+    return w, me.metrics(w, xy[:w.shape[1]], sr=args.sr)
 
 
 def _ss(vectors, labels):
@@ -480,7 +507,7 @@ def cmd_shape(args):
                                                    v_thresh=args.v_thresh,
                                                    detect_uv=args.detect)
                         if len(W):
-                            bank.setdefault((dy, lat), []).append(W)
+                            bank.setdefault((dy, lat), []).append(_post(args, W))
             D = []
             for key, Ws in bank.items():
                 W = np.concatenate(Ws)
@@ -576,6 +603,11 @@ def _probe(p):
     p.add_argument("--nsamp", type=int, default=42)
     p.add_argument("--peak", type=int, default=21)
     p.add_argument("--sigma", type=float, default=me.SIGMA_DEFAULT, help="S/m")
+    p.add_argument("--sdiff-pairs", default=None, dest="sdiff_pairs",
+                   help="session sdiffPairs; applies the stderiv transform so simulated "
+                        "footprints live in the recorded feature space")
+    p.add_argument("--drop-last", type=int, default=0, dest="drop_last",
+                   help="also drop the last channel, as SDIFF_PASS does at the PCA stage")
     return p
 
 

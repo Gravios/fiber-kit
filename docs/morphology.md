@@ -442,6 +442,49 @@ amplitude (the recovery curve), and refractory violations — which is what the
 `envelope` and recovery machinery supply, and why they are worth combining
 rather than choosing between.
 
+### On the real probe, in the real feature space
+
+The numbers above use an octrode stand-in and raw footprints. With the session's
+own `probe.0.probe` geometry for group 5 (channels 40–47: staggered ±11 µm,
+20 µm pitch, 140 µm span — **tighter** than the stand-in's ±12.5 / 21.65 / 151.5)
+and the session's order-5 `sdiffPairs` applied so simulated footprints live in
+the same stderiv space as the recorded `.spk`/`.fet`:
+
+| | median 1−cos | p99 |
+|---|---|---|
+| pvbasket, within-cell, matched amplitude | 0.0119 | 0.084 |
+| **pooled within-cell floor** | | **0.198** |
+| between cell types, same morphology and position | 0.149 | 5th pct 0.047 |
+
+Separation ratio 0.8× — the overlap conclusion survives the move to real
+geometry and real features, and is marginally worse.
+
+**The threshold comparison flips.** In raw space 1 − cos = 0.10 sat just above
+the 0.089 within-cell floor. In stderiv space the floor is **0.198**, so the
+0.90 operating threshold is *below* what one cell's own state variation
+produces. The transform is linear but not orthogonal — it does not preserve
+angles — and removing the common mode roughly doubles the within-cell angular
+spread, because common mode was much of what made two footprints of the same
+cell look alike. A threshold calibrated in raw space is not the threshold that
+applies to stderiv features.
+
+Two defects in `probe.0.probe`, found while wiring this up. Both are on shanks
+this work does not use, but both would silently corrupt anything run on them:
+
+- **Shank 0, site 1 is `[-78.5179, 977.166]`** where every other shank has
+  `[x0−11, 20]`. It is 977 µm out of plane.
+- **Shank 3's origin is x = 532.482**, breaking the exact 200 µm shank spacing
+  of the other seven (0, 200, 400, …). 532.482 + 67.518 = 600.
+
+Groups 4 and 5 (shanks 4 and 5, x ≈ 794.5 and 994.5) are clean.
+
+One more observation from implementing the transform: the session's order-5
+pattern has **rank 7 of 8**. `sdiff_pairs.h` says order-5 sets are "generally
+full rank" and treats the `SDIFF_PASS` last-channel drop as a convention for
+orders 4/5 rather than a rank necessity. For *this* pattern it is a necessity —
+the dropped channel is genuinely redundant, not merely least informative.
+
+
 ### Caveats that move this number in known directions
 
 - **All cell types were run on the same pyramidal morphology.** Only the
