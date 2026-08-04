@@ -244,3 +244,83 @@ def realign_features(waves, pca, shifts):
         m = shifts == s
         out[m] = project(w[m], pca, shift=int(s))
     return out
+
+
+# ── noise ───────────────────────────────────────────────────────────────────
+def baseline_noise_cov(raw_spk, nbase=8, nsamp=None, max_lag=None):
+    """Spatiotemporal noise covariance from the pre-spike baseline of raw waveforms.
+
+    Estimated from the RAW (.spk.standard) window, never the transformed one: the
+    transform is exactly what we want to propagate the noise THROUGH, so
+    measuring it downstream would beg the question.
+
+    The baseline is only `nbase` samples long, so the channel covariance is
+    measured at each temporal lag it supports and the result is extended as a
+    block-Toeplitz matrix with lags beyond that set to zero.  That is an
+    approximation with a known direction of error -- hippocampal band-passed
+    noise is oscillatory, its autocorrelation is still large at lag 5, and
+    truncating it inflates the variance.  Callers should compare the synthesized
+    SD against the measured one and scale, rather than trusting the absolute
+    number; noise_report() does this.
+    """
+    x = np.asarray(raw_spk, np.float64)
+    n = int(nsamp if nsamp is not None else x.shape[1])
+    nch = x.shape[2]
+    # Centre ACROSS SPIKES at each (sample, channel), not across time within a
+    # spike.  Within-spike centring removes a degree of freedom from only `nbase`
+    # correlated samples, and because the noise is strongly autocorrelated their
+    # mean carries far more than 1/nbase of the variance -- measured, it biases
+    # the SD low by ~16% and the propagated radius low by ~30%.  Centring across
+    # spikes costs 1/N of a degree of freedom instead, and removes any residual
+    # template baseline, which is what we actually want gone.
+    bl = x[:, :nbase, :] - x[:, :nbase, :].mean(0, keepdims=True)
+    L = int(max_lag if max_lag is not None else nbase)
+    Ck = []
+    for k in range(L):
+        a = bl[:, :nbase - k, :].reshape(-1, nch)
+        b = bl[:, k:, :].reshape(-1, nch)
+        Ck.append(a.T @ b / max(len(a), 1))
+    S = np.zeros((n * nch, n * nch))
+    for i in range(n):
+        for j in range(n):
+            k = abs(i - j)
+            if k < L:
+                S[i * nch:(i + 1) * nch, j * nch:(j + 1) * nch] = Ck[k]
+    return S, bl.std(axis=(0, 1))
+
+
+def sample_noise(cov, nsamp, nchan, n, rng=None):
+    """Draw n synthetic (nsamp, nchan) noise windows from a spatiotemporal cov.
+
+    Negative eigenvalues are clipped rather than the matrix repaired: the
+    truncation above makes it indefinite by construction, and clipping is the
+    nearest PSD matrix in Frobenius norm, so the failure is bounded and named
+    instead of hidden behind a regularizer.
+    """
+    rng = rng or np.random.default_rng(0)
+    w, V = np.linalg.eigh(np.asarray(cov, float))
+    w = np.clip(w, 0.0, None)
+    Z = (V * np.sqrt(w)) @ rng.normal(size=(len(w), int(n)))
+    return Z.T.reshape(int(n), nsamp, nchan)
+
+
+def noise_report(raw_spk, template, pca, sdiff_sets, nbase=8, n=20000, rng=None):
+    """How much of a cluster's feature-space span is recording noise?
+
+    Returns a dict with the noise-only feature radius, the per-channel variance
+    fractions it produces, and the scale correction implied by comparing the
+    synthesized SD against the measured baseline SD.  The corrected radius is the
+    one to use; the raw one is kept so the size of the correction is visible.
+    """
+    x = np.asarray(raw_spk, np.float64)
+    S, sd_meas = baseline_noise_cov(x, nbase=nbase, nsamp=x.shape[1])
+    N = sample_noise(S, x.shape[1], x.shape[2], n, rng)
+    sd_syn = N.std(axis=(0, 1))
+    scale = float(np.mean(sd_meas / np.maximum(sd_syn, 1e-30)))
+    F = to_features(np.asarray(template, float)[None] + N, pca, sdiff_sets=sdiff_sets)
+    mu = F.mean(0)
+    R = float(np.sqrt(((F - mu) ** 2).sum(1).mean()))
+    vc = ((F - mu) ** 2).mean(0).reshape(pca.nch, pca.ncomp).sum(1)
+    return dict(radius=R, radius_corrected=R * scale, scale=scale,
+                var_fraction=vc / max(vc.sum(), 1e-30),
+                sd_measured=sd_meas, sd_synth=sd_syn)

@@ -810,6 +810,80 @@ apply and a noise estimate can be propagated analytically through the known
 linear transform to separate the uniform component from the concentrated one.
 
 
+## Separating noise from physiology
+
+`.spk.standard.5` makes this a measurement rather than an argument. The noise is
+estimated from the **raw** pre-spike baseline — never the transformed waveform,
+since the transform is exactly what we want to propagate it through — and then
+pushed through the identical chain into the 32 feature columns.
+
+Measured baseline noise on g5: SD **119–166 ADU** rising with channel index,
+median inter-channel |r| **0.34**, and a strongly oscillatory autocorrelation
+(lag 1 **+0.67**, lag 5 **−0.78**) — band-passed, not white, so it must be
+modelled as coloured and channel-correlated.
+
+| clu | n | observed r | \|template\| | noise r | residual r | residual/\|t\| | noise share of variance |
+|---|---|---|---|---|---|---|---|
+| 2103 | 47254 | 864 | 1268 | 769 | 395 | **0.312** | 79% |
+| 2102 | 796 | 848 | 1318 | 766 | 363 | 0.276 | 82% |
+| 2097 | 2496 | 829 | 1159 | 768 | 312 | 0.269 | 86% |
+| 2105 | 1324 | 828 | 1267 | 771 | 301 | 0.237 | 87% |
+| 2094 | 728 | 841 | 1218 | 809 | 230 | 0.189 | 93% |
+| 2101 | 892 | 805 | 1268 | 778 | 208 | 0.164 | 93% |
+| 2108 | 744 | 790 | 1304 | 763 | 204 | 0.156 | 93% |
+
+**79–93% of the within-cluster feature variance is recording noise.** And the
+per-channel signature matches: the propagated noise gives 0.110–0.136 across the
+eight channels against an observed 0.114–0.136. The near-uniformity that looked
+like a puzzle is simply what this noise does after the transform.
+
+### The model and the residual agree
+
+Residual span (radius / |template|, noise removed): **0.156 – 0.312**.
+Model-predicted physiological span, same chain and probe: **0.196 – 0.434**.
+
+The ranges overlap, and the comparison is between an **upper bound and a lower
+bound**, which is the only honest way to read it: the residual still contains
+drift as well as physiology, so it bounds physiology from above; the model's
+state ensemble is five ISI patterns and two pathways at one probe position, so
+it bounds physiology from below. They are consistent, not equal.
+
+The ordering is also right. The curated cell 2103 has the **largest** residual
+(0.312) and its fragments sit below it (0.156–0.276) — a fragment samples less
+of the cell's state space, which is the same under-dispersion seen in the raw
+radius, now with the noise floor removed.
+
+Realignment shows up too: 2103's radius is **864** on the re-extracted files
+against **893** before, 3.2% tighter — the opposite of what realigning on the
+differenced waveform achieved.
+
+### A bias worth recording
+
+The first version of `baseline_noise_cov` centred the baseline **within each
+spike**, across its 8 samples. Because the noise is strongly autocorrelated,
+those 8 samples' mean carries far more than 1/8 of the variance, and the
+estimator came out **16% low in SD and 31% low in propagated radius** — which
+under-stated the noise share as 68–81% instead of 79–93%. Centring across spikes
+at each (sample, channel) instead costs 1/N of a degree of freedom and removes
+any residual template baseline. On the synthetic ground truth the recovered
+noise radius went 0.69× → **0.99×** of the true value.
+
+### Peak indices
+
+Three different sample positions are in play and they are not interchangeable:
+
+| | trough at |
+|---|---|
+| raw `.spk.standard` | **23** (57%), 22 (40%) |
+| transformed `.spk.stderiv.C5.D34` | **20** (83%), 19 (11%) |
+| declared `peakSampleIndex` | 21 |
+
+The temporal first-difference moves the extremum 3 samples earlier. Simulated
+footprints are currently cut with the trough at 21, so **the model is offset from
+the raw recording by 2 samples** — two-thirds of the lag step in the D34 basis.
+That is uncorrected.
+
+
 ## Confronting the model with the sort
 
 ```bash
