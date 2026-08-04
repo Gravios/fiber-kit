@@ -846,5 +846,67 @@ a_lc, _ = mvd.ccg_asymmetry(mvd.local_center(Xq, tq, 60.0) @ axis, tq,
 check(abs(a_lc) > 0.5 * abs(a_raw) and abs(a_lc) > 0.02,
       f"local centring preserves a genuine state signal ({a_raw:+.3f} -> {a_lc:+.3f})")
 
+# ── 17. channel extraction ──────────────────────────────────────────────────
+print("[17] channel extraction from an interleaved binary")
+try:
+    from fiber_kit import neuro_extract as nx
+except ImportError:
+    import neuro_extract as nx
+
+with _tf.TemporaryDirectory() as tdx:
+    NCHX, NFX = 96, 4000
+    rngx = np.random.default_rng(71)
+    Xr = (rngx.normal(0, 300, (NFX, NCHX)) + np.arange(NCHX) * 10).astype(np.int16)
+    pin = os.path.join(tdx, "t.lfp"); Xr.tofile(pin)
+    check(nx.n_samples(pin, NCHX) == NFX, "frame count is derived from the file size")
+
+    sp = nx.parse_spec("5*0.5-7")
+    check(sp.channel == 5 and sp.reference == 7 and abs(sp.gain - 0.5) < 1e-12,
+          "gain and reference parse together — the gain charset must not eat '-7'")
+    for badspec in ("7x", "72*", "-3", "72-", "a", "5**2", ""):
+        try:
+            nx.parse_spec(badspec); ok_bad = False
+        except ValueError:
+            ok_bad = True
+        if not ok_bad:
+            break
+    check(ok_bad, "malformed specs are refused, not silently truncated to their integer")
+
+    pout = os.path.join(tdx, "o.lfp")
+    n = nx.extract(pin, pout, NCHX, [nx.parse_spec(t) for t in ("72", "84", "43-2")],
+                   start=100, stop=600)
+    Y = np.memmap(pout, dtype=np.int16).reshape(-1, 3)
+    check(n == 500 and Y.shape == (500, 3), f"the time range is honoured {Y.shape}")
+    check(np.array_equal(Y[:, 0], Xr[100:600, 72]) and
+          np.array_equal(Y[:, 1], Xr[100:600, 84]),
+          "extracted channels are bit-exact")
+    ref = (Xr[100:600, 43].astype(np.int32) - Xr[100:600, 2]).astype(np.int16)
+    check(np.array_equal(Y[:, 2], ref), "a referenced channel is the exact difference")
+
+    p2 = os.path.join(tdx, "o2.lfp")
+    nx.extract(pin, p2, NCHX, [nx.parse_spec("72")], chunk_frames=37)
+    check(np.array_equal(np.asarray(np.memmap(p2, dtype=np.int16)), Xr[:, 72]),
+          "output is invariant to chunk size — the chunk loop does not drop or "
+          "duplicate frames at its seams")
+
+    # the refusals that matter: a wrong nChannels shears the interleave silently
+    for lbl, fn in (("wrong nChannels", lambda: nx.n_samples(pin, 95)),
+                    ("out-of-range channel",
+                     lambda: nx.extract(pin, pout, NCHX, [nx.parse_spec("999")])),
+                    ("empty range",
+                     lambda: nx.extract(pin, pout, NCHX, [nx.parse_spec("1")],
+                                        start=900, stop=800))):
+        try:
+            fn(); ok_r = False
+        except ValueError:
+            ok_r = True
+        check(ok_r, f"{lbl} is refused")
+
+    # negative control: a nChannels that DOES divide the file must be accepted,
+    # so the check above is testing divisibility and not rejecting everything
+    check(nx.n_samples(pin, 48) == NFX * 2,
+          "a divisor-compatible nChannels is accepted (the guard is divisibility, "
+          "not a whitelist) — which is why --yaml exists")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
