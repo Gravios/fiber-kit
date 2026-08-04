@@ -65,7 +65,8 @@ class Biophys:
     def __init__(self, Rm=28000.0, Ra=150.0, Ra_axon=50.0, cm=1.0, v_rest=-65.0,
                  gna=0.025, axon_na_mult=5.0, gkdr=0.01, gka=0.03, ka_scale=1.0,
                  ka_slope_per_100um=1.0, ka_dist_max=350.0, ka_prox_lim=100.0,
-                 ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0):
+                 ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0,
+                 ca1_type=None):
         self.__dict__.update(locals()); del self.__dict__["self"]
 
     def densities(self, cmp_):
@@ -170,12 +171,26 @@ class Cell:
         self.elim, self.back = _levels(cmp_.parent)
 
         cel = self.bio.celsius
-        self.chans = [
-            (mch.Na(cel, ar=self.bio.na_ar), dens["na"] * area_cm2 * 1e6, self.bio.ena),
-            (mch.Kdr(cel), dens["kdr"] * area_cm2 * 1e6, self.bio.ek),
-            (mch.KA("prox", cel), dens["ka_prox"] * area_cm2 * 1e6, self.bio.ek),
-            (mch.KA("dist", cel), dens["ka_dist"] * area_cm2 * 1e6, self.bio.ek),
-        ]
+        kind = getattr(self.bio, "ca1_type", None)
+        if kind:
+            # A CA1 cell type carries its own channel complement (morpho_chan_ca1);
+            # a PV basket cell is not a pyramidal cell with different dendrites, and
+            # its narrow spike comes from a 4th-order delayed rectifier and 5x the
+            # sodium density, neither of which is reachable by re-parameterizing the
+            # pyramidal kinetics.
+            try:
+                from . import morpho_chan_ca1 as mca
+            except ImportError:
+                import morpho_chan_ca1 as mca
+            self.chans = [(ch, dens[dk] * area_cm2 * 1e6, getattr(self.bio, ek))
+                          for ch, dk, ek in mca.channels(kind, cel)]
+        else:
+            self.chans = [
+                (mch.Na(cel, ar=self.bio.na_ar), dens["na"] * area_cm2 * 1e6, self.bio.ena),
+                (mch.Kdr(cel), dens["kdr"] * area_cm2 * 1e6, self.bio.ek),
+                (mch.KA("prox", cel), dens["ka_prox"] * area_cm2 * 1e6, self.bio.ek),
+                (mch.KA("dist", cel), dens["ka_dist"] * area_cm2 * 1e6, self.bio.ek),
+            ]
         self.chans = [c for c in self.chans if np.any(c[1] > 0)]
         self.n = n
         self.reset()
