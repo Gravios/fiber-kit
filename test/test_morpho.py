@@ -317,5 +317,111 @@ with _tf.TemporaryDirectory() as td:
     check(np.allclose(e2.cos_thr, env.cos_thr) and abs(e2.ratio_max - env.ratio_max) < 1e-12,
           "an envelope round-trips through save/load")
 
+# ── 10. validation primitives ───────────────────────────────────────────────
+print("[10] validation primitives")
+try:
+    from fiber_kit import morpho_validate as mvd
+except ImportError:
+    import morpho_validate as mvd
+
+
+class _FakeSort:
+    """Minimal stand-in with the attributes the measurements touch, so the
+    statistics can be checked against constructed data whose answer is known.
+    Building it from a real session would make these tests unrunnable anywhere
+    the session is absent, which is everywhere except one machine."""
+
+    def __init__(self, res, clu, spk):
+        self.res, self.clu, self.spk = res, clu, spk
+
+    sizes = mvd.Sort.sizes
+    idx = mvd.Sort.idx
+    template = mvd.Sort.template
+    minutes = mvd.Sort.minutes
+
+
+SR = 32552.0
+rng3 = np.random.default_rng(11)
+base_w = np.zeros((42, 8), np.float32); base_w[21, 3] = -400.0; base_w[26, 3] = 120.0
+base_w[21, 2] = -180.0; base_w[21, 4] = -160.0
+
+# unit A: 4000 spikes, Poisson at 5 Hz over 600 s, identical shape + noise
+ta = np.sort(rng3.uniform(0, 600, 4000)) * SR
+wa = base_w[None] + rng3.normal(0, 6.0, (4000, 42, 8)).astype(np.float32)
+# unit B: a *different* shape, on another channel
+bw = np.zeros((42, 8), np.float32); bw[21, 6] = -400.0; bw[26, 6] = 120.0
+tb = np.sort(rng3.uniform(0, 600, 800)) * SR
+wb = bw[None] + rng3.normal(0, 6.0, (800, 42, 8)).astype(np.float32)
+# unit C: A's own spikes, always 3-6 ms after an A spike (a burst continuation)
+pick = rng3.choice(len(ta), 600, replace=False)
+tc = ta[pick] + rng3.uniform(0.003, 0.006, 600) * SR
+wc = base_w[None] * 0.97 + rng3.normal(0, 6.0, (600, 42, 8)).astype(np.float32)
+
+res = np.concatenate([ta, tb, tc]).astype(np.int64)
+clu = np.concatenate([np.full(len(ta), 1), np.full(len(tb), 2), np.full(len(tc), 3)])
+spk = np.concatenate([wa, wb, wc])
+o = np.argsort(res)
+fs = _FakeSort(res[o], clu[o], spk[o])
+
+check(fs.sizes() == {1: 4000, 2: 800, 3: 600}, "cluster sizes are recovered")
+d_ab = mvd.cos_dist(fs.template(1), fs.template(2))
+d_ac = mvd.cos_dist(fs.template(1), fs.template(3))
+check(d_ab > 0.9 and d_ac < 0.02,
+      f"a different-channel unit is far ({d_ab:.3f}) and a rescaled copy is near ({d_ac:.4f})")
+
+nf = mvd.split_half_noise(fs, 1)
+check(0.0 < nf < 0.02, f"split-half noise of a stationary unit is small ({nf:.4f})")
+nf_small = mvd.split_half_noise(fs, 3)
+check(nf_small > nf,
+      f"a smaller cluster has a larger noise floor ({nf_small:.4f} > {nf:.4f}) — "
+      "the reason a raw distance cannot be read without it")
+
+tb6 = mvd.time_budget(fs, 1, 6)
+check(tb6.shape == (6, 6) and np.nanmax(tb6) < 0.03 and
+      np.allclose(np.diag(tb6), 0.0, atol=1e-9),
+      f"a non-drifting unit has a small time budget ({np.nanmax(tb6):.4f}) and zero diagonal")
+
+lat_c, ch_c = mvd.latency_enrichment(fs, 1, 3, SR, 10.0)
+lat_b, ch_b = mvd.latency_enrichment(fs, 1, 2, SR, 10.0)
+check(lat_c > 0.9, f"a burst continuation is strongly enriched ({100*lat_c:.0f}%)")
+check(abs(lat_b - ch_b) < 0.03,
+      f"an independent unit sits at chance ({100*lat_b:.1f}% vs {100*ch_b:.1f}%)")
+check(lat_c / max(ch_c, 1e-9) > 5.0, "enrichment is many-fold over chance")
+
+r1 = mvd.refractory(fs, [1], SR, 2.0)
+r13 = mvd.refractory(fs, [1, 3], SR, 2.0)
+check(r13 > r1, f"merging a short-latency partner costs refractory ({100*r1:.2f}% -> "
+                f"{100*r13:.2f}%)")
+
+# recovery: build a unit whose amplitude genuinely DOES depend on preceding ISI,
+# and confirm the measurement recovers the imposed law rather than inventing one.
+n = 6000
+gaps = np.concatenate([rng3.uniform(0.003, 0.010, n // 2),
+                       rng3.uniform(0.3, 1.0, n - n // 2)])
+rng3.shuffle(gaps)
+tt = np.cumsum(gaps)
+scale = np.ones(n)
+scale[1:] = np.where(np.diff(tt) < 0.020, 0.60, 1.0)
+ww = (base_w[None] * scale[:, None, None]).astype(np.float32) + \
+    rng3.normal(0, 4.0, (n, 42, 8)).astype(np.float32)
+fs2 = _FakeSort((tt * SR).astype(np.int64), np.ones(n, np.int64), ww)
+rows, b0, niso = mvd.recovery_curve(fs2, [1], SR)
+short = [r for r in rows if r[1] <= 12]
+long_ = [r for r in rows if r[0] >= 200]
+if check(short and long_, "recovery curve produced both short- and long-ISI bins"):
+    check(abs(np.mean([r[3] for r in short]) - 0.60) < 0.05,
+          f"the imposed 0.60 short-ISI ratio is recovered "
+          f"({np.mean([r[3] for r in short]):.3f})")
+    check(abs(long_[0][3] - 1.0) < 0.02, "the isolated bin normalises to 1.0")
+
+# negative control: a unit with NO ISI dependence must come back flat, or the
+# measurement is manufacturing the effect it is meant to detect.
+fs3 = _FakeSort((tt * SR).astype(np.int64), np.ones(n, np.int64),
+                (base_w[None] + rng3.normal(0, 4.0, (n, 42, 8))).astype(np.float32))
+rows3, _, _ = mvd.recovery_curve(fs3, [1], SR)
+spread = max(r[3] for r in rows3) - min(r[3] for r in rows3)
+check(spread < 0.05,
+      f"negative control: an ISI-independent unit gives a flat curve (spread {spread:.3f})")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

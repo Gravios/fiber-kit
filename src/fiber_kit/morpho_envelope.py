@@ -324,6 +324,29 @@ class Recovery:
     curve quantitatively.  Two distinct cells firing near each other have no
     such relationship, and no reason to acquire one.
 
+    ═══ FALSIFIED ON THE REFERENCE SESSION — read before using ═══
+    Measured on g5 unit 2103 pooled with its candidate fragments (56,068 spikes,
+    stderiv, curated `anchor_linked` sort), the observed amplitude ratio at a
+    2-4 ms preceding ISI is 1.030 -- spikes after a short interval are three
+    percent LARGER.  This class, fitted to the model, predicts 0.589 there.
+    Wrong sign, and an order of magnitude out.
+
+    The measured ISI-dependent SHAPE change is real but tiny: 1-cos against the
+    cell's rested template rises monotonically from 0.000 to 0.0060 at 2-4 ms.
+    So firing state moves this unit's waveform by ~0.006, while its candidate
+    fragments sit 0.011-0.071 away and its own template moves up to 0.026 across
+    the session.  Adaptation is not what a merge gate on this data is competing
+    with; drift and estimation noise are.
+
+    Why the model over-predicted is NOT established.  Candidates, none tested:
+    the unit may not be a bursting pyramidal cell; the stderiv common-average
+    reference may remove the component that carries most of the amplitude change;
+    or the extracellular amplitude, dominated by a somato-axonal sink, may
+    simply be more robust to Na inactivation than the somatic membrane potential
+    is.  Until one of those is settled, do not gate merges on predicted
+    amplitude ratio -- measure the curve on the unit with
+    morpho_validate.recovery_curve and use that.
+
     Fitted as a double exponential because the model shows two timescales and
     they come from different gates: a fast limb (h, tau ~ 5 ms) that recovers to
     unity, and a slow floor (s) that does not -- at na_ar = 0.5 the ratio

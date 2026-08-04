@@ -20,6 +20,7 @@ waveform variance a sorter sees is the cell, and how much is everything else.**
 - [Afferent topology](#afferent-topology)
 - [Constraining merges: the physiological envelope](#constraining-merges-the-physiological-envelope)
 - [Shape variance and intra-chunk over-merging](#shape-variance-and-intra-chunk-over-merging)
+- [Confronting the model with the sort](#confronting-the-model-with-the-sort)
 - [What this model does not do](#what-this-model-does-not-do)
 
 ---
@@ -50,6 +51,7 @@ provides.
 | `morpho_eap` | line-source extracellular field, band-pass, resample, `.spk`-convention windowing |
 | `morpho_input` | CA1 afferent topology: pathway table, allocation onto compartments, laminar profile, synaptic drive |
 | `morpho_chan_ca1` | per-cell-type CA1 channel kinetics and biophysical presets (Bezaire 2016) |
+| `morpho_validate` | confronts the model with a curated sort (`fiber-morpho validate`) |
 | `morpho_envelope` | spike trains, per-spike footprints, and the **admissible merge envelope** |
 | `morpho_archetype` | parametric cells for one-factor-at-a-time sweeps |
 | `morpho_study` | the `fiber-morpho` CLI |
@@ -523,6 +525,86 @@ The model's own pyramidal cell uses `ch_Navp` / `ch_Kdrp` / `ch_KvAproxp` /
 `ch_KvAdistp`, which **are** the Migliore kinetics already in `morpho_chan`, so
 `CA1_TYPES["pyramidal"]` routes there rather than offering a rival pyramidal
 cell.
+
+
+## Confronting the model with the sort
+
+```bash
+fiber-morpho validate --base <session> --group 5 \
+    --variant stderiv.C5.D34 --tag anchor_linked --main 2103
+```
+
+Run on g5's curated `anchor_linked` sort, cluster 2103 (47,254 spikes) and the
+13 neighbouring fragments the curator kept separate "because they show
+interesting deviations from the main waveform".
+
+### The recovery prediction is falsified
+
+Pooled over 2103 + 13 fragments, amplitude normalised to 9,274 spikes with
+preceding ISI > 200 ms:
+
+| preceding ISI | n | amp ratio | model | 1−cos vs rested |
+|---|---|---|---|---|
+| 2–4 ms | 2430 | **1.030** | 0.589 | 0.0058 |
+| 4–6 ms | 3314 | 1.035 | 0.758 | 0.0038 |
+| 8–12 ms | 5287 | 1.033 | 0.894 | 0.0030 |
+| 100–200 ms | 10058 | 1.019 | 0.953 | 0.0013 |
+| > 200 ms | 9274 | 1.000 | — | 0.0000 |
+
+Spikes after a short interval are 3% **larger**. `morpho_envelope.Recovery`
+predicts 0.589 at 4 ms — wrong sign, an order of magnitude out. Do not gate
+merges on predicted amplitude ratio; measure the curve on the unit.
+
+Why it over-predicted is **not established**. Candidates, none tested: the unit
+may not be a bursting pyramidal cell; the stderiv common-average reference may
+remove the component carrying most of the amplitude change; or the
+extracellular amplitude, dominated by a somato-axonal sink, may be more robust
+to Na inactivation than the somatic membrane potential is.
+
+### Firing state is not what a merge gate competes with
+
+The ISI-dependent *shape* change is real but small — 1−cos rises monotonically
+to **0.0058**. Against that:
+
+- the fragments sit **0.011–0.071** from 2103, 2–12× larger;
+- 2103's own template moves up to **0.0257** across six time blocks — the
+  within-unit variation this sort already accepts as one cell.
+
+So drift and estimation noise, not adaptation, set the budget here.
+
+### The fragments
+
+| clu | n | 1−cos | split-half noise | d/noise | d/budget | lat < 10 ms | t5–t95 (min) |
+|---|---|---|---|---|---|---|---|
+| 2102 | 796 | 0.0113 | 0.0141 | 0.8 | 0.4 | 15.3% | 165–280 |
+| 2101 | 892 | 0.0227 | 0.0105 | 2.2 | 0.9 | 28.7% | 164–178 |
+| 2108 | 744 | 0.0226 | 0.0125 | 1.8 | 0.9 | 23.4% | 164–249 |
+| 2105 | 1324 | 0.0284 | 0.0108 | 2.6 | 1.1 | 24.3% | 164–267 |
+| 2098 | 865 | 0.0301 | 0.0085 | 3.5 | 1.2 | 13.4% | 172–197 |
+| 2097 | 2496 | 0.0530 | 0.0422 | 1.3 | 2.1 | 15.7% | 168–280 |
+| **2100** | 142 | **1.0853** | 0.0371 | **29.2** | **42.2** | 26.8% | 164–178 |
+
+(chance for lat < 10 ms is 4.8% at 2103's own rate over its own lifetime)
+
+Six of thirteen are inside their own split-half noise; five more are inside
+2103's time budget. Every fragment is enriched 3–6× over chance for firing
+within 10 ms of a 2103 spike, and merging any of them moves the ISI < 2 ms
+fraction by at most 0.091% → 0.103%.
+
+**Only 2100 is distinct** — 29× its own noise, 42× the unit's time budget — and
+its difference is in time course, not spatial profile.
+
+Two classes by time: **localised** (2094, 2098, 2100, 2101, 2107 — 14–30 min
+windows from ~164 min) versus **session-spanning** (2097, 2102, 2104, 2105,
+2108 — matching 2103's own extent). The first group looks like one instability
+episode, which is a drift problem rather than a merge decision.
+
+### The command prints no verdict, deliberately
+
+The refractory column has almost no power at a few hundred spikes; latency
+enrichment is shared by a burst continuation and by a synaptically driven
+partner; and a fragment inside its own split-half noise has not been shown to
+deviate at all. These are inputs to a decision, not one.
 
 
 ## What this model does not do
