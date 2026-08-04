@@ -49,6 +49,12 @@ class Biophys:
     gNa 0.025 S/cm^2 (x5 in axon), gKdr 0.01, A-type 0.03 at the soma rising as
     (1 + d/100 um) out to ka_dist_max, celsius 35.
 
+    na_ar is na3's slow-inactivation floor: the fraction of Na channels that do
+    NOT slow-inactivate.  1.0 is the published CA1 value and makes s a constant;
+    below 1.0 the cell shows use-dependent Na availability, which is the
+    mechanism behind within-burst spike-amplitude decrement and therefore behind
+    a large part of the within-neuron waveform variance a sorter must tolerate.
+
     ka_scale is exposed as a single knob because it is the experimental
     dichotomy: CA1 cells with a strong dendritic A-current attenuate the bAP
     steeply, cells with less of it propagate nearly unattenuated (Golding, Kath
@@ -59,7 +65,7 @@ class Biophys:
     def __init__(self, Rm=28000.0, Ra=150.0, Ra_axon=50.0, cm=1.0, v_rest=-65.0,
                  gna=0.025, axon_na_mult=5.0, gkdr=0.01, gka=0.03, ka_scale=1.0,
                  ka_slope_per_100um=1.0, ka_dist_max=350.0, ka_prox_lim=100.0,
-                 ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0):
+                 ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0):
         self.__dict__.update(locals()); del self.__dict__["self"]
 
     def densities(self, cmp_):
@@ -165,7 +171,7 @@ class Cell:
 
         cel = self.bio.celsius
         self.chans = [
-            (mch.Na(cel), dens["na"] * area_cm2 * 1e6, self.bio.ena),
+            (mch.Na(cel, ar=self.bio.na_ar), dens["na"] * area_cm2 * 1e6, self.bio.ena),
             (mch.Kdr(cel), dens["kdr"] * area_cm2 * 1e6, self.bio.ek),
             (mch.KA("prox", cel), dens["ka_prox"] * area_cm2 * 1e6, self.bio.ek),
             (mch.KA("dist", cel), dens["ka_dist"] * area_cm2 * 1e6, self.bio.ek),

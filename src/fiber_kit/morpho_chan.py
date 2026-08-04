@@ -38,20 +38,34 @@ def _trap0(v, th, a, q):
 
 
 class Na:
-    """na3 / nax -- fast sodium, m^3 h.
+    """na3 / nax -- fast sodium, m^3 h s.
 
-    The published na3 also carries a slow-inactivation state s, but only when
-    ar < 1; the CA1 papers run ar = 1, for which sinf == 1 identically and s is
-    a constant.  It is therefore omitted rather than integrated as a no-op, and
-    this is the ONLY simplification of the transcription.
+    All three gates, including the slow-inactivation state s.  An earlier
+    version of this module dropped s on the grounds that sinf == 1 identically
+    at the published ar = 1, which is true and was still the wrong call: s is
+    the mechanism that makes Na availability USE-dependent over hundreds of ms,
+    and use-dependent availability is exactly what sets the spike-amplitude
+    decrement within a burst.  Removing a no-op at one operating point removed
+    the ability to leave that operating point.  ar is now a parameter: ar = 1
+    reproduces the published behaviour exactly (s stays at 1 and the extra state
+    costs only arithmetic), ar < 1 lets a fraction 1 - ar of the channels
+    slow-inactivate when depolarized.
+
+    The two inactivation gates cover different timescales and both matter for
+    within-neuron waveform variance: h recovers with a floor of 0.5 ms, so it
+    sets the amplitude of the second spike of a doublet; s has taus >= 10 ms and
+    growing, so it sets the decrement across a whole complex-spike burst and the
+    recovery between bursts.
     """
     name = "na"
     tha, qa, Ra, Rb = -30.0, 7.2, 0.4, 0.124
     thi1, thi2, qd, qg, Rd, Rg = -45.0, -45.0, 1.5, 1.5, 0.03, 0.01
     thinf, qinf, mmin, hmin, q10 = -50.0, 4.0, 0.02, 0.5, 2.0
+    vhalfs, a0s, zetas, gms, smax, vvh, vvs = -60.0, 0.0003, 12.0, 0.2, 10.0, -58.0, 2.0
 
-    def __init__(self, celsius=35.0, sh=0.0):
+    def __init__(self, celsius=35.0, sh=0.0, ar=1.0):
         self.qt = self.q10 ** ((celsius - 24.0) / 10.0); self.sh = sh
+        self.ar = float(ar); self.zf = _zfac(celsius)
 
     def rates(self, v):
         sh = self.sh
@@ -63,11 +77,17 @@ class Na:
         b = _trap0(-v, -self.thi2 - sh, self.Rg, self.qg)
         htau = np.maximum(1.0 / (a + b) / self.qt, self.hmin)
         hinf = 1.0 / (1.0 + np.exp((v - self.thinf - sh) / self.qinf))
-        return (minf, mtau), (hinf, htau)
+        with np.errstate(over="ignore"):
+            c = 1.0 / (1.0 + np.exp((v - self.vvh - sh) / self.vvs))
+            alps = np.exp(self.zetas * self.zf * (v - self.vhalfs - sh))
+            bets = np.exp(self.zetas * self.gms * self.zf * (v - self.vhalfs - sh))
+        sinf = c + self.ar * (1.0 - c)
+        taus = np.maximum(bets / (self.a0s * (1.0 + alps)), self.smax)
+        return (minf, mtau), (hinf, htau), (sinf, taus)
 
     def g(self, st):
-        m, h = st
-        return m * m * m * h
+        m, h, s = st
+        return m * m * m * h * s
 
 
 class Kdr:
