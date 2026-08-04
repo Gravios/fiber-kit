@@ -72,13 +72,14 @@ fiber-view-gui = "fiber_kit.fiber_view_gui:main"
 fiber-view-tour = "fiber_kit.fiber_view:tour_main"
 fiber-plan-edit = "fiber_kit.fiber_pipeline_editor:main"
 fiber-kit-init = "fiber_kit.init_config:main"
+fiber-morpho = "fiber_kit.morpho_study:main"
 ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml"]
+fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml", "hippocampal_pathways.tsv"]
 
 [tool.ruff]
 line-length = 110

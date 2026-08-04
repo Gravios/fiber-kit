@@ -13,6 +13,10 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   with its positionals, flags, defaults and choices (generated from each stage's argument parser).
 - **[config.md](config.md)** — every `FK_*` configuration knob, grouped by stage, with defaults and
   meanings (from `fiber-kit-exp.yaml`).
+- **[morphology.md](morphology.md)** — biophysical **forward modelling** (`fiber-morpho`):
+  reconstruction → compartmental simulation → extracellular footprint, the variance decomposition
+  (position vs. morphology), back-propagation, and the CA1 afferent topology.  Answers questions the
+  sort itself cannot: how much waveform variance is the cell and how much is everything else.
 - **[methods.md](methods.md)** — the core numerical primitives (`fiber_geometry`, `fiber_ccg`): the
   energy-scaled median±σ band overlap, the Omlor–Giese drift-warp veto, waveform complexity, and the
   refractory cross-correlogram gate, with signatures and parameters.
