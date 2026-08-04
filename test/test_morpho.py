@@ -91,12 +91,21 @@ check(res["v"][:, 0].max() > 0.0,
 # ── 3. channel kinetics ─────────────────────────────────────────────────────
 print("[3] channel kinetics")
 v = np.linspace(-90.0, 40.0, 40)
-(minf, mtau), (hinf, htau) = mch.Na(35.0).rates(v)
+(minf, mtau), (hinf, htau), (sinf, staus) = mch.Na(35.0).rates(v)
 check(np.all(np.diff(minf) > 0) and np.all(np.diff(hinf) < 0),
       "Na activation rises and inactivation falls monotonically with V")
 check(minf[0] < 0.05 and minf[-1] > 0.95, "Na m_inf spans ~0 to ~1 over the range")
-check(np.all(mtau >= mch.Na.mmin - 1e-12) and np.all(htau >= mch.Na.hmin - 1e-12),
+check(np.all(mtau >= mch.Na.mmin - 1e-12) and np.all(htau >= mch.Na.hmin - 1e-12)
+      and np.all(staus >= mch.Na.smax - 1e-9),
       "Na time constants respect their published floors")
+check(np.allclose(sinf, 1.0), "at the published ar=1 the slow gate is identically 1")
+(_, _), (_, _), (sinf_ar, _) = mch.Na(35.0, ar=0.5).rates(v)
+check(sinf_ar[0] > 0.99 and abs(float(sinf_ar[-1]) - 0.5) < 1e-3
+      and np.all(np.diff(sinf_ar) <= 1e-12),
+      "with ar=0.5 the slow gate falls monotonically from 1 to the ar floor")
+check(float(np.median(staus)) >= 10.0,
+      f"slow inactivation is slow ({np.median(staus):.0f} ms median tau, vs "
+      f"{np.median(htau):.2f} ms for h) — the two gates cover different timescales")
 # the removable singularity in trap0 must not produce a NaN at v == th
 sing = mch._trap0(np.array([mch.Na.tha]), mch.Na.tha, mch.Na.Ra, mch.Na.qa)
 check(np.isfinite(sing).all() and abs(float(sing[0]) - mch.Na.Ra * mch.Na.qa) < 1e-9,
@@ -227,6 +236,86 @@ if check(w is not None and w.shape == (42, 8), "window is (nsamp, nchan) = (42, 
     check(0.1 < m["width_ms"] < 1.5, f"trough-to-peak width is physiological ({m['width_ms']:.3f} ms)")
     check(abs(me.cosine(w, w) - 1.0) < 1e-12 and abs(me.cosine(w, -w) + 1.0) < 1e-12,
           "cosine is 1 with itself and -1 with its negation")
+
+# ── 9. physiological merge envelope ─────────────────────────────────────────
+print("[9] physiological merge envelope")
+try:
+    from fiber_kit import morpho_envelope as mv
+except ImportError:
+    import morpho_envelope as mv
+
+check(mv.train_times("burst4_5") == [5.0, 10.0, 15.0, 20.0], "burst ISI pattern expands correctly")
+check(len(mv.train_times("tonic_20_4")) == 4 and
+      abs(mv.train_times("tonic_20_4")[1] - mv.train_times("tonic_20_4")[0] - 50.0) < 1e-9,
+      "tonic rate maps to the right ISI")
+check(len(mv.train_times("recover_4_300")) == 5 and
+      mv.train_times("recover_4_300")[-1] - mv.train_times("recover_4_300")[-2] == 300.0,
+      "the recovery pattern puts a long gap before its last spike")
+
+# a train must show USE-dependent amplitude decrement -- the property the whole
+# envelope rests on.  If a burst's spikes were identical there would be nothing
+# for a gate to license, so this is the load-bearing check.
+cell_t = mc.Cell(cmp_, mc.Biophys(na_ar=0.5))
+tt = mv.train_times("burst4_4")
+_, im_t, v_t = mv.simulate_train(cell_t, tt, dt=0.02, stim_amp=6.0)
+sites_t = me.sites_3d(me.staggered_octrode() - np.array([0.0, 40.0]), z=30.0)
+Wt, kept = mv.train_footprints(im_t, cmp_, sites_t, tt, 0.02, v=v_t, v_thresh=0.0)
+if check(len(Wt) >= 3, f"a 4-spike burst yields at least 3 detected footprints ({len(Wt)})"):
+    p2p_t = (Wt.max(1) - Wt.min(1)).max(1)
+    check(p2p_t[0] > p2p_t[-1] * 1.05,
+          f"amplitude decrements within the burst ({p2p_t[0]:.0f} -> {p2p_t[-1]:.0f} uV)")
+    r_t, d_t = mv.pairwise(Wt)
+    check(np.all(r_t >= 1.0) and len(r_t) == len(Wt) * (len(Wt) - 1) // 2,
+          "pairwise returns one ratio >= 1 per spike pair")
+    check(float(np.corrcoef(r_t, d_t)[0, 1]) > 0.0,
+          "shape difference grows with amplitude ratio (the envelope's premise)")
+
+# negative control: with the slow gate pinned off AND a saturating stimulus the
+# decrement must largely vanish, or the effect above was not use-dependence.
+cell_n = mc.Cell(cmp_, mc.Biophys(na_ar=1.0))
+_, im_n, v_n = mv.simulate_train(cell_n, tt, dt=0.02, stim_amp=20.0)
+Wn, _ = mv.train_footprints(im_n, cmp_, sites_t, tt, 0.02, v=v_n, v_thresh=0.0)
+if len(Wn) >= 3 and len(Wt) >= 3:
+    pn = (Wn.max(1) - Wn.min(1)).max(1)
+    check((pn.max() / pn.min()) < (p2p_t.max() / p2p_t.min()),
+          f"negative control: saturating drive with ar=1 decrements less "
+          f"({pn.max()/pn.min():.2f} vs {p2p_t.max()/p2p_t.min():.2f})")
+
+# detection threshold must BOUND the reachable amplitude ratio
+W_all, _ = mv.train_footprints(im_t, cmp_, sites_t, tt, 0.02, v=v_t, detect_uv=0.0)
+W_det, _ = mv.train_footprints(im_t, cmp_, sites_t, tt, 0.02, v=v_t, detect_uv=40.0)
+if len(W_all) > len(W_det) >= 2:
+    ra = (W_all.max(1) - W_all.min(1)).max(1)
+    rd = (W_det.max(1) - W_det.min(1)).max(1)
+    check((rd.max() / rd.min()) <= (ra.max() / ra.min()) + 1e-9,
+          "raising the detection threshold cannot widen the reachable amplitude ratio")
+
+# envelope construction and its two rejection modes
+rng2 = np.random.default_rng(3)
+rr = np.concatenate([np.full(400, 1.02), np.full(400, 1.5)])
+dd = np.concatenate([abs(rng2.normal(0, 0.004, 400)), abs(rng2.normal(0, 0.05, 400))])
+env = mv.build_envelope(rr, dd, q=0.99, nbin=6)
+check(np.all(np.diff(env.cos_thr) >= -1e-12), "envelope thresholds are non-decreasing in ratio")
+check(float(env.allowed(1.5)) > float(env.allowed(1.02)),
+      "a wider amplitude ratio licenses more shape change")
+base = np.zeros((42, 8)); base[21, 3] = -100.0; base[25, 3] = 30.0
+ok_same, rho_s, d_s, _ = env.admissible(base, base * 1.01)
+check(ok_same and abs(rho_s - 1.01) < 1e-6 and d_s < 1e-9,
+      "a pure rescale of the same shape is admissible")
+far = base.copy(); far[21, 3] = -100.0; far[21, 6] = -90.0
+ok_shape = env.admissible(base, far)[0]
+check(not ok_shape, "a footprint on a different channel is rejected on SHAPE")
+ok_amp, rho_a, _, _ = env.admissible(base, base * 40.0)
+check(not ok_amp and rho_a > env.ratio_max,
+      "an unreachable amplitude ratio is rejected on RATIO, separately from shape")
+
+import tempfile as _tf
+with _tf.TemporaryDirectory() as td:
+    pth = os.path.join(td, "env.npz")
+    env.save(pth)
+    e2 = mv.Envelope.load(pth)
+    check(np.allclose(e2.cos_thr, env.cos_thr) and abs(e2.ratio_max - env.ratio_max) < 1e-12,
+          "an envelope round-trips through save/load")
 
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
