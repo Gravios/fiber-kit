@@ -18,6 +18,7 @@ waveform variance a sorter sees is the cell, and how much is everything else.**
 - [Sub-commands](#sub-commands)
 - [Results on the reference geometry](#results-on-the-reference-geometry)
 - [Afferent topology](#afferent-topology)
+- [Constraining merges: the physiological envelope](#constraining-merges-the-physiological-envelope)
 - [What this model does not do](#what-this-model-does-not-do)
 
 ---
@@ -47,6 +48,7 @@ provides.
 | `morpho_cable` | Hines cable solver, spike simulation, back-propagation profiles |
 | `morpho_eap` | line-source extracellular field, band-pass, resample, `.spk`-convention windowing |
 | `morpho_input` | CA1 afferent topology: pathway table, allocation onto compartments, laminar profile, synaptic drive |
+| `morpho_envelope` | spike trains, per-spike footprints, and the **admissible merge envelope** |
 | `morpho_archetype` | parametric cells for one-factor-at-a-time sweeps |
 | `morpho_study` | the `fiber-morpho` CLI |
 
@@ -99,6 +101,9 @@ fiber-morpho variance --cells a.hoc,b.hoc,archetype:multipolar \
 fiber-morpho bap   --cells a.hoc --ka-scales 0.25,1.0,4.0
 fiber-morpho input --cells a.hoc --post pyramidalcell
 fiber-morpho state --cells a.hoc --pathways ca3cell,eccell --drift 2,5,10,20
+
+fiber-morpho envelope --cells a.hoc --detect 50 --out envelope.npz
+fiber-morpho gate --envelope envelope.npz --templates candidates.npz
 ```
 
 Pass `--probe <session>.probe.0.probe --channels 24,25,...` to place the real
@@ -275,6 +280,121 @@ geometry.
 `Drive` turns pathways into conductance for `morpho_cable.simulate`; the
 GABA-B component of the NGF `ExpGABAab` synapse is dropped (GABA-A only).
 
+## Constraining merges: the physiological envelope
+
+The reason the rest of this stack exists. **A merge gate calibrated on the
+recording is circular** — its threshold is fitted to the same sort whose errors
+it is meant to catch, so it inherits that sort's over-splitting and its false
+merges alike. A gate calibrated on a forward model is not: it states what a
+single neuron *can do*, independent of any clustering, and a pair of fragments
+requiring more change than that cannot be the same cell however convincing the
+feature-space overlap.
+
+### The envelope is a function of amplitude ratio, not a scalar
+
+Two fragments at the same energy are allowed almost no shape difference; two
+fragments differing 1.4× in energy — one a burst's first spike, one its fourth —
+are allowed considerably more, because Na availability really does reshape the
+spike over that range. A single cosine threshold has to be loose enough for the
+second case and is then useless for the first. That is the specific way a scalar
+gate fails, and it is why `Envelope.allowed(ratio)` returns a curve.
+
+`ca1_5038804`, 24 trains over 6 ISI patterns × 2 Na slow-inactivation floors ×
+2 plateau levels × 3 probe positions, 98 detected spikes, 585 within-cell pairs,
+99th percentile, **detection threshold 50 µV**:
+
+| amplitude ratio | max admissible 1 − cos | pairs |
+|---|---|---|
+| 1.00 – 1.05 | 0.0143 | 248 |
+| 1.05 – 1.10 | 0.0267 | 107 |
+| 1.10 – 1.15 | 0.0452 | 74 |
+| 1.15 – 1.21 | 0.0556 | 72 |
+| 1.21 – 1.27 | 0.0585 | 42 |
+| 1.27 – 1.39 | 0.0585 | 33 |
+| **> 1.39** | **unreachable** | — |
+
+Two rejection modes, reported separately because they mean different things:
+the amplitude ratio exceeds anything one cell reaches, or the *shape* differs by
+more than that ratio licenses.
+
+### Detection threshold is what bounds the envelope
+
+The largest amplitude ratio a merge can legitimately span is not set by the cell
+— it is set by (largest spike) / (detection threshold), because a spike below
+threshold is never detected and so never joins a cluster to be merged. Sweeping
+it on the same simulations:
+
+| `--detect` | spikes | reachable ratio (max) | 99th-pct 1 − cos (max) | variance along d(r) |
+|---|---|---|---|---|
+| 0 µV | 471 | 6.45 | 1.81 | 0.60 |
+| 20 µV | 318 | 2.95 | 1.18 | 0.62 |
+| 30 µV | 250 | 2.24 | 1.18 | 0.61 |
+| **50 µV** | 98 | **1.39** | **0.059** | **0.77** |
+
+**Set `--detect` to the pipeline's actual detection threshold.** Using 0 licenses
+ratios no sorter can encounter and drags in the wild shapes of near-threshold
+events.
+
+### Unresolved: the sub-50 µV regime
+
+Between roughly 30 and 50 µV the model produces footprints reaching
+`1 − cos ≈ 1.18`, i.e. *anti-correlated* with the same cell's large spikes. This
+was checked and is **not** an alignment artifact — allowing ±4 samples of shift
+only moves it from 1.184 to 1.097, and the offending pair has the same peak
+channel and the same trough index.
+
+The likely explanation is real: in a heavily attenuated burst spike the somatic
+sink collapses while the dendritic return current does not, so the footprint's
+dominant phase inverts, and a trough-aligned extraction then cuts an essentially
+arbitrary feature. Whether recorded spikes do this — and whether a real detector
+would even fire on them — **has not been established.** Until it is, use the
+envelope at `--detect ≥ 50 µV`, where the behaviour is clean and monotone, and
+treat the low-amplitude tail as unknown rather than as licence.
+
+### The fiber premise, tested from first principles
+
+`along_curve_fraction` reports how much of the direction variance the energy
+curve d(r) accounts for. At a 50 µV detection threshold it is **0.77** —
+physiological modulation slides a unit mostly *along* one smooth curve rather
+than scattering it. That is the assumption `fiber_geometry` is built on, arrived
+at here from biophysics rather than from the sort.
+
+The remaining 23% is real, though, and it is the part a curve-distance gate
+cannot see. It sets a floor on how tight `DEFAULT_GEO_THR` can usefully be.
+
+### Using it
+
+```python
+from fiber_kit.morpho_envelope import Envelope
+env = Envelope.load("envelope.npz")
+ok, ratio, cosd, allowed = env.admissible(template_a, template_b)
+```
+
+**Admissible is a necessary condition for a merge, never a sufficient one.** It
+says only that one cell *could* have produced both. Refractory-period evidence,
+drift budget and feature-space overlap all still apply — and the envelope
+deliberately excludes drift, noise and spike overlap, so that a pair needing
+"8 µm of drift" stays distinguishable from a pair needing a physiologically
+impossible spike. Combine them downstream where the drift budget is known.
+
+### What went into the envelope
+
+- **Na slow inactivation** (`na3`'s `s` gate, `na_ar < 1`) — sets the decrement
+  across a complex-spike burst and recovery over ~1.5 s at rest.
+- **h-gate incomplete recovery** — sets the second spike of a doublet.
+- **Burst plateau** (`--plateaus`) — a labelled *stand-in* for the dendritic
+  calcium plateau, since this model has no calcium channels. Without it the soma
+  repolarizes fully between spikes and the model reports a decrement several
+  times smaller than the recorded one. Because an under-estimated envelope
+  *rejects legitimate merges*, that error runs in the dangerous direction for
+  over-splitting, so the substitute is provided and swept rather than omitted.
+  Above ~2 nA the cell enters depolarization block and the later "spikes" are
+  failures, not spikes — the `--v-thresh` and `--detect` filters remove them.
+- **Probe position** is *not* pooled into a pair: pairs are formed within one
+  cell at one electrode, because the gate must not contain the geometry variance
+  that `variance` measures separately.
+
+
 ## What this model does not do
 
 - **Nothing here has been validated against the reference session's sorted
@@ -286,8 +406,8 @@ GABA-B component of the NGF `ExpGABAab` synapse is dropped (GABA-A only).
   amplitude.
 - No calcium, no Ih, no calcium-dependent K. Ih matters for the resting profile
   of distal dendrites; its absence makes the distal tree slightly too excitable.
-- The Na model omits the `s` slow-inactivation state, which is identically 1 at
-  the published `ar=1` — the only simplification of the transcribed kinetics.
+- No calcium, so complex-spike bursting is driven by a stand-in plateau current
+  rather than by its real mechanism (see the envelope section).
 - Spikes are evoked by a somatic pulse, so the axonal initiation site and the
   resulting early waveform phase are approximate.
 - The archetypes are **factor-sweep instruments, not cells**. A smooth tapering

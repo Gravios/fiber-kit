@@ -32,9 +32,11 @@ import numpy as np
 try:
     from . import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     from . import morpho_input as mi, morpho_archetype as ma
+    from . import morpho_envelope as mv
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
+    import morpho_envelope as mv
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -314,6 +316,111 @@ def cmd_state(args):
         print(f"wrote {args.out}")
 
 
+# ── envelope ────────────────────────────────────────────────────────────────
+def cmd_envelope(args):
+    """Build the physiologically admissible waveform-change envelope."""
+    xy = _sites(args)
+    pats = args.patterns.split(",")
+    poss = [tuple(float(x) for x in p.split("/")) for p in args.positions.split(",")]
+    ars = [float(v) for v in args.na_ar.split(",")]
+    plats = [float(v) for v in args.plateaus.split(",")]
+
+    groups, nsim = {}, 0
+    t0 = time.time()
+    for spec in args.cells.split(","):
+        c = _load_cell(spec, args.d_lambda, args.max_comp)
+        for ar in ars:
+            for plat in plats:
+                for pat in pats:
+                    times = mv.train_times(pat)
+                    cell = mc.Cell(c, mc.Biophys(na_ar=ar, gna=args.gna, gkdr=args.gkdr))
+                    _, im, v = mv.simulate_train(cell, times, dt=args.dt,
+                                                 stim_amp=args.stim, plateau=plat)
+                    nsim += 1
+                    for dy, lat in poss:
+                        sites = me.sites_3d(xy - np.array([0.0, dy]), z=lat)
+                        W, _ = mv.train_footprints(im, c, sites, times, args.dt, sr=args.sr,
+                                                   nsamp=args.nsamp, peak=args.peak,
+                                                   sigma=args.sigma, v=v,
+                                                   v_thresh=args.v_thresh,
+                                                   detect_uv=args.detect)
+                        if len(W):
+                            groups.setdefault((c.name, ar, plat, dy, lat), []).append(W)
+
+    R, D, AF, nsp = [], [], [], 0
+    for key, Ws in groups.items():
+        # Pairs are formed WITHIN one cell at one electrode position, pooling
+        # firing states.  Pairing across positions would fold the geometry
+        # variance measured by `variance` back into a gate that must not
+        # contain it: the gate's job is to say what one cell at one electrode
+        # can do.
+        W = np.concatenate(Ws)
+        if len(W) < 3:
+            continue
+        nsp += len(W)
+        r, d = mv.pairwise(W)
+        R.append(r); D.append(d)
+        af, _ = mv.along_curve_fraction(W)
+        AF.append(af)
+    if not R:
+        raise SystemExit("[envelope] no usable spikes — lower --detect or --stim")
+    R = np.concatenate(R); D = np.concatenate(D); AF = np.asarray(AF, float)
+    af = float(np.nanmedian(AF))
+    env = mv.build_envelope(R, D, q=args.q, nbin=args.nbin, along_frac=af,
+                            meta=dict(cells=args.cells, detect_uv=str(args.detect),
+                                      na_ar=args.na_ar, plateaus=args.plateaus,
+                                      patterns=args.patterns, q=str(args.q)))
+
+    print(f"=== physiological envelope ({nsim} trains, {nsp} detected spikes, "
+          f"{len(R)} within-cell pairs, {time.time()-t0:.0f}s) ===")
+    print(f"detection threshold      {args.detect:.0f} uV")
+    print(f"amplitude ratio          median {np.median(R):.2f}  p95 {np.percentile(R,95):.2f}  "
+          f"max {R.max():.2f}")
+    print(f"variance along d(r)      {af:.3f}   (fraction of direction variance the "
+          f"energy curve explains)")
+    print(f"\n{'amplitude ratio':<22s}{'max admissible 1-cos':>22s}{'pairs':>8s}")
+    for k in range(len(env.cos_thr)):
+        lo = env.edges[k]
+        hi = env.edges[k + 1] if k + 1 < len(env.edges) else np.inf
+        n = int(((R >= lo) & (R < hi)).sum())
+        rng = f"{lo:.2f} - {hi:.2f}" if np.isfinite(hi) else f">= {lo:.2f}"
+        print(f"{rng:<22s}{env.cos_thr[k]:22.4f}{n:8d}")
+    print(f"\nratio above {env.ratio_max:.2f} is not reachable by one cell at this "
+          "detection threshold:\nany merge requiring it is rejected outright.")
+    if args.out:
+        env.save(args.out)
+        print(f"wrote {args.out}")
+    return env
+
+
+def cmd_gate(args):
+    """Apply an envelope to candidate merge pairs."""
+    env = mv.Envelope.load(args.envelope)
+    z = np.load(args.templates, allow_pickle=True)
+    key = args.key or ("templates" if "templates" in z else z.files[0])
+    T = np.asarray(z[key], float)
+    if T.ndim != 3:
+        raise SystemExit(f"[gate] {key} must be (nunit, nsamp, nchan), got {T.shape}")
+    lab = [str(x) for x in z[args.labels]] if args.labels and args.labels in z.files \
+        else [str(i) for i in range(len(T))]
+    print(f"envelope: {env}")
+    print(f"{'a':>6s}{'b':>6s}{'ratio':>8s}{'1-cos':>9s}{'allowed':>9s}  verdict")
+    nok = 0
+    for i in range(len(T)):
+        for j in range(i + 1, len(T)):
+            ok, rho, d, thr = env.admissible(T[i], T[j])
+            nok += ok
+            why = "" if ok else ("amplitude ratio unreachable" if rho > env.ratio_max
+                                 else "shape change exceeds physiology")
+            print(f"{lab[i]:>6s}{lab[j]:>6s}{rho:8.3f}{d:9.4f}{thr:9.4f}  "
+                  f"{'ADMISSIBLE' if ok else 'REJECT'} {why}")
+    tot = len(T) * (len(T) - 1) // 2
+    print(f"\n{nok}/{tot} candidate pairs are physiologically admissible")
+    print("Admissible means only that ONE CELL COULD produce both; it is a necessary\n"
+          "condition for a merge, never a sufficient one.  Refractory, drift and\n"
+          "feature-space evidence still apply.")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _common(p):
     p.add_argument("--cells", default="archetype:pyramidal",
@@ -379,6 +486,33 @@ def main(argv=None):
     s.add_argument("--drift", default="2,5,10,20", help="calibration displacements, um")
     s.add_argument("--seed", type=int, default=0)
     s.set_defaults(func=cmd_state)
+
+    e = _probe(_common(sub.add_parser("envelope",
+                                      help="build the physiological merge envelope")))
+    e.add_argument("--patterns",
+                   default="single,burst4_4,burst4_6,burst3_10,tonic_50_5,recover_4_150",
+                   help="ISI patterns to pool")
+    e.add_argument("--positions", default="20/25,40/30,60/45",
+                   help="probe placements as depth/lateral in um")
+    e.add_argument("--na-ar", default="1.0,0.5", dest="na_ar",
+                   help="Na slow-inactivation floors to pool")
+    e.add_argument("--plateaus", default="0.0,1.0",
+                   help="burst plateau currents (nA); a stand-in for dendritic Ca")
+    e.add_argument("--detect", type=float, default=50.0,
+                   help="detection threshold in uV — this BOUNDS the envelope")
+    e.add_argument("--v-thresh", type=float, default=0.0, dest="v_thresh",
+                   help="somatic mV a stimulus must reach to count as a spike")
+    e.add_argument("--q", type=float, default=0.99, help="envelope quantile")
+    e.add_argument("--nbin", type=int, default=8)
+    e.set_defaults(func=cmd_envelope, t_stop=None)
+
+    g = sub.add_parser("gate", help="apply an envelope to candidate merge pairs")
+    g.add_argument("--envelope", required=True, help="npz written by `envelope`")
+    g.add_argument("--templates", required=True,
+                   help="npz holding a (nunit, nsamp, nchan) template array")
+    g.add_argument("--key", default=None, help="array name inside --templates")
+    g.add_argument("--labels", default=None, help="array of unit labels inside --templates")
+    g.set_defaults(func=cmd_gate)
 
     a = ap.parse_args(argv)
     return a.func(a)
