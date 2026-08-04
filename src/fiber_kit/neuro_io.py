@@ -726,12 +726,15 @@ def session_rates(yaml_path):
 def lfp_index(res, sampling_rate, lfp_rate, first_record=0):
     """Map .res timestamps (acquisition samples) to LFP sample indices.
 
-    first_record subtracts the offset of an extracted segment, so a range pulled
-    with `process_extractchannels -s N` indexes from zero.
+    first_record is in the OUTPUT file's own samples, not acquisition samples:
+    `process_extractchannels -s N` on a .lfp counts LFP records, so the offset is
+    subtracted after the rate conversion, never scaled by it.  Scaling it was the
+    first version and it is wrong by the rate ratio -- 26x here, which is large
+    enough to be obvious in a spike-triggered average and invisible in a spot
+    check of one timestamp.
     """
-    return np.rint(np.asarray(res, np.float64) * (float(lfp_rate) / float(sampling_rate))
-                   - float(first_record) * (float(lfp_rate) / float(sampling_rate))
-                   ).astype(np.int64)
+    idx = np.rint(np.asarray(res, np.float64) * (float(lfp_rate) / float(sampling_rate)))
+    return (idx - float(first_record)).astype(np.int64)
 
 
 def open_signal(path, nchan, mode="r"):

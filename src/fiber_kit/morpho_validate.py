@@ -41,6 +41,11 @@ try:
 except ImportError:
     import neuro_io as nio
 
+# The .res -> LFP sample mapping lives in neuro_io and is re-exported, not
+# reimplemented: a second copy would be a second place the convention is
+# decided, and being one sample out is invisible in a rate ratio.
+lfp_index = nio.lfp_index
+
 
 def cos_dist(a, b):
     a = np.asarray(a, float).ravel(); b = np.asarray(b, float).ravel()
@@ -491,4 +496,107 @@ def state_axes(features, times_s, ncomp=8, win_s=60.0, lag=(0.010, 0.050), rng=N
                         asym=a, asym_shuffled=sh, n_pairs=npair,
                         state_var=sv, state_frac=(sv / tot if np.isfinite(sv) else np.nan),
                         direction=Vt[k]))
+    return out
+
+
+# ── LFP phase ───────────────────────────────────────────────────────────────
+def bipolar(lfp, a=0, b=1):
+    """Difference of two LFP channels: the local voltage gradient.
+
+    Subtracting two nearby sites cancels the volume-conducted far field, which
+    is common to both, and keeps the local gradient, which is not.  Measured on
+    g5's shank-7 pair (140 um apart): the bipolar theta SD is 1.88x the
+    common-mode SD, so the derivation is doing real work rather than just
+    halving the signal.
+
+    It does NOT by itself identify a layer.  Two sites 140 um apart constrain
+    the gradient between them; naming the generator needs the fissure located,
+    which that span cannot do.
+    """
+    x = np.asarray(lfp)
+    return x[:, a].astype(np.float64) - x[:, b].astype(np.float64)
+
+
+def band_phase(x, sr, lo=5.0, hi=11.0, order=3, chunk=1_000_000, overlap=20_000):
+    """Instantaneous phase and amplitude in a band, computed in chunks.
+
+    Chunked because a Hilbert transform of a full session at 1250 Hz is a
+    26-million-point FFT and will exhaust memory -- it did, on the first run.
+    Chunks overlap by `overlap` samples and only their interiors are kept, so
+    the filter and Hilbert edge transients never reach the output; at 1250 Hz
+    the default overlap is 16 s, far longer than a 5 Hz filter's ringing.
+    """
+    from scipy import signal as _sig
+    x = np.asarray(x, np.float64)
+    n = len(x)
+    b, a = _sig.butter(order, [lo / (sr / 2), hi / (sr / 2)], btype="band")
+    ph = np.empty(n, np.float32); am = np.empty(n, np.float32)
+    for s in range(0, n, chunk):
+        p = max(s - overlap, 0); q = min(s + chunk + overlap, n)
+        seg = x[p:q] - x[p:q].mean()
+        h = _sig.hilbert(_sig.filtfilt(b, a, seg))
+        i0, i1 = s - p, min(s + chunk, n) - p
+        ph[s:s + (i1 - i0)] = np.angle(h[i0:i1])
+        am[s:s + (i1 - i0)] = np.abs(h[i0:i1])
+    return ph, am
+
+
+def circ_lin_corr(y, phase):
+    """Circular-linear correlation of a linear variable with a phase.
+
+    Note what it does NOT do: a value of 0.03 at n = 24,000 is many standard
+    errors from zero and still explains under 0.1% of the variance.  Report the
+    shuffled control alongside it, which is why phase_dependence does.
+    """
+    y = np.asarray(y, float); p = np.asarray(phase, float)
+    c = np.corrcoef(y, np.cos(p))[0, 1]
+    s = np.corrcoef(y, np.sin(p))[0, 1]
+    rcs = np.corrcoef(np.cos(p), np.sin(p))[0, 1]
+    return float(np.sqrt(max(c * c + s * s - 2 * c * s * rcs, 0.0) / max(1 - rcs * rcs, 1e-12)))
+
+
+def phase_modulation(phase, nbin=18):
+    """Depth and max/min of a count histogram over phase — the positive control.
+
+    If the spikes themselves are not phase modulated, the phase estimate is
+    wrong or the band is empty, and nothing downstream of it means anything.
+    """
+    h, _ = np.histogram(np.asarray(phase, float), bins=nbin, range=(-np.pi, np.pi))
+    m = h.mean()
+    return dict(depth=float((h.max() - h.min()) / max(m, 1e-12)),
+                ratio=float(h.max() / max(h.min(), 1)), counts=h)
+
+
+def phase_dependence(features, times_s, phase, amp=None, amp_pct=60.0, ncomp=6,
+                     win_s=60.0, rng=None, nshuffle=10):
+    """Do the residual's principal axes track LFP phase?
+
+    Restricted to high-amplitude epochs by default: phase is meaningless where
+    the rhythm is absent, and including those samples dilutes a real effect with
+    noise rather than guarding against a false one.
+
+    Each axis is reported with BOTH its phase correlation and its shared-state
+    variance, because the interesting question is whether they are the same
+    axes.  On g5 cluster 2103 they are not -- the axis with the strongest phase
+    correlation carries the least state.
+    """
+    rng = rng or np.random.default_rng(0)
+    X = local_center(features, times_s, win_s)
+    t = np.sort(np.asarray(times_s, float))
+    p = np.asarray(phase, float)
+    keep = np.ones(len(p), bool) if amp is None else \
+        (np.asarray(amp, float) > np.percentile(np.asarray(amp, float), amp_pct))
+    R = X - X.mean(0)
+    U, S, Vt = np.linalg.svd(R, full_matrices=False)
+    tot = float((R ** 2).sum(1).mean())
+    out = []
+    for k in range(min(ncomp, len(S))):
+        y = R @ Vt[k]
+        sv, _, _ = shared_state_variance(y, t)
+        r = circ_lin_corr(y[keep], p[keep])
+        sh = float(np.mean([circ_lin_corr(y[keep], rng.permutation(p[keep]))
+                            for _ in range(nshuffle)]))
+        out.append(dict(pc=k, var_frac=float(S[k] ** 2 / (S ** 2).sum()),
+                        state_frac=(sv / tot if np.isfinite(sv) else np.nan),
+                        r_phase=r, r_shuffled=sh, direction=Vt[k]))
     return out
