@@ -670,5 +670,80 @@ check(shn < 0.02,
       f"negative control: no ISI dependence gives ~0 ({100*shn:.2f}%) — the bin "
       "structure alone does not manufacture a share")
 
+# ── 14. noise propagation ───────────────────────────────────────────────────
+print("[14] noise model and propagation")
+rngn = np.random.default_rng(41)
+NS, NC, NB = 42, 4, 8
+# synthetic spikes: a template plus KNOWN coloured, channel-correlated noise, so
+# the recovered noise radius has a right answer that is not the code's own output
+tmpl = np.zeros((NS, NC)); tmpl[23, 1] = -900.0; tmpl[28, 1] = 260.0
+tmpl[23, 0] = -350.0; tmpl[23, 2] = -400.0
+mix = np.array([[1.0, 0.5, 0.2, 0.0], [0.5, 1.0, 0.5, 0.2],
+                [0.2, 0.5, 1.0, 0.5], [0.0, 0.2, 0.5, 1.0]])
+Lm = np.linalg.cholesky(mix + 1e-9 * np.eye(NC))
+def _coloured(m):
+    w = rngn.normal(size=(m, NS + 6, NC)) @ Lm.T
+    k = np.array([0.25, 0.5, 0.7, 0.5, 0.25, -0.2, -0.4])   # band-pass-ish
+    out = sum(k[j] * w[:, j:j + NS, :] for j in range(len(k)))
+    return out * 60.0
+noise = _coloured(4000)
+spk_syn = tmpl[None] + noise
+
+S, sd_meas = mf.baseline_noise_cov(spk_syn, nbase=NB)
+check(S.shape == (NS * NC, NS * NC), f"covariance is (nsamp*nchan)^2 {S.shape}")
+truth_sd = noise.std(axis=(0, 1))
+check(float(np.max(np.abs(sd_meas / truth_sd - 1.0))) < 0.15,
+      f"baseline SD recovers the true noise SD "
+      f"(max err {100*np.max(np.abs(sd_meas/truth_sd-1)):.0f}%)")
+
+drawn = mf.sample_noise(S, NS, NC, 3000, rngn)
+check(drawn.shape == (3000, NS, NC), "sample_noise returns the requested shape")
+r_syn = float(np.mean(drawn[:, :-1, :] * drawn[:, 1:, :]) / np.mean(drawn * drawn))
+r_tru = float(np.mean(noise[:, :-1, :] * noise[:, 1:, :]) / np.mean(noise * noise))
+check(abs(r_syn - r_tru) < 0.25 and r_syn > 0.2,
+      f"the synthetic noise is COLOURED like the real thing "
+      f"(lag-1 autocorr {r_syn:.2f} vs {r_tru:.2f}) — white noise would give ~0")
+xc_syn = float(np.corrcoef(drawn.reshape(-1, NC).T)[0, 1])
+xc_tru = float(np.corrcoef(noise.reshape(-1, NC).T)[0, 1])
+check(abs(xc_syn - xc_tru) < 0.20,
+      f"and channel-correlated ({xc_syn:.2f} vs {xc_tru:.2f})")
+
+# propagate: the noise-only radius must reproduce the radius of the synthetic
+# cluster, which by construction has NO physiological component at all
+with _tf2.TemporaryDirectory() as td2:
+    pth2 = os.path.join(td2, "n.pca.1")
+    ev2 = np.zeros((NC, 3, 21))
+    bump = np.sin(np.linspace(0, np.pi, 15))
+    for ch in range(NC):
+        ev2[ch, 0, 3:18] = bump / np.linalg.norm(bump)
+        ev2[ch, 1, 3:18] = np.gradient(bump) / np.linalg.norm(np.gradient(bump))
+        ev2[ch, 2, 3:18] = (bump ** 2 - bump.mean()) / np.linalg.norm(bump ** 2 - bump.mean())
+    _write_pcae(pth2, NC, 21, 3, 10, False, 0, ev2, np.zeros((NC, 21)))
+    b2 = mf.load_pca(pth2)
+    rep = mf.noise_report(spk_syn, tmpl, b2, None, nbase=NB, n=4000, rng=rngn)
+    F_true = mf.to_features(spk_syn, b2, sdiff_sets=None)
+    R_true = float(np.sqrt(((F_true - F_true.mean(0)) ** 2).sum(1).mean()))
+    q = rep["radius_corrected"] / R_true
+    check(0.75 < q < 1.35,
+          f"noise-only radius recovers a pure-noise cluster's radius ({q:.2f}x) — "
+          "the whole separation rests on this")
+    check(0.7 < rep["scale"] < 1.3,
+          f"the Toeplitz truncation's scale correction is modest ({rep['scale']:.2f})")
+
+    # negative control: add a LARGE physiological component and the noise estimate
+    # must NOT follow it, or it is measuring the cluster rather than the noise
+    # The perturbation has to be large ENOUGH to move the cluster radius against
+    # this noise level, or the control asserts nothing.  At 0.5x the template it
+    # was worth 1.02x the radius and the check was vacuous.
+    phys = rngn.normal(size=(4000, 1, 1)) * tmpl[None] * 3.0
+    rep2 = mf.noise_report(spk_syn + phys, tmpl, b2, None, nbase=NB, n=4000, rng=rngn)
+    check(abs(rep2["radius_corrected"] / rep["radius_corrected"] - 1.0) < 0.25,
+          f"negative control: a large physiological term does not inflate the NOISE "
+          f"estimate ({rep2['radius_corrected']/rep['radius_corrected']:.2f}x)")
+    F2 = mf.to_features(spk_syn + phys, b2, sdiff_sets=None)
+    R2 = float(np.sqrt(((F2 - F2.mean(0)) ** 2).sum(1).mean()))
+    check(R2 > R_true * 1.2,
+          "...while the cluster's own radius does grow, so the control has bite")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
