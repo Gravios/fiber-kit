@@ -812,6 +812,14 @@ linear transform to separate the uniform component from the concentrated one.
 
 ## Separating noise from physiology
 
+> **Superseded in part.** The baseline-derived noise estimate below is unsafe on
+> detected spikes, and the "79–93% recording noise" figure it produced is both
+> mislabelled and low. See *What the variance actually decomposes into*, which
+> replaces it. The `.spk.standard` machinery is retained because the noise
+> spectrum it measures is still the right input for a forward noise model — it
+> is the *share* attributed to it that was wrong.
+
+
 `.spk.standard.5` makes this a measurement rather than an argument. The noise is
 estimated from the **raw** pre-spike baseline — never the transformed waveform,
 since the transform is exactly what we want to propagate it through — and then
@@ -882,6 +890,71 @@ The temporal first-difference moves the extremum 3 samples earlier. Simulated
 footprints are currently cut with the trough at 21, so **the model is offset from
 the raw recording by 2 samples** — two-thirds of the lag step in the D34 basis.
 That is uncorrected.
+
+
+## What the variance actually decomposes into
+
+Estimating noise from the pre-spike samples of a `.spk` window is unsafe, for
+reasons visible in the data itself:
+
+- **The leading samples are not baseline.** `|template − baseline|` rises to 21
+  ADU by sample 5 and 73 by sample 11 — the spike's rising phase is inside the
+  window.
+- **Detected-spike windows are selected events.** In a dense band the pre-spike
+  region routinely contains other units' spikes, so the estimate is of
+  multi-unit activity, not a noise floor.
+- The block-Toeplitz truncation left **102 of 336 eigenvalues negative**, and
+  clipping them *raises* the trace.
+
+### An estimator that touches none of that
+
+Two spikes of the same cell less than a second apart share the electrode
+position, the dendritic state and the behavioural context. Whatever differs
+between them is spike-independent:
+
+`V_fast = E[ |F_i − F_j|² ] / 2` over temporally adjacent pairs.
+
+Pooled cell 2103 + its 14 fragments, 56,068 spikes, |template| = 1256:
+
+| component | share of variance | radius | radius / \|template\| |
+|---|---|---|---|
+| **fast, spike-independent** | **94.6%** | 848 | 0.675 |
+| drift (between 12 time blocks) | 3.2% | 157 | 0.125 |
+| slow, non-drift (≈ physiology) | **1.7%** | 128 | **0.102** |
+
+Trimming the top 5% of residuals moves the fast share by ≤1 point, so this is
+the bulk and not a handful of outliers. Pooling the fragments does not recover
+more slow variance (0.162 → 0.161), so over-splitting is not truncating it.
+
+### Two corrections this forces
+
+**The model over-predicts physiological span by 2–4×.** Predicted 0.196–0.434;
+the slow non-drift component is **0.102**, and even the whole slow term is 0.161.
+Last section's claim that model and residual *agree* was an artifact of the
+baseline estimator under-counting the fast term — it left an inflated residual
+(0.156–0.312) that happened to overlap the model's range. It does not.
+
+**`V_fast` is not "recording noise".** It is electrode noise **plus spike
+superposition plus cluster contamination**, and the decomposition does not
+separate them. Two facts rule out the easy readings: the residual is *not*
+concentrated in the timing subspace (28.8% of variance against 26.4% by chance;
+correlation with the measured trough index is +0.08), so it is not alignment
+jitter; and the tails are far from Gaussian (99.9th percentile of the squared
+residual norm is **4.4×** its mean, where χ²₃₂ gives 2.0), so a Gaussian noise
+model is wrong in the tail. Only the claim that it is **spike-independent** is
+supported — which is enough for the merge question, because a component that
+decorrelates completely between adjacent spikes cannot be the cell's
+physiological state.
+
+### What survives
+
+The operational conclusion is unchanged and sharper: **only ~2–5% of a cluster's
+feature variance is slow enough to be physiology or drift.** A merge gate
+thresholding total feature distance is thresholding a quantity that is ~95%
+spike-independent — a noise-and-contamination threshold wearing a physiology
+label. The dispersion test of the previous section still works, because it
+compares like with like: every cluster carries the same fast term, so a cluster
+that is *under*-dispersed is short of it, which is the fragment signature.
 
 
 ## Confronting the model with the sort

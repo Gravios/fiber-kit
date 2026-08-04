@@ -745,5 +745,48 @@ with _tf2.TemporaryDirectory() as td2:
     check(R2 > R_true * 1.2,
           "...while the cluster's own radius does grow, so the control has bite")
 
+# ── 15. fast/slow decomposition ─────────────────────────────────────────────
+print("[15] fast / slow variance decomposition")
+rngs = np.random.default_rng(53)
+DD, NN = 32, 6000
+tt2 = np.cumsum(rngs.exponential(0.3, NN))
+tmplF = rngs.normal(0, 200, DD)
+fastc = rngs.normal(0, 30, (NN, DD))                       # spike-independent
+drift = np.outer(np.linspace(-1, 1, NN), rngs.normal(0, 40, DD))   # slow ramp
+Xfs = tmplF + fastc + drift
+d = mvd.fast_slow(Xfs, tt2)
+check(abs(d["v_fast"] / (30.0 ** 2 * DD) - 1.0) < 0.15,
+      f"V_fast recovers the imposed spike-independent variance "
+      f"({d['v_fast']:.0f} vs {30.0**2*DD:.0f})")
+check(d["v_drift"] / d["v_total"] > 0.05,
+      f"the imposed drift shows up as between-block variance "
+      f"({100*d['v_drift']/d['v_total']:.0f}%)")
+check(d["v_slow"] > d["v_drift"] * 0.5,
+      "slow variance is at least of the order of the drift term it contains")
+
+# negative control: with NO slow term, v_slow must collapse.  Without this the
+# decomposition could be attributing noise to the slow bin and nobody would know.
+Xf0 = tmplF + rngs.normal(0, 30, (NN, DD))
+d0 = mvd.fast_slow(Xf0, tt2)
+check(d0["v_slow"] / d0["v_total"] < 0.05,
+      f"negative control: a purely fast cluster has ~no slow variance "
+      f"({100*d0['v_slow']/d0['v_total']:.1f}%)")
+check(d0["v_drift"] / d0["v_total"] < 0.02,
+      f"...and ~no drift ({100*d0['v_drift']/d0['v_total']:.2f}%)")
+
+# the estimator must not care about spike ORDER beyond adjacency in time
+perm = rngs.permutation(NN)
+dp = mvd.fast_slow(Xf0[perm], tt2[perm])
+check(abs(dp["v_fast"] / d0["v_fast"] - 1.0) < 0.1,
+      "shuffling the input order does not change V_fast (it sorts by time itself)")
+
+check(1.5 < mvd.tail_index(Xf0) < 3.0,
+      f"Gaussian residuals give a chi2-like tail index ({mvd.tail_index(Xf0):.1f})")
+Xh = Xf0.copy(); k = rngs.choice(NN, 60, replace=False)
+Xh[k] += rngs.normal(0, 400, (60, DD))
+check(mvd.tail_index(Xh) > mvd.tail_index(Xf0) * 1.5,
+      f"contaminating 1% of spikes raises the tail index "
+      f"({mvd.tail_index(Xh):.1f} vs {mvd.tail_index(Xf0):.1f})")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
