@@ -690,6 +690,77 @@ rule leaves 2094, 2097, 2098, 2101, 2102, 2104, 2105, 2108, all with max D² ≤
 Only **2100** is separated by this test as well as by shape.
 
 
+## The constant per-cell span, and where ISI changes sit inside it
+
+The covariance tests above need n ≫ 32 and are useless on the small clusters
+where the question is sharpest. That was never a sample-size problem to work
+around — it was a sign that a **location** statistic was the wrong tool. What
+distinguishes a fragment from a cell is **dispersion**, and dispersion has one
+useful number in it.
+
+### The span is constant
+
+Across 275 clusters with n ≥ 200 in g5's `anchor_linked` sort, the RMS distance
+of a cluster's spikes from its own centroid in the 32-dim `.fet`:
+
+| | |
+|---|---|
+| median radius | **993** |
+| IQR | 908 – 1097 |
+| CoV | **0.20** |
+| radius vs template energy | log-log slope **+0.057**, R² **0.020** |
+
+Flat. This is the feature-space form of the constant absolute scatter radius
+already established on raw amplitudes (~240 ADU, 13% CoV, R² = 0.00) — the same
+phenomenon, measured in the space the sort actually clusters in.
+
+Note the population median is inflated by contaminated clusters. The **curated**
+cell 2103 sits at **893**, which is the better estimate of one cell's span.
+
+### ISI-dependent changes live inside it
+
+Pooling 2103 with its 14 fragments (56,068 spikes) and binning by preceding ISI:
+
+- ISI bin membership explains **0.21%** of the cell's feature variance
+- that is a radius of **41** inside a cell radius of **897**
+
+So the ISI-dependent modulation is a component *within* the constant span, at
+~4.6% of the radius — not an extra tolerance a merge gate has to add on top.
+
+### The operational consequence: under-dispersion is over-splitting
+
+A fragment is a **compact sub-region** of a cell, so it is *tighter* than a cell,
+not merely nearer. Every one of 2103's fragments is under-dispersed:
+
+| clu | n | radius | × population median |
+|---|---|---|---|
+| 2108 | 744 | 794 | 0.80 |
+| 2106 | 185 | 806 | 0.81 |
+| 2101 | 892 | 810 | 0.82 |
+| 2105 | 1324 | 831 | 0.84 |
+| 2094 | 728 | 843 | 0.85 |
+| 2098 | 865 | 864 | 0.87 |
+| 2102 | 796 | 878 | 0.88 |
+| 2104 | 366 | 886 | 0.89 |
+| 2107 | 268 | 885 | 0.89 |
+| 2097 | 2496 | 956 | 0.96 |
+
+And **merging all 14 into 2103 grows the radius by 0.5%** — 893 → 897 while n
+goes 47,254 → 56,068. Adding 8,814 spikes from fourteen "separate" clusters
+barely moves the dispersion, which is what one cell looks like and is not what
+absorbing fourteen other cells would look like.
+
+`dispersion_verdict()` reads this out: under → fragment, over → contamination,
+neither → one cell. It needs **no covariance**, so it works down to ~20 spikes,
+because a radius averages n × d squared residuals rather than n of them.
+
+This is what the biophysical model is for: to predict that span, and its
+per-channel structure, from first principles rather than from the sort. The
+empirical target it has to hit is the near-uniform per-channel variance
+(0.113–0.135 of the total, against amplitude fractions of 0.068–0.157) reported
+in the previous section.
+
+
 ## Confronting the model with the sort
 
 ```bash
