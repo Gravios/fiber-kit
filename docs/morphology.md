@@ -20,6 +20,7 @@ waveform variance a sorter sees is the cell, and how much is everything else.**
 - [Afferent topology](#afferent-topology)
 - [Constraining merges: the physiological envelope](#constraining-merges-the-physiological-envelope)
 - [Shape variance and intra-chunk over-merging](#shape-variance-and-intra-chunk-over-merging)
+- [The session's actual feature space](#the-sessions-actual-feature-space)
 - [Confronting the model with the sort](#confronting-the-model-with-the-sort)
 - [What this model does not do](#what-this-model-does-not-do)
 
@@ -51,6 +52,7 @@ provides.
 | `morpho_eap` | line-source extracellular field, band-pass, resample, `.spk`-convention windowing |
 | `morpho_input` | CA1 afferent topology: pathway table, allocation onto compartments, laminar profile, synaptic drive |
 | `morpho_chan_ca1` | per-cell-type CA1 channel kinetics and biophysical presets (Bezaire 2016) |
+| `morpho_features` | the session's real feature space: PCAE basis, lagged projection, realignment |
 | `morpho_validate` | confronts the model with a curated sort (`fiber-morpho validate`) |
 | `morpho_envelope` | spike trains, per-spike footprints, and the **admissible merge envelope** |
 | `morpho_archetype` | parametric cells for one-factor-at-a-time sweeps |
@@ -525,6 +527,78 @@ The model's own pyramidal cell uses `ch_Navp` / `ch_Kdrp` / `ch_KvAproxp` /
 `ch_KvAdistp`, which **are** the Migliore kinetics already in `morpho_chan`, so
 `CA1_TYPES["pyramidal"]` routes there rather than offering a rival pyramidal
 cell.
+
+
+## The session's actual feature space
+
+Everything this repo measured before `morpho_features` used cosine distance on
+**waveforms**. The sort does not cluster on waveforms. It clusters on the
+`.fet`, and that file is neither the waveform nor a straightforward PCA of it.
+
+Read off g5's `.pca.stderiv.C5.D34.5` (PCAE v2): `nCh=8, data2use=31,
+nComp=4, recShift=6, centered=False, method=8`.
+
+- **Method 8 is `StderivCustomCar`** — the per-group `sdiffPairs` reference-set
+  form, and `hasTemporalDiff` is true for it, so the extractor applies the
+  channel difference **and** a temporal first-difference.
+- **Both are already applied on disk.** Projecting `.spk` onto the left-null
+  vector of the channel-mixing matrix gives 0.0033 of signal scale — zero up to
+  int16 rounding. A consumer must not transform again.
+- **The four "components" per channel are not four principal components.** They
+  are **PC1@−3, PC1@0, PC1@+3, PC2@0**, with the lag baked into the stored
+  31-sample vectors by zero-padding: `corr(c0,c1)` at lag −3 = 1.000,
+  `corr(c1,c2)` at lag −3 = 1.000, `corr(c0,c2)` at lag −6 = 1.000. With
+  `recShift=6`, PC1's 25-sample support sits at absolute samples 6–31, 9–34,
+  12–37 — centred on peak−3, peak, peak+3. `PcaBasis.lag_structure()` recovers
+  this from the file rather than assuming it.
+
+**Verified:** projecting the recorded `.spk` through `load_pca` + `project`
+reproduces the on-disk `.fet` **exactly** — 100% of 5000 × 32 values match after
+rounding, max error 0.500.
+
+### What this does to distance
+
+Three of every four dimensions per channel are one filter at three time offsets,
+so the space encodes **timing explicitly**. The 32 nominal dimensions have a
+**participation ratio of 6.1** (90% of variance in 13 dims, 99% in 25). A cosine
+threshold calibrated on waveforms is calibrated in the wrong geometry, and every
+shape number earlier in this document is subject to that.
+
+`to_features()` puts a simulated footprint through the identical chain —
+channel difference, then temporal difference, then the lagged projection — so
+model and recording land in the same 32 columns.
+
+### Realignment: measured, and it made things worse
+
+`fiber-morpho` can realign each cluster to its own template and reproject.
+On g5's `anchor_linked` sort, with two template re-estimation passes and
+`max_shift=3`:
+
+| | |
+|---|---|
+| spikes moved | 25.7% |
+| within-cluster RMS feature radius | 1033 → **1055** (2.2% *looser*) |
+| clusters that tightened | 8.9% |
+
+So realignment is **not** shipped as a pipeline step. Two things are established
+about it and one is not:
+
+- **The shifts are real, not estimator noise.** Split-half agreement of the
+  shift estimator is 99.8% against a chance level of ~14%, with 18.8% of spikes
+  non-zero.
+- **The trough sits at sample 20, not the declared `peakSampleIndex=21`** —
+  76% of cluster 2103's spikes trough at 20, only 9.5% at 21. The temporal
+  first-difference moves the extremum by a sample. Simulated footprints are cut
+  with the trough at 21, so **model and recording are offset by one sample**,
+  which is a third of the lag step.
+- **The mechanism is not established.** A tempting explanation — that a window
+  shift is a different operation from reading a different lag — was asserted,
+  written as a test, and *falsified*: in the window interior the two move along
+  the same axis to corr 1.000. Whatever loosens the clusters, it is not that.
+
+Realigning on the raw waveform rather than the differenced one is the obvious
+next thing to try, by the same argument that keeps localization on
+`.spk.standard`; it needs `.spk.standard.5`, which is not available here.
 
 
 ## Confronting the model with the sort
