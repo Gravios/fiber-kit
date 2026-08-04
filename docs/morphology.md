@@ -957,6 +957,67 @@ compares like with like: every cluster carries the same fast term, so a cluster
 that is *under*-dispersed is short of it, which is the fragment signature.
 
 
+## Positively identifying the physiological component
+
+Every measure above works by subtraction — total minus noise, total minus fast.
+Subtraction cannot say what the remainder *is*. Splitting a cluster along a
+feature direction and cross-correlating the halves can: **noise cannot produce a
+CCG asymmetry**, because which half a spike falls in is independent of when it
+fired. A state variable can, because the state evolves in time, so one half
+systematically precedes the other.
+
+On cluster 2103, splitting at the median along each residual principal axis,
+after local ±60 s centring:
+
+| PC | var % | asym 0–10 ms | asym **10–50 ms** | asym 100–150 ms | short-gap state variance |
+|---|---|---|---|---|---|
+| 0 | 10.9% | +0.004 | +0.017 | +0.002 | 0.02% |
+| 1 | 9.2% | −0.014 | −0.043 | +0.004 | 0.02% |
+| 2 | 7.6% | +0.041 | **+0.042** | +0.004 | **0.67%** |
+| 3 | 7.1% | −0.022 | **−0.043** | −0.010 | **0.81%** |
+| 4 | 6.7% | +0.007 | **+0.052** | −0.004 | **0.56%** |
+| 5 | 6.0% | — | — | — | **0.81%** |
+
+(shuffled controls run −0.02 to +0.02)
+
+**Two independent signatures agree.** The axes with a CCG asymmetry are the same
+axes whose adjacent-pair difference is *smaller* at 10–50 ms than at 0.3–1 s —
+spikes close in time share the state. PCs 0 and 1 show neither and are noise
+axes despite carrying the most variance.
+
+### The timescale is 10–50 ms, which is neither burst nor theta period
+
+- Not **0–10 ms**: burst-gap variance is flat (690k at 2–10 ms against 699–729k
+  at 0.1–1 s), and the ISI share is 0.21%.
+- Not **100–150 ms**: no asymmetry there. The split-half CCG *is* 90% theta-band
+  power peaking at 6.7 Hz, but that is the cell's own firing rhythmicity, which
+  any split inherits — it is not evidence about the split.
+- **10–50 ms** is consistent with within-theta-cycle progression, dendritic
+  integration decay, or AHP recovery. Distinguishing them needs the LFP for
+  theta phase, which is not available here.
+
+### Magnitude, and what it fixes
+
+Summing the state-carrying axes: **~2–3% of cluster variance**. That closes a
+real flaw — `V_fast` used a 1-second gap, so a 10–50 ms component was booked as
+spike-independent. It was, however, small enough not to change the totals: the
+figure agrees with the 1.7% slow non-drift estimate reached by subtraction.
+
+The physiological component is now **positively identified** rather than left as
+a residual, and the model comparison stands: predicted 0.196–0.434 in radius,
+i.e. 8–39% of variance, against ~2–3% measured. The model over-predicts by
+3–13× in variance.
+
+### A confound that turned out not to be one
+
+I assumed monotone drift could manufacture CCG asymmetry. It cannot, and the
+test says why: a drifting feature puts early spikes in one half and late spikes
+in the other, so the halves barely co-occur and there are almost no cross-pairs
+at short lags — a full-range linear ramp gives −0.004. `local_center` is still
+applied by default, and the test now checks the property that matters, that it
+does not destroy a genuine state signal.
+
+
 ## Confronting the model with the sort
 
 ```bash
