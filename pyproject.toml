@@ -73,7 +73,6 @@ fiber-view-tour = "fiber_kit.fiber_view:tour_main"
 fiber-plan-edit = "fiber_kit.fiber_pipeline_editor:main"
 fiber-kit-init = "fiber_kit.init_config:main"
 fiber-morpho = "fiber_kit.morpho_study:main"
-neuro-extract = "fiber_kit.neuro_extract:main"
 ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 
 [tool.setuptools.packages.find]
