@@ -788,5 +788,63 @@ check(mvd.tail_index(Xh) > mvd.tail_index(Xf0) * 1.5,
       f"contaminating 1% of spikes raises the tail index "
       f"({mvd.tail_index(Xh):.1f} vs {mvd.tail_index(Xf0):.1f})")
 
+# ── 16. state axes ──────────────────────────────────────────────────────────
+print("[16] CCG asymmetry and state axes")
+rngq = np.random.default_rng(67)
+DQ, NQ = 16, 12000
+# gaps from a heavy-tailed mixture, so BOTH the near (10-50 ms) and far
+# (0.3-1 s) bands are populated -- an exponential with a 50 ms mean puts almost
+# nothing beyond 300 ms and the estimator correctly returns NaN
+_g = np.where(rngq.random(NQ) < 0.5, rngq.exponential(0.02, NQ),
+              rngq.exponential(0.8, NQ))
+tq = np.cumsum(_g)
+# a STATE variable: an Ornstein-Uhlenbeck process in time with a 30 ms constant,
+# so spikes close in time share it -- and, being monotone within an excursion,
+# it makes one half of a median split systematically precede the other.
+tau, st = 0.030, np.zeros(NQ)
+for j in range(1, NQ):
+    dtq = tq[j] - tq[j - 1]
+    st[j] = st[j - 1] * np.exp(-dtq / tau) + rngq.normal(0, np.sqrt(1 - np.exp(-2 * dtq / tau)))
+axis = rngq.normal(size=DQ); axis /= np.linalg.norm(axis)
+Xq = rngq.normal(0, 1.0, (NQ, DQ)) + 3.0 * st[:, None] * axis
+
+sv, nn, nf = mvd.shared_state_variance(Xq @ axis, tq)
+check(sv > 0.5, f"a state axis shows short-gap variance sharing (+{sv:.2f})")
+other = rngq.normal(size=DQ); other -= other @ axis * axis; other /= np.linalg.norm(other)
+sv0, _, _ = mvd.shared_state_variance(Xq @ other, tq)
+check(abs(sv0) < 0.3,
+      f"negative control: a noise axis shows none ({sv0:+.2f}) — otherwise the "
+      "measure would just be detecting the gap binning")
+
+ax = mvd.state_axes(Xq, tq, ncomp=4)
+top = max(ax, key=lambda r: (r["state_frac"] if np.isfinite(r["state_frac"]) else -1))
+align = abs(float(top["direction"] @ axis))
+check(align > 0.85, f"state_axes recovers the imposed direction (|cos| {align:.2f})")
+check(top["state_frac"] > 0.05,
+      f"and quantifies its share ({100*top['state_frac']:.0f}% of residual variance)")
+
+# CCG asymmetry must be ~0 when the split is independent of time
+a_rand, npr = mvd.ccg_asymmetry(rngq.normal(size=NQ), tq, win=0.05, lag_lo=0.010)
+check(abs(a_rand) < 0.03 and npr > 500,
+      f"negative control: a time-independent split gives no asymmetry ({a_rand:+.4f})")
+
+# Monotone drift turns out NOT to be the confound I assumed.  A drifting feature
+# puts early spikes in one half and late spikes in the other, so the halves
+# barely overlap in time and there are almost no cross-pairs at short lags --
+# measured, a full-range linear ramp gives an asymmetry of -0.004.  What
+# local_center must therefore be shown to do is not destroy a REAL state signal,
+# since it is applied by default.
+drift_q = np.outer(np.linspace(-3, 3, NQ), axis)
+a_drift, n_drift = mvd.ccg_asymmetry((rngq.normal(0, 1.0, (NQ, DQ)) + drift_q) @ axis,
+                                     tq, win=0.05, lag_lo=0.010)
+check(abs(a_drift) < 0.05,
+      f"a monotone drift does not itself create short-lag asymmetry "
+      f"({a_drift:+.3f}) — the halves hardly co-occur")
+a_raw, _ = mvd.ccg_asymmetry(Xq @ axis, tq, win=0.05, lag_lo=0.010)
+a_lc, _ = mvd.ccg_asymmetry(mvd.local_center(Xq, tq, 60.0) @ axis, tq,
+                            win=0.05, lag_lo=0.010)
+check(abs(a_lc) > 0.5 * abs(a_raw) and abs(a_lc) > 0.02,
+      f"local centring preserves a genuine state signal ({a_raw:+.3f} -> {a_lc:+.3f})")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

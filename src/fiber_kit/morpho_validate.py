@@ -392,3 +392,103 @@ def tail_index(features):
     X = np.asarray(features, float)
     n2 = ((X - X.mean(0)) ** 2).sum(1)
     return float(np.percentile(n2, 99.9) / max(n2.mean(), 1e-30))
+
+
+# ── state axes ──────────────────────────────────────────────────────────────
+def ccg_asymmetry(values, times_s, win=0.05, lag_lo=0.0, lag_hi=None, split=None):
+    """Asymmetry of the cross-correlogram between the two halves of a split.
+
+    Split a cluster along a feature direction and cross-correlate the halves.
+    Noise cannot produce an asymmetry: which half a spike lands in is
+    independent of when it fired.  A STATE variable can, because the state
+    evolves in time, so one half systematically precedes the other.  This is
+    therefore a POSITIVE detector of within-cell structure, where every other
+    measure in this module works by subtraction.
+
+    Returns (index, n_pairs) with index = (n_forward - n_backward) / n_total
+    over the lag band [lag_lo, lag_hi].
+    """
+    v = np.asarray(values, float)
+    t = np.asarray(times_s, float)
+    o = np.argsort(t); v, t = v[o], t[o]
+    s = v - (np.median(v) if split is None else split)
+    a = t[s > 0]; b = t[s <= 0]
+    if len(a) < 200 or len(b) < 200:
+        return np.nan, 0
+    hi_l = lag_hi if lag_hi is not None else win
+    lo = np.searchsorted(b, a - win); hi = np.searchsorted(b, a + win)
+    parts = [b[lo[k]:hi[k]] - a[k] for k in range(len(a)) if hi[k] > lo[k]]
+    if not parts:
+        return np.nan, 0
+    L = np.concatenate(parts)
+    L = L[np.abs(L) > 1e-9]
+    p = int(((L > lag_lo) & (L <= hi_l)).sum())
+    n = int(((L < -lag_lo) & (L >= -hi_l)).sum())
+    return ((p - n) / max(p + n, 1)), p + n
+
+
+def local_center(features, times_s, win_s=60.0):
+    """Subtract a running mean over +-win_s, so drift cannot masquerade as state.
+
+    Without this a slowly drifting feature separates early spikes from late
+    ones, and the split halves then differ in TIME as well as in feature -- which
+    produces a CCG asymmetry with no physiology in it at all.
+    """
+    X = np.asarray(features, float)
+    t = np.asarray(times_s, float)
+    o = np.argsort(t); X, t = X[o], t[o]
+    lo = np.searchsorted(t, t - win_s); hi = np.searchsorted(t, t + win_s)
+    C = np.cumsum(np.vstack([np.zeros(X.shape[1]), X]), 0)
+    return X - (C[hi] - C[lo]) / np.maximum((hi - lo)[:, None], 1)
+
+
+def shared_state_variance(values, times_s, near=(0.010, 0.050), far=(0.300, 1.0)):
+    """Variance along an axis that spikes close in time SHARE.
+
+    A state variable changes slowly enough that two spikes tens of milliseconds
+    apart hold similar values, so their squared difference is smaller than for
+    spikes a second apart.  A noise axis shows no such gradient.  The difference
+    between the two bands is the state variance carried by this axis, and unlike
+    a total-minus-noise subtraction it never goes negative for a reason that
+    cannot be checked.
+    """
+    v = np.asarray(values, float)
+    t = np.asarray(times_s, float)
+    o = np.argsort(t); v, t = v[o], t[o]
+    d = np.diff(t)
+    dv = (v[1:] - v[:-1]) ** 2 / 2.0
+    mn = (d >= near[0]) & (d < near[1])
+    mf = (d >= far[0]) & (d < far[1])
+    if mn.sum() < 200 or mf.sum() < 200:
+        return np.nan, int(mn.sum()), int(mf.sum())
+    return float(dv[mf].mean() - dv[mn].mean()), int(mn.sum()), int(mf.sum())
+
+
+def state_axes(features, times_s, ncomp=8, win_s=60.0, lag=(0.010, 0.050), rng=None):
+    """Rank the residual's principal axes by how much STATE they carry.
+
+    Two independent signatures per axis, and an axis is only interesting if it
+    shows both: a CCG asymmetry beyond its own shuffled control, and a positive
+    shared-state variance.  Either alone is weak -- asymmetry can come from
+    residual drift the local centring missed, and a short-gap variance deficit
+    can come from refractory-correlated amplitude effects.
+    """
+    rng = rng or np.random.default_rng(0)
+    X = local_center(features, times_s, win_s)
+    t = np.sort(np.asarray(times_s, float))
+    R = X - X.mean(0)
+    U, S, Vt = np.linalg.svd(R, full_matrices=False)
+    tot = float((R ** 2).sum(1).mean())
+    out = []
+    for k in range(min(ncomp, len(S))):
+        p = R @ Vt[k]
+        a, npair = ccg_asymmetry(p, t, win=lag[1], lag_lo=lag[0], lag_hi=lag[1])
+        sh = float(np.nanmean([ccg_asymmetry(rng.permutation(p), t, win=lag[1],
+                                             lag_lo=lag[0], lag_hi=lag[1])[0]
+                               for _ in range(3)]))
+        sv, _, _ = shared_state_variance(p, t, near=lag)
+        out.append(dict(pc=k, var_frac=float(S[k] ** 2 / (S ** 2).sum()),
+                        asym=a, asym_shuffled=sh, n_pairs=npair,
+                        state_var=sv, state_frac=(sv / tot if np.isfinite(sv) else np.nan),
+                        direction=Vt[k]))
+    return out
