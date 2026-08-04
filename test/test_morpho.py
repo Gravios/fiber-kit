@@ -320,9 +320,9 @@ with _tf.TemporaryDirectory() as td:
 # ── 10. validation primitives ───────────────────────────────────────────────
 print("[10] validation primitives")
 try:
-    from fiber_kit import morpho_validate as mvd
+    from fiber_kit import morpho_validate as mvd, neuro_io as nio
 except ImportError:
-    import morpho_validate as mvd
+    import morpho_validate as mvd, neuro_io as nio
 
 
 class _FakeSort:
@@ -845,6 +845,67 @@ a_lc, _ = mvd.ccg_asymmetry(mvd.local_center(Xq, tq, 60.0) @ axis, tq,
                             win=0.05, lag_lo=0.010)
 check(abs(a_lc) > 0.5 * abs(a_raw) and abs(a_lc) > 0.02,
       f"local centring preserves a genuine state signal ({a_raw:+.3f} -> {a_lc:+.3f})")
+
+# ── 18. LFP phase ───────────────────────────────────────────────────────────
+print("[18] bipolar LFP and phase dependence")
+SRL = 1250.0
+nl = 400_000
+tl = np.arange(nl) / SRL
+rngl = np.random.default_rng(83)
+# a common-mode far field plus an antiphase local gradient: the bipolar
+# derivation must recover the local part and suppress the common one
+common = 3.0 * np.sin(2 * np.pi * 7.6 * tl + 0.4)
+local = 1.0 * np.sin(2 * np.pi * 7.6 * tl)
+lfp2 = np.stack([common + local + rngl.normal(0, 0.2, nl),
+                 common - local + rngl.normal(0, 0.2, nl)], 1)
+bp = mvd.bipolar(lfp2)
+check(abs(np.std(bp) / np.std(lfp2.mean(1)) - 2.0 / 3.0) < 0.25,
+      f"bipolar keeps the local gradient and drops the common mode "
+      f"(ratio {np.std(bp)/np.std(lfp2.mean(1)):.2f}, expected ~0.67)")
+
+phl, aml = mvd.band_phase(bp, SRL)
+check(len(phl) == nl and np.all(np.isfinite(phl)), "chunked phase covers every sample")
+# chunk seams must be invisible: compare against a single-chunk computation
+ph1, _ = mvd.band_phase(bp, SRL, chunk=nl)
+d = np.abs(np.angle(np.exp(1j * (phl - ph1))))
+check(float(np.percentile(d, 99)) < 0.05,
+      f"chunk seams do not perturb the phase (99th pct {np.percentile(d,99):.4f} rad)")
+
+# spikes locked to a known phase must be recovered at that phase
+target = 1.0
+lock = np.flatnonzero(np.abs(np.angle(np.exp(1j * (phl - target)))) < 0.15)
+sp = rngl.choice(lock, 4000, replace=False)
+pm = mvd.phase_modulation(phl[sp])
+check(pm["ratio"] > 10, f"a phase-locked train is strongly modulated ({pm['ratio']:.0f}x)")
+pm0 = mvd.phase_modulation(phl[rngl.choice(nl, 4000, replace=False)])
+check(pm0["ratio"] < 3.0,
+      f"negative control: an unlocked train is not ({pm0['ratio']:.1f}x) — the "
+      "histogram alone does not manufacture modulation")
+
+# circ_lin_corr must find a phase-dependent feature and only that one
+tsp = np.sort(rngl.choice(nl, 12000, replace=False))
+psp = phl[tsp].astype(np.float64)
+DL = 12
+Fl = rngl.normal(0, 1.0, (len(tsp), DL))
+Fl[:, 0] += 4.0 * np.cos(psp)
+check(mvd.circ_lin_corr(Fl[:, 0], psp) > 0.7,
+      f"a phase-driven feature is detected ({mvd.circ_lin_corr(Fl[:,0],psp):.2f})")
+check(mvd.circ_lin_corr(Fl[:, 1], psp) < 0.1,
+      f"negative control: a phase-independent one is not "
+      f"({mvd.circ_lin_corr(Fl[:,1],psp):.3f})")
+
+pd = mvd.phase_dependence(Fl, tsp / SRL, psp, amp=aml[tsp], ncomp=3, nshuffle=3)
+top = max(pd, key=lambda r: r["r_phase"])
+check(top["r_phase"] > 5 * max(top["r_shuffled"], 1e-6),
+      f"phase_dependence separates signal from its shuffle "
+      f"({top['r_phase']:.3f} vs {top['r_shuffled']:.3f})")
+
+check(int(mvd.lfp_index([32552, 65104], 32552.0, 1250.0)[0]) == 1250,
+      "lfp_index converts one acquisition second to one LFP second")
+check(int(mvd.lfp_index([32552], 32552.0, 1250.0, first_record=1250)[0]) == 0,
+      "and subtracts an extracted segment's offset in the OUTPUT file's samples")
+check(mvd.lfp_index is nio.lfp_index,
+      "morpho_validate re-exports neuro_io's mapping rather than owning a copy")
 
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

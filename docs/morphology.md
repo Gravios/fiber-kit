@@ -1046,6 +1046,69 @@ session yaml, and `neuro_io.lfp_index()` maps a `.res` timestamp to an LFP sampl
 subtracting the offset of an extracted segment. The extracted file itself opens
 with the existing `neuro_io.open_signal(path, nchan)`.
 
+## Theta phase, from a bipolar LFP — and the answer is no
+
+The two-channel LFP slice is **channels 56 and 63**: top and bottom of probe 0's
+shank 7, 140 µm apart, full session at 1250 Hz. Verified end to end — 21,108 s
+by both clocks, ratio 1.0000, so `res × 1250/32552` holds at the endpoints.
+
+### The bipolar derivation works
+
+| | ch56 (y=0) | ch63 (y=140) |
+|---|---|---|
+| theta peak | 7.63 Hz | 7.63 Hz |
+| theta / 1–25 Hz power | 0.43 | **0.57** |
+
+Phase difference **−78°**, not 180° — the two sit on the *same* side of the
+reversal and sample the progressive depth gradient, with ch63 deeper (more
+theta). The **bipolar theta SD is 1.88× the common-mode SD**, so subtracting
+genuinely suppresses the volume-conducted far field rather than just halving the
+signal.
+
+What it does *not* do is identify a layer. 140 µm constrains the gradient
+between the two sites; naming its generator needs the fissure located, which
+that span cannot do. It is the local gradient on shank 7.
+
+### The positive control passes emphatically
+
+Spike count of cluster 2103 across theta phase: modulation depth **2.22**,
+max/min **21×**. The phase estimate, the derivation and the timestamp mapping
+are all sound, and the cell is strongly theta-locked.
+
+### The state axis is not theta phase
+
+| PC | var % | state % | r circ-lin | shuffled |
+|---|---|---|---|---|
+| **0** | 10.9% | **0.02%** | **0.0395** | 0.0064 |
+| 1 | 9.2% | 0.02% | 0.0231 | 0.0083 |
+| 2 | 7.6% | **0.67%** | 0.0241 | 0.0075 |
+| 3 | 7.1% | **0.81%** | 0.0250 | 0.0088 |
+| 4 | 6.7% | **0.56%** | 0.0175 | 0.0094 |
+| 5 | 6.0% | **0.81%** | 0.0304 | 0.0086 |
+
+**The axis with the strongest phase correlation carries the least state**, and
+the state-carrying axes are no more phase-related than the noise axes. All the
+correlations are 2–5× their shuffles — significant at n ≈ 24,000, and explaining
+under 0.1% of variance each.
+
+So of the two mechanisms proposed for the 10–50 ms structure, **theta phase is
+ruled out and dendritic integration is not**. That is a negative result about
+theta, not a positive one about dendrites: 10–50 ms is also the timescale of AHP
+recovery, and nothing here distinguishes those two.
+
+### Two caveats that bound it
+
+- The LFP is from **shank 7** (x ≈ 1400 µm); the units are on **shank 5**
+  (x ≈ 1000 µm), 400 µm away. Theta is coherent over that distance and the 21×
+  spike modulation proves the phase is meaningful for these cells — but a
+  *local dendritic* signal would want the units' own shank.
+- `ndm_lfp` defaults `subtractSpikes: auto`, and this session has `.spk.*`
+  files, so the LFP is probably **spike-cleaned** by `ndm_stripdat`. For phase
+  that is preferable — no spike bleed-through — but it means a spike-triggered
+  signal has been removed, so residuals are correlated with the spike train.
+  Which was used is not recorded in the slice's `.info`.
+
+
 ## Confronting the model with the sort
 
 ```bash
