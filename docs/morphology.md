@@ -1018,6 +1018,46 @@ applied by default, and the test now checks the property that matters, that it
 does not destroy a genuine state signal.
 
 
+## `neuro-extract` — pulling channels out of a recording
+
+```bash
+neuro-extract <session>.lfp out.lfp 72 84 43 \
+    --yaml <session>.yaml --probe <session>.probe.1.probe --probe-base 64
+
+neuro-extract <session>.lfp seg32.lfp 64 65 66 ... 95 \
+    --yaml <session>.yaml --start 600 --stop 1800     # 20 min, all 32 sites
+```
+
+The channel-spec grammar is **`process_extractchannels`'s**, reproduced rather
+than replaced — `5`, `5*1.5` for a gain, `5-2` to reference channel 5 against
+channel 2, `5*0.5-7` for both. A second tool taking the same arguments and
+meaning something different by them is the divergence this codebase keeps
+paying for.
+
+What it adds is the two things the C++ tool has no notion of, both needed to get
+an LFP subset out of a session without moving 132 GB:
+
+- **A time range** (`--start/--stop` in seconds), so a short segment of many
+  channels costs the same as a long segment of few.
+- **The session yaml** (`--yaml`), so `nChannels` comes from the recording
+  rather than a number retyped on the command line. Getting it wrong does not
+  fail — it shears the interleave and produces a file that looks like data. The
+  only guard available without the yaml is that the file size divides evenly,
+  and 96-channel data divides evenly by 48 too.
+
+Everything is chunked; peak memory is `chunk × nChannels × 2` bytes regardless
+of input size. Output column order follows the **channel list**, not the
+original channel ids, and the tool says so on exit.
+
+`--probe` reports each extracted channel's site position, with `--probe-base`
+giving the global channel id of site 0 (64 for probe 1 of this session) — the
+probe file does not know its own offset.
+
+One parsing trap worth naming: the gain charset must not contain a bare `-`, or
+`5*0.5-7` parses its gain as `0.5-7` and the reference is silently dropped. It
+did, on the first pass.
+
+
 ## Confronting the model with the sort
 
 ```bash
