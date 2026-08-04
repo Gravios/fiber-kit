@@ -1109,6 +1109,64 @@ recovery, and nothing here distinguishes those two.
   Which was used is not recorded in the slice's `.info`.
 
 
+## Gamma sub-bands: also no
+
+Theta is volume-conducted and global, so it localises nothing. Gamma is
+pathway-specific — ~25–50 Hz tracks CA3→radiatum, ~60–100 Hz entorhinal→SLM,
+180–240 Hz is the ripple band — so band power at spike time is a direct test of
+the surviving dendritic-integration hypothesis, and it can say *which* input.
+
+Correlation of each residual axis with log band power of the bipolar signal at
+spike time, cluster 2103, n = 47,254:
+
+| band | mean amp | PC0 | PC2 | PC3 | PC5 | max\|r\| / null |
+|---|---|---|---|---|---|---|
+| 25–30 Hz | 437 | −0.018 | −0.016 | +0.007 | −0.007 | 1.08 |
+| 30–40 Hz | 545 | −0.012 | −0.006 | +0.002 | −0.004 | 0.92 |
+| 50–60 Hz | 344 | **−0.023** | −0.014 | +0.005 | +0.002 | 1.88 |
+| 60–80 Hz | 377 | −0.006 | −0.007 | +0.010 | −0.004 | 0.82 |
+| 80–100 Hz | 275 | −0.012 | −0.013 | +0.012 | +0.001 | 1.13 |
+| 100–120 Hz | 204 | −0.013 | −0.010 | +0.009 | −0.003 | 1.27 |
+| 180–240 Hz | 157 | **−0.024** | −0.016 | +0.012 | −0.010 | 1.75 |
+
+state variance: PC0 0.02%, PC2 0.67%, PC3 0.81%, PC5 0.81%
+
+**Every correlation is within, or barely above, the circular-shift null.** And
+the same pattern as theta repeats: the largest values sit on **PC0**, the
+highest-variance axis carrying essentially no state, while the state-carrying
+axes stay at |r| ≤ 0.016 in every band.
+
+### The null has to be circular shifts, not permutation
+
+Both series are strongly autocorrelated — band power is smooth over hundreds of
+ms, a feature projection drifts over minutes. A permutation null sits near
+0.006; the circular-shift null reaches 0.013–0.028. That is exactly the
+difference between calling r = 0.024 a five-sigma effect and calling it nothing,
+and a test asserts the shift null is the wider of the two.
+
+### What it leaves
+
+Local synaptic drive, as indexed by gamma in any of these bands, does not
+explain the 10–50 ms state axis. Of the mechanisms on the table that leaves
+**intrinsic dynamics — AHP recovery** — a cell-autonomous process with the right
+time constant that need not track the local field at all.
+
+One small positive: PC0's largest correlations are at 50–60 Hz and 180–240 Hz,
+the ripple band. PC0 carries no state variance, and ripples coincide with dense
+population firing, so this is consistent with part of `V_fast` being **spike
+superposition** — one of the three components that decomposition could not
+separate.
+
+### The caveat that bounds this null
+
+The whole rationale was that gamma is *local* where theta is global — and this
+gamma is measured on **shank 7**, 400 µm from the units on shank 5. Gamma is
+spatially structured at that scale, so a null measured 400 µm away is weaker
+than a null measured on the units' own shank. **This does not rule out dendritic
+integration; it rules out a relationship to gamma 400 µm away.** Two channels
+from shank 5 would make it decisive.
+
+
 ## Confronting the model with the sort
 
 ```bash

@@ -907,5 +907,54 @@ check(int(mvd.lfp_index([32552], 32552.0, 1250.0, first_record=1250)[0]) == 0,
 check(mvd.lfp_index is nio.lfp_index,
       "morpho_validate re-exports neuro_io's mapping rather than owning a copy")
 
+# ── 19. band power and the shift null ───────────────────────────────────────
+print("[19] band power and the circular-shift null")
+SRB = 1250.0
+nb = 300_000
+tb = np.arange(nb) / SRB
+rngb = np.random.default_rng(97)
+# a signal whose 60-80 Hz power is modulated slowly, and nothing in 25-30 Hz
+# APERIODIC slow modulator.  A pure sinusoid makes the circular-shift null
+# degenerate -- shifting a periodic signal reproduces it, so the null reaches
+# 1.0 and nothing can ever clear it.  Real band power is not periodic.
+from scipy import signal as _sg
+slow = _sg.filtfilt(*_sg.butter(2, 0.2 / (SRB / 2), btype="low"),
+                    rngb.normal(0, 1, nb))
+slow = slow / slow.std()
+carrier = np.sin(2 * np.pi * 70.0 * tb) * (1.0 + 0.9 * slow)
+sig = carrier + 0.5 * np.sin(2 * np.pi * 27.0 * tb) + rngb.normal(0, 0.3, nb)
+e70 = mvd.band_envelope(sig, SRB, 60, 80)
+e27 = mvd.band_envelope(sig, SRB, 25, 30)
+check(float(np.corrcoef(e70, slow)[0, 1]) > 0.8,
+      f"the 60-80 Hz envelope follows its imposed modulation "
+      f"({np.corrcoef(e70,slow)[0,1]:.2f})")
+check(abs(float(np.corrcoef(e27, slow)[0, 1])) < 0.3,
+      f"negative control: the 25-30 Hz envelope does not "
+      f"({np.corrcoef(e27,slow)[0,1]:+.2f})")
+sub = np.sort(rngb.choice(nb, 40_000, replace=False))
+check(np.allclose(mvd.band_envelope(sig, SRB, 60, 80, at=sub), e70[sub]),
+      "sampling at indices matches the full envelope")
+
+# THE point of the block: a permutation null must be tighter than a
+# circular-shift null on autocorrelated data, so using one would overstate
+# significance.  If this ever fails, shift_null is not doing its job.
+y = e70[sub] + rngb.normal(0, e70.std(), len(sub))
+perm = np.array([abs(np.corrcoef(y, rngb.permutation(np.log(e70[sub] + 1e-9)))[0, 1])
+                 for _ in range(24)])
+circ = mvd.shift_null(y, e70, sub, n_shift=24, min_gap_s=20.0, sr=SRB, rng=rngb)
+check(circ.max() > perm.max() * 1.5,
+      f"the circular-shift null is wider than a permutation null "
+      f"({circ.max():.3f} vs {perm.max():.3f}) — using the latter would "
+      "manufacture significance")
+
+bd = mvd.band_dependence(np.stack([np.log(e70[sub] + 1e-9),
+                                   rngb.normal(0, 1, len(sub))], 1),
+                         sig, sub, [(60, 80), (25, 30)], sr=SRB, n_shift=8, rng=rngb)
+check(abs(bd[0]["r"][0]) > 5 * bd[0]["null_p95"][0],
+      f"a real band dependence clears its null ({bd[0]['r'][0]:+.2f} vs "
+      f"{bd[0]['null_p95'][0]:.3f})")
+check(abs(bd[0]["r"][1]) < 5 * max(bd[0]["null_p95"][1], 1e-6),
+      "negative control: an unrelated axis does not")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
