@@ -141,11 +141,17 @@ _RE_SECREF = re.compile(r"([A-Za-z_]\w*(?:\[\s*[\d.]+\s*\])?)\s*\(\s*([\d.]+)\s*
 
 
 _RE_FOR = re.compile(r"\bfor\s+([A-Za-z_]\w*)\s*=\s*(-?\d+)\s*,\s*(-?\d+)\s*\{([^{}]*)\}", re.S)
+# hoc also allows a BRACE-LESS single-statement loop: `for i = 1, 5 connect
+# axon[i](0), axon[i-1](1)`.  Neurolucida exports use it heavily -- one
+# reconstruction here has 920 connect lines, many of that form -- and a parser
+# that only handles the braced form drops them, producing a morphology that is
+# structurally a pile of disconnected stubs.
+_RE_FOR1 = re.compile(r"\bfor\s+([A-Za-z_]\w*)\s*=\s*(-?\d+)\s*,\s*(-?\d+)\s+([^\n{}]+)")
 _RE_IDXEXPR = re.compile(r"\[([^\]]+)\]")
 _SAFE_IDX = re.compile(r"^[\d\s+\-*/()]+$")
 
 
-def _expand_for(txt, max_iter=8):
+def _expand_for(txt, max_iter=200000):
     """Unroll `for i=a,b { ... }` bodies (no nesting) with the index substituted.
 
     Reduced-morphology cell templates chain their dendrites in a loop
@@ -154,16 +160,19 @@ def _expand_for(txt, max_iter=8):
     disconnected stubs -- which is worse than failing, so the alternative to
     this ~20 lines is to reject those files outright.
     """
-    for _ in range(max_iter):
-        m = _RE_FOR.search(txt)
-        if not m:
-            break
-        var, a, b, body = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
-        out = []
-        for k in range(a, b + 1):
-            piece = re.sub(rf"\b{re.escape(var)}\b", str(k), body)
-            out.append(_RE_IDXEXPR.sub(_eval_idx, piece))
-        txt = txt[:m.start()] + "\n".join(out) + txt[m.end():]
+    for rx in (_RE_FOR, _RE_FOR1):
+        guard = 0
+        while guard < 200000:
+            m = rx.search(txt)
+            if not m:
+                break
+            guard += 1
+            var, a, b, body = m.group(1), int(m.group(2)), int(m.group(3)), m.group(4)
+            out = []
+            for k in range(a, b + 1):
+                piece = re.sub(rf"\b{re.escape(var)}\b", str(k), body)
+                out.append(_RE_IDXEXPR.sub(_eval_idx, piece))
+            txt = txt[:m.start()] + "\n".join(out) + txt[m.end():]
     return txt
 
 

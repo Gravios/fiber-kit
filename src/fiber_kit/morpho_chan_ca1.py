@@ -186,13 +186,13 @@ CA1_TYPES = {
     "pyramidal": dict(family="migliore", Rm=28000.0, cm=1.0, Ra=150.0, Ra_axon=50.0,
                       v_rest=-65.0, celsius=34.0, gna=0.032, axon_na_mult=2.0,
                       gkdr=0.003, gka=0.008),
-    "pvbasket": dict(family="bezaire", nav="nav", kdr="kdrfast", kva="kva",
+    "pvbasket": dict(family="bezaire", kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
                      Rm=5555.0, cm=1.4, Ra=100.0, v_rest=-65.0, celsius=34.0,
                      gna=0.15, gkdr=0.013, gka=0.00015),
-    "axoaxonic": dict(family="bezaire", nav="nav", kdr="kdrfast", kva="kva",
+    "axoaxonic": dict(family="bezaire", kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
                       Rm=5555.0, cm=1.4, Ra=100.0, v_rest=-65.0, celsius=34.0,
                       gna=0.15, gkdr=0.013, gka=0.00015),
-    "bistratified": dict(family="bezaire", nav="navbis", kdr="kdrfast", kva="kva",
+    "bistratified": dict(family="bezaire", kv3=0.01, nav="navbis", kdr="kdrfast", kva="kva",
                          Rm=11110.0, cm=1.4, Ra=100.0, v_rest=-67.0, celsius=34.0,
                          gna=0.07, gkdr=0.016, gka=0.00005),
     "cck": dict(family="bezaire", nav="navcck", kdr="kdrfast", kva="kva",
@@ -230,8 +230,11 @@ def channels(kind, celsius=None):
     if p["family"] == "migliore":
         return [(mch.Na(cel), "na", "ena"), (mch.Kdr(cel), "kdr", "ek"),
                 (mch.KA("prox", cel), "ka_prox", "ek"), (mch.KA("dist", cel), "ka_dist", "ek")]
-    return [(NavBez(p["nav"], cel), "na", "ena"), (KdrFast(p["kdr"], cel), "kdr", "ek"),
-            (KvABez(p["kva"], cel), "ka_prox", "ek"), (KvABez(p["kva"], cel), "ka_dist", "ek")]
+    out = [(NavBez(p["nav"], cel), "na", "ena"), (KdrFast(p["kdr"], cel), "kdr", "ek"),
+           (KvABez(p["kva"], cel), "ka_prox", "ek"), (KvABez(p["kva"], cel), "ka_dist", "ek")]
+    if p.get("kv3", 0.0):
+        out.append((Kv3(cel), "kv3", "ek"))
+    return out
 
 
 def biophys(kind, **over):
@@ -243,8 +246,52 @@ def biophys(kind, **over):
     p = dict(CA1_TYPES[kind]); p.pop("family", None)
     for k in ("nav", "kdr", "kva"):
         p.pop(k, None)
+    if "kv3" in p:
+        p["gkv3"] = p.pop("kv3")
     p.setdefault("Ra_axon", p.get("Ra", 150.0))
     p.update(over)
     b = mc.Biophys(**p)
     b.ca1_type = kind
     return b
+
+
+class Kv3:
+    """Kv3 — the fast-spiking potassium channel, n^4, high threshold.
+
+    Transcribed from Akemann et al. (2009) as implemented by Zang & De Schutter
+    (2021), whose rate constants are least-squares fits to the interneuron K
+    current data of Martina et al. (2007, J Neurophysiol 97:563).
+
+        alpha = 0.22 * exp(-(v + 16) / -26.5)      beta = 0.22 * exp(-(v + 16) / 26.5)
+        g = gbar * n^4                              q10 = 2.7 from 22 degC
+
+    WHY IT HAD TO BE ADDED, rather than tuning what was already here.  The
+    Bezaire-derived Kdrfast is the only fast rectifier in this module, and
+    sweeping its density over 7.7x (0.013 to 0.100 S/cm^2) on a reconstructed
+    basket cell moved the extracellular trough-to-peak only 0.614 -> 0.461 ms
+    and then saturated.  The real g5 interneuron measures 0.271 ms.  Conductance
+    density cannot buy a time constant: Kdrfast's activation midpoint and tau
+    are fixed, whereas Kv3 activates near +16 mV with tau under a millisecond at
+    spike potentials, which is what terminates a fast-spiking action potential.
+
+    Its absence is why patch 0330 produced basket cells BROADER than pyramidal
+    cells -- a result flagged there as backwards and unexplained.  The model had
+    no mechanism for fast spiking at all.
+    """
+    name = "kv3"
+    ca, cva, cka = 0.22, 16.0, -26.5
+    cb, cvb, ckb = 0.22, 16.0, 26.5
+    q10 = 2.7
+
+    def __init__(self, celsius=34.0):
+        self.qt = self.q10 ** ((celsius - 22.0) / 10.0)
+
+    def rates(self, v):
+        with np.errstate(over="ignore"):
+            a = self.qt * self.ca * np.exp(-(v + self.cva) / self.cka)
+            b = self.qt * self.cb * np.exp(-(v + self.cvb) / self.ckb)
+        s = a + b
+        return ((a / s, np.maximum(1.0 / s, 1e-3)),)
+
+    def g(self, st):
+        return st[0] ** 4
