@@ -604,5 +604,71 @@ with _tf.TemporaryDirectory() as td:
     check(float(np.abs(a_free.mid - a_fix.mid).max()) > 1.0,
           "orient()'s axis search rotates a laminar layout — hence axis=(0,1,0)")
 
+# ── 13. dispersion ──────────────────────────────────────────────────────────
+print("[13] feature-space dispersion")
+rngd = np.random.default_rng(31)
+D = 32
+# three cells of very different amplitude but the SAME intrinsic spread -- the
+# constant-radius claim.  If radius tracked amplitude the whole approach fails,
+# so the test asserts independence rather than assuming it.
+Fs, Is = [], []
+for j, gain in enumerate([1.0, 2.0, 3.5, 6.0, 9.0]):
+    mu = rngd.normal(0, 50, D) * gain
+    Fs.append(mu + rngd.normal(0, 20, (900, D)))
+    Is.append(np.full(900, j))
+# a FRAGMENT: a compact sub-region of cell 0, tighter than the cell
+frag_mu = Fs[0].mean(0) + rngd.normal(0, 10, D)
+Fs.append(frag_mu + rngd.normal(0, 8, (300, D))); Is.append(np.full(300, 10))
+# a CONTAMINATED cluster: two cells pooled
+Fs.append(np.concatenate([Fs[0][:300], Fs[1][:300]])); Is.append(np.full(600, 11))
+F = np.concatenate(Fs); I = np.concatenate(Is)
+
+keys, rad, nn, en = mvd.dispersion_table(F, I, min_spikes=100)
+base = float(np.median(rad[np.isin(keys, [0, 1, 2, 3, 4])]))
+check(len(keys) == 7, f"dispersion_table returns every cluster above the floor ({len(keys)})")
+CELLS = [0, 1, 2, 3, 4]
+cells = rad[np.isin(keys, CELLS)]
+check(cells.std() / cells.mean() < 0.10,
+      f"five cells spanning 9x in amplitude share one radius (CoV {cells.std()/cells.mean():.3f})")
+sl, r2 = mvd.constancy(rad[np.isin(keys, CELLS)], en[np.isin(keys, CELLS)])
+check(abs(sl) < 0.15 and r2 < 0.5,
+      f"radius is independent of template energy (slope {sl:+.3f}, R2 {r2:.2f})")
+
+vf, qf = mvd.dispersion_verdict(float(rad[keys == 10][0]), base)
+vc, qc = mvd.dispersion_verdict(float(rad[keys == 11][0]), base)
+check(vf.startswith("under"), f"a compact sub-region reads as a fragment ({qf:.2f}x)")
+check(vc.startswith("over"), f"two pooled cells read as contaminated ({qc:.2f}x)")
+v1, q1 = mvd.dispersion_verdict(float(rad[keys == 1][0]), base)
+check(v1 == "one cell", f"an actual cell reads as one cell ({q1:.2f}x)")
+
+# negative control: dispersion must NOT separate two cells that differ only in
+# LOCATION.  If it did, it would be a disguised centroid test and would break on
+# exactly the co-located pairs it is meant to survive.
+far = Fs[0] + 500.0
+r_far, _ = mvd.feature_radius(np.concatenate([Fs[0], far]),
+                              np.concatenate([np.zeros(900), np.ones(900)]), 1)
+r_near, _ = mvd.feature_radius(Fs[0], np.zeros(900), 0)
+check(abs(r_far / r_near - 1.0) < 0.10,
+      "negative control: translating a cell does not change its radius")
+
+check(np.isnan(mvd.feature_radius(F, I, 999)[0]),
+      "an absent cluster gives NaN rather than a number")
+check(mvd.dispersion_verdict(np.nan, base)[0] == "unknown",
+      "a NaN radius is reported unknown, not classified")
+
+# isi_share: a cell whose features genuinely depend on ISI must show it, and one
+# that does not must come back near zero.
+tt = np.cumsum(rngd.uniform(0.003, 0.4, 4000))
+isi_ms = np.concatenate([[1e9], np.diff(tt) * 1e3])
+Xd = rngd.normal(0, 20, (4000, D))
+Xd[:, 0] += np.where(isi_ms < 16, 300.0, 0.0)
+sh, rtot, risi = mvd.isi_share(Xd, tt)
+check(sh > 0.05, f"an imposed ISI dependence is detected ({100*sh:.1f}% of variance)")
+Xn = rngd.normal(0, 20, (4000, D))
+shn, _, _ = mvd.isi_share(Xn, tt)
+check(shn < 0.02,
+      f"negative control: no ISI dependence gives ~0 ({100*shn:.2f}%) — the bin "
+      "structure alone does not manufacture a share")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

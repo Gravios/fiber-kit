@@ -230,3 +230,97 @@ def recovery_curve(sort, ks, sr, bins=None, isolated_ms=200.0):
         rows.append((lo, hi, int(m.sum()), float(np.median(amp[m])) / base,
                      cos_dist(w[m].astype(np.float64).mean(0), T0)))
     return rows, base, int(iso.sum())
+
+
+# ── dispersion ──────────────────────────────────────────────────────────────
+def feature_radius(features, ids, key):
+    """RMS distance of a cluster's spikes from its own centroid, in feature space.
+
+    A scalar, deliberately.  The covariance-based tests above need n >> d and
+    are useless on the small clusters where the question is sharpest -- which was
+    never a sample-size problem to work around but a sign that a location
+    statistic was the wrong tool.  Dispersion is what distinguishes a fragment
+    from a cell, and dispersion has one useful number in it.  This is estimable
+    from ~20 spikes because it averages n*d squared residuals, not n of them.
+    """
+    f = np.asarray(features, float)
+    i = np.flatnonzero(np.asarray(ids) == key)
+    if len(i) < 3:
+        return np.nan, len(i)
+    X = f[i]
+    return float(np.sqrt(((X - X.mean(0)) ** 2).sum(1).mean())), len(i)
+
+
+def dispersion_table(features, ids, min_spikes=200):
+    """Per-cluster feature radius, plus the template energy it should be
+    independent of.
+
+    Returns (keys, radius, n, energy).  Energy is carried so a caller can CHECK
+    the constancy rather than assume it: if radius tracked energy the whole
+    approach would be wrong, and that is a one-line regression to run.
+    """
+    f = np.asarray(features, float)
+    ids = np.asarray(ids)
+    u, c = np.unique(ids, return_counts=True)
+    keep = u[c >= min_spikes]
+    r, n, e = [], [], []
+    for k in keep:
+        i = np.flatnonzero(ids == k)
+        X = f[i]
+        r.append(float(np.sqrt(((X - X.mean(0)) ** 2).sum(1).mean())))
+        n.append(len(i)); e.append(float(np.linalg.norm(X.mean(0))))
+    return keep, np.asarray(r), np.asarray(n), np.asarray(e)
+
+
+def constancy(radius, energy):
+    """Log-log slope and R^2 of radius against template energy.
+
+    Slope ~0 with R^2 ~0 is the claim: one cell's feature-space span is a
+    CONSTANT, not a fraction of its amplitude.  Measured on g5 this is slope
+    +0.057, R^2 0.020 -- the feature-space form of the constant absolute scatter
+    radius already established on raw amplitudes.
+    """
+    r, e = np.asarray(radius, float), np.asarray(energy, float)
+    m = np.isfinite(r) & np.isfinite(e) & (r > 0) & (e > 0)
+    if m.sum() < 4:
+        return np.nan, np.nan
+    x, y = np.log10(e[m]), np.log10(r[m])
+    sl = float(np.polyfit(x, y, 1)[0])
+    return sl, float(np.corrcoef(x, y)[0, 1] ** 2)
+
+
+def isi_share(features, times_s, bins_ms=(4, 8, 16, 32, 64, 128, 256)):
+    """Fraction of a cell's feature variance that ISI bin membership explains.
+
+    Run on a cell's spikes POOLED across its fragments -- splitting them first is
+    what hides the dependence.  On g5 this is 0.21% of variance, a radius of 41
+    inside a cell radius of 897: the ISI-dependent changes really do live inside
+    the constant span rather than adding to it.
+    """
+    X = np.asarray(features, float)
+    t = np.asarray(times_s, float)
+    o = np.argsort(t); X, t = X[o], t[o]
+    isi = np.full(len(t), np.inf)
+    isi[1:] = np.diff(t) * 1e3
+    g = np.digitize(isi, list(bins_ms))
+    mu = X.mean(0)
+    tot = float(((X - mu) ** 2).sum(1).mean())
+    btw = sum((g == k).sum() * float(((X[g == k].mean(0) - mu) ** 2).sum())
+              for k in np.unique(g)) / len(X)
+    return (btw / max(tot, 1e-30)), float(np.sqrt(tot)), float(np.sqrt(btw))
+
+
+def dispersion_verdict(radius, expected, lo=0.80, hi=1.25):
+    """Classify a cluster by how its span compares with one cell's.
+
+    UNDER-dispersed is the over-split signature: a fragment is a compact
+    sub-region of a cell, so it is TIGHTER than a cell, not merely nearer.
+    OVER-dispersed is contamination or a merge.  The thresholds are conventions
+    and are exposed; what is measured is that a curated cell sits at 1.0 and its
+    14 fragments all sat between 0.80 and 0.96.
+    """
+    if not np.isfinite(radius) or not np.isfinite(expected) or expected <= 0:
+        return "unknown", np.nan
+    q = radius / expected
+    return ("under (fragment?)" if q < lo else
+            "over (contaminated?)" if q > hi else "one cell"), q
