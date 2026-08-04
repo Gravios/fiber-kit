@@ -19,6 +19,7 @@ waveform variance a sorter sees is the cell, and how much is everything else.**
 - [Results on the reference geometry](#results-on-the-reference-geometry)
 - [Afferent topology](#afferent-topology)
 - [Constraining merges: the physiological envelope](#constraining-merges-the-physiological-envelope)
+- [Shape variance and intra-chunk over-merging](#shape-variance-and-intra-chunk-over-merging)
 - [What this model does not do](#what-this-model-does-not-do)
 
 ---
@@ -48,6 +49,7 @@ provides.
 | `morpho_cable` | Hines cable solver, spike simulation, back-propagation profiles |
 | `morpho_eap` | line-source extracellular field, band-pass, resample, `.spk`-convention windowing |
 | `morpho_input` | CA1 afferent topology: pathway table, allocation onto compartments, laminar profile, synaptic drive |
+| `morpho_chan_ca1` | per-cell-type CA1 channel kinetics and biophysical presets (Bezaire 2016) |
 | `morpho_envelope` | spike trains, per-spike footprints, and the **admissible merge envelope** |
 | `morpho_archetype` | parametric cells for one-factor-at-a-time sweeps |
 | `morpho_study` | the `fiber-morpho` CLI |
@@ -393,6 +395,91 @@ impossible spike. Combine them downstream where the drift budget is known.
 - **Probe position** is *not* pooled into a pair: pairs are formed within one
   cell at one electrode, because the gate must not contain the geometry variance
   that `variance` measures separately.
+
+
+## Shape variance and intra-chunk over-merging
+
+Within one chunk the electrode does not move and the cell does not change type,
+so the only thing varying is the cell's own state. The amplitude-ratio-indexed
+envelope above is therefore the *wrong tool* for the intra-chunk question: two
+fragments of the same size are exactly the case it says nothing about. What
+governs a within-chunk merge is **how much the shape can change with amplitude
+held fixed**.
+
+`fiber-morpho shape` measures that, using the Bezaire per-cell-type biophysics
+rather than pyramidal kinetics applied to every cell. States pooled: 5 ISI
+patterns × 5 synaptic conditions (none, CA3 and EC drive at 1% and 2% synchrony),
+3 probe positions, pairs restricted to amplitude ratio ≤ 1.05, detection 50 µV.
+
+| morphology | cell type | pairs | median 1−cos | p99 | max |
+|---|---|---|---|---|---|
+| `ca1_5038804` | pyramidal | 2079 | 0.0026 | **0.0976** | 0.0996 |
+| `ca1_5038804` | pvbasket * | 2191 | 0.0086 | **0.0317** | 0.0575 |
+
+**Physiological shape floor (99th pct): 1 − cos = 0.089.**
+
+### The result that matters, and it is a negative
+
+Between cell **types**, same morphology and same position: median 1 − cos =
+**0.060**, 5th percentile 0.025.
+
+**Within-cell shape variance exceeds between-type distance** — separation ratio
+0.7×. At matched amplitude, two different CA1 cell types sitting at the same
+place can be *closer* in shape than one cell is to itself across firing and
+synaptic states.
+
+The consequence is direct and it constrains the whole approach: **no cosine
+threshold can simultaneously hold one cell together and keep two cell types
+apart.** The operating threshold of 0.90 (1 − cos = 0.10) is not badly placed —
+it sits just above the within-cell p99 of 0.089, so it is about right for *not
+splitting* a cell. But it is intrinsically insufficient to *prevent*
+over-merging, because the two distributions overlap. Tightening it will start
+splitting cells before it stops merging them.
+
+So preventing intra-chunk over-merging cannot be done on waveform shape alone.
+It needs evidence orthogonal to shape — amplitude-ratio structure, ISI-dependent
+amplitude (the recovery curve), and refractory violations — which is what the
+`envelope` and recovery machinery supply, and why they are worth combining
+rather than choosing between.
+
+### Caveats that move this number in known directions
+
+- **All cell types were run on the same pyramidal morphology.** Only the
+  channels varied. Real PV baskets have their own dendritic geometry, and
+  `variance` shows morphology is worth 22% of shape variance — so the true
+  between-type distance is **larger** than 0.060, and the separation ratio is
+  pessimistic. How much larger is not established here.
+- **Ca and Ca-dependent K are not transcribed** (`morpho_chan_ca1.INCOMPLETE`).
+  The AHP they shape lies mostly outside the 1.29 ms window and below the 300 Hz
+  corner, but calcium accumulates across a burst, so a real state-dependent shape
+  term is missing. The 0.089 floor is a **lower bound**.
+- `bistratified` yielded one usable pair at these settings — it barely spikes
+  under this drive. Its row is not usable and is shown only so its absence is
+  not mistaken for a small number.
+- **A safety-direction correction to the envelope section above.** Patch 0325
+  argued that under-estimating the envelope was the dangerous direction, because
+  it would reject legitimate merges. That reasoning was for over-*splitting*.
+  For intra-chunk over-*merging* the direction inverts: an over-estimated
+  envelope is what licenses fusing two real cells. The burst plateau stand-in
+  (`--plateaus`) inflates the envelope, so **for intra-chunk work run it at
+  `--plateaus 0.0`** and treat the plateau-inflated envelope as applying to
+  cross-chunk linking only.
+
+### Per-cell-type biophysics
+
+`morpho_chan_ca1` transcribes the Nav family (`nav`, `navbis`, `navcck`,
+`navngf`), the fast delayed rectifiers (`kdrfast`, `kdrfastngf`, fourth-order,
+unlike the pyramidal first-order `kdrca1`) and the Boltzmann A-types (`kva`,
+`kvangf`), with per-type densities and passive constants from each template's
+`mechinit()`. A PV basket cell carries ~5× the somatic sodium of a pyramidal
+cell and almost no A-current; that, plus the fourth-order rectifier, is why its
+spike is narrow, and none of it is reachable by re-parameterizing a pyramidal
+model.
+
+The model's own pyramidal cell uses `ch_Navp` / `ch_Kdrp` / `ch_KvAproxp` /
+`ch_KvAdistp`, which **are** the Migliore kinetics already in `morpho_chan`, so
+`CA1_TYPES["pyramidal"]` routes there rather than offering a rival pyramidal
+cell.
 
 
 ## What this model does not do

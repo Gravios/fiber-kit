@@ -33,10 +33,12 @@ try:
     from . import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     from . import morpho_input as mi, morpho_archetype as ma
     from . import morpho_envelope as mv
+    from . import morpho_chan_ca1 as mca
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
     import morpho_envelope as mv
+    import morpho_chan_ca1 as mca
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -421,6 +423,136 @@ def cmd_gate(args):
           "feature-space evidence still apply.")
 
 
+# ── shape ───────────────────────────────────────────────────────────────────
+def cmd_shape(args):
+    """Shape-only variance at MATCHED amplitude — the intra-chunk over-merge bound.
+
+    Within one chunk the electrode does not move and the cell does not change
+    type, so the only thing that varies is the cell's own state.  The quantity
+    that governs whether a within-chunk merge is safe is therefore how much the
+    SHAPE can change with amplitude held fixed: an amplitude-ratio-indexed
+    envelope is the wrong tool here, because two fragments of the same size are
+    exactly the case it says nothing about.
+
+    Pairs are taken within one cell at one probe position with amplitude ratio
+    below --match, pooling firing states and synaptic states.  Between-type
+    distances are computed at the SAME positions, so the two numbers are
+    directly comparable and the gap between them is the whole discriminative
+    budget a cosine threshold has to live in.
+    """
+    xy = _sites(args)
+    poss = [tuple(float(x) for x in p.split("/")) for p in args.positions.split(",")]
+    pats = args.patterns.split(",")
+    kinds = args.types.split(",")
+    pw = {p.pre: p for p in mi.load_table(post="pyramidalcell")}
+    drives = [None] + [(k, f) for k in args.drive_pathways.split(",") if k
+                       for f in [float(x) for x in args.drive_fractions.split(",")]]
+
+    per_type, rows = {}, []
+    t0 = time.time()
+    for spec in args.cells.split(","):
+        c = _load_cell(spec, args.d_lambda, args.max_comp)
+        for kind in kinds:
+            bank = {}
+            for pat in pats:
+                times = mv.train_times(pat)
+                nt = int(round((max(times) + 6.0) / args.dt))
+                for dspec in drives:
+                    drive = None
+                    if dspec is not None:
+                        pre, frac = dspec
+                        if pre not in pw:
+                            continue
+                        drive = mi.Drive([pw[pre]], c, args.dt, nt,
+                                         {pre: np.array([max(times[0] - 3.0, 0.5)])},
+                                         active_fraction=frac,
+                                         rng=np.random.default_rng(0))
+                        if len(drive) == 0:
+                            drive = None
+                    cell = mc.Cell(c, mca.biophys(kind, na_ar=args.na_ar))
+                    _, im, v = mv.simulate_train(cell, times, dt=args.dt,
+                                                 stim_amp=args.stim, drive=drive)
+                    for dy, lat in poss:
+                        sites = me.sites_3d(xy - np.array([0.0, dy]), z=lat)
+                        W, _ = mv.train_footprints(im, c, sites, times, args.dt, sr=args.sr,
+                                                   nsamp=args.nsamp, peak=args.peak,
+                                                   sigma=args.sigma, v=v,
+                                                   v_thresh=args.v_thresh,
+                                                   detect_uv=args.detect)
+                        if len(W):
+                            bank.setdefault((dy, lat), []).append(W)
+            D = []
+            for key, Ws in bank.items():
+                W = np.concatenate(Ws)
+                if len(W) < 2:
+                    continue
+                r, d = mv.pairwise(W)
+                D.append(d[r <= args.match])
+            D = np.concatenate(D) if D else np.zeros(0)
+            if len(D):
+                per_type[kind] = per_type.get(kind, {})
+                per_type[kind][c.name] = D
+                mm = {k: np.concatenate(v_) for k, v_ in bank.items()}
+                rows.append((c.name, kind, len(D), float(np.median(D)),
+                             float(np.percentile(D, 99)), float(D.max()),
+                             mm))
+
+    if not rows:
+        raise SystemExit("[shape] no matched-amplitude pairs — lower --detect or --stim")
+    print(f"=== shape variance at matched amplitude (ratio <= {args.match:.2f}, "
+          f"{time.time()-t0:.0f}s) ===")
+    print(f"detection {args.detect:.0f} uV | states: {len(pats)} ISI patterns x "
+          f"{len(drives)} synaptic conditions\n")
+    print(f"{'morphology':<16s}{'cell type':<14s}{'pairs':>7s}{'median':>10s}"
+          f"{'p99':>10s}{'max':>10s}")
+    for nm, kind, n, med, p99, mx, _ in rows:
+        flag = " *" if kind in mca.INCOMPLETE else ""
+        print(f"{nm:<16s}{kind + flag:<14s}{n:>7d}{med:>10.4f}{p99:>10.4f}{mx:>10.4f}")
+
+    allD = np.concatenate([r[3 - 3] if False else per_type[r[1]][r[0]] for r in rows])
+    floor = float(np.percentile(allD, 99))
+    print(f"\nphysiological SHAPE floor (99th pct over everything): 1-cos = {floor:.4f}")
+
+    # between-type distances at the same positions
+    banks = {}
+    for nm, kind, *_rest in rows:
+        banks[(nm, kind)] = _rest[-1]
+    keys = sorted(banks)
+    cross = []
+    for i in range(len(keys)):
+        for j in range(i + 1, len(keys)):
+            if keys[i][0] != keys[j][0] or keys[i][1] == keys[j][1]:
+                continue
+            for pos in set(banks[keys[i]]) & set(banks[keys[j]]):
+                A, B = banks[keys[i]][pos], banks[keys[j]][pos]
+                da, db = mv._dirs(A), mv._dirs(B)
+                cross.append(1.0 - (da @ db.T).ravel())
+    if cross:
+        cross = np.concatenate(cross)
+        print(f"between cell TYPES, same morphology and position: median "
+              f"{np.median(cross):.4f}  5th pct {np.percentile(cross, 5):.4f}")
+        print(f"separation ratio (type median / within-cell p99): "
+              f"{np.median(cross)/max(floor,1e-9):.1f}x")
+
+    thr = 1.0 - args.threshold
+    print(f"\nAgainst an operating cosine threshold of {args.threshold:.2f} "
+          f"(1-cos = {thr:.3f}):")
+    print(f"  physiology needs at most {floor:.4f}; the remaining {thr - floor:+.4f} "
+          f"is budget for\n  template-estimation noise, NOT for physiology.  If the "
+          "sort's templates are\n  estimated from enough spikes that their own cosine "
+          "error is below that,\n  the threshold is looser than anything the cell can "
+          "justify and is a\n  candidate cause of intra-chunk over-merging.")
+    if any(k in mca.INCOMPLETE for _, k, *_ in rows):
+        print("\n* these types omit Ca / KCa (and where listed HCN, KvM): the AHP is "
+              "outside\n  the 1.3 ms window, but Ca accumulation across a burst is a "
+              "real shape-variance\n  source that is MISSING here, so the floor above "
+              "is a LOWER bound.")
+    if args.out:
+        np.savez_compressed(args.out, floor=floor,
+                            **{f"{nm}|{kind}": per_type[kind][nm] for nm, kind, *_ in rows})
+        print(f"\nwrote {args.out}")
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _common(p):
     p.add_argument("--cells", default="archetype:pyramidal",
@@ -513,6 +645,25 @@ def main(argv=None):
     g.add_argument("--key", default=None, help="array name inside --templates")
     g.add_argument("--labels", default=None, help="array of unit labels inside --templates")
     g.set_defaults(func=cmd_gate)
+
+    sh = _probe(_common(sub.add_parser("shape",
+                                       help="shape-only variance at matched amplitude "
+                                            "(the intra-chunk over-merge bound)")))
+    sh.add_argument("--types", default="pyramidal,pvbasket,bistratified,ngf",
+                    help="CA1 cell types from morpho_chan_ca1.CA1_TYPES")
+    sh.add_argument("--patterns", default="single,burst4_4,burst4_6,burst3_10,tonic_50_5")
+    sh.add_argument("--positions", default="20/25,40/30,60/45")
+    sh.add_argument("--drive-pathways", default="ca3cell,eccell", dest="drive_pathways",
+                    help="afferent pathways to vary dendritic state with ('' for none)")
+    sh.add_argument("--drive-fractions", default="0.01,0.02", dest="drive_fractions")
+    sh.add_argument("--match", type=float, default=1.05,
+                    help="max amplitude ratio counted as 'matched amplitude'")
+    sh.add_argument("--threshold", type=float, default=0.90,
+                    help="the sort's operating cosine threshold, for comparison")
+    sh.add_argument("--na-ar", type=float, default=0.5, dest="na_ar")
+    sh.add_argument("--detect", type=float, default=50.0)
+    sh.add_argument("--v-thresh", type=float, default=0.0, dest="v_thresh")
+    sh.set_defaults(func=cmd_shape)
 
     a = ap.parse_args(argv)
     return a.func(a)
