@@ -600,3 +600,82 @@ def phase_dependence(features, times_s, phase, amp=None, amp_pct=60.0, ncomp=6,
                         state_frac=(sv / tot if np.isfinite(sv) else np.nan),
                         r_phase=r, r_shuffled=sh, direction=Vt[k]))
     return out
+
+
+# ── band power ──────────────────────────────────────────────────────────────
+def band_envelope(x, sr, lo, hi, order=3, chunk=1_000_000, overlap=20_000,
+                  at=None, dtype=np.float32):
+    """Analytic amplitude in a band, chunked; optionally sampled at indices `at`.
+
+    `at` exists so a caller can sweep many bands without holding many full
+    envelopes: a session at 1250 Hz is 105 MB per band in float32, and seven
+    bands at once is most of a gigabyte for values that will be read at a few
+    tens of thousands of spike times.
+    """
+    from scipy import signal as _sig
+    x = np.asarray(x, np.float64)
+    n = len(x)
+    b, a = _sig.butter(order, [lo / (sr / 2), hi / (sr / 2)], btype="band")
+    env = np.empty(n, dtype)
+    for s in range(0, n, chunk):
+        p = max(s - overlap, 0); q = min(s + chunk + overlap, n)
+        seg = x[p:q] - x[p:q].mean()
+        h = np.abs(_sig.hilbert(_sig.filtfilt(b, a, seg)))
+        i0, i1 = s - p, min(s + chunk, n) - p
+        env[s:s + (i1 - i0)] = h[i0:i1]
+    return env if at is None else env[np.asarray(at, np.int64)]
+
+
+def shift_null(values, series, index, n_shift=24, min_gap_s=60.0, sr=1250.0, rng=None):
+    """Null distribution of corr(values, series[index]) under CIRCULAR SHIFTS.
+
+    A permutation null is wrong here and anti-conservative.  Both series are
+    strongly autocorrelated -- LFP band power is smooth over hundreds of
+    milliseconds and a feature projection drifts over minutes -- so shuffling
+    destroys that structure and produces a null far tighter than the real
+    sampling distribution.  Measured on g5, a permutation null sits near 0.006
+    while the circular-shift null reaches 0.013-0.028, which is the difference
+    between calling r = 0.024 a five-sigma effect and calling it nothing.
+
+    Shifts are at least min_gap_s away from zero so a shifted series is not
+    still aligned with the original within its own correlation time.
+    """
+    rng = rng or np.random.default_rng(0)
+    v = np.asarray(values, float)
+    s = np.asarray(series)
+    idx = np.asarray(index, np.int64)
+    n = len(s)
+    gap = int(min_gap_s * sr)
+    if n <= 2 * gap:
+        raise ValueError("series too short for the requested minimum shift")
+    out = []
+    for k in rng.integers(gap, n - gap, int(n_shift)):
+        y = np.log(np.asarray(s[(idx + int(k)) % n], float) + 1e-9)
+        out.append(abs(float(np.corrcoef(v, y)[0, 1])))
+    return np.asarray(out)
+
+
+def band_dependence(projections, lfp, index, bands, sr=1250.0, n_shift=24, rng=None):
+    """Correlate feature-axis projections with log power in each band.
+
+    Log power, not power: band amplitude is roughly log-normal, and a linear
+    correlation against a heavy-tailed variable is dominated by a handful of
+    high-power epochs.
+
+    Returns one record per band with the per-axis correlations and the
+    circular-shift null, so a reader can see both rather than a verdict.
+    """
+    rng = rng or np.random.default_rng(0)
+    P = np.asarray(projections, float)
+    idx = np.asarray(index, np.int64)
+    out = []
+    for lo, hi in bands:
+        env = band_envelope(lfp, sr, lo, hi)
+        lg = np.log(env[idx].astype(np.float64) + 1e-9)
+        r = np.array([float(np.corrcoef(P[:, k], lg)[0, 1]) for k in range(P.shape[1])])
+        nul = np.stack([shift_null(P[:, k], env, idx, n_shift, sr=sr, rng=rng)
+                        for k in range(P.shape[1])])
+        out.append(dict(band=(lo, hi), mean_amp=float(env[idx].mean()), r=r,
+                        null_max=nul.max(1), null_p95=np.percentile(nul, 95, axis=1)))
+        del env
+    return out
