@@ -186,13 +186,13 @@ CA1_TYPES = {
     "pyramidal": dict(family="migliore", Rm=28000.0, cm=1.0, Ra=150.0, Ra_axon=50.0,
                       v_rest=-65.0, celsius=34.0, gna=0.032, axon_na_mult=2.0,
                       gkdr=0.003, gka=0.008),
-    "pvbasket": dict(family="bezaire", kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
+    "pvbasket": dict(family="bezaire", hcn=0.00015, kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
                      Rm=5555.0, cm=1.4, Ra=100.0, v_rest=-65.0, celsius=34.0,
                      gna=0.15, gkdr=0.013, gka=0.00015),
-    "axoaxonic": dict(family="bezaire", kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
+    "axoaxonic": dict(family="bezaire", hcn=0.00015, kv3=0.05, nav="nav", kdr="kdrfast", kva="kva",
                       Rm=5555.0, cm=1.4, Ra=100.0, v_rest=-65.0, celsius=34.0,
                       gna=0.15, gkdr=0.013, gka=0.00015),
-    "bistratified": dict(family="bezaire", kv3=0.01, nav="navbis", kdr="kdrfast", kva="kva",
+    "bistratified": dict(family="bezaire", hcn=0.0002, kv3=0.01, nav="navbis", kdr="kdrfast", kva="kva",
                          Rm=11110.0, cm=1.4, Ra=100.0, v_rest=-67.0, celsius=34.0,
                          gna=0.07, gkdr=0.016, gka=0.00005),
     "cck": dict(family="bezaire", nav="navcck", kdr="kdrfast", kva="kva",
@@ -217,8 +217,8 @@ CA1_TYPES = {
 INCOMPLETE = {"cck": ("KvM", "KvGroup", "Ca", "KCa"),
               "sca": ("KvM", "KvGroup", "HCN", "Ca", "KCa"),
               "ngf": ("Ca", "KCa"), "ivy": ("Ca", "KCa"),
-              "pvbasket": ("HCN", "Ca", "KCa"), "axoaxonic": ("HCN", "Ca", "KCa"),
-              "bistratified": ("HCN", "Ca", "KCa")}
+              "pvbasket": ("Ca", "KCa"), "axoaxonic": ("Ca", "KCa"),
+              "bistratified": ("Ca", "KCa")}
 
 
 def channels(kind, celsius=None):
@@ -234,6 +234,8 @@ def channels(kind, celsius=None):
            (KvABez(p["kva"], cel), "ka_prox", "ek"), (KvABez(p["kva"], cel), "ka_dist", "ek")]
     if p.get("kv3", 0.0):
         out.append((Kv3(cel), "kv3", "ek"))
+    if p.get("hcn", 0.0):
+        out.append((HCN(cel), "hcn", "eh"))
     return out
 
 
@@ -248,6 +250,8 @@ def biophys(kind, **over):
         p.pop(k, None)
     if "kv3" in p:
         p["gkv3"] = p.pop("kv3")
+    if "hcn" in p:
+        p["ghcn"] = p.pop("hcn")
     p.setdefault("Ra_axon", p.get("Ra", 150.0))
     p.update(over)
     b = mc.Biophys(**p)
@@ -295,3 +299,49 @@ class Kv3:
 
     def g(self, st):
         return st[0] ** 4
+
+
+class HCN:
+    """ch_HCN — the interneuron hyperpolarization-activated current, g = gmax*h^2.
+
+    Transcribed from the Bezaire et al. (2016) mod file that the basket,
+    axo-axonic and bistratified templates insert.
+
+        hinf = 1 / (1 + exp((v + 91) / 10))
+        tau  = (120 + 129.5 / (1 + exp((v + 59.3) / 0.83))) / q10,  q10 = 3^((T-34)/10)
+
+    WHY IT IS WORTH HAVING: the time constant runs 120 ms at -50 mV to 250 ms at
+    -70 mV.  That is the best match in this module to the measured adaptation
+    profile, whose marginal R^2 peaks at tau = 50-200 ms and which also has an
+    independent slow (0.5-10 s) component -- one channel spanning both, rather
+    than two mechanisms.  Second-order gating makes the effective onset slower
+    still.  HCN was listed in INCOMPLETE for the fast-spiking types and is now
+    filled.
+
+    WHAT IT PROBABLY DOES NOT EXPLAIN, stated so it is not oversold: the
+    measured +11% spike-amplitude INCREASE at short ISI.  With a half-activation
+    of -91 mV and a fast-spiking duty cycle near 2%, a train leaves the cell
+    hyperpolarized far more than depolarized, so Ih should ACTIVATE, depolarize
+    between spikes, and reduce Na availability -- predicting smaller spikes, the
+    same wrong sign as Kv3 and Na inactivation.  Ih is also cAMP-modulated and so
+    ought to be brain-state dependent, whereas the measured state component is
+    invariant across theta/non-theta and across 162 minutes.  Both are arguments
+    against Ih being the dominant term, and neither is settled here.
+    """
+    name = "hcn"
+    vhalf, slope = -91.0, 10.0
+    tau_a, tau_b, tau_vh, tau_k = 120.0, 129.5, -59.3, 0.83
+    q10 = 3.0
+
+    def __init__(self, celsius=34.0):
+        self.qt = self.q10 ** ((celsius - 34.0) / 10.0)
+
+    def rates(self, v):
+        with np.errstate(over="ignore"):
+            hinf = 1.0 / (1.0 + np.exp((v - self.vhalf) / self.slope))
+            tau = (self.tau_a + self.tau_b /
+                   (1.0 + np.exp((v - self.tau_vh) / self.tau_k))) / self.qt
+        return ((hinf, np.maximum(tau, 1e-3)),)
+
+    def g(self, st):
+        return st[0] ** 2

@@ -1091,5 +1091,33 @@ check("kv3" in ch_fs, "the fast-spiking types now carry Kv3")
 check("kv3" not in [c_[1] for c_ in mca.channels("pyramidal")],
       "negative control: the pyramidal type does not")
 
+# ── 22. Ih ──────────────────────────────────────────────────────────────────
+print("[22] HCN / Ih")
+vh = np.array([-100.0, -90.0, -80.0, -70.0, -60.0, -50.0])
+(hi, ht2), = mca.HCN(34.0).rates(vh)
+check(np.all(np.diff(hi) < 0) and hi[0] > 0.6 and hi[-1] < 0.05,
+      "Ih is activated by HYPERPOLARIZATION, not depolarization — the sign that "
+      "distinguishes it from every other channel here")
+check(abs(hi[1] - 0.5) < 0.05, f"half-activation sits at the stated -91 mV ({hi[1]:.3f} at -90)")
+check(120.0 <= ht2.min() and ht2.max() <= 260.0,
+      f"tau spans {ht2.min():.0f}-{ht2.max():.0f} ms — the 50–200 ms band the measured "
+      "adaptation profile peaks in, unlike Kv3 (sub-ms) or Kdrfast (a few ms)")
+(kn3, kt3), = mca.Kv3(34.0).rates(vh)
+check(ht2.min() > 100 * kt3.min(),
+      f"and it is ~{ht2.min()/kt3.min():.0f}x slower than Kv3, so the two cannot "
+      "substitute for one another")
+check(abs(mca.HCN(34.0).g([np.array([0.5])])[0] - 0.25) < 1e-12, "Ih conducts as h^2")
+fs_ch = [c_[1] for c_ in mca.channels("pvbasket")]
+check("hcn" in fs_ch and "kv3" in fs_ch, f"the fast-spiking type carries both ({fs_ch})")
+check("HCN" not in mca.INCOMPLETE["pvbasket"],
+      f"HCN is no longer listed as missing ({mca.INCOMPLETE['pvbasket']})")
+check("Ca" in mca.INCOMPLETE["pvbasket"] and "KCa" in mca.INCOMPLETE["pvbasket"],
+      "negative control: Ca and KCa are still declared missing, so the list was "
+      "narrowed rather than emptied")
+b_fs = mca.biophys("pvbasket")
+check(b_fs.ghcn > 0 and b_fs.eh > -60.0,
+      f"Ih has a depolarizing reversal ({b_fs.eh:.0f} mV), so it is an inward "
+      "current at rest")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
