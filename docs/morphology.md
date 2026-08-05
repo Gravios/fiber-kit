@@ -1358,6 +1358,44 @@ second used the default 5.0. Sub-sample width estimation on both is the next
 step, and until then no claim is made that the model reproduces 0.271 ms.
 
 
+### Ih — the best timescale match, and its sign problem
+
+`HCN` transcribes the `ch_HCN` the Bezaire basket, axo-axonic and bistratified
+templates insert: `g = gmax·h²`, `hinf = 1/(1+exp((v+91)/10))`,
+`τ = (120 + 129.5/(1+exp((v+59.3)/0.83)))/q10`.
+
+| v | h∞ | τ |
+|---|---|---|
+| −100 mV | 0.711 | 250 ms |
+| −80 | 0.250 | 249 ms |
+| −60 | 0.043 | 211 ms |
+| −50 | 0.016 | 120 ms |
+
+**τ runs 120–250 ms — the best match in the module to the measured adaptation
+profile**, whose marginal R² peaks at τ = 50–200 ms and which also carries an
+independent slow (0.5–10 s) component. One channel spanning both is more
+parsimonious than two mechanisms, and second-order gating slows the effective
+onset further. It is ~2000× slower than Kv3, so the two cannot substitute.
+
+`INCOMPLETE` for `pvbasket` and `axoaxonic` narrows from `(HCN, Ca, KCa)` to
+`(Ca, KCa)`.
+
+**Two arguments against it being the dominant term, neither settled:**
+
+- **The sign.** With half-activation at −91 mV and a fast-spiking duty cycle
+  near 2%, a train leaves the cell hyperpolarized far more than depolarized, so
+  Ih should *activate*, depolarize between spikes, and reduce Na availability —
+  predicting **smaller** spikes at short ISI. The measurement is **+11% larger**.
+  That is the same wrong sign as Kv3 and Na inactivation. Resurgent Na
+  (Nav1.6/β4) remains the only candidate with the right direction.
+- **State dependence.** Ih is cAMP-modulated and should therefore vary with
+  neuromodulatory tone, yet the measured state component is invariant across
+  theta/non-theta and across 162 minutes of session time.
+
+So Ih is added because it is a real, documented gap with the right kinetics —
+not because it explains the facilitation. It does not.
+
+
 ## Confronting the model with the sort
 
 ```bash
