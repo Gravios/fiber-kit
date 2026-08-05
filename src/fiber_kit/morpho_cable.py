@@ -66,7 +66,7 @@ class Biophys:
                  gna=0.025, axon_na_mult=5.0, gkdr=0.01, gka=0.03, ka_scale=1.0,
                  ka_slope_per_100um=1.0, ka_dist_max=350.0, ka_prox_lim=100.0,
                  ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0,
-                 ca1_type=None, gkv3=0.0, ghcn=0.0, eh=-30.0):
+                 ca1_type=None, gkv3=0.0, ghcn=0.0, eh=-30.0, gnarsg=0.0):
         self.__dict__.update(locals()); del self.__dict__["self"]
 
     def densities(self, cmp_):
@@ -91,8 +91,9 @@ class Biophys:
         # the extracellular field is generated.
         gkv3 = np.full(n, float(self.gkv3))
         ghcn = np.full(n, float(self.ghcn))
+        grsg = np.full(n, float(self.gnarsg))
         return dict(na=gna, kdr=gkdr, ka_prox=gka_p, ka_dist=gka_d, kv3=gkv3,
-                    hcn=ghcn, Ra=Ra)
+                    hcn=ghcn, narsg=grsg, Ra=Ra)
 
 
 # ── tree scheduling ─────────────────────────────────────────────────────────
@@ -189,8 +190,16 @@ class Cell:
                 from . import morpho_chan_ca1 as mca
             except ImportError:
                 import morpho_chan_ca1 as mca
+            chlist = mca.channels(kind, cel)
+            # A Markov channel is opt-in per SIMULATION, not per cell type: it
+            # costs a 13x13 solve per compartment per step, so it is added only
+            # when the Biophys actually carries a density for it.  CA1_TYPES
+            # cannot express that, since it describes the cell and not the run.
+            if getattr(self.bio, "gnarsg", 0.0) > 0 and \
+                    not any(dk == "narsg" for _, dk, _ in chlist):
+                chlist = chlist + [(mca.NaRsg(cel), "narsg", "ena")]
             self.chans = [(ch, dens[dk] * area_cm2 * 1e6, getattr(self.bio, ek))
-                          for ch, dk, ek in mca.channels(kind, cel)]
+                          for ch, dk, ek in chlist]
         else:
             self.chans = [
                 (mch.Na(cel, ar=self.bio.na_ar), dens["na"] * area_cm2 * 1e6, self.bio.ena),
@@ -198,7 +207,15 @@ class Cell:
                 (mch.KA("prox", cel), dens["ka_prox"] * area_cm2 * 1e6, self.bio.ek),
                 (mch.KA("dist", cel), dens["ka_dist"] * area_cm2 * 1e6, self.bio.ek),
             ]
-        self.chans = [c for c in self.chans if np.any(c[1] > 0)]
+        # Markov channels are held separately: they carry an occupancy vector per
+        # compartment rather than independent gates, and are integrated with an
+        # implicit step because their fastest rates reach ~1e4 /ms at spike
+        # potentials, where an explicit step at dt = 0.02 ms diverges rather than
+        # merely blurring.
+        self.markov = [c for c in self.chans if getattr(c[0], "markov", False)]
+        self.chans = [c for c in self.chans
+                      if not getattr(c[0], "markov", False) and np.any(c[1] > 0)]
+        self.markov = [c for c in self.markov if np.any(c[1] > 0)]
         self.n = n
         self.reset()
 
@@ -207,18 +224,23 @@ class Cell:
         self.v = v
         self.state = [[np.asarray(inf, float) * np.ones(self.n) for inf, _ in ch.rates(v)]
                       for ch, _, _ in self.chans]
+        self.mstate = [ch.steady(v) for ch, _, _ in self.markov]
         # e_pas chosen so the resting state is a true steady state (the published
         # models do the same at init): any residual ionic current at v_rest is
         # absorbed into the leak reversal rather than left to drift the cell.
         ion = np.zeros(self.n)
         for (ch, gbar, erev), st in zip(self.chans, self.state):
             ion += gbar * ch.g(st) * (v - erev)
+        for (ch, gbar, erev), P in zip(self.markov, self.mstate):
+            ion += gbar * ch.g(P) * (v - erev)
         self.e_pas = v + ion / np.maximum(self.gpas, 1e-30)
 
     def _advance_gates(self, v, dt):
         for (ch, _, _), st in zip(self.chans, self.state):
             for k, (inf, tau) in enumerate(ch.rates(v)):
                 st[k] = inf + (st[k] - inf) * np.exp(-dt / tau)
+        for j, (ch, _, _) in enumerate(self.markov):
+            self.mstate[j] = ch.step(self.mstate[j], v, dt)
 
     def step(self, dt, istim=None, gsyn=None):
         """One backward-Euler step.  Returns (v_new, I_m) with I_m in nA.
@@ -239,6 +261,9 @@ class Cell:
         gerev = self.gpas * self.e_pas
         for (ch, gbar, erev), st in zip(self.chans, self.state):
             g = gbar * ch.g(st)
+            gtot += g; gerev += g * erev
+        for (ch, gbar, erev), P in zip(self.markov, self.mstate):
+            g = gbar * ch.g(P)
             gtot += g; gerev += g * erev
         if gsyn:
             for g, erev in gsyn:

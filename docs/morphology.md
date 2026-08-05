@@ -1396,6 +1396,57 @@ So Ih is added because it is a real, documented gap with the right kinetics —
 not because it explains the facilitation. It does not.
 
 
+### Resurgent sodium — necessary, not sufficient
+
+`NaRsg` transcribes the 13-state Raman & Bean scheme from `narsg.mod` (Khaliq,
+Gouwens & Raman 2003, as distributed with Zang & De Schutter 2021): five closed
+states, open, a **blocked** state, and six inactivated. It is not a product of
+independent gates, so it needs the Markov path added to `morpho_cable`.
+
+**Why it was worth the machinery.** The measured cell shows spikes ~11% *larger*
+after short intervals. Kv3, Na inactivation and Ih all predict the opposite
+sign. Resurgent sodium is the only candidate that facilitates: during
+repolarisation the blocked state unbinds back *through* the open state rather
+than through inactivation, so a preceding spike leaves channels poised to reopen.
+
+**Channel validation**, independent of any cell: `alfac` 3.500 and `btfac` 0.316
+match the published reversibility factors (derived from `Oon/Con` and
+`Ooff/Coff`, not free); generator columns sum to zero to 3.6e-12; and the
+voltage-step protocol reproduces the resurgent current — 50% of channels
+accumulate blocked at +30 mV, and on repolarisation to −30 the open probability
+rises again to **7.2×** its end-of-step value. Removing the O↔B transition
+collapses that to **1.0×**, so it comes from the block and not from the
+activation chain.
+
+**Two-parameter sweep**, ratio of 2nd to 1st spike at 5 ms ISI (target 1.11):
+
+| gna \ gnarsg | 0.000 | 0.004 | 0.008 | 0.015 | 0.030 |
+|---|---|---|---|---|---|
+| 0.040 | 0.850 | 0.894 | 0.962 | 1.024 | 0.931 |
+| 0.060 | 0.884 | 0.947 | 1.011 | 1.037 | 0.938 |
+| 0.090 | 0.934 | 1.002 | 1.047 | 1.037 | 0.954 |
+| 0.120 | 0.977 | 1.031 | 1.051 | 1.028 | 0.973 |
+| 0.150 | 0.994 | 1.040 | **1.061** | 1.029 | 0.982 |
+
+**Without resurgent sodium nothing facilitates** — the whole `gnarsg = 0` column
+depresses, approaching 1.0 as `gna` rises but never crossing it. With it, a
+facilitation ridge appears at `gnarsg` ≈ 0.008–0.015 and collapses beyond,
+presumably because too much charge sits blocked to be recovered.
+
+**Best is 1.061 against a measured 1.11.** Over half the effect, right sign,
+right mechanism — and a real gap. Candidates for the remainder, none tested: the
+model cell is a *dentate* basket cell, the drive is somatic current injection
+rather than synaptic, Ca and KCa are still absent, and part of the measured
++11% at 2–5 ms could be ringing from the preceding spike through the 33-sample
+moving-average high pass.
+
+**Cost.** A batched 13×13 solve per compartment per step, so the Markov path is
+opt-in per *simulation* via the `Biophys` density rather than per cell type —
+`CA1_TYPES` describes the cell, not the run. Integration is implicit because the
+fastest rates reach ~10⁴/ms at spike potentials, where an explicit step at
+dt = 0.02 ms diverges rather than merely blurring.
+
+
 ## Confronting the model with the sort
 
 ```bash
