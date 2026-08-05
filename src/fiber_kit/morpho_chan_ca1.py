@@ -236,6 +236,8 @@ def channels(kind, celsius=None):
         out.append((Kv3(cel), "kv3", "ek"))
     if p.get("hcn", 0.0):
         out.append((HCN(cel), "hcn", "eh"))
+    if p.get("narsg", 0.0):
+        out.append((NaRsg(cel), "narsg", "ena"))
     return out
 
 
@@ -252,6 +254,8 @@ def biophys(kind, **over):
         p["gkv3"] = p.pop("kv3")
     if "hcn" in p:
         p["ghcn"] = p.pop("hcn")
+    if "narsg" in p:
+        p["gnarsg"] = p.pop("narsg")
     p.setdefault("Ra_axon", p.get("Ra", 150.0))
     p.update(over)
     b = mc.Biophys(**p)
@@ -345,3 +349,113 @@ class HCN:
 
     def g(self, st):
         return st[0] ** 2
+
+
+class NaRsg:
+    """naRsg — RESURGENT sodium, the 13-state Raman & Bean scheme.
+
+    Transcribed from narsg.mod (Khaliq, Gouwens & Raman 2003, as distributed with
+    Zang & De Schutter 2021).  Unlike every other channel in this module it is
+    not a product of independent gates, so it cannot be expressed as (inf, tau)
+    pairs and needs the Markov path in morpho_cable.
+
+        C1-C2-C3-C4-C5-O          activation chain, then opening
+        O <-> B                   open-channel BLOCK -- the resurgent state
+        O <-> I6, I1-...-I5-I6    inactivation, coupled to each closed state
+
+    WHY IT IS HERE.  The measured cell shows spikes ~11% LARGER after short
+    interspike intervals, decaying to baseline over ~200 ms.  Kv3, Na
+    inactivation and Ih all predict the opposite sign: each of them depresses the
+    spike during a train.  Resurgent sodium is the one candidate that facilitates
+    -- during repolarization the blocked state B unbinds back THROUGH the open
+    state rather than through inactivation, so a preceding spike leaves channels
+    poised to reopen instead of inactivated.  That is the mechanism the data has
+    been pointing at since the recovery curve of patch 0328 came back with the
+    wrong sign.
+
+    Rates are the published ones; alfac and btfac are the microscopic-
+    reversibility factors (Oon/Con)^(1/4) and (Ooff/Coff)^(1/4), not free
+    parameters.
+    """
+    name = "narsg"
+    markov = True
+    NSTATE = 13
+    LABEL = ("C1", "C2", "C3", "C4", "C5", "O", "B", "I1", "I2", "I3", "I4", "I5", "I6")
+    iO, iB = 5, 6
+    Con, Coff, Oon, Ooff = 0.005, 0.5, 0.75, 0.005
+    alpha, beta, gamma, delta = 150.0, 3.0, 150.0, 40.0
+    epsilon, zeta = 1.75, 0.03
+    x1, x2, x6 = 20.0, -20.0, -25.0
+    q10 = 2.7
+
+    def __init__(self, celsius=34.0):
+        self.qt = self.q10 ** ((celsius - 22.0) / 10.0)
+        self.alfac = (self.Oon / self.Con) ** 0.25
+        self.btfac = (self.Ooff / self.Coff) ** 0.25
+
+    def _rates(self, v):
+        q, af, bf = self.qt, self.alfac, self.btfac
+        with np.errstate(over="ignore"):
+            ea = np.exp(v / self.x1) * q
+            eb = np.exp(v / self.x2) * q
+            f = [k * self.alpha * ea for k in (4, 3, 2, 1)]              # f01..f04
+            b = [k * self.beta * eb for k in (1, 2, 3, 4)]               # b01..b04
+            f1 = [k * self.alpha * af * ea for k in (4, 3, 2, 1)]        # f11..f14
+            b1 = [k * self.beta * bf * eb for k in (1, 2, 3, 4)]         # b11..b14
+            bip = self.zeta * np.exp(v / self.x6) * q
+        fi = [self.Con * af ** k * q for k in range(5)]                  # fi1..fi5
+        bi = [self.Coff * bf ** k * q for k in range(5)]                 # bi1..bi5
+        return dict(f=f, b=b, f1=f1, b1=b1, fi=fi, bi=bi,
+                    f0O=self.gamma * q, b0O=self.delta * q,
+                    fip=self.epsilon * q, bip=bip,
+                    fin=self.Oon * q, bin=self.Ooff * q,
+                    f1n=self.gamma * q, b1n=self.delta * q)
+
+    def generator(self, v):
+        """(N, 13, 13) matrix A with dP/dt = A P, columns summing to zero."""
+        v = np.atleast_1d(np.asarray(v, float))
+        n = len(v)
+        r = self._rates(v)
+        A = np.zeros((n, 13, 13))
+
+        def link(i, j, fwd, bwd):
+            fwd = np.broadcast_to(np.asarray(fwd, float), (n,))
+            bwd = np.broadcast_to(np.asarray(bwd, float), (n,))
+            A[:, j, i] += fwd; A[:, i, i] -= fwd
+            A[:, i, j] += bwd; A[:, j, j] -= bwd
+
+        for k in range(4):                       # C1..C5 chain
+            link(k, k + 1, r["f"][k], r["b"][k])
+        link(4, self.iO, r["f0O"], r["b0O"])     # C5 <-> O
+        link(self.iO, self.iB, r["fip"], r["bip"])   # O <-> B  (resurgent block)
+        link(self.iO, 12, r["fin"], r["bin"])    # O <-> I6
+        for k in range(4):                       # I1..I5 chain
+            link(7 + k, 8 + k, r["f1"][k], r["b1"][k])
+        link(11, 12, r["f1n"], r["b1n"])         # I5 <-> I6
+        for k in range(5):                       # Ck <-> Ik
+            link(k, 7 + k, r["fi"][k], r["bi"][k])
+        return A
+
+    def steady(self, v):
+        """(N, 13) equilibrium occupancy — the null space with sum = 1."""
+        A = self.generator(v).copy()
+        A[:, -1, :] = 1.0                        # replace one row by conservation
+        rhs = np.zeros((len(A), 13)); rhs[:, -1] = 1.0
+        return np.linalg.solve(A, rhs[..., None])[..., 0]
+
+    def step(self, P, v, dt):
+        """One implicit step: (I - dt*A) P_new = P_old, batched over compartments.
+
+        Implicit rather than explicit because the fastest rates here reach
+        ~10^4 /ms at spike potentials, which an explicit step at dt = 0.02 ms
+        would not merely blur but diverge.
+        """
+        A = self.generator(v)
+        M = np.eye(13)[None] - dt * A
+        Pn = np.linalg.solve(M, np.asarray(P, float)[..., None])[..., 0]
+        np.clip(Pn, 0.0, 1.0, out=Pn)
+        s = Pn.sum(1, keepdims=True)
+        return Pn / np.maximum(s, 1e-30)
+
+    def g(self, P):
+        return np.asarray(P)[..., self.iO]

@@ -1119,5 +1119,79 @@ check(b_fs.ghcn > 0 and b_fs.eh > -60.0,
       f"Ih has a depolarizing reversal ({b_fs.eh:.0f} mV), so it is an inward "
       "current at rest")
 
+# ── 23. resurgent sodium (13-state Markov) ──────────────────────────────────
+print("[23] resurgent sodium, Markov integration")
+rsg = mca.NaRsg(34.0)
+# (Oon/Con)^(1/4) = 150^0.25 = 3.4996; the published 3.5 is rounded, so the
+# tolerance is on the rounding and not on the arithmetic.
+check(abs(rsg.alfac - 3.5) < 1e-3 and abs(rsg.btfac - 0.3162) < 1e-3,
+      f"microscopic-reversibility factors match the published values "
+      f"({rsg.alfac:.3f}, {rsg.btfac:.4f}) — they are derived, not free")
+vv2 = np.array([-90.0, -60.0, -30.0, 0.0, 30.0])
+A = rsg.generator(vv2)
+check(float(np.abs(A.sum(1)).max()) < 1e-9,
+      f"generator columns sum to zero ({np.abs(A.sum(1)).max():.1e}) — probability "
+      "is conserved by construction, not by renormalising")
+P0 = rsg.steady(vv2)
+check(np.allclose(P0.sum(1), 1.0) and np.all(P0 >= -1e-9),
+      "steady state is a valid distribution")
+check(np.all(np.abs(np.einsum("nij,nj->ni", A, P0)) < 1e-6),
+      "and it really is the null space, A @ P = 0")
+check(P0[0, rsg.iO] < 1e-4 and P0[-1, rsg.iB] > 0.3,
+      f"at rest almost nothing is open ({P0[0,rsg.iO]:.1e}) while at +30 mV most "
+      f"channels sit BLOCKED ({P0[-1,rsg.iB]:.2f})")
+
+def _step_protocol(chan, dt=0.005):
+    P = chan.steady(np.array([-90.0]))
+    dep, rep = [], []
+    for k in range(int(20 / dt)):
+        t = k * dt
+        v_ = -90.0 if t < 2 else (30.0 if t < 12 else -30.0)
+        P = chan.step(P, np.array([v_]), dt)
+        (dep if 2 <= t < 12 else rep if t >= 12 else []).append(float(P[0, chan.iO]))
+    return np.array(dep), np.array(rep)
+
+dep, rep = _step_protocol(rsg)
+ratio = rep.max() / max(dep[-1], 1e-12)
+check(ratio > 3.0,
+      f"THE defining behaviour: open probability RISES again on repolarisation, to "
+      f"{ratio:.1f}x its end-of-step value — the resurgent current")
+
+# negative control: remove the open-channel block and the resurgence must vanish
+class _NoBlock(mca.NaRsg):
+    epsilon = 0.0
+nb = _NoBlock(34.0)
+dep2, rep2 = _step_protocol(nb)
+check(rep2.max() / max(dep2[-1], 1e-12) < ratio / 3.0,
+      f"negative control: with the O<->B transition removed the resurgence "
+      f"collapses ({rep2.max()/max(dep2[-1],1e-12):.1f}x vs {ratio:.1f}x) — it comes "
+      "from the block, not from the activation chain")
+
+# the implicit step must stay a valid distribution at a coarse dt, where an
+# explicit step on rates reaching ~1e4/ms would diverge
+Pc = rsg.steady(np.array([-70.0]))
+for _ in range(200):
+    Pc = rsg.step(Pc, np.array([20.0]), 0.05)
+check(np.all(np.isfinite(Pc)) and abs(Pc.sum() - 1.0) < 1e-9 and np.all(Pc >= -1e-12),
+      "the implicit step stays bounded and normalised at dt = 0.05 ms")
+
+# wiring: Markov channels are opt-in per simulation and carry conductance
+cmp_rsg = ma.build("pyramidal", d_lambda=0.35)
+b_no = mca.biophys("pvbasket")
+b_yes = mca.biophys("pvbasket"); b_yes.gnarsg = 0.01
+cell_no = mc.Cell(cmp_rsg, b_no); cell_yes = mc.Cell(cmp_rsg, b_yes)
+check(len(cell_no.markov) == 0 and len(cell_yes.markov) == 1,
+      f"the Markov channel is added only when a density is set "
+      f"({len(cell_no.markov)} vs {len(cell_yes.markov)})")
+check(cell_yes.mstate[0].shape == (len(cmp_rsg), 13),
+      f"occupancy is per-compartment {cell_yes.mstate[0].shape}")
+r_no = mc.simulate(cell_no, dt=0.02, t_stop=6.0, stim_amp=8.0, record_v=False)
+r_yes = mc.simulate(cell_yes, dt=0.02, t_stop=6.0, stim_amp=8.0, record_v=False)
+check(float(np.abs(r_yes["im"] - r_no["im"]).max()) > 1e-6,
+      "adding it changes the membrane current — it is not inert")
+sc = float(np.abs(r_yes["im"]).max())
+check(float(np.abs(r_yes["im"].sum(1)).max()) / max(sc, 1e-30) < 1e-5,
+      "and charge is still conserved with a Markov channel present")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
