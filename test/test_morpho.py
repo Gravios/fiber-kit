@@ -1193,5 +1193,72 @@ sc = float(np.abs(r_yes["im"]).max())
 check(float(np.abs(r_yes["im"].sum(1)).max()) / max(sc, 1e-30) < 1e-5,
       "and charge is still conserved with a Markov channel present")
 
+# ── 24. morphology acquisition ──────────────────────────────────────────────
+print("[24] morphology acquisition: gate, manifest, provenance")
+try:
+    from fiber_kit import morpho_fetch as mfe
+except ImportError:
+    import morpho_fetch as mfe
+
+rec = {"neuron_name": "int27_3_1", "archive": "Hamad"}
+urls = mfe.swc_urls(rec)
+check(any("dableFiles/hamad/CNG%20version/int27_3_1.CNG.swc" in u for u in urls),
+      "the standardised URL matches the one observed live for that archive")
+check(any("Source-Version" in u for u in urls) and len(urls) >= 2,
+      f"a fallback to the source version is offered ({len(urls)} candidates)")
+check(urls[0].endswith(".CNG.swc"),
+      "the standardised version is tried FIRST — it is the one the loader is "
+      "tested against")
+sp = mfe.swc_urls({"neuron_name": "a b", "archive": "Two Words"})
+check(all(" " not in u for u in sp), "names and archives with spaces are URL-quoted")
+for bad_rec in ({"archive": "X"}, {"neuron_name": "y"}):
+    try:
+        mfe.swc_urls(bad_rec); ok_b = False
+    except ValueError:
+        ok_b = True
+    if not ok_b:
+        break
+check(ok_b, "a record missing neuron_name or archive is refused, not half-built")
+
+# the gate, on real NeuroMorpho-format files with and without an axon
+_ax = "/home/claude/morph/swc/AKO60sdax2lay.CNG.swc"
+_no = "/home/claude/morph/swc/l22.swc"
+if os.path.exists(_ax) and os.path.exists(_no):
+    v_ax = mfe.validate(_ax)
+    check(v_ax["axon_um"] > 5000 and v_ax["roots"] == 1,
+          f"an axon-bearing reconstruction validates ({v_ax['axon_um']:.0f} um, "
+          f"{v_ax['roots']} root)")
+    check(mfe.validate(_no)["axon_um"] == 0.0,
+          "a dendrite-only one reports zero axon rather than failing silently")
+    try:
+        mfe.validate(_no, min_axon_um=5000); ok_g = False
+    except ValueError:
+        ok_g = True
+    check(ok_g, "and is REJECTED when the caller states the axon matters")
+    check(mfe.validate(_ax, min_axon_um=5000)["axon_um"] > 0,
+          "negative control: the gate does not reject the good one too")
+
+    with _tf.TemporaryDirectory() as td4:
+        man = os.path.join(td4, "m.tsv")
+        added, failed = mfe.adopt([_ax, _no], man, min_axon_um=5000)
+        check(len(added) == 1 and len(failed) == 1,
+              f"adopt gates per file ({len(added)} in, {len(failed)} out)")
+        rows = mfe.read_manifest(man)
+        check(len(rows) == 1 and rows[0]["neuron_name"] == "AKO60sdax2lay",
+              "only the accepted cell reaches the manifest")
+        check(len(rows[0]["sha1"]) == 40 and rows[0]["axon_um"] == "6171",
+              "provenance carries a content hash and the measured axon length")
+        # re-adopting must not duplicate, and the manifest must stay sorted
+        mfe.adopt([_ax], man, min_axon_um=5000)
+        check(len(mfe.read_manifest(man)) == 1, "re-adopting does not duplicate a row")
+        rows2 = [dict(neuron_name=n, sha1="x") for n in ("zz", "aa", "mm")]
+        mfe.write_manifest(man, rows2)
+        got = [r["neuron_name"] for r in mfe.read_manifest(man)]
+        check(got == sorted(got),
+              f"the manifest is written sorted {got} — so a diff shows what changed, "
+              "not how the API ordered its reply")
+else:
+    print("  (skipped: sample SWC files not present)")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

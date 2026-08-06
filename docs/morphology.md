@@ -1447,6 +1447,72 @@ fastest rates reach ~10⁴/ms at spike potentials, where an explicit step at
 dt = 0.02 ms diverges rather than merely blurring.
 
 
+## Acquiring morphologies: `fiber-morpho-fetch`
+
+Adding a reconstruction is not "download a file". Three things have gone wrong
+in this work in ways that only surfaced later:
+
+- a **dentate** basket cell was used where a **CA1** one was needed, and the
+  substitution had to be carried as a caveat through five patches;
+- **four of twelve** NeuroMorpho files tested here have **no axon**, and a
+  dendrite-only interneuron is useless for this — the axon carries 46–109% of
+  the off-peak extracellular field;
+- a reconstruction loaded as **977 disconnected roots** because of a parser gap,
+  and only failed loudly because `morpho_geom` refuses that.
+
+So every acquisition passes a **validation gate** and lands in a **manifest**
+with provenance. A morphology not in the manifest is not one this project uses.
+
+```bash
+# find candidates (no download)
+fiber-morpho-fetch search --fq brain_region:CA1 --fq cell_type:interneuron \
+    --q species:rat --json hits.json
+
+# download, gate on axon length, record provenance
+fiber-morpho-fetch fetch --fq brain_region:CA1 --fq cell_type:interneuron \
+    --dest morph/ --min-axon 5000
+
+# files you fetched by hand — no network needed
+fiber-morpho-fetch adopt morph/*.swc --manifest morph/morphologies.tsv --min-axon 5000
+
+# re-check that files still match their recorded hashes
+fiber-morpho-fetch verify --manifest morph/morphologies.tsv --dir morph/
+```
+
+The manifest records `axon_um` and `dend_um` alongside archive, species, region
+and a SHA-1, so the region substitution and the dendrite-only case are
+*checkable* rather than remembered. It is written sorted and de-duplicated, so a
+diff between runs shows what changed rather than how the API ordered its reply.
+
+Demonstrated on the real files to hand:
+
+| file | axon | dend | verdict at `--min-axon 5000` |
+|---|---|---|---|
+| `EC2-609291-4.CNG.swc` | 31,245 µm | 12,037 | **adopted** |
+| `AKO60sdax2lay.CNG.swc` | 6,171 µm | 2,343 | **adopted** |
+| `l22.swc` | 0 | 2,900 | rejected |
+| `A1-May29-IR1-5-O.CNG.swc` | 0 | — | rejected |
+
+### The network code is unverified
+
+`neuromorpho.org` is unreachable from the environment this was written in — the
+egress proxy blocks the host and its `robots.txt` disallows automated access —
+so **`search()` and `download()` have never been run against the live service**.
+Their URL construction follows the documented API and one observed file URL
+(`dableFiles/hamad/CNG version/int27_3_1.CNG.swc`), and is unit-tested against
+those; the HTTP round trip is not tested.
+
+The archive path segment is inferred to be the archive name lower-cased with
+spaces removed, from that single example rather than from documentation, so
+`swc_urls` returns **four candidates** — standardised and source versions of
+both the slugified and the raw archive string — and `download` tries each. If a
+multi-word archive breaks all four, the neuron's own page carries the link.
+
+Everything downstream of a file existing on disk **is** tested, which is the
+path that matters if you fetch by hand — and `adopt` exists precisely so that
+route is first-class rather than a workaround.
+
+
 ## Confronting the model with the sort
 
 ```bash
