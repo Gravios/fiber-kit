@@ -1463,6 +1463,10 @@ in this work in ways that only surfaced later:
 So every acquisition passes a **validation gate** and lands in a **manifest**
 with provenance. A morphology not in the manifest is not one this project uses.
 
+The console script comes from `pyproject.toml`, so it only appears after an
+install: `pip install -e .`. Without that, use `python3 -m fiber_kit.morpho_fetch`
+from `src/` — identical behaviour.
+
 ```bash
 # find candidates (no download)
 fiber-morpho-fetch search --fq brain_region:CA1 --fq cell_type:interneuron \
