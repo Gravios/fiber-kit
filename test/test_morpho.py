@@ -1292,5 +1292,70 @@ if os.path.exists(_pj):
 else:
     print("  (skipped: pyproject.toml not found)")
 
+# ── 26. model-based localisation ────────────────────────────────────────────
+print("[26] position fitting, co-localisation, within-chunk split")
+try:
+    from fiber_kit import morpho_localize as mlz
+except ImportError:
+    import morpho_localize as mlz
+
+# a synthetic table: profile depends on position through a known law, so the
+# right answer is not the code's own output
+gxy = me.staggered_octrode(n=8)
+rows, grid, names = [], [], []
+for dy in np.arange(0, 161, 5.0):
+    for lat in np.arange(5.0, 61.0, 5.0):
+        d = np.hypot(gxy[:, 1] - dy, lat)
+        p = 1.0 / (d + 10.0)
+        rows.append(p / p.max()); grid.append((0.0, dy, lat)); names.append("synth")
+tab = mlz.PositionTable(rows, grid, names)
+check(len(tab) == 33 * 12, f"table has one entry per grid point ({len(tab)})")
+
+def _waves(dy, lat, n, noise, rr):
+    d = np.hypot(gxy[:, 1] - dy, lat); a = 1.0 / (d + 10.0); a = a / a.max()
+    w = np.zeros((n, 42, 8))
+    w[:, 21, :] = -a * 1000.0; w[:, 26, :] = a * 300.0
+    return w + rr.normal(0, noise, w.shape)
+
+rl = np.random.default_rng(131)
+w_true = _waves(80.0, 25.0, 600, 12.0, rl)
+f = tab.fit(mlz.profile(w_true))
+check(abs(f["depth"] - 80) <= 5 and abs(f["lateral"] - 25) <= 5,
+      f"a known position is recovered ({f['depth']:.0f}, {f['lateral']:.0f} vs 80, 25)")
+check(mlz.profile(w_true * 7.3).max() == 1.0 and
+      np.allclose(mlz.profile(w_true), mlz.profile(w_true * 7.3)),
+      "the profile is amplitude-invariant — gain must not move the fit")
+
+fl = mlz.split_half_floor(tab, w_true, rng=rl)
+check(0.0 <= fl <= 15.0, f"the split-half floor is finite and small ({fl:.1f} um)")
+check(np.isnan(mlz.split_half_floor(tab, w_true[:20], rng=rl)),
+      "too few spikes gives NaN rather than a confident number")
+
+same = mlz.colocalised(tab, w_true, _waves(80.0, 25.0, 600, 12.0, rl), rng=rl)
+diff = mlz.colocalised(tab, w_true, _waves(120.0, 25.0, 600, 12.0, rl), rng=rl)
+check(same["same"] and same["separation"] <= same["threshold"],
+      f"two populations at one place read as SAME ({same['separation']:.1f} um)")
+check(not diff["same"] and diff["separation"] > 20,
+      f"negative control: 40 um apart reads as different ({diff['separation']:.1f} um)")
+
+one = mlz.within_chunk_split(tab, [_waves(80.0, 25.0, 400, 12.0, rl) for _ in range(3)], rng=rl)
+two = mlz.within_chunk_split(tab, [_waves(80.0, 25.0, 400, 12.0, rl),
+                                   _waves(115.0, 30.0, 400, 12.0, rl)], rng=rl)
+check(not one["split"], f"three atoms from one cell read as one ({one['separation']:.1f} um)")
+check(two["split"] and two["separation"] > 20,
+      f"two atoms 35 um apart read as TWO CELLS ({two['separation']:.1f} um)")
+
+# drift must be visible as a trajectory, and must NOT be mistaken for a split
+blocks = [(f"b{k}", _waves(60.0 + 4.0 * k, 25.0, 400, 12.0, rl)) for k in range(8)]
+tr = mlz.trajectory(tab, blocks, rng=rl)
+span = max(r["depth"] for r in tr) - min(r["depth"] for r in tr)
+check(span >= 20, f"a 28 um imposed drift is traced ({span:.0f} um across 8 blocks)")
+check(all(np.isnan(r["step"]) or r["step"] < 15 for r in tr),
+      "and it is traced as small steps, not jumps")
+drift_as_split = mlz.within_chunk_split(tab, [b[1] for b in (blocks[0], blocks[-1])], rng=rl)
+check(drift_as_split["split"],
+      "a drifting unit's FIRST and LAST blocks do look like two positions — which "
+      "is why within_chunk_split requires atoms from one time window")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
