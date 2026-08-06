@@ -1260,5 +1260,37 @@ if os.path.exists(_ax) and os.path.exists(_no):
 else:
     print("  (skipped: sample SWC files not present)")
 
+# ── 25. entry points are actually declared ──────────────────────────────────
+print("[25] console-script registration")
+_root = os.path.join(HERE, "..")
+_pj = os.path.join(_root, "pyproject.toml")
+if os.path.exists(_pj):
+    import tomllib as _tl
+    _scripts = _tl.load(open(_pj, "rb")).get("project", {}).get("scripts", {})
+    # A module with a main() and no entry point is invisible to the user: it was
+    # shipped, tested and documented, and `command not found` was the first
+    # anyone knew.  Assert the mapping rather than trusting that an edit landed.
+    for _cmd, _tgt in (("fiber-morpho", "fiber_kit.morpho_study:main"),
+                       ("fiber-morpho-fetch", "fiber_kit.morpho_fetch:main")):
+        check(_scripts.get(_cmd) == _tgt,
+              f"{_cmd} is declared and points at {_tgt} (got {_scripts.get(_cmd)!r})")
+    # and every declared target must actually import and expose main()
+    import importlib as _il
+    _bad = []
+    for _cmd, _tgt in _scripts.items():
+        if not _tgt.startswith("fiber_kit.morpho") and _tgt != "fiber_kit.morpho_fetch:main":
+            continue
+        _mod, _fn = _tgt.split(":")
+        try:
+            if not callable(getattr(_il.import_module(_mod), _fn)):
+                _bad.append(_cmd)
+        except Exception:
+            _bad.append(_cmd)
+    check(not _bad, f"every declared morpho entry point resolves to a callable ({_bad})")
+    check("neuro-extract" not in _scripts,
+          "negative control: the reverted neuro-extract script is NOT declared")
+else:
+    print("  (skipped: pyproject.toml not found)")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
