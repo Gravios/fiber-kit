@@ -1517,6 +1517,67 @@ path that matters if you fetch by hand — and `adopt` exists precisely so that
 route is first-class rather than a workaround.
 
 
+## Localisation: position as a merge and link criterion
+
+`morpho_localize` turns a cluster's per-channel amplitude profile into a
+**position**. That is evidence built on none of what the existing criteria use —
+not waveform cosine, not refractory statistics, not feature-space distance.
+
+**Affordable because the transfer matrix is time-independent.** One simulation
+per morphology serves the whole position grid: 1,372 positions built in **6 s**,
+after which every cluster and every atom is a table search. Nothing re-simulates
+per cluster.
+
+### Measured on g5 group 5
+
+| | |
+|---|---|
+| resolution | split-half floor **2.5 µm** at ~4,000 spikes; RMSE triples over 5 µm of depth |
+| co-localisation | clusters **262 and 263 agree to 2.5 µm** across eight 24-min blocks — exactly the floor |
+| drift | one cluster's atoms trace **152.5 → 175 µm** over five hours |
+| two cells in one cluster | three chunks of 263 hold atoms **14.6, 26.6 and 21.4 µm** apart, against floors of 2.5, 6.7, 4.6 |
+
+### The distinction that makes it work
+
+Atoms are **chunk-aligned**, so comparing them *across* chunks measures drift
+and will flag every drifting unit as a split. I made that mistake once: 13 of
+15 atoms in cluster 262 "flagged", when what they trace is a smooth 25 µm
+trajectory. `within_chunk_split` therefore requires atoms from **one time
+window**, where drift cannot account for a separation — and a test asserts that
+a drifting unit's first and last blocks *do* look like two positions, so the
+constraint is about something real.
+
+### What this changed about 262 + 263
+
+Three independent tests supported that merge: refractory dip 0.916, template
+1−cos 0.036, co-localisation to 2.5 µm. All were measured on **263 as a whole**,
+and 263 is a mixture — 161 atoms for 17,056 spikes against 262's 15 for 51,222.
+So they establish that *part* of 263 is 262's cell, not all of it. Split 263
+first, then re-test each part. Its elevated contamination (viol/exp 0.11 against
+262's 0.03) stops being mysterious and becomes a prediction.
+
+### Pipeline integration
+
+Build the table once per session from the group's `.probe` geometry, then fit
+per cluster and per atom and write the positions as a sidecar. Linking across
+chunks can then match on **position continuity** — a physical criterion — rather
+than only on feature-space similarity. `trajectory()` returns each block's fit
+alongside its own floor and the step from the previous block, so a trace is
+readable against its resolution rather than by eye.
+
+### Limits
+
+It is **blind to genuinely co-located cells** — two somata at one point give the
+same profile whatever their spikes look like — and that is precisely the
+population left after the spatial criteria are exhausted. It needs enough spikes
+(the floor scales as 1/√n, which is why the floor is returned rather than a
+fixed threshold applied). And it inherits the model's systematic error: a good
+fit is RMSE ~0.011 against a split-half floor of ~0.002, so the model is ~6×
+from describing the data, and a position is only as good as the morphology being
+roughly right. Rotation was searched coarsely and is likely far less constrained
+than depth.
+
+
 ## Confronting the model with the sort
 
 ```bash
