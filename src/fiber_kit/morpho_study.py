@@ -784,16 +784,36 @@ def cmd_localize(args):
         # take the first N ALPHABETICALLY, which silently selected an unrelated
         # cell type and produced RMSE 0.22 instead of 0.01 with no error --
         # the caller must be able to say WHICH morphologies, not how many.
-        spec = args.morphologies
-        if "," in spec:
-            paths = [p for p in spec.split(",") if p]
-        elif os.path.isdir(spec):
-            paths = sorted(glob.glob(os.path.join(spec, "*.swc")))
-        else:
-            paths = sorted(glob.glob(spec))
-        missing = [p for p in paths if not os.path.exists(p)]
-        if missing:
-            raise SystemExit(f"[localize] no such morphology: {missing[0]}")
+        # Each comma-separated entry is resolved INDEPENDENTLY as a directory,
+        # a glob, or a file.  The first version treated every comma entry as a
+        # file path, so `--morphologies a/,b/` produced two directory paths that
+        # passed the existence check and only failed later, as two entries with
+        # an empty basename and no biophysics rule.
+        paths = []
+        for entry in [e.strip() for e in args.morphologies.split(",") if e.strip()]:
+            if os.path.isdir(entry):
+                got = sorted(glob.glob(os.path.join(entry, "*.swc")))
+                if not got:
+                    raise SystemExit(f"[localize] no .swc files under {entry}")
+            elif any(ch in entry for ch in "*?["):
+                got = sorted(glob.glob(entry))
+                if not got:
+                    raise SystemExit(f"[localize] glob matched nothing: {entry}")
+            elif os.path.exists(entry):
+                got = [entry]
+            else:
+                raise SystemExit(f"[localize] no such morphology, directory or glob: {entry}")
+            paths.extend(got)
+        seen, uniq = set(), []
+        for q in paths:
+            r = os.path.realpath(q)
+            if r not in seen:
+                seen.add(r); uniq.append(q)
+        if len(uniq) != len(paths):
+            print(f"  [note] {len(paths)-len(uniq)} duplicate path(s) dropped")
+        paths = uniq
+        if not paths:
+            raise SystemExit("[localize] --morphologies resolved to nothing")
         if args.max_morph:
             paths = paths[:args.max_morph]
         if not paths:
@@ -804,20 +824,32 @@ def cmd_localize(args):
         # downstream can flag.  The manifest already records cell_type, so the
         # preset is read from it rather than asserted on the command line.
         kinds = {q: args.kind for q in paths}
-        if args.manifest:
-            km, unk = mfe.kinds_from_manifest(args.manifest, paths,
-                                              default=(None if args.strict_kind else args.kind))
+        mans = list(args.manifest or [])
+        if mans:
+            # Repeatable, because a morphology set fetched per cell class has one
+            # manifest per directory.  Later manifests win on a name collision.
+            km, unk = {}, None
+            for mp in mans:
+                if not os.path.exists(mp):
+                    raise SystemExit(f"[localize] no such manifest: {mp}")
+                k1, u1 = mfe.kinds_from_manifest(
+                    mp, paths, default=(None if args.strict_kind else args.kind))
+                km.update(k1)
+                unk = u1 if unk is None else [x for x in unk if x[0] in {y[0] for y in u1}]
+            unk = unk or []
             kinds.update(km)
             if unk:
                 print(f"  [warn] {len(unk)} morphologies have no biophysics rule; "
                       + ("refusing (--strict-kind)" if args.strict_kind
                          else f"using --kind {args.kind}"))
                 for n_, t_ in unk[:5]:
-                    print(f"    {n_}: {t_[:60]}")
+                    print(f"    {n_ or '<unnamed>'}: {t_[:60]}")
                 if args.strict_kind:
                     raise SystemExit("[localize] refusing to simulate with a guessed preset")
-            rows_m = {r["neuron_name"]: r.get("cell_type", "")
-                      for r in mfe.read_manifest(args.manifest)}
+            rows_m = {}
+            for mp in mans:
+                rows_m.update({r["neuron_name"]: r.get("cell_type", "")
+                               for r in mfe.read_manifest(mp)})
             approx = [(os.path.basename(q), mfe.approximated_as(rows_m.get(
                 os.path.basename(q).replace(".CNG.swc", "").replace(".swc", ""), "")))
                       for q in paths]
@@ -1098,8 +1130,9 @@ def main(argv=None):
     lz.add_argument("--table", default=None, help="cache the position table here (reused)")
     lz.add_argument("--kind", default="pvbasket",
                     help="fallback preset; --manifest overrides it per morphology")
-    lz.add_argument("--manifest", default=None,
-                    help="morphologies.tsv; biophysics is inferred from its cell_type")
+    lz.add_argument("--manifest", action="append", default=None,
+                    help="morphologies.tsv; repeatable, one per morphology directory. "
+                         "Biophysics is inferred from its cell_type column")
     lz.add_argument("--strict-kind", action="store_true", dest="strict_kind",
                     help="refuse rather than fall back to --kind for unmapped cells")
     lz.add_argument("--spk-variant", default="standard", dest="spk_variant",
