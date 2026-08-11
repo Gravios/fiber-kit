@@ -1599,5 +1599,27 @@ with _tf.TemporaryDirectory() as tdA, _tf.TemporaryDirectory() as tdB:
           "a single manifest leaves the other directory's cell unmapped — which is "
           "why --manifest had to become repeatable")
 
+# ── 31. the sidecar's name ──────────────────────────────────────────────────
+print("[31] position sidecar naming")
+_nm = nio.session_path("s", "fk-cpos", 5, variant="stderiv.C5.D34", tag="anchor_linked")
+check(_nm == "s.fk-cpos.stderiv.C5.D34.5.anchor_linked",
+      f"the default name follows <base>.<type>.<variant>.<group>.<tag> ({_nm})")
+check(".pos." not in _nm and not _nm.endswith(".pos"),
+      "and avoids `.pos`, which in a hippocampus session already means the "
+      "animal's tracked position — a file beside <session>.whl would be read as behaviour")
+check(_nm.split(".")[1] == "fk-cpos",
+      "the whole token sits in the TYPE slot, so resolve_any can find it without "
+      "being taught a two-field type")
+check(nio.session_path("s", "fk-cpos", 5) == "s.fk-cpos.5",
+      "variant and tag are optional, as for every other artifact")
+# variant and tag must be present by default: cluster ids in the sidecar are only
+# meaningful relative to one .clu, so two sorts must not share a filename
+a = nio.session_path("s", "fk-cpos", 5, variant="stderiv.C5.D34", tag="anchor_linked")
+b = nio.session_path("s", "fk-cpos", 5, variant="stderiv.C5.D34", tag="other")
+c = nio.session_path("s", "fk-cpos", 5, variant="standard", tag="anchor_linked")
+check(len({a, b, c}) == 3,
+      "different variant or tag gives a different filename — cluster 262 means "
+      "something only relative to the clu it came from")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
