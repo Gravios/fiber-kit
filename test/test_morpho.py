@@ -1426,5 +1426,58 @@ with _tf.TemporaryDirectory() as td6:
     check(a["depth"] == b["depth"] and a["lateral"] == b["lateral"],
           "and a fit through the reloaded table is identical")
 
+# ── 28. biophysics inferred from cell_type ──────────────────────────────────
+print("[28] cell_type -> biophysics inference")
+# ORDER, not key length.  This is the case that motivated the ordered rules:
+# `parvalbumin (pv)-positive` is longer than `chandelier`, so sorting by length
+# routed axo-axonic cells to pvbasket.
+check(mfe.infer_kind("ErbB4-positive,Parvalbumin (PV)-positive,Chandelier,interneuron")
+      == "axoaxonic",
+      "an anatomical class beats a co-occurring marker (PV+ Chandelier -> axoaxonic)")
+check(mfe.infer_kind("Neuropeptide Y (NPY)-positive,Somatostatin (SOM)-positive,"
+                     "GABAergic,bistratified,interneuron") == "bistratified",
+      "...and again for a multiply-marked bistratified cell")
+check(mfe.infer_kind("Cannabinoid receptor (CB1R)-negative,basket,interneuron") == "pvbasket"
+      and mfe.infer_kind("Cannabinoid receptor (CB1R)-positive,basket,interneuron") == "cck",
+      "the CB1R-/CB1R+ basket dichotomy maps to PV and CCK respectively")
+check(mfe.infer_kind("principal cell,pyramidal") == "pyramidal",
+      "pyramidal reconstructions get pyramidal biophysics, not the interneuron default")
+check(mfe.infer_kind("") is None and mfe.infer_kind("something unheard of") is None,
+      "an unrecognised label returns None rather than guessing")
+check(mfe.infer_kind("something unheard of", default="pvbasket") == "pvbasket",
+      "...unless the caller supplies an explicit default")
+
+# every preset the rules can emit must exist, or the table build dies late
+kinds_emitted = {k for _, k in mfe.TYPE_RULES}
+check(kinds_emitted <= set(mca.CA1_TYPES),
+      f"every emitted preset exists in CA1_TYPES (extra: {kinds_emitted - set(mca.CA1_TYPES)})")
+check(set(mfe.APPROXIMATED.values()) <= set(mca.CA1_TYPES),
+      "so does every approximation target")
+check(mfe.approximated_as("Trilaminar,interneuron") == "trilaminar"
+      and mfe.approximated_as("Cannabinoid receptor (CB1R)-negative,basket,interneuron") is None,
+      "approximations are reported as such, exact matches are not")
+
+# a manifest maps to per-path presets, and unmapped rows are RETURNED not hidden
+with _tf.TemporaryDirectory() as td7:
+    man = os.path.join(td7, "m.tsv")
+    mfe.write_manifest(man, [
+        dict(neuron_name="a", cell_type="Cannabinoid receptor (CB1R)-negative,basket,interneuron"),
+        dict(neuron_name="b", cell_type="principal cell,pyramidal"),
+        dict(neuron_name="c", cell_type="wholly unknown thing")])
+    paths = [os.path.join(td7, n + ".CNG.swc") for n in ("a", "b", "c")]
+    km, unk = mfe.kinds_from_manifest(man, paths)
+    check(km[paths[0]] == "pvbasket" and km[paths[1]] == "pyramidal",
+          f"per-path presets come from the manifest ({sorted(km.values())})")
+    check(len(unk) == 1 and unk[0][0] == "c",
+          "the unmapped row is returned to the caller, not silently defaulted")
+    km2, _ = mfe.kinds_from_manifest(man, paths, default="cck")
+    check(km2[paths[2]] == "cck", "a default fills it when one is given")
+    try:
+        mfe.kinds_from_manifest(man, paths, strict=True); ok_s = False
+    except ValueError:
+        ok_s = True
+    check(ok_s, "strict=True refuses instead — what a pipeline wants, since a "
+                "wrong preset yields a plausible waveform nothing can flag")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
