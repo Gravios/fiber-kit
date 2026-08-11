@@ -846,10 +846,6 @@ def cmd_localize(args):
                 raise SystemExit("[localize] no morphology in --morphologies appears in "
                                  "--manifest; check that they describe the same directory")
             paths = keep
-        # Capped AFTER the manifest filter, so a cap of N yields N USABLE cells
-        # rather than N entries of which some are gate rejects.
-        if args.max_morph:
-            paths = paths[:args.max_morph]
         kinds = {q: args.kind for q in paths}
         if mans:
             # Repeatable, because a morphology set fetched per cell class has one
@@ -888,8 +884,6 @@ def cmd_localize(args):
             import collections as _c
             print("  biophysics: " + ", ".join(
                 f"{k}={v}" for k, v in sorted(_c.Counter(kinds.values()).items())))
-        if args.max_morph and not mans:
-            paths = paths[:args.max_morph]
         t0 = time.time()
         tab = mlz.build_table(paths, xy,
                               rotations=[float(v) for v in args.rotations.split(",")],
@@ -1181,8 +1175,6 @@ def main(argv=None):
     lz.add_argument("--lat-min", type=float, default=2.5, dest="lat_min")
     lz.add_argument("--lat-max", type=float, default=70.0, dest="lat_max")
     lz.add_argument("--step", type=float, default=2.5)
-    lz.add_argument("--max-morph", type=int, default=0, dest="max_morph",
-                    help="cap the count AFTER selection; it does not choose which")
     lz.add_argument("--nsamp", type=int, default=42); lz.add_argument("--nchan", type=int, default=8)
     lz.add_argument("--sr", type=float, default=32552.0)
     lz.add_argument("--min-spikes", type=int, default=150, dest="min_spikes")

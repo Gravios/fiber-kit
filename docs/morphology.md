@@ -1620,9 +1620,13 @@ fiber-morpho localize ... \
     --strict-kind
 ```
 
-**`--max-morph` caps the count after selection and never chooses which.**
-It previously took the first N alphabetically, which silently selected a CCK
-basket cell and produced RMSE 0.22 with no error.
+**There is no `--max-morph`.** It selected an arbitrary subset by *filename
+order*, which is uncorrelated with what a table needs to cover, and it caused
+two silent failures: picking a CCK basket cell where a fast-spiking one was
+meant (RMSE 0.22, no error), and capping before the manifest gate so that 110
+rejects stayed hidden. `--morphologies` takes an explicit list, which is
+reproducible and says what you got.
+
 
 **Filter on RMSE before using a position.** Only clusters the morphology set can
 represent will fit: with three basket cells, non-basket units land at 0.1–0.3
@@ -1668,6 +1672,19 @@ axo-axonic cell that happens to be PV+.
 `infer_kind` returns `None` on no match rather than guessing, and
 `kinds_from_manifest` returns the unmapped rows to the caller rather than
 quietly defaulting them.
+
+
+**Build cost is small enough that subsetting is pointless.** The position sweep
+is matmuls against a precomputed membrane-current matrix, so the per-cell cost
+is the simulation and rotations are nearly free:
+
+| rotations | positions/cell | s/cell | 84 cells | size |
+|---|---|---|---|---|
+| 1 | 1,596 | 6.1 | 9 min | 9 MB |
+| 2 | 3,192 | 8.4 | 12 min | 17 MB |
+| 4 | 6,384 | 13.3 | **19 min** | 34 MB |
+
+And it caches, so that is a one-time cost per probe geometry.
 
 
 **The manifest gates the morphology set.** `fetch` leaves rejected downloads on

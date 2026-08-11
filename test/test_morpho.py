@@ -1381,8 +1381,12 @@ check("--spk-variant" in _h and "untransformed" in _h,
       "the waveform variant is exposed and documented as needing to be untransformed")
 check("--max-rmse" in _h, "the split test can be gated on fit quality")
 # argparse re-wraps help text, so match a fragment that survives wrapping
-check("does not choose" in _h,
-      "--max-morph documents that it caps rather than selects")
+check("--max-morph" not in _h,
+      "--max-morph is gone: selecting an arbitrary subset by FILENAME ORDER is "
+      "never what a caller wants, and it caused two silent failures — picking a "
+      "CCK cell where a fast-spiking one was meant, and capping before the "
+      "manifest gate so 110 rejects stayed hidden. --morphologies takes an "
+      "explicit list, which is reproducible")
 
 # morphology spec: directory, glob and explicit list must all resolve, and a
 # missing path must fail loudly rather than silently shrinking the set
