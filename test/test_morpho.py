@@ -1528,5 +1528,76 @@ check(set(mfe.APPROXIMATED.values()) <= set(mca.CA1_TYPES)
       and {k for _, k in mfe.TYPE_RULES} <= set(mca.CA1_TYPES),
       "every emitted and approximated preset still exists")
 
+# ── 30. --morphologies path resolution and repeatable --manifest ────────────
+print("[30] path resolution: directories inside a comma list")
+def _resolve(spec):
+    """Mirror of cmd_localize's resolver, exercised without a session."""
+    out = []
+    for entry in [e.strip() for e in spec.split(",") if e.strip()]:
+        if os.path.isdir(entry):
+            got = sorted(glob.glob(os.path.join(entry, "*.swc")))
+            if not got:
+                raise ValueError(f"no .swc under {entry}")
+        elif any(ch in entry for ch in "*?["):
+            got = sorted(glob.glob(entry))
+            if not got:
+                raise ValueError(f"glob matched nothing: {entry}")
+        elif os.path.exists(entry):
+            got = [entry]
+        else:
+            raise ValueError(f"no such morphology, directory or glob: {entry}")
+        out.extend(got)
+    return out
+
+with _tf.TemporaryDirectory() as tdA, _tf.TemporaryDirectory() as tdB:
+    for d, names in ((tdA, ("x", "y")), (tdB, ("z",))):
+        for n in names:
+            open(os.path.join(d, n + ".CNG.swc"), "w").write("1 1 0 0 0 1 -1\n")
+    # THE case that failed in the field: two DIRECTORIES in a comma list.  The
+    # old resolver treated every comma entry as a file path, so these passed the
+    # existence check as directories and surfaced two entries whose basename was
+    # the empty string, with a message blaming the manifest.
+    got = _resolve(f"{tdA},{tdB}")
+    check(len(got) == 3 and all(q.endswith(".swc") for q in got),
+          f"two directories in a comma list expand to their files ({len(got)})")
+    check(all(os.path.basename(q).replace(".CNG.swc", "") for q in got),
+          "and every resolved path has a non-empty name — the empty basename was "
+          "the symptom that pointed at the wrong subsystem")
+    check(len(_resolve(tdA)) == 2 and len(_resolve(os.path.join(tdA, "*.swc"))) == 2,
+          "a bare directory and a bare glob still work")
+    mixed = _resolve(f"{tdA},{os.path.join(tdB, '*.swc')}")
+    check(len(mixed) == 3, f"directory and glob can be mixed in one list ({len(mixed)})")
+    for bad, why in ((os.path.join(tdA, "nope"), "missing entry"),
+                     (os.path.join(tdA, "*.nomatch"), "glob matching nothing")):
+        try:
+            _resolve(bad); ok_r = False
+        except ValueError:
+            ok_r = True
+        check(ok_r, f"{why} is refused up front, naming the entry")
+    with _tf.TemporaryDirectory() as tdC:
+        try:
+            _resolve(tdC); ok_e = False
+        except ValueError:
+            ok_e = True
+        check(ok_e, "an empty directory is refused rather than contributing nothing")
+
+    # repeatable --manifest: one per morphology directory
+    mA = os.path.join(tdA, "morphologies.tsv"); mB = os.path.join(tdB, "morphologies.tsv")
+    mfe.write_manifest(mA, [dict(neuron_name="x", cell_type="principal cell,pyramidal"),
+                            dict(neuron_name="y", cell_type="interneuron,GABAergic,bistratified")])
+    mfe.write_manifest(mB, [dict(neuron_name="z",
+                                 cell_type="oriens-lacunosum moleculare,interneuron")])
+    paths = _resolve(f"{tdA},{tdB}")
+    merged = {}
+    for mp in (mA, mB):
+        k, _ = mfe.kinds_from_manifest(mp, paths, default=None)
+        merged.update(k)
+    check(len(merged) == 3 and set(merged.values()) == {"pyramidal", "bistratified", "olm"},
+          f"presets merge across manifests ({sorted(set(merged.values()))})")
+    kA, unkA = mfe.kinds_from_manifest(mA, paths, default=None)
+    check(len(unkA) == 1 and unkA[0][0] == "z",
+          "a single manifest leaves the other directory's cell unmapped — which is "
+          "why --manifest had to become repeatable")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

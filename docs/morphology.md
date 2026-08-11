@@ -1600,10 +1600,29 @@ explicitly and prints which one it used.
 fits means nothing; without the gate the scan reported 12 flags including
 separations of 106–148 µm on a 140 µm grid. With it, 4.
 
-**`--morphologies` takes a directory, a glob, or an explicit list.**
-`--max-morph` caps the count *after* selection and never chooses which — it
-previously took the first N alphabetically, which silently selected a CCK basket
-cell and produced RMSE 0.22 with no error.
+**`--morphologies` takes a directory, a glob, or a comma-separated list — and
+each entry of the list is itself resolved as a directory, glob or file**, so
+`--morphologies morph/,morph_pyr/` works. The first version treated every comma
+entry as a *file path*: two directories passed the existence check, produced two
+entries whose basename was the empty string, and failed several steps later with
+`2 morphologies have no biophysics rule` and two blank names — a message
+blaming the manifest for a path-resolution fault. A missing entry, an unmatched
+glob and an empty directory are all now refused up front, naming the entry.
+
+**`--manifest` is repeatable**, one per morphology directory, later ones winning
+on a name collision. With a single manifest, cells from the other directory come
+back unmapped and `--strict-kind` refuses them.
+
+```bash
+fiber-morpho localize ... \
+    --morphologies morph/,morph_pyr/ \
+    --manifest morph/morphologies.tsv --manifest morph_pyr/morphologies.tsv \
+    --strict-kind
+```
+
+**`--max-morph` caps the count after selection and never chooses which.**
+It previously took the first N alphabetically, which silently selected a CCK
+basket cell and produced RMSE 0.22 with no error.
 
 **Filter on RMSE before using a position.** Only clusters the morphology set can
 represent will fit: with three basket cells, non-basket units land at 0.1–0.3
