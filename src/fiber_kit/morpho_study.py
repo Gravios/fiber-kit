@@ -814,8 +814,7 @@ def cmd_localize(args):
         paths = uniq
         if not paths:
             raise SystemExit("[localize] --morphologies resolved to nothing")
-        if args.max_morph:
-            paths = paths[:args.max_morph]
+
         if not paths:
             raise SystemExit(f"[localize] no .swc under {args.morphologies}")
         # Per-morphology biophysics.  A single --kind across a mixed set runs
@@ -823,8 +822,35 @@ def cmd_localize(args):
         # a plausible-looking waveform that is simply wrong and which nothing
         # downstream can flag.  The manifest already records cell_type, so the
         # preset is read from it rather than asserted on the command line.
-        kinds = {q: args.kind for q in paths}
+        # A manifest is the record of what PASSED the gate at fetch time.  Files
+        # left on disk that never made it in are rejects -- 110 of 194 in the
+        # reference set: 83 with no axon, 20 that load as disconnected trees --
+        # and a directory glob picks them all up.  They are dropped here with a
+        # count, because "not adopted" is a different failure from "adopted but
+        # its cell_type maps to no preset", and only the second is what
+        # --strict-kind is about.  --allow-unmanifested keeps them on --kind.
         mans = list(args.manifest or [])
+        if mans and not args.allow_unmanifested:
+            known = set()
+            for mp in mans:
+                if not os.path.exists(mp):
+                    raise SystemExit(f"[localize] no such manifest: {mp}")
+                known |= {r.get("neuron_name", "") for r in mfe.read_manifest(mp)}
+            keep = [q for q in paths
+                    if os.path.basename(q).replace(".CNG.swc", "").replace(".swc", "") in known]
+            if len(keep) != len(paths):
+                print(f"  [note] {len(paths)-len(keep)} of {len(paths)} .swc files are not in "
+                      f"any manifest and were dropped; they did not pass the fetch gate. "
+                      f"Use --allow-unmanifested to include them on --kind {args.kind}")
+            if not keep:
+                raise SystemExit("[localize] no morphology in --morphologies appears in "
+                                 "--manifest; check that they describe the same directory")
+            paths = keep
+        # Capped AFTER the manifest filter, so a cap of N yields N USABLE cells
+        # rather than N entries of which some are gate rejects.
+        if args.max_morph:
+            paths = paths[:args.max_morph]
+        kinds = {q: args.kind for q in paths}
         if mans:
             # Repeatable, because a morphology set fetched per cell class has one
             # manifest per directory.  Later manifests win on a name collision.
@@ -839,7 +865,8 @@ def cmd_localize(args):
             unk = unk or []
             kinds.update(km)
             if unk:
-                print(f"  [warn] {len(unk)} morphologies have no biophysics rule; "
+                print(f"  [warn] {len(unk)} manifested morphologies have a cell_type "
+                      f"matching no biophysics rule; "
                       + ("refusing (--strict-kind)" if args.strict_kind
                          else f"using --kind {args.kind}"))
                 for n_, t_ in unk[:5]:
@@ -861,6 +888,8 @@ def cmd_localize(args):
             import collections as _c
             print("  biophysics: " + ", ".join(
                 f"{k}={v}" for k, v in sorted(_c.Counter(kinds.values()).items())))
+        if args.max_morph and not mans:
+            paths = paths[:args.max_morph]
         t0 = time.time()
         tab = mlz.build_table(paths, xy,
                               rotations=[float(v) for v in args.rotations.split(",")],
@@ -1139,6 +1168,9 @@ def main(argv=None):
     lz.add_argument("--manifest", action="append", default=None,
                     help="morphologies.tsv; repeatable, one per morphology directory. "
                          "Biophysics is inferred from its cell_type column")
+    lz.add_argument("--allow-unmanifested", action="store_true", dest="allow_unmanifested",
+                    help="include .swc files absent from every manifest, on --kind; "
+                         "by default they are dropped as fetch-gate rejects")
     lz.add_argument("--strict-kind", action="store_true", dest="strict_kind",
                     help="refuse rather than fall back to --kind for unmapped cells")
     lz.add_argument("--spk-variant", default="standard", dest="spk_variant",
