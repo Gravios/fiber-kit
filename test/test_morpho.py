@@ -1621,5 +1621,42 @@ check(len({a, b, c}) == 3,
       "different variant or tag gives a different filename — cluster 262 means "
       "something only relative to the clu it came from")
 
+# ── 32. the manifest gates the morphology set ───────────────────────────────
+print("[32] unmanifested files are fetch-gate rejects, not biophysics failures")
+with _tf.TemporaryDirectory() as tdD:
+    for n in ("good1", "good2", "reject1", "reject2"):
+        open(os.path.join(tdD, n + ".CNG.swc"), "w").write("1 1 0 0 0 1 -1\n")
+    manD = os.path.join(tdD, "morphologies.tsv")
+    mfe.write_manifest(manD, [
+        dict(neuron_name="good1", cell_type="Cannabinoid receptor (CB1R)-negative,basket,interneuron"),
+        dict(neuron_name="good2", cell_type="interneuron,GABAergic,bistratified")])
+    allp = sorted(glob.glob(os.path.join(tdD, "*.swc")))
+    known = {r.get("neuron_name", "") for r in mfe.read_manifest(manD)}
+    keep = [q for q in allp
+            if os.path.basename(q).replace(".CNG.swc", "").replace(".swc", "") in known]
+    check(len(allp) == 4 and len(keep) == 2,
+          f"a directory glob picks up rejects the manifest excludes ({len(allp)} -> {len(keep)})")
+    # the distinction that matters: a file absent from the manifest never passed
+    # the gate, which is NOT the same failure as a manifested cell whose
+    # cell_type maps to no preset — only the second is --strict-kind's business
+    km, unk = mfe.kinds_from_manifest(manD, keep, default=None)
+    check(len(km) == 2 and not unk,
+          "the manifested subset maps cleanly, with nothing left unmapped")
+    km2, unk2 = mfe.kinds_from_manifest(manD, allp, default=None)
+    check(len(unk2) == 2 and {u[0] for u in unk2} == {"reject1", "reject2"},
+          "whereas the full glob reports the rejects as unmapped — the message that "
+          "sent a path-resolution problem to the biophysics subsystem")
+    mfe.write_manifest(manD, [
+        dict(neuron_name="good1", cell_type="Cannabinoid receptor (CB1R)-negative,basket,interneuron"),
+        dict(neuron_name="good2", cell_type="interneuron,GABAergic,bistratified"),
+        dict(neuron_name="reject1", cell_type="entirely unheard of")])
+    known2 = {r.get("neuron_name", "") for r in mfe.read_manifest(manD)}
+    keep2 = [q for q in allp
+             if os.path.basename(q).replace(".CNG.swc", "").replace(".swc", "") in known2]
+    _, unk3 = mfe.kinds_from_manifest(manD, keep2, default=None)
+    check(len(keep2) == 3 and len(unk3) == 1 and unk3[0][0] == "reject1",
+          "a cell that IS manifested but maps to no preset survives the gate and is "
+          "then reported as unmapped — the two failures stay distinct")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

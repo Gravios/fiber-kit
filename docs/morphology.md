@@ -1670,6 +1670,27 @@ axo-axonic cell that happens to be PV+.
 quietly defaulting them.
 
 
+**The manifest gates the morphology set.** `fetch` leaves rejected downloads on
+disk — in the reference set, **110 of 194** `.swc` files never entered the
+manifest: 83 with no axon, 20 that load as disconnected trees, 7 below the
+`--min-axon` threshold. A directory glob picks all of them up, so when a
+manifest is given, files absent from it are dropped with a count.
+`--allow-unmanifested` keeps them, on `--kind`.
+
+That separates two failures which previously arrived as one message. *Not in the
+manifest* means the file never passed the fetch gate; *in the manifest but its
+`cell_type` maps to no preset* is what `--strict-kind` is for. Reporting the
+first as the second sent a path-resolution problem to the biophysics subsystem:
+
+```
+  [warn] 110 morphologies have no biophysics rule; refusing (--strict-kind)
+    050103b: <not in manifest>
+```
+
+`--max-morph` now caps **after** the gate filter, so a cap of N yields N usable
+cells rather than N entries of which most are rejects.
+
+
 ### The O-LM preset
 
 `CA1_TYPES` had no O-LM entry, so 25 of the 84 fetched interneurons ran on
