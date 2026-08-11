@@ -1479,5 +1479,54 @@ with _tf.TemporaryDirectory() as td7:
     check(ok_s, "strict=True refuses instead — what a pipeline wants, since a "
                 "wrong preset yields a plausible waveform nothing can flag")
 
+# ── 29. the O-LM preset ─────────────────────────────────────────────────────
+print("[29] O-LM biophysics")
+vo = np.array([-90.0, -70.0, -50.0, -20.0, 0.0])
+(ai, ta), (bi, tb) = mca.KvAolm(34.0).rates(vo)
+check(np.all(np.diff(ai) > 0) and np.all(np.diff(bi) < 0),
+      "KvAolm activates and inactivates with the right signs")
+check(np.allclose(ta, 5.0),
+      "its activation tau is FIXED at 5 ms — not voltage dependent, unlike KvABez")
+(a2, t2), _ = mca.KvABez("kva", 34.0).rates(vo)
+check(not np.allclose(t2, t2[0]),
+      "negative control: KvABez's tau IS voltage dependent, so the two are distinct")
+check(tb.max() > 100 and tb.min() > 10,
+      f"inactivation is slow throughout ({tb.min():.0f}-{tb.max():.0f} ms)")
+
+(ri, tr), = mca.HCNolm(34.0).rates(vo)
+(hi, th), = mca.HCN(34.0).rates(vo)
+check(tr[1] > 5 * th[1],
+      f"O-LM Ih is far slower than the basket one at -70 mV ({tr[1]:.0f} vs {th[1]:.0f} ms) "
+      "— the large slow Ih these cells are known for")
+check(abs(ri[0] - 0.641) < 0.01 and abs(hi[0] - 0.475) < 0.01,
+      "and half-activation differs, so the two are not interchangeable")
+check(mca.HCNolm(34.0).g([np.array([0.5])])[0] == 0.5,
+      "HCNolm is first order, where HCN is squared")
+check(abs(mca.HCN(34.0).g([np.array([0.5])])[0] - 0.25) < 1e-12, "...confirmed")
+
+ch_olm = [c[1] for c in mca.channels("olm")]
+check("hcnolm" in ch_olm and "hcn" not in ch_olm,
+      f"the olm preset carries HCNolm and not HCN ({ch_olm})")
+b_olm = mca.biophys("olm")
+check(b_olm.gna_dend_mult == 2.0 and b_olm.gka_dist < b_olm.gka,
+      "the O-LM gradient is inverted — dendritic Na is 2x somatic, dendritic KvA lower")
+check(b_olm.Rm > 50000 and abs(b_olm.eh_olm + 32.9) < 1e-9,
+      f"high Rm ({b_olm.Rm:.0f}) and its own Ih reversal ({b_olm.eh_olm})")
+check("olm" in mca.INCOMPLETE and "Ca" in mca.INCOMPLETE["olm"],
+      "Ca and KCa are still declared missing for it")
+
+# the mapping must now use it, and the approximation list must shrink honestly
+check(mfe.infer_kind("interneuron,GABAergic,oriens-lacunosum moleculare (OLM)") == "olm",
+      "O-LM cells map to the olm preset, no longer approximated as sca")
+check(mfe.approximated_as("oriens-lacunosum moleculare,interneuron") is None,
+      "and are no longer reported as an approximation")
+check(set(mfe.APPROXIMATED) == {"trilaminar", "perforant pathway-associated",
+                                "back-projecting"},
+      f"only the three classes with no published CA1 biophysics remain "
+      f"({sorted(mfe.APPROXIMATED)})")
+check(set(mfe.APPROXIMATED.values()) <= set(mca.CA1_TYPES)
+      and {k for _, k in mfe.TYPE_RULES} <= set(mca.CA1_TYPES),
+      "every emitted and approximated preset still exists")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

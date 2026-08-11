@@ -365,12 +365,12 @@ TYPE_RULES = (
     ("bistratified", "bistratified"),
     ("neurogliaform", "ngf"),
     ("ivy", "ivy"),
-    ("oriens-lacunosum moleculare", "sca"),
-    ("olm", "sca"),
+    ("oriens-lacunosum moleculare", "olm"),
+    ("olm", "olm"),
     ("schaffer-collateral associated", "sca"),
     ("schaffer collateral associated", "sca"),
-    ("perforant pathway-associated", "sca"),
-    ("back-projecting", "sca"),
+    ("perforant pathway-associated", "cck"),
+    ("back-projecting", "olm"),
     ("trilaminar", "bistratified"),
     ("pyramidal", "pyramidal"),
     ("principal cell", "pyramidal"),
@@ -386,9 +386,13 @@ TYPE_RULES = (
 
 # Classes with no preset of their own, and what they are routed to.  Kept
 # separate and reported so an approximation is never mistaken for an identity.
-APPROXIMATED = {"trilaminar": "bistratified", "perforant pathway-associated": "sca",
-                "back-projecting": "sca", "oriens-lacunosum moleculare": "sca",
-                "olm": "sca"}
+# O-LM now has its own preset (Bezaire's class_olmcell), so it is no longer
+# approximated.  The three that remain have no published CA1 biophysics in the
+# Bezaire model and are routed to the nearest class on marker grounds:
+# trilaminar and back-projecting are SOM+ dendrite-targeting cells, and
+# perforant-path associated cells are CCK+.
+APPROXIMATED = {"trilaminar": "bistratified", "perforant pathway-associated": "cck",
+                "back-projecting": "olm"}
 
 
 def infer_kind(cell_type, default=None):

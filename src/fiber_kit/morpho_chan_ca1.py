@@ -183,6 +183,11 @@ class KvABez:
 # kinetics module builds the channel list ("bezaire" here, "migliore" routes to
 # morpho_chan, which is what the model's own pyramidal cells use).
 CA1_TYPES = {
+    "olm": dict(family="bezaire", nav="nav", kdr="kdrfast", kva="kvaolm",
+                hcnolm=0.0005, Rm=100000.0, cm=1.0, Ra=150.0, v_rest=-67.0,
+                celsius=34.0,
+                gna=0.0107, gkdr=0.073370, gka=0.0074250,
+                gka_dist=0.0042, gna_dend_mult=2.0, axon_na_mult=1.6),
     "pyramidal": dict(family="migliore", Rm=28000.0, cm=1.0, Ra=150.0, Ra_axon=50.0,
                       v_rest=-65.0, celsius=34.0, gna=0.032, axon_na_mult=2.0,
                       gkdr=0.003, gka=0.008),
@@ -214,7 +219,7 @@ CA1_TYPES = {
 # and CCK/SCA on ch_KvM + ch_KvGroup, none of which exist in this module.  They
 # are still runnable (the entries above give their Nav/Kdr/KvA), but their spike
 # shape is an approximation and must not be reported as that cell type's.
-INCOMPLETE = {"cck": ("KvM", "KvGroup", "Ca", "KCa"),
+INCOMPLETE = {"olm": ("Ca", "KCa"), "cck": ("KvM", "KvGroup", "Ca", "KCa"),
               "sca": ("KvM", "KvGroup", "HCN", "Ca", "KCa"),
               "ngf": ("Ca", "KCa"), "ivy": ("Ca", "KCa"),
               "pvbasket": ("Ca", "KCa"), "axoaxonic": ("Ca", "KCa"),
@@ -230,12 +235,15 @@ def channels(kind, celsius=None):
     if p["family"] == "migliore":
         return [(mch.Na(cel), "na", "ena"), (mch.Kdr(cel), "kdr", "ek"),
                 (mch.KA("prox", cel), "ka_prox", "ek"), (mch.KA("dist", cel), "ka_dist", "ek")]
+    _ka = (lambda: KvAolm(cel)) if p.get("kva") == "kvaolm" else (lambda: KvABez(p["kva"], cel))
     out = [(NavBez(p["nav"], cel), "na", "ena"), (KdrFast(p["kdr"], cel), "kdr", "ek"),
-           (KvABez(p["kva"], cel), "ka_prox", "ek"), (KvABez(p["kva"], cel), "ka_dist", "ek")]
+           (_ka(), "ka_prox", "ek"), (_ka(), "ka_dist", "ek")]
     if p.get("kv3", 0.0):
         out.append((Kv3(cel), "kv3", "ek"))
     if p.get("hcn", 0.0):
         out.append((HCN(cel), "hcn", "eh"))
+    if p.get("hcnolm", 0.0):
+        out.append((HCNolm(cel), "hcnolm", "eh_olm"))
     if p.get("narsg", 0.0):
         out.append((NaRsg(cel), "narsg", "ena"))
     return out
@@ -256,6 +264,8 @@ def biophys(kind, **over):
         p["ghcn"] = p.pop("hcn")
     if "narsg" in p:
         p["gnarsg"] = p.pop("narsg")
+    if "hcnolm" in p:
+        p["ghcnolm"] = p.pop("hcnolm")
     p.setdefault("Ra_axon", p.get("Ra", 150.0))
     p.update(over)
     b = mc.Biophys(**p)
@@ -459,3 +469,63 @@ class NaRsg:
 
     def g(self, P):
         return np.asarray(P)[..., self.iO]
+
+
+class KvAolm:
+    """ch_KvAolm — the O-LM A-type potassium current, g = gmax * a * b.
+
+    Transcribed from Bezaire et al. (2016), whose parameters are attributed to
+    Martina et al.  Distinct from KvABez: activation is 14 mV more negative,
+    the activation time constant is FIXED at 5 ms rather than voltage-dependent,
+    and inactivation is far slower.
+
+        ainf = 1/(1+exp(-(v+14)/16.6)),           tau_a = 5 ms
+        binf = 1/(1+exp((v+71)/7.3)),             tau_b = 1/(alpha_b + beta_b)
+        alpha_b = 9e-6/exp((v-26)/18.5)
+        beta_b  = 0.014/(exp((v+70)/-11) + 0.2)
+    """
+    name = "kvaolm"
+
+    def __init__(self, celsius=34.0):
+        self.celsius = float(celsius)
+
+    def rates(self, v):
+        with np.errstate(over="ignore"):
+            ainf = 1.0 / (1.0 + np.exp(-(v + 14.0) / 16.6))
+            binf = 1.0 / (1.0 + np.exp((v + 71.0) / 7.3))
+            ab = 9e-6 / np.exp((v - 26.0) / 18.5)
+            bb = 0.014 / (np.exp((v + 70.0) / -11.0) + 0.2)
+            tb = 1.0 / np.maximum(ab + bb, 1e-12)
+        ta = np.full_like(np.asarray(v, float), 5.0)
+        return ((ainf, ta), (binf, np.clip(tb, 1e-3, 1e5)))
+
+    def g(self, st):
+        return st[0] * st[1]
+
+
+class HCNolm:
+    """ch_HCNolm — the O-LM hyperpolarization-activated current, first order.
+
+        rinf  = 1/(1 + exp((v + 84.1)/10.2))
+        tau_r = 100 + 1/(exp(-17.9 - 0.116 v) + exp(-1.84 + 0.09 v))
+
+    Not interchangeable with HCN: half-activation is 6.9 mV more positive, the
+    reversal is -32.9 mV rather than -30, gating is first order rather than
+    squared, and tau has a floor of 100 ms rather than 120 with a very different
+    voltage dependence.  O-LM cells are the canonical large-Ih interneuron and
+    the density Bezaire uses is 3.3x the basket value.
+    """
+    name = "hcnolm"
+
+    def __init__(self, celsius=34.0):
+        self.celsius = float(celsius)
+
+    def rates(self, v):
+        with np.errstate(over="ignore"):
+            rinf = 1.0 / (1.0 + np.exp((v + 84.1) / 10.2))
+            tau = 100.0 + 1.0 / np.maximum(
+                np.exp(-17.9 - 0.116 * v) + np.exp(-1.84 + 0.09 * v), 1e-12)
+        return ((rinf, np.clip(tau, 1e-3, 1e5)),)
+
+    def g(self, st):
+        return st[0]
