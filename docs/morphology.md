@@ -1565,6 +1565,51 @@ than only on feature-space similarity. `trajectory()` returns each block's fit
 alongside its own floor and the step from the previous block, so a trace is
 readable against its resolution rather than by eye.
 
+### Running it as a pipeline stage
+
+```bash
+fiber-morpho localize \
+    --base <session> --group 5 \
+    --variant stderiv.C5.D34 --tag anchor_linked \
+    --probe <session>.probe.0.probe --channels 32,33,34,35,36,37,38,39 \
+    --morphologies "morph/fs-basket-cell-12-09-07-4.CNG.swc,morph/BC-S-01-03-2011_Z02.CNG.swc" \
+    --table morph/postable.npz \
+    --out <session>.pos.stderiv.C5.D34.5.tsv
+```
+
+**The table is cached and reused.** It depends only on the probe geometry and the
+morphology set, never on the sort — 4,788 positions from three morphologies took
+115 s to build and 0 s on rerun. Re-cluster and re-run without re-simulating.
+
+Output is one row per cluster (`atom = -1`) and one per atom, carrying
+morphology, rotation, depth, lateral, RMSE and that population's **own**
+split-half floor. The floor is per-row because thresholds must scale with spike
+count.
+
+**`--spk-variant` defaults to `standard` and must stay untransformed.** The
+first version of this stage inherited the clustering variant from `Sort()` and
+fitted positions to the **stderiv** waveform, where the channel difference has
+removed exactly the amplitude-distance relationship a position fit reads — the
+same reason `read_pca` refuses to fall back to stderiv. Cluster 262 came out at
+RMSE 0.179, depth 182.5, lateral 2.5; on the raw waveform it is **0.0134, depth
+170, lateral 20**, and the session median goes 0.229 → 0.0688 with the
+resolution reading 1.2 µm instead of 0. The stage now opens the raw file
+explicitly and prints which one it used.
+
+**`--max-rmse 0.06` gates the split scan.** A large separation between two bad
+fits means nothing; without the gate the scan reported 12 flags including
+separations of 106–148 µm on a 140 µm grid. With it, 4.
+
+**`--morphologies` takes a directory, a glob, or an explicit list.**
+`--max-morph` caps the count *after* selection and never chooses which — it
+previously took the first N alphabetically, which silently selected a CCK basket
+cell and produced RMSE 0.22 with no error.
+
+**Filter on RMSE before using a position.** Only clusters the morphology set can
+represent will fit: with three basket cells, non-basket units land at 0.1–0.3
+and their positions are meaningless. On g5, 4 of 344 clusters reach RMSE ≤ 0.10.
+
+
 ### Limits
 
 It is **blind to genuinely co-located cells** — two somata at one point give the
