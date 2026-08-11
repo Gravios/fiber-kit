@@ -349,3 +349,107 @@ def main(argv=None):
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+# ── biophysics inference ────────────────────────────────────────────────────
+# Checked IN ORDER, most specific class first.  Not sorted by key length: a
+# cell labelled "Parvalbumin (PV)-positive, Chandelier" must map to axoaxonic,
+# and `parvalbumin (pv)-positive` is the longer string, so length ordering
+# silently routed chandelier cells to pvbasket.  Marker terms are therefore
+# placed AFTER the anatomical class terms they co-occur with.
+TYPE_RULES = (
+    # anatomical class — unambiguous, and takes precedence over any marker
+    ("chandelier", "axoaxonic"),
+    ("axo-axonic", "axoaxonic"),
+    ("axoaxonic", "axoaxonic"),
+    ("bistratified", "bistratified"),
+    ("neurogliaform", "ngf"),
+    ("ivy", "ivy"),
+    ("oriens-lacunosum moleculare", "sca"),
+    ("olm", "sca"),
+    ("schaffer-collateral associated", "sca"),
+    ("schaffer collateral associated", "sca"),
+    ("perforant pathway-associated", "sca"),
+    ("back-projecting", "sca"),
+    ("trilaminar", "bistratified"),
+    ("pyramidal", "pyramidal"),
+    ("principal cell", "pyramidal"),
+    # marker terms — only reached when no class term matched
+    ("cannabinoid receptor (cb1r)-negative", "pvbasket"),
+    ("cannabinoid receptor (cb1r)-positive", "cck"),
+    ("cholecystokinin (cck)-positive", "cck"),
+    ("parvalbumin (pv)-positive", "pvbasket"),
+    ("fast-spiking", "pvbasket"),
+    ("perisomatic targeting", "pvbasket"),
+    ("basket", "pvbasket"),
+)
+
+# Classes with no preset of their own, and what they are routed to.  Kept
+# separate and reported so an approximation is never mistaken for an identity.
+APPROXIMATED = {"trilaminar": "bistratified", "perforant pathway-associated": "sca",
+                "back-projecting": "sca", "oriens-lacunosum moleculare": "sca",
+                "olm": "sca"}
+
+
+def infer_kind(cell_type, default=None):
+    """Map a NeuroMorpho cell_type string onto a CA1_TYPES preset.
+
+    Rules are checked IN ORDER with anatomical class before marker, because the
+    two co-occur and the class is the more specific statement: "Parvalbumin
+    (PV)-positive, Chandelier" is an axo-axonic cell that happens to be PV+.
+
+    Two entries carry real interpretation.  CB1R-NEGATIVE basket cells are the
+    PV/fast-spiking population and CB1R-positive ones the CCK population --
+    the standard CA1 dichotomy, but an inference from what the label says the
+    cell LACKS.  And several classes have no preset of their own; `APPROXIMATED`
+    names them and what they are routed to, so the substitution is visible.
+
+    Returns None when nothing matches, so a caller can refuse rather than
+    silently simulate with the wrong conductances.  A pyramidal reconstruction
+    run with pvbasket densities gives a plausible waveform that is simply
+    wrong, and nothing downstream would flag it.
+    """
+    s = (cell_type or "").lower()
+    if not s.strip():
+        return default
+    for key, kind in TYPE_RULES:
+        if key in s:
+            return kind
+    return default
+
+
+def approximated_as(cell_type):
+    """The APPROXIMATED entry a cell_type triggered, or None."""
+    s = (cell_type or "").lower()
+    for key in APPROXIMATED:
+        if key in s:
+            return key
+    return None
+
+
+def kinds_from_manifest(manifest, paths=None, default=None, strict=False):
+    """{path: preset} for a set of .swc files, read from a manifest.
+
+    Keyed by neuron_name, which is the .swc basename with the .CNG suffix
+    stripped -- the same convention `adopt` writes.  Files absent from the
+    manifest, or whose cell_type matches no rule, take `default`; with
+    strict=True they raise instead, which is what a pipeline wants.
+    """
+    import os
+    rows = read_manifest(manifest)
+    by = {r.get("neuron_name", ""): r.get("cell_type", "") for r in rows}
+    if paths is None:
+        base = os.path.dirname(manifest)
+        paths = [os.path.join(base, n + ".CNG.swc") for n in by]
+    out, unknown = {}, []
+    for p in paths:
+        name = os.path.basename(p).replace(".CNG.swc", "").replace(".swc", "")
+        k = infer_kind(by.get(name, ""), default)
+        if k is None:
+            unknown.append((name, by.get(name, "<not in manifest>")))
+        else:
+            out[p] = k
+    if unknown and strict:
+        raise ValueError("no biophysics rule for: " +
+                         "; ".join(f"{n} [{t[:50]}]" for n, t in unknown[:5]))
+    return out, unknown

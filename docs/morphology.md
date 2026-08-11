@@ -1610,6 +1610,47 @@ represent will fit: with three basket cells, non-basket units land at 0.1–0.3
 and their positions are meaningless. On g5, 4 of 344 clusters reach RMSE ≤ 0.10.
 
 
+### Biophysics from the manifest
+
+A single `--kind` across a mixed morphology set runs pyramidal reconstructions
+with interneuron conductances — a plausible-looking waveform that is simply
+wrong, and which nothing downstream can flag. The manifest already records
+`cell_type`, so the preset is read from it:
+
+```bash
+fiber-morpho localize ... --morphologies morph/ --manifest morph/morphologies.tsv
+```
+
+`--manifest` supersedes `--kind`, which becomes the fallback. `--strict-kind`
+refuses instead of falling back, which is what a pipeline wants.
+
+On the 84-cell CA1 interneuron set: **zero unmapped** — `pvbasket` 25, `sca` 25,
+`cck` 20, `bistratified` 13, `axoaxonic` 1.
+
+**Rules are checked in order, most specific class first — not by key length.**
+That distinction is load-bearing: `parvalbumin (pv)-positive` is 25 characters
+and `chandelier` is 10, so length-ordering routed a *PV-positive Chandelier*
+cell to `pvbasket` when it is axo-axonic. A multiply-marked NPY/SOM
+bistratified cell failed the same way. Anatomical class now precedes marker,
+because the class is the more specific statement — a PV+ chandelier cell is an
+axo-axonic cell that happens to be PV+.
+
+**Two interpretations are baked in and should be known:**
+
+- **CB1R-negative → PV, CB1R-positive → CCK.** The standard CA1 basket
+  dichotomy, but an inference from what the Scanziani label says the cell
+  *lacks*, not something it states. **32 of the 84 cells** depend on it.
+- **`APPROXIMATED`** names the classes with no preset of their own — O-LM,
+  trilaminar, perforant-path associated, back-projecting — and what they route
+  to. The CLI prints which were used, so a substitution is never mistaken for an
+  identity. **25 of 84** run on `sca` this way, which is a gap in the biophysics
+  rather than in the mapping.
+
+`infer_kind` returns `None` on no match rather than guessing, and
+`kinds_from_manifest` returns the unmapped rows to the caller rather than
+quietly defaulting them.
+
+
 ### Limits
 
 It is **blind to genuinely co-located cells** — two somata at one point give the

@@ -38,6 +38,7 @@ try:
     from . import morpho_features as mf
     from . import morpho_localize as mlz
     from . import neuro_io as nio
+    from . import morpho_fetch as mfe
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
@@ -47,6 +48,7 @@ except ImportError:
     import morpho_features as mf
     import morpho_localize as mlz
     import neuro_io as nio
+    import morpho_fetch as mfe
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -796,12 +798,43 @@ def cmd_localize(args):
             paths = paths[:args.max_morph]
         if not paths:
             raise SystemExit(f"[localize] no .swc under {args.morphologies}")
+        # Per-morphology biophysics.  A single --kind across a mixed set runs
+        # pyramidal reconstructions with interneuron conductances, which yields
+        # a plausible-looking waveform that is simply wrong and which nothing
+        # downstream can flag.  The manifest already records cell_type, so the
+        # preset is read from it rather than asserted on the command line.
+        kinds = {q: args.kind for q in paths}
+        if args.manifest:
+            km, unk = mfe.kinds_from_manifest(args.manifest, paths,
+                                              default=(None if args.strict_kind else args.kind))
+            kinds.update(km)
+            if unk:
+                print(f"  [warn] {len(unk)} morphologies have no biophysics rule; "
+                      + ("refusing (--strict-kind)" if args.strict_kind
+                         else f"using --kind {args.kind}"))
+                for n_, t_ in unk[:5]:
+                    print(f"    {n_}: {t_[:60]}")
+                if args.strict_kind:
+                    raise SystemExit("[localize] refusing to simulate with a guessed preset")
+            rows_m = {r["neuron_name"]: r.get("cell_type", "")
+                      for r in mfe.read_manifest(args.manifest)}
+            approx = [(os.path.basename(q), mfe.approximated_as(rows_m.get(
+                os.path.basename(q).replace(".CNG.swc", "").replace(".swc", ""), "")))
+                      for q in paths]
+            approx = [(n_, a_) for n_, a_ in approx if a_]
+            if approx:
+                print(f"  [note] {len(approx)} morphologies use an APPROXIMATE preset "
+                      "(no exact match in CA1_TYPES): "
+                      + ", ".join(sorted({a_ for _, a_ in approx})))
+            import collections as _c
+            print("  biophysics: " + ", ".join(
+                f"{k}={v}" for k, v in sorted(_c.Counter(kinds.values()).items())))
         t0 = time.time()
         tab = mlz.build_table(paths, xy,
                               rotations=[float(v) for v in args.rotations.split(",")],
                               depths=np.arange(args.depth_min, args.depth_max + 1e-9, args.step),
                               laterals=np.arange(args.lat_min, args.lat_max + 1e-9, args.step),
-                              kinds={p: args.kind for p in paths},
+                              kinds=kinds,
                               progress=lambda k, n, lab: print(f"  [{k}/{n}] {lab}"))
         print(f"table: {len(tab)} positions from {len(paths)} morphologies "
               f"in {time.time()-t0:.0f}s")
@@ -1063,7 +1096,12 @@ def main(argv=None):
     lz.add_argument("--morphologies", default=None,
                     help="directory, glob, or comma-separated list of .swc files")
     lz.add_argument("--table", default=None, help="cache the position table here (reused)")
-    lz.add_argument("--kind", default="pvbasket")
+    lz.add_argument("--kind", default="pvbasket",
+                    help="fallback preset; --manifest overrides it per morphology")
+    lz.add_argument("--manifest", default=None,
+                    help="morphologies.tsv; biophysics is inferred from its cell_type")
+    lz.add_argument("--strict-kind", action="store_true", dest="strict_kind",
+                    help="refuse rather than fall back to --kind for unmapped cells")
     lz.add_argument("--spk-variant", default="standard", dest="spk_variant",
                     help="waveform variant to localise on; MUST be untransformed")
     lz.add_argument("--rotations", default="0,90,180,270")
