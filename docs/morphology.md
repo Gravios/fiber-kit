@@ -1651,6 +1651,43 @@ axo-axonic cell that happens to be PV+.
 quietly defaulting them.
 
 
+### The O-LM preset
+
+`CA1_TYPES` had no O-LM entry, so 25 of the 84 fetched interneurons ran on
+`sca`. Bezaire et al. (2016) does define one (`class_olmcell.hoc`), and it is
+not a variant of anything already present:
+
+| | O-LM | pvbasket |
+|---|---|---|
+| A-type | **KvAolm** (τ_a fixed 5 ms) | KvABez (τ voltage-dependent) |
+| Ih | **HCNolm**, first order, e = −32.9 | HCN, squared, e = −30 |
+| Ih τ at −70 mV | **2,972 ms** | 249 ms |
+| Rm | **100,000** | 5,555 |
+| Na gradient | dendrite **2×** soma, axon 1.6× | uniform |
+
+The slow Ih is the property these cells are known for, and the `sca`
+substitution captured none of it. `KvAolm` and `HCNolm` are transcribed from
+the Bezaire mod files; densities are his, with the multipliers evaluated.
+
+`gka_dist` and `gna_dend_mult` are new `Biophys` fields, since O-LM is the first
+type here with an inverted somatodendritic gradient.
+
+### What remains approximated
+
+Three classes, down from five. None has published CA1 biophysics in the Bezaire
+model, so each is routed on marker grounds and reported as an approximation:
+
+| class | routed to | on what grounds |
+|---|---|---|
+| trilaminar | bistratified | SOM+ dendrite-targeting |
+| back-projecting | **olm** | SOM+, mGluR1α+ |
+| perforant-path associated | **cck** | CCK+, SLM-targeting |
+
+`back-projecting` and `perforant-path` previously went to `sca`; both are better
+served now. `Ca` and `KCa` remain declared missing for every interneuron type
+including O-LM.
+
+
 ### Limits
 
 It is **blind to genuinely co-located cells** — two somata at one point give the

@@ -66,7 +66,8 @@ class Biophys:
                  gna=0.025, axon_na_mult=5.0, gkdr=0.01, gka=0.03, ka_scale=1.0,
                  ka_slope_per_100um=1.0, ka_dist_max=350.0, ka_prox_lim=100.0,
                  ena=55.0, ek=-90.0, celsius=35.0, soma_na_mult=1.0, na_ar=1.0,
-                 ca1_type=None, gkv3=0.0, ghcn=0.0, eh=-30.0, gnarsg=0.0):
+                 ca1_type=None, gkv3=0.0, ghcn=0.0, eh=-30.0, gnarsg=0.0,
+                 ghcnolm=0.0, eh_olm=-32.9, gka_dist=None, gna_dend_mult=1.0):
         self.__dict__.update(locals()); del self.__dict__["self"]
 
     def densities(self, cmp_):
@@ -92,8 +93,14 @@ class Biophys:
         gkv3 = np.full(n, float(self.gkv3))
         ghcn = np.full(n, float(self.ghcn))
         grsg = np.full(n, float(self.gnarsg))
+        gholm = np.full(n, float(self.ghcnolm))
+        if self.gka_dist is not None:
+            gka_d = np.where(cmp_.type == mg.SOMA, float(self.gka), float(self.gka_dist))
+        if self.gna_dend_mult != 1.0:
+            dend = (cmp_.type == mg.BASAL) | (cmp_.type == mg.APICAL)
+            gna = np.where(dend, gna * float(self.gna_dend_mult), gna)
         return dict(na=gna, kdr=gkdr, ka_prox=gka_p, ka_dist=gka_d, kv3=gkv3,
-                    hcn=ghcn, narsg=grsg, Ra=Ra)
+                    hcn=ghcn, narsg=grsg, hcnolm=gholm, Ra=Ra)
 
 
 # ── tree scheduling ─────────────────────────────────────────────────────────
