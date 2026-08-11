@@ -927,7 +927,13 @@ def cmd_localize(args):
 
     cols = ["cluster", "atom", "chunk", "n", "morphology", "rot", "depth",
             "lateral", "rmse", "floor"]
-    out = args.out or f"{args.base}.pos.{args.variant}.{args.group}.tsv"
+    # NOT `.pos`: in a hippocampus session that extension already means the
+    # animal's tracked position, and a file called <session>.pos sitting beside
+    # <session>.whl would be read as behaviour by anyone scanning the directory.
+    # `fk-cpos` is cluster position, in the type slot the convention expects, so
+    # session_path builds it and resolve_any can find it.
+    out = args.out or nio.session_path(args.base, "fk-cpos", args.group,
+                                       variant=args.variant, tag=args.tag)
     with open(out, "w") as fh:
         fh.write("# positions fitted by fiber-morpho localize\n")
         fh.write(f"# probe={args.probe} channels={args.channels} "
@@ -1156,7 +1162,8 @@ def main(argv=None):
     lz.add_argument("--split-floor", type=float, default=7.5, dest="split_floor")
     lz.add_argument("--max-rmse", type=float, default=0.06, dest="max_rmse",
                     help="skip the split test where the model does not fit; a large\nseparation between two bad fits means nothing")
-    lz.add_argument("--out", default=None)
+    lz.add_argument("--out", default=None,
+                    help="default <base>.fk-cpos.<variant>.<group>[.<tag>]")
     lz.set_defaults(func=cmd_localize)
 
     a = ap.parse_args(argv)
