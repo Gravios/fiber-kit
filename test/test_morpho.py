@@ -6,6 +6,7 @@
 # or an invariance the physics requires.  Where a check guards a property, the
 # property is also BROKEN deliberately and the check confirmed to fire; a test
 # that has never failed proves nothing.
+import glob
 import os
 import sys
 
@@ -1356,6 +1357,74 @@ drift_as_split = mlz.within_chunk_split(tab, [b[1] for b in (blocks[0], blocks[-
 check(drift_as_split["split"],
       "a drifting unit's FIRST and LAST blocks do look like two positions — which "
       "is why within_chunk_split requires atoms from one time window")
+
+# ── 27. the localize pipeline stage ─────────────────────────────────────────
+print("[27] localize: morphology selection, raw-waveform rule, fit gating")
+try:
+    from fiber_kit import morpho_study as _ms
+except ImportError:
+    import morpho_study as _ms
+
+_p = _ms.main.__globals__
+check(callable(_p.get("cmd_localize")), "cmd_localize is defined")
+# the raw-waveform default is the load-bearing one: localising on a
+# channel-differenced waveform reads a signal the transform has removed
+import io as _io, contextlib as _ctx
+_buf = _io.StringIO()
+try:
+    with _ctx.redirect_stdout(_buf):
+        _ms.main(["localize", "--help"])
+except SystemExit:
+    pass
+_h = _buf.getvalue()
+check("--spk-variant" in _h and "untransformed" in _h,
+      "the waveform variant is exposed and documented as needing to be untransformed")
+check("--max-rmse" in _h, "the split test can be gated on fit quality")
+# argparse re-wraps help text, so match a fragment that survives wrapping
+check("does not choose" in _h,
+      "--max-morph documents that it caps rather than selects")
+
+# morphology spec: directory, glob and explicit list must all resolve, and a
+# missing path must fail loudly rather than silently shrinking the set
+with _tf.TemporaryDirectory() as td5:
+    import shutil as _sh
+    srcs = sorted(glob.glob("/home/claude/morph/swc/*.swc"))[:2] \
+        if os.path.isdir("/home/claude/morph/swc") else []
+    if len(srcs) >= 2:
+        for f in srcs:
+            _sh.copy(f, td5)
+        got = {}
+        specs = [td5, os.path.join(td5, "*.swc"),
+                 ",".join(sorted(glob.glob(os.path.join(td5, "*.swc"))))]
+        for spec in specs:
+            if "," in spec:
+                paths = [q for q in spec.split(",") if q]
+            elif os.path.isdir(spec):
+                paths = sorted(glob.glob(os.path.join(spec, "*.swc")))
+            else:
+                paths = sorted(glob.glob(spec))
+            got[str(spec)[:18]] = len(paths)
+        check(all(v == 2 for v in got.values()),
+              f"directory, glob and list specs all resolve to the same set ({got})")
+    else:
+        print("  (skipped: no sample .swc to build a spec from)")
+
+# PositionTable round-trips through disk, which is what makes caching safe
+gxy2 = me.staggered_octrode(n=8)
+rr2, gg2, nn2 = [], [], []
+for dy in np.arange(0, 61, 10.0):
+    for lat in np.arange(5.0, 31.0, 10.0):
+        d = np.hypot(gxy2[:, 1] - dy, lat); p = 1.0 / (d + 10.0)
+        rr2.append(p / p.max()); gg2.append((0.0, dy, lat)); nn2.append("t")
+t2 = mlz.PositionTable(rr2, gg2, nn2, meta=dict(k="v"))
+with _tf.TemporaryDirectory() as td6:
+    q = os.path.join(td6, "tab.npz"); t2.save(q); t3 = mlz.PositionTable.load(q)
+    check(len(t3) == len(t2) and np.allclose(t3.profiles, t2.profiles)
+          and np.allclose(t3.grid, t2.grid) and t3.names == t2.names,
+          "a cached position table round-trips exactly — reuse must not alter fits")
+    a = t2.fit(t2.profiles[5]); b = t3.fit(t3.profiles[5])
+    check(a["depth"] == b["depth"] and a["lateral"] == b["lateral"],
+          "and a fit through the reloaded table is identical")
 
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

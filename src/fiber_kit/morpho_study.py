@@ -36,6 +36,8 @@ try:
     from . import morpho_chan_ca1 as mca
     from . import morpho_validate as mvd
     from . import morpho_features as mf
+    from . import morpho_localize as mlz
+    from . import neuro_io as nio
 except ImportError:
     import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
     import morpho_input as mi, morpho_archetype as ma
@@ -43,6 +45,8 @@ except ImportError:
     import morpho_chan_ca1 as mca
     import morpho_validate as mvd
     import morpho_features as mf
+    import morpho_localize as mlz
+    import neuro_io as nio
 
 
 # ── shared plumbing ─────────────────────────────────────────────────────────
@@ -759,6 +763,149 @@ def _load_cell_laminar(name, args):
     return _load_cell(name, args.d_lambda, args.max_comp)
 
 
+# ── localize ────────────────────────────────────────────────────────────────
+def cmd_localize(args):
+    """Fit a position to every cluster and atom; write a sidecar.
+
+    The position table is built once and CACHED, because it depends only on the
+    probe geometry and the morphology set -- not on the sort.  A rerun after
+    re-clustering reuses it, which is what makes this cheap enough to sit in a
+    pipeline rather than be run by hand once.
+    """
+    import glob
+    xy = me.group_geometry(args.probe, [int(v) for v in args.channels.split(",")])
+    if args.table and os.path.exists(args.table):
+        tab = mlz.PositionTable.load(args.table)
+        print(f"table: {len(tab)} positions (cached, {args.table})")
+    else:
+        # A directory, a glob, or a comma-separated list.  --max-morph used to
+        # take the first N ALPHABETICALLY, which silently selected an unrelated
+        # cell type and produced RMSE 0.22 instead of 0.01 with no error --
+        # the caller must be able to say WHICH morphologies, not how many.
+        spec = args.morphologies
+        if "," in spec:
+            paths = [p for p in spec.split(",") if p]
+        elif os.path.isdir(spec):
+            paths = sorted(glob.glob(os.path.join(spec, "*.swc")))
+        else:
+            paths = sorted(glob.glob(spec))
+        missing = [p for p in paths if not os.path.exists(p)]
+        if missing:
+            raise SystemExit(f"[localize] no such morphology: {missing[0]}")
+        if args.max_morph:
+            paths = paths[:args.max_morph]
+        if not paths:
+            raise SystemExit(f"[localize] no .swc under {args.morphologies}")
+        t0 = time.time()
+        tab = mlz.build_table(paths, xy,
+                              rotations=[float(v) for v in args.rotations.split(",")],
+                              depths=np.arange(args.depth_min, args.depth_max + 1e-9, args.step),
+                              laterals=np.arange(args.lat_min, args.lat_max + 1e-9, args.step),
+                              kinds={p: args.kind for p in paths},
+                              progress=lambda k, n, lab: print(f"  [{k}/{n}] {lab}"))
+        print(f"table: {len(tab)} positions from {len(paths)} morphologies "
+              f"in {time.time()-t0:.0f}s")
+        if args.table:
+            tab.save(args.table); print(f"  cached to {args.table}")
+
+    # Localisation MUST use the raw waveform.  The channel difference removes
+    # the common mode, which is precisely the amplitude-distance relationship a
+    # position fit reads -- the same reason read_pca refuses to fall back to
+    # stderiv.  Sort() resolves .spk by the clustering variant, so the raw file
+    # is opened explicitly here rather than inherited.
+    s = mvd.Sort(args.base, args.group, args.nsamp, args.nchan,
+                 variant=args.variant, tag=args.tag)
+    rs = nio.resolve_any(args.base, "spk", args.group, preferred=args.spk_variant)
+    if not rs.found:
+        raise SystemExit(f"[localize] no .spk.{args.spk_variant} for group {args.group}; "
+                         f"localisation cannot use the transformed waveform")
+    if rs.variant != args.spk_variant:
+        print(f"  [warn] asked for .spk.{args.spk_variant}, resolved {rs.variant}")
+    s.spk = nio.open_spk_file(rs.path, args.nsamp, args.nchan)
+    print(f"  waveforms: {os.path.basename(rs.path)} [{rs.variant}]")
+    sr = args.sr
+    clu = s.clu
+    clc = None
+    if args.atoms:
+        cpath = nio.session_path(args.base, "clc", args.group, args.variant, args.tag)
+        if os.path.exists(cpath):
+            clc = np.fromfile(cpath, dtype=np.int32)[1:]
+            if len(clc) != len(clu):
+                print(f"  [warn] .clc has {len(clc)} entries for {len(clu)} spikes; "
+                      "ignoring atoms"); clc = None
+        else:
+            print(f"  [warn] no .clc at {cpath}; cluster-level only")
+
+    tmin = s.res.astype(np.float64) / sr / 60.0
+    rows = []
+    sizes = s.sizes()
+    for k in sorted(sizes):
+        if sizes[k] < args.min_spikes:
+            continue
+        i = s.idx(k)
+        w = np.asarray(s.spk[i], np.float64)
+        f = tab.fit(mlz.profile(w))
+        fl = mlz.split_half_floor(tab, w, n_rep=args.n_rep)
+        rows.append(dict(cluster=k, atom=-1, chunk=-1, n=len(i), **f, floor=fl))
+        if clc is None:
+            continue
+        for a in np.unique(clc[i]):
+            j = np.flatnonzero(clc == a)
+            if len(j) < args.min_spikes_atom:
+                continue
+            wa = np.asarray(s.spk[j], np.float64)
+            fa = tab.fit(mlz.profile(wa))
+            rows.append(dict(cluster=k, atom=int(a),
+                             chunk=int(np.median(tmin[j]) // args.chunk_min),
+                             n=len(j), **fa,
+                             floor=mlz.split_half_floor(tab, wa, n_rep=args.n_rep)))
+
+    cols = ["cluster", "atom", "chunk", "n", "morphology", "rot", "depth",
+            "lateral", "rmse", "floor"]
+    out = args.out or f"{args.base}.pos.{args.variant}.{args.group}.tsv"
+    with open(out, "w") as fh:
+        fh.write("# positions fitted by fiber-morpho localize\n")
+        fh.write(f"# probe={args.probe} channels={args.channels} "
+                 f"table={len(tab)} morphologies\n")
+        fh.write("# atom=-1 is the whole cluster; floor is that population's own "
+                 "split-half resolution in um\n")
+        fh.write("\t".join(cols) + "\n")
+        for r in rows:
+            fh.write("\t".join(
+                ("%.4g" % r[c] if isinstance(r[c], float) else str(r[c])) for c in cols) + "\n")
+    nc = sum(1 for r in rows if r["atom"] < 0)
+    print(f"\nwrote {out}: {nc} clusters, {len(rows)-nc} atoms")
+    med = np.median([r["rmse"] for r in rows if r["atom"] < 0])
+    mfl = np.median([r["floor"] for r in rows if r["atom"] < 0 and np.isfinite(r["floor"])])
+    print(f"  median cluster fit RMSE {med:.4f} ; median resolution {mfl:.1f} um")
+
+    if not args.split_scan or clc is None:
+        return 0
+    print("\nwithin-chunk atom splits (two positions in one time window):")
+    hit = 0
+    for k in sorted(sizes):
+        per = {}
+        for r in rows:
+            if r["cluster"] == k and r["atom"] >= 0:
+                per.setdefault(r["chunk"], []).append(r)
+        for ch, v in sorted(per.items()):
+            if len(v) < 2:
+                continue
+            v = sorted(v, key=lambda r: -r["n"])[:2]
+            sep = float(np.hypot(v[0]["depth"] - v[1]["depth"],
+                                 v[0]["lateral"] - v[1]["lateral"]))
+            fl = max([r["floor"] for r in v if np.isfinite(r["floor"])] or [0.0])
+            thr = max(3 * fl, args.split_floor)
+            if max(v[0]["rmse"], v[1]["rmse"]) > args.max_rmse:
+                continue
+            if sep > thr:
+                hit += 1
+                print("  clu %-6d chunk %-4d atoms %d/%d  sep %5.1f um  thr %4.1f"
+                      % (k, ch, v[0]["atom"], v[1]["atom"], sep, thr))
+    print(f"  {hit} chunk(s) flagged — those clusters hold more than one cell")
+    return 0
+
+
 # ── CLI ─────────────────────────────────────────────────────────────────────
 def _common(p):
     p.add_argument("--cells", default="archetype:pyramidal",
@@ -908,6 +1055,38 @@ def main(argv=None):
     sp.add_argument("--lateral", type=float, default=30.0)
     sp.add_argument("--seed", type=int, default=0)
     sp.set_defaults(func=cmd_span)
+
+    lz = sub.add_parser("localize", help="fit positions to clusters/atoms; write a sidecar")
+    lz.add_argument("--base", required=True); lz.add_argument("--group", type=int, required=True)
+    lz.add_argument("--variant", default=""); lz.add_argument("--tag", default="")
+    lz.add_argument("--probe", required=True); lz.add_argument("--channels", required=True)
+    lz.add_argument("--morphologies", default=None,
+                    help="directory, glob, or comma-separated list of .swc files")
+    lz.add_argument("--table", default=None, help="cache the position table here (reused)")
+    lz.add_argument("--kind", default="pvbasket")
+    lz.add_argument("--spk-variant", default="standard", dest="spk_variant",
+                    help="waveform variant to localise on; MUST be untransformed")
+    lz.add_argument("--rotations", default="0,90,180,270")
+    lz.add_argument("--depth-min", type=float, default=0.0, dest="depth_min")
+    lz.add_argument("--depth-max", type=float, default=200.0, dest="depth_max")
+    lz.add_argument("--lat-min", type=float, default=2.5, dest="lat_min")
+    lz.add_argument("--lat-max", type=float, default=70.0, dest="lat_max")
+    lz.add_argument("--step", type=float, default=2.5)
+    lz.add_argument("--max-morph", type=int, default=0, dest="max_morph",
+                    help="cap the count AFTER selection; it does not choose which")
+    lz.add_argument("--nsamp", type=int, default=42); lz.add_argument("--nchan", type=int, default=8)
+    lz.add_argument("--sr", type=float, default=32552.0)
+    lz.add_argument("--min-spikes", type=int, default=150, dest="min_spikes")
+    lz.add_argument("--min-spikes-atom", type=int, default=120, dest="min_spikes_atom")
+    lz.add_argument("--n-rep", type=int, default=4, dest="n_rep")
+    lz.add_argument("--chunk-min", type=float, default=18.0, dest="chunk_min")
+    lz.add_argument("--atoms", type=int, default=1)
+    lz.add_argument("--split-scan", type=int, default=1, dest="split_scan")
+    lz.add_argument("--split-floor", type=float, default=7.5, dest="split_floor")
+    lz.add_argument("--max-rmse", type=float, default=0.06, dest="max_rmse",
+                    help="skip the split test where the model does not fit; a large\nseparation between two bad fits means nothing")
+    lz.add_argument("--out", default=None)
+    lz.set_defaults(func=cmd_localize)
 
     a = ap.parse_args(argv)
     return a.func(a)
