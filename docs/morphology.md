@@ -1719,6 +1719,13 @@ BLAS threads are pinned to 1 inside workers: N processes each spawning N threads
 oversubscribes badly, and these matmuls (a few hundred by 8) gain nothing from
 threading. The environment is restored afterwards.
 
+The pool uses **fork** where available, falling back to spawn. `spawn`
+re-imports the parent's `__main__` in every worker — a full numpy import per
+worker, material at 64 of them — and *fails outright* when the parent was
+started from stdin, since the worker then tries to re-execute a `<stdin>` path
+that does not exist. The usual fork hazard is inherited threads, and BLAS
+threads are pinned immediately above.
+
 Serial and parallel builds produce the same table, which matters because the
 table is cached — its contents must not depend on how many workers built it.
 
