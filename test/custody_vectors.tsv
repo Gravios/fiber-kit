@@ -70,6 +70,14 @@ method_token	stderiv_C4	stderiv	C	4
 method_token	stderiv_C5	stderiv	C	5
 method_token	stderiv_C12	stderiv	C	12
 method_token	sdiff_S2	sdiff	S	2
+# _D<lag><dims>: the lag feature space fiber-session emits under --feat-lag.
+# Suffixes peel from the RIGHT, so a token may carry both a kind and a lag.
+# NOTE: lag/dims are NOT columns here -- this table is four-wide and widening it
+# changes the reader in all four mirrors.  These rows pin the FAMILY and KIND,
+# which is what isStderivMethod and every resolve path depend on; the lag/dims
+# values themselves are covered by the C++ unit test until the table is widened.
+method_token	stderiv_D34	stderiv		
+method_token	stderiv_C5_D34	stderiv	C	5
 # malformed suffixes stay opaque - the whole token is the family
 method_token	stderivfoo	stderivfoo		
 method_token	stderiv_C	stderiv_C		
@@ -78,6 +86,8 @@ method_token	stderiv_X3	stderiv_X3
 is_stderiv	stderiv	1
 is_stderiv	stderiv_S3	1
 is_stderiv	stderiv_C4	1
+is_stderiv	stderiv_C5_D34	1
+is_stderiv	stderiv_D34	1
 is_stderiv	stderiv_C12	1
 is_stderiv	standard	0
 is_stderiv	sdiff	0

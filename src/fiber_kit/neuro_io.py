@@ -71,13 +71,19 @@ FET_HDR_DTYPE = np.dtype("<i4")
 ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found"])
 
 
-VariantSpec = namedtuple("VariantSpec", "family kind order")
+# lag/dims default to 0 so existing positional unpacking is unaffected.
+VariantSpec = namedtuple("VariantSpec", "family kind order lag dims", defaults=(0, 0))
 
 
 def parse_variant_token(variant):
     """Decompose a variant token <family>[_<kind><order>], e.g. 'stderiv_C4'.
 
-    Returns VariantSpec(family, kind, order): kind is 'S' (plain spatial derivative)
+    Returns VariantSpec(family, kind, order, lag, dims).  Suffixes peel from the
+    RIGHT, so a token may carry more than one: stderiv_C5_D34 is the custom
+    sdiffPairs pattern AND the lag feature space this module emits under
+    --feat-lag (PC1 at -lag/0/+lag plus PC2, `dims` columns per channel).
+
+    kind is 'S' (plain spatial derivative)
     or 'C' (the session's custom sdiffPairs pattern), order is the spatial-derivative
     order actually applied; both are None on a bare token.
 
@@ -88,12 +94,28 @@ def parse_variant_token(variant):
     masquerades as a known one.  Kept honest by test/custody_vectors.tsv, an
     identical copy of the canonical table those three are checked against.
     """
-    cut = variant.rfind("_")
-    if cut != -1:
-        suffix = variant[cut + 1:]
-        if len(suffix) >= 2 and suffix[0] in ("S", "C") and suffix[1:].isdigit():
-            return VariantSpec(variant[:cut], suffix[0], int(suffix[1:]))
-    return VariantSpec(variant, None, None)
+    rest, kind, order, lag, dims = variant, None, None, 0, 0
+    while True:
+        cut = rest.rfind("_")
+        if cut == -1:
+            break
+        suffix = rest[cut + 1:]
+        if len(suffix) < 2 or not suffix[1:].isdigit():
+            break
+        if suffix[0] == "D":
+            if lag or len(suffix) != 3:      # repeated, or not _D<lag><dims>
+                return VariantSpec(variant, None, None, 0, 0)
+            lag, dims = int(suffix[1]), int(suffix[2])
+        elif suffix[0] in ("S", "C"):
+            if kind:
+                return VariantSpec(variant, None, None, 0, 0)
+            kind, order = suffix[0], int(suffix[1:])
+        else:
+            return VariantSpec(variant, None, None, 0, 0)
+        rest = rest[:cut]
+    if kind is None and not lag:
+        return VariantSpec(variant, None, None, 0, 0)
+    return VariantSpec(rest, kind, order, lag, dims)
 
 
 def variant_family(variant):
