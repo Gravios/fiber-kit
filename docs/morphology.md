@@ -1701,6 +1701,28 @@ Note the variant is one dotted field with **underscores inside**:
 `<family>_<kind><order>`, and the feature-space suffix extends it.
 
 
+**`--jobs` parallelises the table build.** Morphologies are independent — load,
+simulate and sweep all happen per cell with no shared state — so the build
+scales nearly linearly with cores. Loading dominates the per-cell cost (3.2 s of
+3.7 s excluding the sweep), and it parallelises with everything else.
+
+```bash
+fiber-morpho localize ... --jobs -1        # all cores
+```
+
+On a 64-core machine the 155-morphology build that took 1,248 s serially should
+take about a minute. **That speedup has not been measured** — the machine this
+was written on has one core, where two workers are *slower* than one (2.9 s
+against 0.1 s on a tiny case) because only the spawn overhead is visible.
+
+BLAS threads are pinned to 1 inside workers: N processes each spawning N threads
+oversubscribes badly, and these matmuls (a few hundred by 8) gain nothing from
+threading. The environment is restored afterwards.
+
+Serial and parallel builds produce the same table, which matters because the
+table is cached — its contents must not depend on how many workers built it.
+
+
 **Build cost is small enough that subsetting is pointless.** The position sweep
 is matmuls against a precomputed membrane-current matrix, so the per-cell cost
 is the simulation and rotations are nearly free:
