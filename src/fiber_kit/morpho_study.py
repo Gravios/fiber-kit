@@ -917,12 +917,16 @@ def cmd_localize(args):
             import collections as _c
             print("  biophysics: " + ", ".join(
                 f"{k}={v}" for k, v in sorted(_c.Counter(kinds.values()).items())))
+        if args.jobs < 0:
+            args.jobs = os.cpu_count() or 1
+        if args.jobs > 1:
+            print(f"  building with {args.jobs} worker processes")
         t0 = time.time()
         tab = mlz.build_table(paths, xy,
                               rotations=[float(v) for v in args.rotations.split(",")],
                               depths=np.arange(args.depth_min, args.depth_max + 1e-9, args.step),
                               laterals=np.arange(args.lat_min, args.lat_max + 1e-9, args.step),
-                              kinds=kinds,
+                              kinds=kinds, jobs=args.jobs,
                               progress=lambda k, n, lab: print(f"  [{k}/{n}] {lab}"))
         print(f"table: {len(tab)} positions from {len(paths)} morphologies "
               f"in {time.time()-t0:.0f}s")
@@ -1185,6 +1189,10 @@ def main(argv=None):
     lz.add_argument("--morphologies", default=None,
                     help="directory, glob, or comma-separated list of .swc files")
     lz.add_argument("--table", default=None, help="cache the position table here (reused)")
+    lz.add_argument("--jobs", type=int, default=1,
+                    help="parallel worker processes for the table build; morphologies "
+                         "are independent, so this scales nearly linearly. Use -1 for "
+                         "all cores")
     lz.add_argument("--kind", default="pvbasket",
                     help="fallback preset; --manifest overrides it per morphology")
     lz.add_argument("--manifest", action="append", default=None,

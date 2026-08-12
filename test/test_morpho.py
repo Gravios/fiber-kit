@@ -1718,5 +1718,49 @@ with _tf.TemporaryDirectory() as tdE:
     check(rp2.found and rp2.variant == "standard",
           "negative control: it is accepted once the raw copy exists")
 
+# ── 35. parallel table build ────────────────────────────────────────────────
+print("[35] build_table --jobs")
+check(callable(getattr(mlz, "_one_morphology", None)),
+      "the per-morphology worker is a TOP-LEVEL function, so it can be pickled "
+      "into a spawned process")
+import inspect as _ins
+_bt = _ins.signature(mlz.build_table)
+check("jobs" in _bt.parameters and _bt.parameters["jobs"].default == 1,
+      "build_table takes jobs, defaulting to serial")
+_bs = _ins.getsource(mlz.build_table)
+check("OMP_NUM_THREADS" in _bs,
+      "BLAS threads are pinned to 1 in workers — N processes each spawning N "
+      "threads oversubscribes the machine, and these matmuls are too small to "
+      "gain from threading anyway")
+check("finally:" in _bs, "...and the environment is restored afterwards")
+
+# serial and parallel must produce the SAME table, or a cached table's contents
+# would depend on how it was built
+_gxy = me.staggered_octrode(n=8)
+# TINY synthetic cells: a real morphology takes ~3 s just to load, and this test
+# builds twice, so using real ones made the suite time out on a single core.
+_swc = ("1 1 0 0 0 5 -1\n2 3 0 20 0 1 1\n3 3 0 60 0 1 2\n"
+        "4 3 0 100 0 1 3\n5 2 0 -20 0 1 1\n6 2 0 -60 0 1 5\n")
+_tdP = _tf.mkdtemp()
+_paths = []
+for _n in ("tiny1", "tiny2"):
+    _q = os.path.join(_tdP, _n + ".swc"); open(_q, "w").write(_swc); _paths.append(_q)
+if len(_paths) >= 2:
+    _kw = dict(rotations=(0,), depths=np.arange(0, 41, 20.0),
+               laterals=np.arange(10.0, 31.0, 10.0), d_lambda=1.2, max_comp=60,
+               t_stop=3.0)
+    t_ser = mlz.build_table(_paths, _gxy, jobs=1, **_kw)
+    t_par = mlz.build_table(_paths, _gxy, jobs=2, **_kw)
+    check(len(t_ser) == len(t_par) and set(t_ser.names) == set(t_par.names),
+          f"serial and parallel builds agree in size and content "
+          f"({len(t_ser)} vs {len(t_par)})")
+    check(np.allclose(np.sort(t_ser.profiles, axis=0), np.sort(t_par.profiles, axis=0)),
+          "and in the profiles themselves — a cached table must not depend on "
+          "how many workers built it")
+    check(t_ser.fit(t_ser.profiles[3])["depth"] == t_par.fit(t_ser.profiles[3])["depth"],
+          "so a fit through either is the same")
+else:
+    print("  (skipped: no sample .swc for a build comparison)")
+
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)

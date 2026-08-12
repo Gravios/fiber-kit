@@ -90,9 +90,43 @@ class PositionTable:
                              dict(z["meta"].tolist()) if "meta" in z else {})
 
 
+def _one_morphology(args):
+    """Load, simulate and sweep ONE morphology.  Top-level so it can be pickled.
+
+    Returns (label, profiles, grid) rather than writing into shared state, which
+    is what lets this run in a worker process.
+    """
+    (path, kind, xy, rotations, depths, laterals, d_lambda, max_comp,
+     dt, t_stop, stim_amp, sigma) = args
+    try:
+        from . import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
+        from . import morpho_chan_ca1 as mca
+    except ImportError:
+        import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
+        import morpho_chan_ca1 as mca
+    kw = {} if sigma is None else dict(sigma=sigma)
+    c = mg.orient(mg.compartmentalize(mg.load(path), d_lambda=d_lambda,
+                                      max_comp=max_comp))
+    im = mc.simulate(mc.Cell(c, mca.biophys(kind)), dt=dt, t_stop=t_stop,
+                     stim_amp=stim_amp, record_v=False)["im"]
+    label = str(path).split("/")[-1].replace(".CNG.swc", "").replace(".swc", "")
+    P, G = [], []
+    for rot in rotations:
+        cr = mg.rotate_z(c, rot)
+        for dy in depths:
+            for lat in laterals:
+                sites = me.sites_3d(xy - np.array([0.0, dy]), z=lat)
+                p = np.ptp(im @ me.transfer_matrix(cr, sites, **kw), 0)
+                if p.max() <= 0:
+                    continue
+                P.append(p / p.max()); G.append((rot, dy, lat))
+    return label, P, G
+
+
 def build_table(morphologies, site_xy, kinds=None, rotations=(0, 90, 180, 270),
                 depths=None, laterals=None, d_lambda=0.5, max_comp=550,
-                dt=0.02, t_stop=9.0, stim_amp=8.0, sigma=None, progress=None):
+                dt=0.02, t_stop=9.0, stim_amp=8.0, sigma=None, progress=None,
+                jobs=1):
     """Simulate each morphology once, then sweep positions with matmuls.
 
     site_xy must be the group's own geometry RE-REFERENCED to its first site.
@@ -100,36 +134,48 @@ def build_table(morphologies, site_xy, kinds=None, rotations=(0, 90, 180, 270),
     sits near x = 1000 um -- and using them unshifted puts the electrode a
     millimetre from a cell simulated at the origin.
     """
-    try:
-        from . import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
-        from . import morpho_chan_ca1 as mca
-    except ImportError:
-        import morpho_geom as mg, morpho_cable as mc, morpho_eap as me
-        import morpho_chan_ca1 as mca
     depths = np.arange(0, 201, 5.0) if depths is None else np.asarray(depths, float)
     laterals = np.arange(5, 71, 5.0) if laterals is None else np.asarray(laterals, float)
     xy = np.asarray(site_xy, float)
     xy = xy - xy[0]
-    kw = {} if sigma is None else dict(sigma=sigma)
+    # One task per morphology.  Loading dominates the per-cell cost (3.2 s of
+    # 3.7 s excluding the sweep), and every stage -- load, simulate, sweep -- is
+    # independent between cells, so this parallelises without any shared state.
+    tasks = [(q, (kinds or {}).get(q, "pvbasket"), xy, tuple(rotations),
+              np.asarray(depths, float), np.asarray(laterals, float),
+              d_lambda, max_comp, dt, t_stop, stim_amp, sigma)
+             for q in morphologies]
     P, Gd, nm = [], [], []
-    for k, path in enumerate(morphologies):
-        kind = (kinds or {}).get(path, "pvbasket")
-        c = mg.orient(mg.compartmentalize(mg.load(path), d_lambda=d_lambda,
-                                          max_comp=max_comp))
-        im = mc.simulate(mc.Cell(c, mca.biophys(kind)), dt=dt, t_stop=t_stop,
-                         stim_amp=stim_amp, record_v=False)["im"]
-        label = str(path).split("/")[-1].replace(".CNG.swc", "").replace(".swc", "")
-        for rot in rotations:
-            cr = mg.rotate_z(c, rot)
-            for dy in depths:
-                for lat in laterals:
-                    sites = me.sites_3d(xy - np.array([0.0, dy]), z=lat)
-                    p = np.ptp(im @ me.transfer_matrix(cr, sites, **kw), 0)
-                    if p.max() <= 0:
-                        continue
-                    P.append(p / p.max()); Gd.append((rot, dy, lat)); nm.append(label)
-        if progress:
-            progress(k + 1, len(morphologies), label)
+    jobs = max(1, int(jobs))
+    if jobs > 1 and len(tasks) > 1:
+        import multiprocessing as _mp
+        # A worker inherits the parent's BLAS thread count, so N processes each
+        # spawning N threads oversubscribes the machine badly.  The matmuls here
+        # are small (a few hundred by 8) and gain nothing from threading anyway.
+        import os as _os
+        _prev = {v: _os.environ.get(v) for v in
+                 ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS")}
+        for v in _prev:
+            _os.environ[v] = "1"
+        try:
+            with _mp.get_context("spawn").Pool(jobs) as pool:
+                for k, (label, p, g) in enumerate(
+                        pool.imap(_one_morphology, tasks, chunksize=1)):
+                    P.extend(p); Gd.extend(g); nm.extend([label] * len(p))
+                    if progress:
+                        progress(k + 1, len(tasks), label)
+        finally:
+            for v, old_v in _prev.items():
+                if old_v is None:
+                    _os.environ.pop(v, None)
+                else:
+                    _os.environ[v] = old_v
+    else:
+        for k, t in enumerate(tasks):
+            label, p, g = _one_morphology(t)
+            P.extend(p); Gd.extend(g); nm.extend([label] * len(p))
+            if progress:
+                progress(k + 1, len(tasks), label)
     if not P:
         raise ValueError("no usable positions — check site_xy and the grid")
     return PositionTable(P, Gd, nm, meta=dict(n_morph=str(len(morphologies)),
