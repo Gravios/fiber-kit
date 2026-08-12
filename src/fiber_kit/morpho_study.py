@@ -781,17 +781,34 @@ def cmd_localize(args):
     # the expensive step -- 21 minutes for 155 morphologies -- and it used to run
     # first, so a mistyped variant cost the whole build before failing on a
     # missing .clu.  Nothing here is expensive; it is a spelling check.
-    for _t in ("clu", "res"):
-        _p = nio.session_path(args.base, _t, args.group, args.variant, args.tag)
-        if not os.path.exists(_p):
-            _alt = nio.resolve_any(args.base, _t, args.group, preferred=args.variant)
-            _hint = (f"; did you mean --variant {_alt.variant}?"
-                     if getattr(_alt, "found", False) and _alt.variant != args.variant else "")
-            raise SystemExit(f"[localize] no .{_t} at {_p}{_hint}")
-    _rs0 = nio.resolve_any(args.base, "spk", args.group, preferred=args.spk_variant)
+    # .clu is MethodSpecific -- the pinned name is the whole point, since a clu
+    # from another method is a different sort -- so it is checked at its exact
+    # path.  .res and .spk are SHARED: one physical copy whatever token produced
+    # it, because detection may run under one method and extraction under
+    # another.  Checking those at a pinned path is the mistake the artifact
+    # classes exist to prevent, and it rejected a session whose .res was simply
+    # tagged with a different token.
+    _cp = nio.session_path(args.base, "clu", args.group, args.variant, args.tag)
+    if not os.path.exists(_cp):
+        _alt = nio.resolve_any(args.base, "clu", args.group, preferred=args.variant)
+        _hint = (f"; did you mean --variant {_alt.variant}?"
+                 if getattr(_alt, "found", False) and _alt.variant != args.variant else "")
+        raise SystemExit(f"[localize] no .clu at {_cp}{_hint}")
+    _rr = nio.resolve_any(args.base, "res", args.group, preferred=args.variant)
+    if not _rr.found:
+        raise SystemExit(f"[localize] no .res for group {args.group} under any method token")
+    # .spk is listed as Shared, but in fiber-kit its tokens hold DIFFERENT
+    # CONTENT: .spk.standard is the raw window and .spk.stderiv_C5 a spatial
+    # derivative of it.  resolve_any is therefore the WRONG tool here -- it would
+    # hand back a transformed waveform when the raw one is absent.  Localisation
+    # must FAIL instead, because the derivative removes the amplitude-distance
+    # relationship a position fit reads; prefer_standard() encodes exactly that.
+    _pref = nio.prefer_standard() if args.spk_variant == "standard" else [args.spk_variant, ""]
+    _rs0 = nio.resolve_input(args.base, "spk", args.group, _pref)
     if not _rs0.found:
-        raise SystemExit(f"[localize] no .spk.{args.spk_variant} for group {args.group}; "
-                         "localisation needs the untransformed waveform")
+        raise SystemExit(
+            f"[localize] no .spk.{args.spk_variant} for group {args.group}. Localisation "
+            "needs the UNTRANSFORMED waveform and will not fall back to a derived one.")
     if args.table and os.path.exists(args.table):
         tab = mlz.PositionTable.load(args.table)
         print(f"table: {len(tab)} positions (cached, {args.table})")
@@ -919,12 +936,7 @@ def cmd_localize(args):
     # is opened explicitly here rather than inherited.
     s = mvd.Sort(args.base, args.group, args.nsamp, args.nchan,
                  variant=args.variant, tag=args.tag)
-    rs = nio.resolve_any(args.base, "spk", args.group, preferred=args.spk_variant)
-    if not rs.found:
-        raise SystemExit(f"[localize] no .spk.{args.spk_variant} for group {args.group}; "
-                         f"localisation cannot use the transformed waveform")
-    if rs.variant != args.spk_variant:
-        print(f"  [warn] asked for .spk.{args.spk_variant}, resolved {rs.variant}")
+    rs = _rs0
     s.spk = nio.open_spk_file(rs.path, args.nsamp, args.nchan)
     print(f"  waveforms: {os.path.basename(rs.path)} [{rs.variant}]")
     sr = args.sr

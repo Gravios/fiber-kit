@@ -1674,6 +1674,22 @@ axo-axonic cell that happens to be PV+.
 quietly defaulting them.
 
 
+**Each artifact uses the resolver its class requires**, and getting this wrong
+rejected a real session:
+
+| artifact | class | resolver | why |
+|---|---|---|---|
+| `.clu` | MethodSpecific | pinned path | a clu from another method is a *different sort* |
+| `.res` | Shared | `resolve_any` | one physical copy; detection may have run under a different token than extraction |
+| `.spk` | Shared *in name only* | `prefer_standard()` | its tokens hold **different content**, so falling back gives a transformed waveform |
+
+Pinning `.res` to `--variant` reported a present file as missing — the session's
+`.res` wears `stderiv` while the clustering is `stderiv_C5_D34`. And `.spk` must
+*not* use `resolve_any`: `.spk.standard` is the raw window and
+`.spk.stderiv_C5` a spatial derivative of it, so resolve_any would hand back a
+transform when the raw copy is absent. `prefer_standard()` refuses instead.
+
+
 **Session inputs are checked before the table is built.** The build is the
 expensive step — 21 minutes for 155 morphologies — and it used to run first, so
 a mistyped `--variant` cost the whole build before failing on a missing `.clu`.
