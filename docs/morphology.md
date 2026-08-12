@@ -1447,6 +1447,45 @@ fastest rates reach ~10⁴/ms at spike potentials, where an explicit step at
 dt = 0.02 ms diverges rather than merely blurring.
 
 
+## Running the tests
+
+```bash
+python3 test/run_blocks.py                    # all blocks, all cores
+python3 test/run_blocks.py --block 26 --block 34 --verbose
+python3 test/run_blocks.py --list
+python3 test/run_blocks.py --jobs 8 --timeout 900
+```
+
+The suite is one script of numbered blocks and had grown past the point where it
+finishes in a single process on a modest machine. When it stops finishing, the
+practical response is to verify a subset and ship — which is how several defects
+reached a user here: a console script never registered, a resolver that rejected
+a valid session, a worker pool that crashed on launch. Each would have been
+caught by a suite that ran.
+
+The runner gives three things the monolith cannot:
+
+- **isolation** — one process per block, so a hang or a segfault costs that block
+- **timeouts** — a slow block is reported `TIMEOUT`, not left to kill the run
+- **parallelism** — blocks are independent, so wall time is the slowest block
+  rather than their sum (6 blocks: 14 s against 85 s serial)
+
+It does **not** modify `test_morpho.py` — blocks are extracted by their `# ── N.`
+markers and recombined with the file's header, so `python3 test/test_morpho.py`
+still works and there is no second source of truth about what the tests are.
+
+**It immediately found what it was built to find.** Blocks were not independent:
+several used names imported by an *earlier* block, which works only because the
+monolith runs them in order. The runner hoists every block's imports into every
+block, since imports are idempotent — but only imports. A block depending on a
+*value* another computed still fails, and should: that is a real defect in the
+suite, not something a runner may hide.
+
+Exit status is non-zero if any block fails, errors, times out, or produces no
+summary line — the last distinguishes "died before reporting" from "reported
+zero failures".
+
+
 ## Acquiring morphologies: `fiber-morpho-fetch`
 
 Adding a reconstruction is not "download a file". Three things have gone wrong
