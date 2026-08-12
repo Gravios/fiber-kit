@@ -7,6 +7,7 @@
 # property is also BROKEN deliberately and the check confirmed to fire; a test
 # that has never failed proves nothing.
 import glob
+import inspect
 import os
 import sys
 
@@ -1661,6 +1662,24 @@ with _tf.TemporaryDirectory() as tdD:
     check(len(keep2) == 3 and len(unk3) == 1 and unk3[0][0] == "reject1",
           "a cell that IS manifested but maps to no preset survives the gate and is "
           "then reported as unmapped — the two failures stay distinct")
+
+# ── 33. session inputs are checked before the expensive build ───────────────
+print("[33] input validation precedes the table build")
+_src = inspect.getsource(_ms.cmd_localize)
+# the message is an f-string, `no .{_t} at`, so match the marker not the
+# rendered text — searching for "no .clu at" finds nothing and the check
+# passes or fails for the wrong reason
+_i_check = _src.find("Resolve the SESSION inputs before building")
+_i_build = _src.find("mlz.build_table")
+check(_i_check > 0 and _i_build > 0 and _i_check < _i_build,
+      "the .clu existence check appears BEFORE build_table in cmd_localize — a "
+      "mistyped variant must not cost a 21-minute build first")
+_i_spk = _src.find("localisation needs the untransformed waveform")
+check(0 < _i_spk < _i_build,
+      "so does the .spk resolution")
+check("did you mean --variant" in _src,
+      "and a near-miss variant is suggested, since the resolver already knows "
+      "which tokens exist for that stage")
 
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
