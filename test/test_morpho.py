@@ -1674,12 +1674,49 @@ _i_build = _src.find("mlz.build_table")
 check(_i_check > 0 and _i_build > 0 and _i_check < _i_build,
       "the .clu existence check appears BEFORE build_table in cmd_localize — a "
       "mistyped variant must not cost a 21-minute build first")
-_i_spk = _src.find("localisation needs the untransformed waveform")
+# the .spk message changed when it moved from resolve_any to prefer_standard;
+# match the marker rather than the wording, which is what the earlier version of
+# this check got wrong too
+_i_spk = _src.find("prefer_standard()")
 check(0 < _i_spk < _i_build,
       "so does the .spk resolution")
 check("did you mean --variant" in _src,
       "and a near-miss variant is suggested, since the resolver already knows "
       "which tokens exist for that stage")
+
+# ── 34. the right resolver per artifact class ───────────────────────────────
+print("[34] artifact classes: pinned .clu, shared .res, refusing .spk")
+_src2 = inspect.getsource(_ms.cmd_localize)
+check('nio.session_path(args.base, "clu"' in _src2,
+      ".clu is checked at its PINNED path — a clu from another method is a "
+      "different sort, so no fallback is wanted")
+check('nio.resolve_any(args.base, "res"' in _src2,
+      ".res goes through resolve_any — it is genuinely Shared, one physical copy, "
+      "and detection may have run under a different token than extraction")
+check('resolve_any(args.base, "spk"' not in _src2,
+      ".spk does NOT go through resolve_any: its tokens hold different content, so "
+      "resolve_any would hand back a transformed waveform when the raw one is absent")
+check("prefer_standard()" in _src2,
+      "...it uses prefer_standard(), which fails rather than falling back — the "
+      "transform removes the amplitude-distance relationship a position fit reads")
+
+# and the underlying resolvers must behave that way
+with _tf.TemporaryDirectory() as tdE:
+    b2 = os.path.join(tdE, "s")
+    open(f"{b2}.res.stderiv.5", "w").write("0\n")
+    r = nio.resolve_any(b2, "res", 5, preferred="stderiv_C5_D34")
+    check(r.found and r.variant == "stderiv",
+          f"a .res tagged with ANY token is found under a different --variant "
+          f"({r.variant}) — the case that rejected a real session")
+    open(f"{b2}.spk.stderiv_C5.5", "w").write("0")
+    rp = nio.resolve_input(b2, "spk", 5, nio.prefer_standard())
+    check(not rp.found,
+          "but a .spk present only as stderiv is NOT accepted for a standard "
+          "request — refusing is the point")
+    open(f"{b2}.spk.standard.5", "w").write("0")
+    rp2 = nio.resolve_input(b2, "spk", 5, nio.prefer_standard())
+    check(rp2.found and rp2.variant == "standard",
+          "negative control: it is accepted once the raw copy exists")
 
 print(f"\n{ran - fails}/{ran} checks passed")
 sys.exit(1 if fails else 0)
