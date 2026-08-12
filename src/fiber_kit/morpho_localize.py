@@ -158,7 +158,18 @@ def build_table(morphologies, site_xy, kinds=None, rotations=(0, 90, 180, 270),
         for v in _prev:
             _os.environ[v] = "1"
         try:
-            with _mp.get_context("spawn").Pool(jobs) as pool:
+            # fork where available, spawn as a fallback.  spawn re-imports the
+            # parent's __main__ in every worker, which costs a full numpy import
+            # per worker -- material at 64 of them -- and outright FAILS when the
+            # parent was started from stdin, because the worker then tries to
+            # re-execute a "<stdin>" path that does not exist.  fork has neither
+            # problem; the usual fork hazard is inherited threads, and BLAS
+            # threads are already pinned to 1 just above.
+            try:
+                _ctx = _mp.get_context("fork")
+            except ValueError:                        # not available (Windows)
+                _ctx = _mp.get_context("spawn")
+            with _ctx.Pool(jobs) as pool:
                 for k, (label, p, g) in enumerate(
                         pool.imap(_one_morphology, tasks, chunksize=1)):
                     P.extend(p); Gd.extend(g); nm.extend([label] * len(p))
