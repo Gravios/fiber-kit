@@ -1674,6 +1674,17 @@ axo-axonic cell that happens to be PV+.
 quietly defaulting them.
 
 
+**Session inputs are checked before the table is built.** The build is the
+expensive step — 21 minutes for 155 morphologies — and it used to run first, so
+a mistyped `--variant` cost the whole build before failing on a missing `.clu`.
+The check now takes 3 seconds and suggests the right token, since the resolver
+already knows which exist for that stage.
+
+Note the variant is one dotted field with **underscores inside**:
+`--variant stderiv_C5_D34`, not `stderiv.C5.D34`. The method token grammar is
+`<family>_<kind><order>`, and the feature-space suffix extends it.
+
+
 **Build cost is small enough that subsetting is pointless.** The position sweep
 is matmuls against a precomputed membrane-current matrix, so the per-cell cost
 is the simulation and rotations are nearly free:

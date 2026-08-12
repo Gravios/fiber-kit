@@ -776,6 +776,22 @@ def cmd_localize(args):
     """
     import glob
     xy = me.group_geometry(args.probe, [int(v) for v in args.channels.split(",")])
+
+    # Resolve the SESSION inputs before building anything.  The table build is
+    # the expensive step -- 21 minutes for 155 morphologies -- and it used to run
+    # first, so a mistyped variant cost the whole build before failing on a
+    # missing .clu.  Nothing here is expensive; it is a spelling check.
+    for _t in ("clu", "res"):
+        _p = nio.session_path(args.base, _t, args.group, args.variant, args.tag)
+        if not os.path.exists(_p):
+            _alt = nio.resolve_any(args.base, _t, args.group, preferred=args.variant)
+            _hint = (f"; did you mean --variant {_alt.variant}?"
+                     if getattr(_alt, "found", False) and _alt.variant != args.variant else "")
+            raise SystemExit(f"[localize] no .{_t} at {_p}{_hint}")
+    _rs0 = nio.resolve_any(args.base, "spk", args.group, preferred=args.spk_variant)
+    if not _rs0.found:
+        raise SystemExit(f"[localize] no .spk.{args.spk_variant} for group {args.group}; "
+                         "localisation needs the untransformed waveform")
     if args.table and os.path.exists(args.table):
         tab = mlz.PositionTable.load(args.table)
         print(f"table: {len(tab)} positions (cached, {args.table})")
