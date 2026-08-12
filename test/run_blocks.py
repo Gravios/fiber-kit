@@ -70,6 +70,10 @@ def split_blocks(path):
 
 IMPORT = re.compile(r"^\s*(?:import\s+\S+(?:\s+as\s+\w+)?|from\s+\S+\s+import\s+[^\n(]+)$",
                     re.M)
+# A top-level `def` in one block that a later block calls is the same coupling as
+# an import, and has the same fix: replay it everywhere.  Matched at column 0 so
+# a nested def is never lifted out of its scope.
+DEF = re.compile(r"^def\s+\w+\s*\(.*?^(?=\S|\Z)", re.M | re.S)
 
 
 def hoist_imports(blocks):
@@ -90,6 +94,11 @@ def hoist_imports(blocks):
     """
     seen, out = set(), []
     for _, _, body in blocks:
+        for m in DEF.finditer(body):
+            src = m.group(0).rstrip()
+            if src not in seen:
+                seen.add(src)
+                out.append(src)
         for m in IMPORT.finditer(body):
             line = m.group(0).strip()
             if line not in seen:
