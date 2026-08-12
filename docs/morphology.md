@@ -1840,6 +1840,33 @@ served now. `Ca` and `KCa` remain declared missing for every interneuron type
 including O-LM.
 
 
+### Fitting is threaded, and the obvious vectorisation was wrong
+
+Once the table is cached, the cost moves to the fits: 344 clusters plus 835
+atoms, each needing its own fit and eight more for its split-half floor — about
+10,600 scans of a 1.4-million-entry table.
+
+`split_half_floor` now builds all its half-profiles first and fits them in one
+`fit_many` call, which threads over queries. Each query is an independent scan
+of a **read-only, shared** table, so there is no per-worker copy, and numpy
+releases the GIL inside the ufunc loops that do the work.
+
+**The GEMM formulation was tried and rejected on measurement.** Expanding
+‖P−q‖² = ‖P‖² − 2P·q + ‖q‖² turns the batch into one matrix product, which BLAS
+would thread for free. But with only 8 channels it saves no arithmetic, and it
+materialises an N×Q intermediate — 2.9 GB at 1.4 M entries and 256 queries —
+turning a memory-bound scan into a badly memory-bound one. Measured: **4.4 s
+against 0.6 s** for the naive loop. Threads keep peak memory at one N-vector per
+thread instead.
+
+**The speedup itself is unmeasured.** The machine this was written on has one
+core, where threading is *slower* (10.2 s against 4.0 s) because there is
+contention and nothing to win. Worse, the same serial measurement moved 0.6 s →
+4.0 s between two runs on identical input, so timings here are not usable at
+all. What is verified is that threaded and serial fits return byte-identical
+results.
+
+
 ### Limits
 
 It is **blind to genuinely co-located cells** — two somata at one point give the
