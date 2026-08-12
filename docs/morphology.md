@@ -1474,12 +1474,19 @@ It does **not** modify `test_morpho.py` — blocks are extracted by their `# ─
 markers and recombined with the file's header, so `python3 test/test_morpho.py`
 still works and there is no second source of truth about what the tests are.
 
-**It immediately found what it was built to find.** Blocks were not independent:
+**It immediately found what it was built to find, and the count proves it.**
+The first full run reported `221/221 checks passed` with seven blocks in ERROR —
+a green-looking number that was missing 62 checks entirely. Those blocks used
+values built in *earlier* blocks (`cmp_`, `res`, `by`), which works only because
+the monolith runs them in order. Those fixtures now live in the header, and a
+full run reports **283/283 across 34/34 blocks in 72 s**. Blocks were not
+independent:
 several used names imported by an *earlier* block, which works only because the
-monolith runs them in order. The runner hoists every block's imports into every
-block, since imports are idempotent — but only imports. A block depending on a
+monolith runs them in order. The runner hoists every block's imports **and top-level function definitions**
+into every block, since both are idempotent — a helper defined in one block and
+called by another is the same coupling as an import. A block depending on a
 *value* another computed still fails, and should: that is a real defect in the
-suite, not something a runner may hide.
+suite, and it was fixed in the suite rather than papered over here.
 
 Exit status is non-zero if any block fails, errors, times out, or produces no
 summary line — the last distinguishes "died before reporting" from "reported

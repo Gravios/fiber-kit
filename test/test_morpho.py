@@ -39,6 +39,18 @@ def check(ok, what):
     return ok
 
 
+
+# ── shared fixtures ─────────────────────────────────────────────────────────
+# Built in the HEADER because blocks 2 and 4-9 all use them.  They previously
+# lived inside block 2, which made every later block silently depend on block 2
+# having run first -- invisible while the suite ran as one script, and the first
+# thing the per-block runner reported when blocks were finally isolated.
+cmp_ = ma.build("pyramidal", d_lambda=0.2)
+cell = mc.Cell(cmp_, mc.Biophys())
+res = mc.simulate(cell, dt=0.02, t_stop=8.0, stim_amp=8.0)
+pw = mi.load_table(post="pyramidalcell")
+by = {p.pre: p for p in pw}
+
 # ── 1. Hines solver vs an independent dense solve ───────────────────────────
 print("[1] Hines tree solver")
 rng = np.random.default_rng(7)
@@ -80,9 +92,6 @@ check(np.abs(ref - got).max() > 1e-6,
 
 # ── 2. charge conservation ──────────────────────────────────────────────────
 print("[2] transmembrane current sums to zero")
-cmp_ = ma.build("pyramidal", d_lambda=0.2)
-cell = mc.Cell(cmp_, mc.Biophys())
-res = mc.simulate(cell, dt=0.02, t_stop=8.0, stim_amp=8.0)
 scale = float(np.abs(res["im"]).max())
 resid = float(np.abs(res["im"].sum(1)).max())
 check(resid / max(scale, 1e-30) < 1e-5,
@@ -184,7 +193,6 @@ check(float(np.abs(res_r["im"] - res["im"]).max()) < 1e-9,
 print("[6] afferent topology table")
 pw = mi.load_table(post="pyramidalcell")
 check(len(pw) >= 10, f"pyramidal pathway table loads ({len(pw)} pathways)")
-by = {p.pre: p for p in pw}
 check("ca3cell" in by and "eccell" in by, "the two extrinsic pathways are present")
 check(by["ca3cell"].ntotal > by["eccell"].ntotal,
       "Schaffer collateral synapses outnumber perforant path ones")
