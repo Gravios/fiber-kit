@@ -19,6 +19,7 @@
 #  them and the corrected .res so the convention is explicit and reproducible.
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
+import glob
 import numpy as np
 
 _LP = "\u25b8 fiber-realign"
@@ -219,6 +220,52 @@ def refeaturize(spk_new, res_corr, basis):
     full[:, :-1] = fst._round_half_away(fet).astype(np.int64)   # ns3 process_pca uses llround (half-away); np.rint is half-even
     full[:, -1] = np.asarray(res_corr, np.int64)           # time feature (last column)
     return full
+
+
+def _refresh_lag_alias_fets(base, group, refreshed, res_corr, out_tag=""):
+    """Rewrite each on-disk _D<lag><dims> alias .fet from a freshly committed base variant.
+
+    fiber-session --out-variant <method>_D<lag><dims> --emit-fet/--emit-pca names the lag
+    feature space as an ALIAS of the extraction method: the alias owns a .clu copy, a .fet
+    and a .pca, but deliberately NO waveform file -- its .pca is the lag space re-expressed
+    as an ordinary basis on a widened window (fiber_pca.lag_basis), so its .fet is a plain
+    projection of the METHOD waveform.  A realign commit rewrites the shared .res and the
+    method .spk/.fet, which leaves that alias .fet stale twice over: its feature values
+    project pre-commit windows, and its final column carries the PRE-correction timestamps,
+    disagreeing with the .res beside it.
+
+    So: for every <base>.pca.<tok>.<group> whose token parses with a _D lag and whose
+    D-stripped base token is one of the variants this commit just refreshed, project that
+    variant's committed waveform onto the alias basis and rewrite the alias .fet -- the
+    exact projection the emitter used, since the widened basis exists to make it one plain
+    project() (verified equal to the emitter's lag_project to 1e-14, identically rounded).
+    `refreshed` maps the RESOLVED committed token -> its (n, nsamp, nch) waveform.  No
+    alias .spk is ever written: the alias names a feature space, not a waveform space, and
+    a second same-family .spk would make every bare-family resolve ambiguous."""
+    g = str(group)
+    stem, tail = f"{base}.pca.", f".{g}"
+    for pth in sorted(glob.glob(f"{stem}*{tail}")):
+        tok = pth[len(stem):-len(tail)]
+        if not tok or "." in tok:                          # stage-tagged / off-slot name
+            continue
+        spec = nio.parse_variant_token(tok)
+        if not spec.lag:
+            continue
+        base_tok = spec.family + (f"_{spec.kind}{spec.order}" if spec.kind else "")
+        wav = refreshed.get(base_tok)
+        if wav is None:
+            continue                                       # its base was not committed this run
+        basis = fpca.read_pcad(pth)
+        rs, d2u = int(basis["recShift"]), int(basis["data2use"])
+        if rs < 0 or rs + d2u > wav.shape[1]:
+            _det("fet", f"alias {tok}: widened window [{rs},{rs + d2u}) does not fit "
+                        f"nsamp {wav.shape[1]}; .fet left as it was")
+            continue
+        fet = refeaturize(wav, res_corr, basis)
+        fet_out = nio.write_fet(base, group, fet, variant=tok, tag=out_tag)
+        _det("fet", f"{fet_out}   (alias of {base_tok}; {fet.shape[1]} features incl. time)")
+
+
 def _resolve_variant_token(base, group, variant):
     """The method token actually on disk for a requested one, or the request itself.
 
@@ -433,6 +480,7 @@ def main():
             want = [v.strip() for v in a.variants.split(",") if v.strip()]
         else:
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
+        refreshed = {}                                     # resolved token -> committed waveform
         for v in want:
             try:
                 spk_v, _r = nio.open_spk(base, group, nsamp, nch, prefer=[v])
@@ -448,6 +496,7 @@ def main():
             vout = _r.variant or v
             wav = roll_spikes(np.asarray(spk_v[:len(res_corr)]), ioff)        # circular per-spike roll
             spk_out = nio.write_spk(base, group, wav, variant=vout, tag=a.out_tag)
+            refreshed[vout] = wav
             _log(f"rolled {len(wav):,} {vout} spikes by offset (no .fil) → {spk_out}")
             if a.refeaturize:
                 try:
@@ -458,6 +507,8 @@ def main():
                 fet = refeaturize(wav, res_corr, basis)
                 fet_out = nio.write_fet(base, group, fet, variant=vout, tag=a.out_tag)
                 _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+        if a.refeaturize:
+            _refresh_lag_alias_fets(base, group, refreshed, res_corr, a.out_tag)
     elif a.reextract or a.refeaturize:
         fil = a.fil or f"{base}.fil"
         filmm = nio.open_signal(fil, cfg["ntotal"])
@@ -476,6 +527,7 @@ def main():
         # result under a token claiming otherwise.  Deciding on the resolved token is
         # what makes the refusal below reachable at all.
         want = [_resolve_variant_token(base, group, v) for v in want]
+        refreshed = {}                                     # resolved token -> committed waveform
         for v in want:
             spec = nio.parse_variant_token(v)
             if spec.family == "standard":
@@ -527,6 +579,7 @@ def main():
             else:
                 _log(f"variant '{v}': no known waveform transform, skipping"); continue
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
+            refreshed[v] = wav
             _log(f"re-extracted {len(wav):,} {v} spikes from {fil} → {spk_out}")
             if a.refeaturize:
                 try:
@@ -537,6 +590,8 @@ def main():
                 fet = refeaturize(wav, res_corr, basis)
                 fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
                 _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+        if a.refeaturize:
+            _refresh_lag_alias_fets(base, group, refreshed, res_corr, a.out_tag)
 
 
 if __name__ == "__main__":
