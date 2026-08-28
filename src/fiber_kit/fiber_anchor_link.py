@@ -424,7 +424,22 @@ def main():
             print(f"[anchor-link] --feat-lag {a.feat_lag} requested but no global .pca basis for "
                   f"'{a.clu_method}' -- scoring the raw template instead")
         else:
-            lag_basis["_lag"] = int(a.feat_lag); lag_basis["_lag_pc2"] = True
+            # A family request can resolve the _D<lag><dims> ALIAS basis (fiber-session
+            # --emit-pca) when it is all the family has on disk.  That file is ALREADY the
+            # lag space -- PC1 at -lag/0/+lag (+PC2) re-expressed as an ordinary basis on a
+            # widened window (lag_basis()) -- so setting _lag on it would lag-expand it a
+            # SECOND time and score a silently different quantity.  Its token says which
+            # lag it carries: at the requested lag, project it as the plain basis it is; at
+            # any other, refuse and say what is missing rather than guess.
+            spec = nio.parse_variant_token(lag_basis.get("_variant") or "")
+            if spec.lag == 0:
+                lag_basis["_lag"] = int(a.feat_lag); lag_basis["_lag_pc2"] = True
+            elif spec.lag != int(a.feat_lag):
+                print(f"[anchor-link] --feat-lag {a.feat_lag}: only the lag-expanded alias basis "
+                      f"'{lag_basis['_variant']}' (lag {spec.lag}) resolves for '{a.clu_method}'; "
+                      f"need that lag, or the extraction-method .pca it was built from -- "
+                      f"scoring the raw template instead")
+                lag_basis = None
     if lag_basis is not None:
         W = np.stack([f["med"] for f in frags])
         P = _fpca.cluster_features(W, lag_basis, realign=False)
