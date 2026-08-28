@@ -226,7 +226,23 @@ def read_cluster_basis(base, elec, method="standard"):
         # stderiv_C5 has .pca.stderiv_C5.<g> and no .pca.stderiv.<g>, and a caller asking for
         # 'stderiv' wants exactly that.  Discover them by scanning, as resolve_any does for
         # Shared artifacts -- no fixed list can enumerate the suffixes.
-        prefer = [req] + _same_family_variants(base, elec, req)
+        #
+        # ORDER MATTERS.  resolve_input family-scans a bare token itself and deliberately
+        # RAISES when the family has several members ("pass the exact token").  The scanned
+        # list holds those exact tokens -- but appended AFTER the bare req they are
+        # unreachable in exactly the several-member case: the raise from req's own scan
+        # aborts the walk before they are tried.  That case is now the NORMAL layout of a
+        # lag-alias session (fiber-session --emit-pca writes .pca.<method>_D<lag><dims>
+        # beside the method basis), and it silently cost callers the global basis: the fine
+        # split fell back to a local SVD, --emit-fet skipped, and anchor-link's --feat-lag
+        # scored the raw template.  So the bare req leads only while its exact file exists;
+        # otherwise the exact tokens (method basis first) lead and req trails as the
+        # legacy-glued-form fallback.
+        fam = _same_family_variants(base, elec, req)
+        if fam and not os.path.exists(nio.session_path(base, "pca", elec, variant=req)):
+            prefer = fam + [req]
+        else:
+            prefer = [req] + fam
     try:
         r = nio.resolve_input(base, "pca", elec, prefer)
     except Exception:
@@ -243,11 +259,19 @@ def read_cluster_basis(base, elec, method="standard"):
 
 
 def _same_family_variants(base, elec, req):
-    """Tokens of <base>.pca.<tok>.<elec> on disk whose FAMILY matches `req`, longest first.
+    """Tokens of <base>.pca.<tok>.<elec> on disk whose FAMILY matches `req`:
+    extraction-method tokens first, _D<lag><dims> feature-space aliases after them,
+    longest first within each class.
 
     Family = the token up to its first underscore, matching the custody grammar
-    (<family>[_<kind><order>]).  A malformed/opaque token is its own family and so can only
-    ever satisfy itself, which is the intended containment."""
+    (<family>[_<kind><order>][_D<lag><dims>]).  A malformed/opaque token is its own family
+    and so can only ever satisfy itself, which is the intended containment.
+
+    The method-before-alias order is load-bearing: a family request wants the basis the
+    waveforms were FIT against, and a _D alias (fiber-session --emit-pca) is a widened
+    re-expression of that basis, not a second method.  Callers that lag-expand the result
+    themselves (cluster_features via _lag) would double-expand an alias, so the alias is
+    reachable only when it is all the family has."""
     fam = req.split("_", 1)[0]
     d = os.path.dirname(os.path.abspath(base)) or "."
     stem = os.path.basename(base) + ".pca."
@@ -263,7 +287,7 @@ def _same_family_variants(base, elec, req):
         tok = n[len(stem):-len(tail)]
         if tok and tok != req and tok.split("_", 1)[0] == fam:
             out.append(tok)
-    return sorted(out, key=lambda t: (-len(t), t))
+    return sorted(out, key=lambda t: (nio.parse_variant_token(t).lag > 0, -len(t), t))
 
 
 def lag_basis(basis, lag, *, keep_pc2=True):
