@@ -407,11 +407,35 @@ _run() {   # run the command, or (dry-run) just print it
     else "${out[@]}"; fi
 }
 clu_variant() {   # THE feature/method token for this session -- one source of truth.
-    #   From a CLI --method/--variant or FK_REALIGN_VARIANT; default 'stderiv'.  A custom-sdiffPairs
-    #   session (e.g. stderiv_C5) names every artifact .<type>.stderiv_C5.<ELEC>, so every stage below
-    #   must pass THIS, never a literal 'stderiv'.  A local copy of the token is how the banner and the
-    #   invocation drifted apart before: fiber-session ran on stderiv_C5 and the banner announced stderiv.
+    #   Resolution order (settled once, in main): CLI --method/--variant > FK_REALIGN_VARIANT > the
+    #   token read off the session's own stderiv-family .spk (infer_session_variant) > literal
+    #   'stderiv'.  A custom-sdiffPairs session (e.g. stderiv_C5) names every artifact
+    #   .<type>.stderiv_C5.<ELEC>, so every stage below must pass THIS, never a literal 'stderiv'.
+    #   A local copy of the token is how the banner and the invocation drifted apart before; the
+    #   silent literal FALLBACK was how the custody label drifted from the data (canonical
+    #   clu/fibers/res composed as 'stderiv' on a session whose only waveforms are stderiv_C5).
     echo "${REALIGN_VARIANT:-stderiv}"
+}
+
+infer_session_variant() {   # stdout: the session's stderiv-family method token read off its .spk, or ''.
+    # An exact bare .spk.stderiv.<ELEC> is an exact token and wins outright (exact beats family --
+    # the same order resolve applies).  Otherwise a SINGLE suffixed family member names the session.
+    # The .spk is the right file to ask because a _D<lag><dims> feature-space alias deliberately
+    # never owns one (fiber-session emits alias .clu/.fet/.pca only, precisely so the waveform
+    # family stays unambiguous) -- but _D tokens are excluded anyway in case one was written by
+    # hand.  0 or >=2 candidates after the exclusions: no inference (the caller falls back out
+    # loud); guessing here is how a wrong token would end up baked into every composed filename.
+    [ -e "$SESS.spk.stderiv.$ELEC" ] && { echo stderiv; return 0; }
+    local m t tok="" n=0
+    for m in "$SESS.spk.stderiv_"*".$ELEC"; do
+        [ -e "$m" ] || continue                        # unmatched glob
+        t="${m#"$SESS.spk."}"; t="${t%".$ELEC"}"
+        case "$t" in *.*) continue ;; esac             # dotted = an off-slot name, not a method token
+        case "$t" in *_D[0-9]*) continue ;; esac       # a _D feature-space alias never names the method
+        n=$((n + 1)); tok="$t"
+    done
+    [ "$n" = 1 ] && echo "$tok"
+    return 0
 }
 
 # ----- artifact mask (fiber-flag-artifacts) -------------------------------------
@@ -881,6 +905,23 @@ main() {
             --variant|--method) REALIGN_VARIANT="${OVERRIDE_ARGS[_vi+1]:-$REALIGN_VARIANT}" ;;
         esac
     done
+
+    # Still no token (no CLI --variant/--method, FK_REALIGN_VARIANT unset or empty)?  Read it off
+    # the session itself.  On a custom-sdiffPairs session the extractor's only waveforms are e.g.
+    # .spk.stderiv_C5.<ELEC> and no bare copy exists -- the stages family-match their READS to it
+    # and even announce the resolution, yet every path this runner COMPOSES (clu/clc/clp, .fibers,
+    # the realign res commit) was still named with the literal fallback 'stderiv': a custody label
+    # that understates the transform, silently, on every artifact of the run.  The .spk on disk
+    # already knows the answer, so ask it once here; an explicit token still wins, and an absent or
+    # ambiguous family falls back to the literal OUT LOUD rather than by omission.
+    if [ -z "${REALIGN_VARIANT:-}" ]; then
+        REALIGN_VARIANT="$(infer_session_variant)"
+        if [ -n "$REALIGN_VARIANT" ] && [ "$REALIGN_VARIANT" != stderiv ]; then
+            echo "fiber-pipeline: method token '$REALIGN_VARIANT' read off $SESS.spk.$REALIGN_VARIANT.$ELEC (FK_REALIGN_VARIANT / --method overrides)" >&2
+        elif [ -z "$REALIGN_VARIANT" ] && compgen -G "$SESS.spk.stderiv_*.$ELEC" >/dev/null; then
+            echo "fiber-pipeline: cannot pin ONE method token from the stderiv-family .spk set for group $ELEC; naming falls back to 'stderiv' -- set FK_REALIGN_VARIANT or pass --method" >&2
+        fi
+    fi
 
     # --plan: run the ordered (possibly-repeating) plan and stop.  With no --plan, an embedded
     # `pipeline:` section in $FK_CONFIG (fiber-kit.yaml) is the PRIMARY plan and runs by default.

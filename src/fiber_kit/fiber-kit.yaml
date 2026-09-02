@@ -207,10 +207,13 @@ FK_REALIGN_AFTER_MODE:   shift-spk  # shift-spk | reextract.  shift-spk circular
 FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the artefacts that go to curation): reextract
                                   #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).
-FK_REALIGN_VARIANT:      ""       # "" | e.g. stderiv_C5.  Feature variant fiber-realign aligns and refreshes (.spk/.fet);
-                                  #   empty = infer from the clu name (family-matches).  Set to the real token on a
-                                  #   custom-sdiffPairs session so the .spk/.fet name their variant explicitly rather than
-                                  #   leaning on the clu path's hard-coded 'stderiv'.  The .res stays the one shared copy.
+FK_REALIGN_VARIANT:      ""       # "" | e.g. stderiv_C5.  THE session method token: what fiber-realign aligns and
+                                  #   refreshes (.spk/.fet) AND what the runner names every composed path with
+                                  #   (clu/clc/clp, .fibers, the res commit).  "" = the runner reads the token off the
+                                  #   session's stderiv-family .spk (a custom-sdiffPairs session has only
+                                  #   .spk.stderiv_C5.N, which names it); it falls back to the literal 'stderiv' -- out
+                                  #   loud -- only when that family is absent or ambiguous.  Set explicitly only to pin
+                                  #   or override the inference.  The .res stays the one shared copy.
 FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike alignment algorithm (both the fiber-realign
                                   #   stage AND the post-step re-roll): klusters (default, iterative normalised-xcorr to
                                   #   the unit template), template (legacy median/un-normalised), centroid (reference-free
