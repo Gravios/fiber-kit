@@ -12,7 +12,7 @@
 #  automated form of that pass, run PER CHUNK over the final labels:
 #
 #  STRIP — each eligible cluster's median template (≤ tpl_cap evenly-strided
-#    spikes, stored alignment, exactly as Klusters samples it) claims spikes
+#    spikes) claims spikes
 #    of OTHER clusters whose kernel-weighted normalised residual D is at or
 #    below max_dist and whose matched gain g sits in [gmin, gmax], plus the
 #    optional per-channel uniformity gate — the Klusters metric verbatim
@@ -20,10 +20,37 @@
 #    denom = sqrt(Σw·T²/Σw), g = Σw·x·T / Σw·T²).  Where Klusters parks the
 #    matches in a new cluster for the curator, consolidation REASSIGNS them
 #    to the template's cluster, and adds the safeguard that interactive
-#    review provided: a spike moves only when the claiming template beats
-#    the spike's OWN cluster's template by a margin (D_target ≤ margin ·
-#    D_own), so a template can never strip-mine a look-alike's core.  When
-#    several templates claim a spike the smallest D wins.  Every spike is
+#    review provided, with thresholds CALIBRATED FROM THE SESSION rather
+#    than absolute (the anchor-link philosophy: a fixed floor tuned
+#    elsewhere lands mid-distribution on new data and gates nothing — or
+#    everything).  Measured on the reference session, D to a cell's OWN
+#    template has median 0.54: on an over-split sort, half of a low-SNR
+#    cell's own spikes sit past any fixed "misfit" floor, so absolute
+#    thresholds conflate noise level with misfit and reshuffled a third of
+#    the session between near-siblings.  Calibrated, both sides are
+#    quantiles of each cluster's own-spike distance distribution:
+#      * strippable  — D_own ≥ that cluster's own_q quantile (default 0.90):
+#        the spike fits its home worse than 90% of its peers, a ≤10%
+#        per-cell churn budget BY CONSTRUCTION;
+#      * claimable   — D_target ≤ tgt_scale × the TARGET's tgt_q quantile
+#        (defaults 1.25 × 0.90, capped at max_dist): the spike fits the
+#        target as well as the target's own spikes fit it, with a small
+#        out-of-sample allowance (the template is built FROM the target's
+#        spikes, so its in-sample quantile understates where fresh members
+#        of the same population land);
+#    plus the margin (D_target ≤ margin · D_own): the claim must beat home
+#    decisively, so a template cannot strip-mine a look-alike.  The last piece is the TWIN GATE: a pair of
+#    clusters whose templates are SHAPE-identical at some scale (normalized
+#    best-lag correlation ≥ twin_thr, fiber-refine's _ncorr — "energy
+#    levels of one neuron score high") is ineligible to trade at all.  In
+#    an over-split sort such pairs are one neuron's energy levels awaiting
+#    a MERGE; the amplitude-sensitive D happily reshuffles a ladder cell's
+#    low-energy spikes onto their amplitude-matched sibling (measured:
+#    tens of thousands of moves at pair cosine ≥ 0.95), which is churn,
+#    not decontamination — the same judgement the knn's scorr gate encodes
+#    per bucket, applied per pair.  Cross-shape claims, the actual
+#    contamination, are untouched.  When several templates claim a spike
+#    the smallest D wins.  Every spike is
 #    scored against every template in one two-matmul pass per block — a
 #    contaminant is by definition UNLIKE its own cluster's template, so no
 #    donor-level similarity prefilter can be sound.
@@ -32,13 +59,26 @@
 #    split: per-spike K-NN majority vote in a PCA feature space against the
 #    pool of other clusters' spikes; a peeled bucket folds into the winner
 #    when its median waveform matches (amplitude-sensitive xcorr ≥
-#    fold_thr), else it becomes a NEW cluster.
+#    fold_thr), else it becomes a NEW cluster.  scorr defaults to 0.93 —
+#    fiber-refine's own operating value for the shape-distinctness gate
+#    ("same shape as its own cluster → not a contaminant, keep"), which is
+#    the knn's twin guard; 1.0 disables it, and did, in the first draft.
 #
 #  Scope is PER CHUNK in both callers: intrachunk's units are chunk-local by
 #  contract, and anchor-link's cells drift across chunks, so a cell is best
 #  represented by its own within-chunk spikes rather than a drift-smeared
 #  session template.  Labels in `exclude` (the reserve bins) neither donate
 #  nor receive, and their spikes never move.
+#
+#  ALIGNMENT — the driver realigns each chunk's spikes ONCE to a common
+#  reference (fl.realign, the same call fiber-refine's feature build makes on
+#  its own mixed pools) and both passes template and score in that frame.
+#  Klusters scores stored records because its curation axis is realigned on
+#  disk; the pipeline's standard .spk is only loosely stored-aligned —
+#  anchor-link realigns before templating for exactly this reason — and at
+#  stored alignment the per-spike jitter inflates D_own past any sane floor
+#  (measured on the reference session: 29% of spikes moved on jitter alone;
+#  aligned, the pass is surgical).
 #
 #  Knobs read FK_CONS_* (CLI > FK_CONS_* env > global yaml where the caller
 #  passes one > default).
@@ -48,10 +88,10 @@ import numpy as np
 
 try:
     from . import fiber_lib as fl
-    from .fiber_refine import _knn_apply
+    from .fiber_refine import _knn_apply, _ncorr
 except ImportError:                                   # script / flat-layout fallback
     import fiber_lib as fl
-    from fiber_refine import _knn_apply
+    from fiber_refine import _knn_apply, _ncorr
 
 
 # ── knob resolution: default <- global yaml (FK_CONS_*) <- FK_* env <- CLI ──
@@ -62,6 +102,10 @@ _KNOBS = {
     "FK_CONS_GMAX": ("cons_gmax", float, 10.0),
     "FK_CONS_CHAN": ("cons_chan", float, 0.0),
     "FK_CONS_MARGIN": ("cons_margin", float, 0.85),
+    "FK_CONS_OWN_Q": ("cons_own_q", float, 0.90),
+    "FK_CONS_TGT_Q": ("cons_tgt_q", float, 0.90),
+    "FK_CONS_TGT_SCALE": ("cons_tgt_scale", float, 1.25),
+    "FK_CONS_TWIN": ("cons_twin", float, 0.93),
     "FK_CONS_TPL_CAP": ("cons_tpl_cap", int, 1024),
     "FK_CONS_MIN_TPL": ("cons_min_tpl", int, 8),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
@@ -70,7 +114,7 @@ _KNOBS = {
     "FK_CONS_KNN_MINNEW": ("cons_knn_minnew", int, 30),
     "FK_CONS_KNN_DIMS": ("cons_knn_dims", int, 16),
     "FK_CONS_FOLD_THR": ("cons_fold_thr", float, 0.9),
-    "FK_CONS_SCORR": ("cons_scorr", float, 1.0),
+    "FK_CONS_SCORR": ("cons_scorr", float, 0.93),
     "FK_CONS_OFF_THR": ("cons_off_thr", float, 0.0),
 }
 
@@ -104,6 +148,8 @@ def kwargs_from_args(a):
     """(mode, strip_kw, knn_kw) from a parsed namespace add_consolidate_args filled."""
     strip_kw = dict(max_dist=a.cons_max_dist, gmin=a.cons_gmin, gmax=a.cons_gmax,
                     chan_uniform=a.cons_chan, margin=a.cons_margin,
+                    own_q=a.cons_own_q, tgt_q=a.cons_tgt_q, tgt_scale=a.cons_tgt_scale,
+                    twin_thr=(a.cons_twin if a.cons_twin > 0 else None),
                     tpl_cap=a.cons_tpl_cap, min_tpl=a.cons_min_tpl)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
@@ -166,11 +212,14 @@ def _chan_worst(X, t):
 
 
 def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
-               chan_uniform=0.0, margin=0.85, tpl_cap=1024,
-               min_tpl=8, exclude=(0,), block=20000, rng=None, log=None):
+               chan_uniform=0.0, margin=0.85, own_q=0.90, tgt_q=0.90,
+               tgt_scale=1.25, twin_thr=0.93, tpl_cap=1024, min_tpl=8, exclude=(0,),
+               block=20000, rng=None, log=None):
     """One template-strip pass over the spikes `idx` (absolute indices; one
     chunk).  Returns (labels, n_moved): labels is a full-length copy with the
-    moved spikes reassigned to the claiming template's cluster."""
+    moved spikes reassigned to the claiming template's cluster.  Thresholds
+    are per-cluster quantiles of each cluster's own-spike distances (see the
+    module preamble); max_dist survives as the hard cap on any claim."""
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     lab = labels[idx]
@@ -196,6 +245,16 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     # and the spike's own column IS the margin denominator D_own.
     tids = sorted(terms)
     col = {c: i for i, c in enumerate(tids)}
+    # Twin gate: pair eligibility by SHAPE (normalized best-lag correlation of
+    # the medians) — see the module preamble.  True = the pair may trade.
+    C = len(tids)
+    pair_ok = np.ones((C + 1, C), bool)                # row C = spikes with no own template
+    if twin_thr is not None:
+        meds = [terms[c]["flat"].reshape(terms[c]["shape"]) for c in tids]
+        for i in range(C):
+            for j in range(C):
+                if i != j and _ncorr(meds[i], meds[j]) >= twin_thr:
+                    pair_ok[i, j] = False
     Wmat = np.stack([terms[c]["w"] for c in tids])              # (C, P)
     WTm = np.stack([terms[c]["wT"] for c in tids])              # (C, P)
     Ev = np.array([terms[c]["E"] for c in tids])
@@ -205,6 +264,32 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     best_d = np.full(idx.size, np.inf)
     best_t = np.full(idx.size, -1, int)
     own_col = np.array([col.get(int(c), -1) for c in lab])
+
+    # Pass 1 — every spike's distance to its OWN template, then the
+    # per-cluster calibration quantiles (see the module preamble).
+    d_own_all = np.full(idx.size, np.inf)
+    for s in range(0, idx.size, block):
+        r = np.arange(s, min(s + block, idx.size))
+        oc = own_col[r]
+        has_own = np.flatnonzero(oc >= 0)
+        if has_own.size == 0:
+            continue
+        X = np.asarray(get_waves(idx[r[has_own]]), float).reshape(has_own.size, -1)
+        cols = oc[has_own]
+        A2 = np.einsum("ij,ij->i", X * X, Wmat[cols])
+        Bo = np.einsum("ij,ij->i", X, WTm[cols])
+        qo = np.maximum(A2 - 2.0 * Bo + Ev[cols], 0.0)
+        d_own_all[r[has_own]] = np.sqrt(qo / Wv[cols]) / Dv[cols]
+    floor_c = np.full(C, np.inf)                       # own_q quantile per cluster
+    radius_c = np.zeros(C)                             # tgt_q quantile per cluster, capped
+    for c, i in col.items():
+        dc = d_own_all[lab == c]
+        dc = dc[np.isfinite(dc)]
+        if dc.size:
+            floor_c[i] = float(np.quantile(dc, own_q))
+            radius_c[i] = min(tgt_scale * float(np.quantile(dc, tgt_q)), max_dist)
+
+    # Pass 2 — claims.
     for s in range(0, idx.size, block):
         r = np.arange(s, min(s + block, idx.size))
         X = np.asarray(get_waves(idx[r]), float).reshape(r.size, -1)
@@ -215,9 +300,11 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         g = B / Ev[None, :]
         oc = own_col[r]
         has_own = oc >= 0
-        d_own = np.full(r.size, np.inf)
-        d_own[has_own] = D[np.flatnonzero(has_own), oc[has_own]]
-        ok = (max_dist >= D) & (g >= gmin) & (g <= gmax) & (margin * d_own[:, None] >= D)
+        d_own = d_own_all[r]
+        own_floor = np.where(has_own, floor_c[np.maximum(oc, 0)], 0.0)
+        ok = ((radius_c[None, :] >= D) & (g >= gmin) & (g <= gmax)
+              & (margin * d_own[:, None] >= D) & (d_own >= own_floor)[:, None])
+        ok &= pair_ok[np.where(has_own, oc, C)]                 # twin pairs never trade
         ok[np.flatnonzero(has_own), oc[has_own]] = False        # own column never claims
         if chan_uniform > 0.0 and ok.any():
             for ci in range(len(tids)):
@@ -240,8 +327,8 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
 
 # ── the fiber-refine knn-peel, on a chunk subset with arbitrary label ids ───
 def knn_pass(get_waves, labels, idx, *, k=20, thr=0.3, minref=50, minnew=30,
-             fold_thr=0.9, scorr=1.0, off_thr=None, dims=16, exclude=(0,),
-             next_id=None, pca_cap=50000, rng=None, log=None):
+             fold_thr=0.9, scorr=0.93, off_thr=None, dims=16, exclude=(0,),
+             next_id=None, pca_cap=50000, realigned=False, rng=None, log=None):
     """One knn-peel pass (fiber_refine._knn_apply) over the spikes `idx`.
     Returns (labels, n_moved, n_new, next_id): peeled buckets that fold move
     to their winner; buckets distinct from both sides become NEW clusters,
@@ -262,7 +349,7 @@ def knn_pass(get_waves, labels, idx, *, k=20, thr=0.3, minref=50, minnew=30,
     lab = np.array([dense[int(c)] for c in lab_orig], int)
 
     waves = np.asarray(get_waves(sub), np.float32)
-    rw = fl.realign(waves)
+    rw = waves if realigned else fl.realign(waves)
     X = rw.reshape(len(rw), -1)
     X = X - X.mean(0)
     fit = X if len(X) <= pca_cap else X[rng.choice(len(X), pca_cap, replace=False)]
@@ -305,13 +392,20 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     tot = dict(strip=0, knn=0, new=0)
     for ch in np.unique(chunk_ids[chunk_ids >= 0]):
         idx = np.flatnonzero(chunk_ids == ch)
+        # One realignment per chunk, shared by both passes (see ALIGNMENT above).
+        aligned = fl.realign(np.asarray(get_waves(idx), float)).astype(np.float32)
+
+        def aw(ix, _idx=idx, _al=aligned):
+            return _al[np.searchsorted(_idx, np.asarray(ix))]
+
         if mode in ("strip", "both"):
-            labels, n = strip_pass(get_waves, labels, idx, exclude=exclude,
+            labels, n = strip_pass(aw, labels, idx, exclude=exclude,
                                    rng=rng, **(strip_kw or {}))
             tot["strip"] += n
         if mode in ("knn", "both"):
-            labels, n, k_new, next_id = knn_pass(get_waves, labels, idx, exclude=exclude,
-                                                 next_id=next_id, rng=rng, **(knn_kw or {}))
+            labels, n, k_new, next_id = knn_pass(aw, labels, idx, exclude=exclude,
+                                                 next_id=next_id, realigned=True,
+                                                 rng=rng, **(knn_kw or {}))
             tot["knn"] += n
             tot["new"] += k_new
     if log:

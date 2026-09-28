@@ -115,21 +115,58 @@ def get_waves(idx):
 
 new, moved = fc.strip_pass(get_waves, LAB, np.flatnonzero(CHUNK == 0),
                            exclude=(0,), margin=0.85, rng=rng)
-check((new[planted] == 3).all(), "strip moves every planted B spike from cluster 2 to 3")
+# The calibrated radius (tgt_q=0.90) claims spikes that fit the target like
+# its own core — and ~10% of the target's OWN spikes sit outside that radius
+# by construction, so a statistically exchangeable contaminant moves at ~90%,
+# never at 100%.  All movers must land on 3; nothing may go elsewhere.
+n_pl = int((new[planted] == 3).sum())
+check(n_pl >= 17 and set(new[planted].tolist()) <= {2, 3},
+      f"strip moves the planted B spikes to 3 ({n_pl}/20; rest stay, none mislabelled)")
 core = np.arange(40, 40 + 180)
 check((new[core] == 2).sum() >= 175, "cluster 2's own A core stays (margin protects it)")
 check((new[LAB == 0] == 0).all(), "reserve spikes never move")
 check((new[LAB == 4] == 4).all(), "the 0.55·A look-alike keeps its core against A's template")
 
+twin_a = spikes(TPL_A, 150, noise=8.0, seed=11)
+twin_b = spikes(TPL_A * 0.97, 150, noise=8.0, seed=12)          # near-identical sibling
+TW = np.concatenate([twin_a, twin_b]).astype(np.float32)
+TL = np.concatenate([np.full(150, 2), np.full(150, 3)])
+tw_new, tw_moved = fc.strip_pass(lambda ix: TW[np.asarray(ix)], TL, np.arange(300),
+                                 exclude=(0,), rng=rng)
+check(tw_moved == 0, "calibration + twin gate: near-identical twins trade nothing at defaults")
+
+# Energy ladder: a cluster spanning amplitudes 0.3–1.3 of A next to a pure
+# 0.35·A sibling — the amplitude-sensitive D wants to hand the big cluster's
+# low-energy tail to the sibling; the twin gate (same shape at some scale)
+# must refuse the pair, and demonstrably WOULD trade without it.
+r13 = np.random.default_rng(13)
+lad = (TPL_A[None] * r13.uniform(0.3, 1.3, (200, 1, 1))
+       + r13.normal(0, 2.0, (200, NSAMP, NCH)))
+sib = spikes(TPL_A, 120, scale=0.35, noise=1.5, seed=14)
+LW = np.concatenate([lad, sib]).astype(np.float32)
+LL = np.concatenate([np.full(200, 2), np.full(120, 3)])
+def lgw(ix):
+    return LW[np.asarray(ix)]
+lad_new, lad_moved = fc.strip_pass(lgw, LL, np.arange(320), exclude=(0,), rng=rng)
+check(lad_moved == 0, "twin gate: an energy ladder never sheds its tail to a scaled sibling")
+lad_off, lad_off_moved = fc.strip_pass(lgw, LL, np.arange(320), exclude=(0,),
+                                       own_q=0.5, tgt_q=1.0, twin_thr=None, rng=rng)
+check(lad_off_moved > 0, "…and without the gate the ladder DOES shed (the gate is load-bearing)")
+
 nomargin, _ = fc.strip_pass(get_waves, LAB, np.flatnonzero(CHUNK == 0),
-                            exclude=(0,), margin=1e9, rng=rng)
+                            exclude=(0,), margin=1e9, own_q=0.0, tgt_q=1.0, twin_thr=None, rng=rng)
 check((nomargin[LAB == 4] == 2).any(), "…and WITHOUT the margin A does strip-mine it "
                                        "(the margin is load-bearing)")
 
 both, tot = fc.consolidate(get_waves, LAB, CHUNK, mode="strip", exclude=(0,),
                            strip_kw=dict(margin=0.85), log=None)
-check((both[LAB == 5] == 5).all() and (both[planted] == 3).all(),
-      "driver: chunk 1's B population never trades with chunk 0's")
+check((both[LAB == 5] == 5).all(), "driver: chunk 1's B population never trades with chunk 0's")
+# The driver realigns each chunk to its MIXED median; a few planted B spikes
+# keep residual jitter against that A-dominated reference and score 0.5–0.7,
+# just over the Klusters-default radius.  Most move, none mislabel; the
+# stragglers are the price of the conservative default, tunable per run.
+check(int((both[planted] == 3).sum()) >= 15 and set(both[planted]) <= {2, 3},
+      "driver: planted contamination moves (conservative default; no mislabels)")
 check(tot["strip"] == int((both != LAB).sum()), "driver: reported strip count matches the moves")
 
 # ── 3. knn behaviour through the wrapper ─────────────────────────────────────
