@@ -66,11 +66,13 @@ try:
     from . import fiber_pca as _fpca
     from . import config as cfgmod
     from . import fiber_link_core as flc
+    from . import fiber_consolidate as fcons
 except ImportError:
     import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy
     import fiber_pca as _fpca
     import config as cfgmod
     import fiber_link_core as flc
+    import fiber_consolidate as fcons
 
 
 # ── knob resolution: default <- global fiber-kit.yaml (FK_ALINK_*) <- FK_* env <- CLI ──
@@ -336,6 +338,7 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ,
                         default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    fcons.add_consolidate_args(ap, gcfg)      # per-spike strip+knn cleanup of the linked cells (default off)
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 
@@ -514,16 +517,49 @@ def main():
     m = child > 0
     new[m] = parent[child[m] - 1]
 
+    ncells = nxt - 1
+    if a.cons_mode != "off":
+        # ── per-spike consolidation of the linked cells (fiber_consolidate) ──
+        # The link moves whole atoms; a per-spike pass takes back what an atom
+        # carried in.  Per chunk (a cell drifts, so it is represented by its own
+        # within-chunk spikes); chunk per spike comes from the spike's atom, so
+        # cluster 0 and the promoted unassigned cell (no chunk-local atoms) sit
+        # out.  A per-atom parent map cannot express per-spike moves, so every
+        # (source atom -> destination cell) bucket becomes its own child atom —
+        # exactly how the Klusters strip parks its products.
+        mode, strip_kw, knn_kw = fcons.kwargs_from_args(a)
+        chunk_by_atom = np.full(max(n_atoms, 1), -1, np.int64)
+        for at, ck in chunk_of_atom.items():
+            if 1 <= at <= n_atoms:
+                chunk_by_atom[at - 1] = ck
+        chunk_sp = np.where(child > 0, chunk_by_atom[np.maximum(child, 1) - 1], -1)
+        new2, _ = fcons.consolidate(lambda ix: np.asarray(spk[np.asarray(ix)], np.float32),
+                                    new, chunk_sp, mode=mode, exclude=(0,),
+                                    strip_kw=strip_kw, knn_kw=knn_kw,
+                                    log=lambda msg: print(f"[anchor-link] {msg}"),
+                                    tag="anchor-link consolidate")
+        moved = new2 != new
+        if moved.any():
+            key = np.stack([child[moved], new2[moved]], 1)
+            uk, inv = np.unique(key, axis=0, return_inverse=True)
+            child[moved] = n_atoms + 1 + inv
+            n_atoms += len(uk)
+            parent = np.concatenate([parent, uk[:, 1].astype(np.int64)])
+            print(f"[anchor-link] consolidation: {int(moved.sum())} spike(s) re-homed via "
+                  f"{len(uk)} new child atom(s)")
+        new = new2
+        ncells = int(new.max())
+
     outp = nio.session_path(base, "clu", elec, variant=a.clu_method, tag=a.out_tag)
     nio.write_clu_file(outp, new)
     n_multi = sum(1 for v in groups.values() if len(v) > 1)
-    print(f"[anchor-link] {n_atoms} atoms -> {nxt - 1} cells ({n_multi} multi-fragment chains) "
+    print(f"[anchor-link] {n_atoms} atoms -> {ncells} cells ({n_multi} multi-fragment chains) "
           f"| wrote {os.path.basename(outp)}")
     if a.hierarchy:
         nio.write_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.out_tag), child)
         nio.write_clu_file(nio.session_path(base, "clp", elec, variant=a.clu_method, tag=a.out_tag),
                            parent, n_clusters=n_atoms)      # header = nChildren, as klusters writes it
-        print(f"[anchor-link] hierarchy: {n_atoms} children under {nxt - 1} fibers | wrote .clc + .clp")
+        print(f"[anchor-link] hierarchy: {n_atoms} children under {ncells} fibers | wrote .clc + .clp")
 
 
 if __name__ == "__main__":

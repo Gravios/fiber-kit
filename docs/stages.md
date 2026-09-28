@@ -469,6 +469,62 @@ Positional: `session`, `group`
 
 ## Alternative / drift linkers
 
+### `fiber-anchor-link`
+
+Link fiber-session fragments across chunks, SEEDED by the overlap anchors (links established from
+the same physical spikes in the chunk overlap, correct by construction) and gated on a null
+calibrated from the session itself: within-chunk pairs are different cells by construction and set
+the floor at the requested false-positive rate.  Gates run on the candidate pool BEFORE
+mutual-nearest-neighbour selection; writes .clu plus the .clc/.clp hierarchy.
+
+Positional: `args`
+
+| flag | default | description |
+|---|---|---|
+| `--channels` | — | override: comma-separated physical channels |
+| `--ntotal` | — | override: total channels in the recording |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--clu-method` | `stderiv` | fragment .clu feature space (before the group) |
+| `--clu-stage` | `fiber_session` | fragment .clu stage tag |
+| `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
+| `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
+| `--fibers` | — | path to the .fibers npz carrying the overlap anchors (default: derive from --clu-method/--clu-stage) |
+| `--out-stage` (`--out-tag`) | `anchor_linked` | post-fiber stage tag of the output .clu (single token) |
+| `--hierarchy` | `1` | 1 = also write the .clc/.clp sibling hierarchy |
+| `--promote-noise` | `1` | 1 (default) = treat cluster 0 as a real cell (its own atom + cell); 0 = leave it as noise |
+| `--artifact-clu` | — | per-spike artifact mask in .clu form (nonzero = artifact), the SAME mask given to fiber-session --exclude-clu. Masked spikes are withheld from --promote-noise and left in cluster 0, so a promoted cell is the genuine unassigned population only. |
+| `--chunk-min` | — | chunk length (min); default from yaml or 12 |
+| `--seed` | `0` |  |
+| `--prim-frac` | `0.15` | FK_ALINK_PRIM_FRAC (default 0.15) |
+| `--z` | `0.5` | FK_ALINK_Z (default 0.5) |
+| `--win` | `12` | FK_ALINK_WIN (default 12) |
+| `--slide` | `2` | FK_ALINK_SLIDE (default 2) |
+| `--iou-thr` | `0.3` | FK_ALINK_IOU_THR (default 0.3) |
+| `--target-fpr` | `2.0` | FK_ALINK_TARGET_FPR (default 2.0) |
+| `--rate-dev` | `2.0` | FK_ALINK_RATE_DEV (default 2.0) |
+| `--hi-nspk` | `300` | FK_ALINK_HI_NSPK (default 300) |
+| `--max-gap` | `4` | FK_ALINK_MAX_GAP (default 4) |
+| `--spk-cap` | `1500` | FK_ALINK_SPK_CAP (default 1500) |
+| `--warp-thr` | `0.0` | FK_ALINK_WARP_THR (default 0.0) |
+| `--amp-thr` | `0.85` | FK_ALINK_AMP_THR (default 0.85) |
+| `--min-frag` | `15` | FK_ALINK_MIN_FRAG (default 15) |
+| `--feat-lag` | `0` | FK_ALINK_FEAT_LAG (default 0) |
+| `--cons-mode` | `off` | FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
+| `--cons-max-dist` | `0.5` | FK_CONS_MAX_DIST (default 0.5) |
+| `--cons-gmin` | `0.0` | FK_CONS_GMIN (default 0.0) |
+| `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
+| `--cons-chan` | `0.0` | FK_CONS_CHAN (default 0.0) |
+| `--cons-margin` | `0.85` | FK_CONS_MARGIN (default 0.85) |
+| `--cons-tpl-cap` | `1024` | FK_CONS_TPL_CAP (default 1024) |
+| `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
+| `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
+| `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
+| `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
+| `--cons-knn-minnew` | `30` | FK_CONS_KNN_MINNEW (default 30) |
+| `--cons-knn-dims` | `16` | FK_CONS_KNN_DIMS (default 16) |
+| `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
+| `--cons-scorr` | `1.0` | FK_CONS_SCORR (default 1.0) |
+| `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
 ### `fiber-backbone-link`
 
 Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto.
