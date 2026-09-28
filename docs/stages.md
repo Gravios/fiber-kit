@@ -382,6 +382,10 @@ Positional: `session`, `group`
 | `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
 | `--cons-chan` | `0.0` | FK_CONS_CHAN (default 0.0) |
 | `--cons-margin` | `0.85` | FK_CONS_MARGIN (default 0.85) |
+| `--cons-own-q` | `0.9` | FK_CONS_OWN_Q (default 0.9) |
+| `--cons-tgt-q` | `0.9` | FK_CONS_TGT_Q (default 0.9) |
+| `--cons-tgt-scale` | `1.25` | FK_CONS_TGT_SCALE (default 1.25) |
+| `--cons-twin` | `0.93` | FK_CONS_TWIN (default 0.93) |
 | `--cons-tpl-cap` | `1024` | FK_CONS_TPL_CAP (default 1024) |
 | `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
@@ -390,7 +394,7 @@ Positional: `session`, `group`
 | `--cons-knn-minnew` | `30` | FK_CONS_KNN_MINNEW (default 30) |
 | `--cons-knn-dims` | `16` | FK_CONS_KNN_DIMS (default 16) |
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
-| `--cons-scorr` | `1.0` | FK_CONS_SCORR (default 1.0) |
+| `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
 | `--profile` | `default` | fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: 'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline. — choices: `default`, `recommended` |
 | `--off-n-ref` | — | SNR-adaptive offset gate: spike count at which --off-thr applies as-is; loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr. |
@@ -515,6 +519,10 @@ Positional: `args`
 | `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
 | `--cons-chan` | `0.0` | FK_CONS_CHAN (default 0.0) |
 | `--cons-margin` | `0.85` | FK_CONS_MARGIN (default 0.85) |
+| `--cons-own-q` | `0.9` | FK_CONS_OWN_Q (default 0.9) |
+| `--cons-tgt-q` | `0.9` | FK_CONS_TGT_Q (default 0.9) |
+| `--cons-tgt-scale` | `1.25` | FK_CONS_TGT_SCALE (default 1.25) |
+| `--cons-twin` | `0.93` | FK_CONS_TWIN (default 0.93) |
 | `--cons-tpl-cap` | `1024` | FK_CONS_TPL_CAP (default 1024) |
 | `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
@@ -523,7 +531,7 @@ Positional: `args`
 | `--cons-knn-minnew` | `30` | FK_CONS_KNN_MINNEW (default 30) |
 | `--cons-knn-dims` | `16` | FK_CONS_KNN_DIMS (default 16) |
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
-| `--cons-scorr` | `1.0` | FK_CONS_SCORR (default 1.0) |
+| `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
 ### `fiber-backbone-link`
 
