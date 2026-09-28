@@ -51,7 +51,7 @@ Positional: `session`, `group`
 | `--chunk-min` (`--chunk-minutes`) | `12.0` |  |
 | `--overlap-min` | `4.0` |  |
 | `--min-group` | `200` | COARSE min spikes/fiber (for linking) |
-| `--fine-algo` (`--fine-method`) | `gmm` | choices: `gmm`, `rkk`, `fiber`, `none` |
+| `--fine-algo` (`--fine-method`) | `rkk` | per-fiber fine clusterer: rkk (default, masked-EM KlustaKwik with per-cluster realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the coarse cluster whole) — choices: `gmm`, `rkk`, `fiber`, `none` |
 | `--rkk-dims` | `6` |  |
 | `--rkk-max` | `50` |  |
 | `--rkk-realign` | flag (off) | interleave rkk (CEM) with per-cluster realignment (per-step; default on) |
@@ -76,6 +76,8 @@ Positional: `session`, `group`
 | `--resplit-detrend-min-n` | `100` | skip the detrend below this many spikes -- the axis is a covariance estimate and is unreliable on small groups |
 | `--cfiber-gate` | flag (off) | veto Block-A fragment merges whose affine-invariant cfiber shape disagrees beyond the per-chunk within-fiber null (precision gate; threshold self-calibrated at --cfiber-q) |
 | `--cfiber-q` | `0.9` | quantile of the within-fiber split-half cfiber null used as the --cfiber-gate veto threshold |
+| `--off-thr` | `0.0` | inter-channel-TIMING co-veto on Block-A fragment merges: refuse a footprint-correlation merge whose two fibers' RAW-template inter-channel offsets disagree by more than this (xcorr LAG samples, ~0.2-0.3; NOT the trough ~1.0). Reads .spk.standard for raw templates (stderiv timing is channel-mixed); inert if that file is absent. FK_SESSION_OFF_THR. 0 = OFF (default) |
+| `--off-amp-frac` | `0.3` | channels below this fraction of the dominant peak-to-peak carry no reliable timing for --off-thr. FK_SESSION_OFF_AMP_FRAC |
 | `--merge-algo` (`--merge-method`) | `template` | choices: `template`, `sliding`, `profile` |
 | `--sliding-nwin` | `14` |  |
 | `--profile-thr` | — | profile-merge direction-distance threshold; default = auto same-neuron floor |
@@ -136,12 +138,18 @@ Positional: `session`, `group`
 | `--no-link` | flag (off) |  |
 | `--n-grid` | `40` |  |
 | `--method` | `stderiv` | extraction method tag in the .fibers filename |
+| `--out-variant` | — | ALSO write .clu/.clc/.clp under this variant token, in addition to the --method-named copies. READS are unaffected (the .pca basis and .spk still resolve under --method), so an alias like stderiv_C5_D34 can name a feature space without needing its own basis or waveform file. |
+| `--emit-pca` | flag (off) | with --emit-fet: also write <base>.pca.<out-variant or method>.<elec>, the basis the .fet is the projection of, so Klusters can realign/reproject in that space |
+| `--emit-fet` | flag (off) | write <base>.fet.<out-variant or method>.<elec> -- the FULL-WIDTH session-wide projection on the global basis (the feature space the fine split used, before its per-chunk reduction), so Klusters can display it. |
+| `--feat-lag` | `0` | FK_SESSION_FEAT_LAG. >0 = fine-split shape features become PC1 sampled at -N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3. 0 = classic. |
+| `--feat-lag-pc2` | `1` | with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only |
+| `--exclude-clu` | — | per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0. |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the fine-split shape features and use a per-call local SVD (legacy behaviour) |
 | `--clu-stage` | `fiber_session` | post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] (default 'fiber_session'); pass --clu-stage '' for an untagged .clu |
 | `--emit-hierarchy` / `--no-emit-hierarchy` | flag (on) | emit the .clu/.clc/.clp microfiber triple (atoms = pre-link fine fragments, fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. --no-emit-hierarchy writes just the flat .clu (legacy). Ignored with --out. |
 | `--gpu` | flag (off) | run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra) |
 | `--jobs` (`-j`) | `1` | parallel worker processes over chunks (default 1 = serial; chunks are independent) |
-| `--feature-align` | — | feature-building alignment: xcorr (default) or centroid (pure, no refine -- adds the trough-position-vs-asymmetry structure to the clustering/linking features). Does NOT touch committing alignment or fiber-realign. Overrides the FIBER_ALIGN env var. — choices: `xcorr`, `centroid` |
+| `--feature-align` | — | feature-building alignment: xcorr (default), centroid (pure, no refine -- adds the trough-position-vs-asymmetry structure to the clustering/linking features), or off (skip the sub-sample align entirely; features are built from the windows exactly as extracted). Does NOT touch committing alignment or fiber-realign. Overrides the FIBER_ALIGN env var. — choices: `xcorr`, `centroid`, `off` |
 | `--subsample` / `--no-subsample` | flag (off) | enable (--subsample) or disable (--no-subsample) realign's per-spike sub-sample (parabolic) refine in the feature build; default leaves the FIBER_SUBSAMPLE env var / lever untouched (off). Reaches pool workers. |
 | `--out` | — |  |
 ### `fiber-realign`
@@ -170,6 +178,7 @@ Positional: `session`, `group`
 | `--fil` | — | filtered signal path (default <base>.fil) |
 | `--variants` | — | comma list of feature spaces to refresh from .fil (default: standard + stderiv if present). Each is re-derived from the re-extracted raw window: standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the session's own spikeDetection.channelGroups[N].sdiffPairs pattern (partner map / reference sets); then projected onto its .pca |
 | `--out-stage` (`--out-tag`) | `""` | stage tag for committed outputs (default: empty -> overwrite the canonical .res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned |
+| `--variant` | `""` | feature variant the .clu/.spk/.fet adhere to (e.g. stderiv_C5): drives which .spk is aligned and which .fet is refreshed, OVERRIDING the --clu-name inference. The pipeline hard-codes 'stderiv' in the clu path, so a custom-sdiffPairs session (stderiv_C5) needs this to name its real variant instead of leaning on family-matching. The .res stays the single shared copy (resolve_any). (FK_REALIGN_VARIANT) |
 | `--out-variant` | — | variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; falls back to standard). There is one .res/.clu under this variant; .spk/.fet are written per feature space in --variants (standard raw, stderiv transform) |
 | `--emit-clu` | flag (off) | re-emit the (label-unchanged) clu next to the committed .res/.spk/.fet so the set opens in Klusters as a unit (default on) |
 | `--no-emit-clu` | flag (on) | do NOT write the clu. Use when the input --clu is a stage-tagged clu but the outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE .clu.<variant>.<group> with this stage's labels. The stage clu already exists and its labels are unchanged, so skipping the write keeps the base over-cluster intact. |
@@ -252,7 +261,7 @@ Positional: `session`, `group`
 | `--knn-minnew` | `30` |  |
 | `--knn-dims` | `16` |  |
 | `--fold-thr` | `0.9` | non-normalised median-xcorr above which a peeled bucket is folded (else kept as new) |
-| `--fine-algo` (`--fine-method`) | `gmm` | method for the initial fine sort when no --in-clu is given — choices: `gmm`, `fiber`, `none` |
+| `--fine-algo` (`--fine-method`) | `gmm` | method for the initial fine sort when no --in-clu is given (rkk = masked-EM KlustaKwik, the same cluster_chunk_fine backend fiber-session's --fine-algo uses) — choices: `gmm`, `rkk`, `fiber`, `none` |
 | `--chunk-minutes` (`--chunk-min`) | `0.0` | drift-aware mode: window the session into CORE chunks of this many minutes, refine each in its own whitened frame, and link fibers across windows by overlap-anchor; 0 = single whole-session pass (assumes stationary) |
 | `--chunk-overlap-minutes` | `1.0` | overlap between adjacent windows used for overlap-anchor linking (drift-aware mode) |
 | `--chunk-jobs` | `1` | parallel worker PROCESSES over chunks in drift-aware mode (default 1 = serial). Chunks are independent (own whitener + refine), so this is the main speedup for a chunked run; the cross-window link runs serially after. Workers re-open the .spkD/.fil memmaps, so memory is bounded. No effect in whole-session mode (--chunk-minutes 0). |
@@ -352,7 +361,7 @@ Positional: `session`, `group`
 | `--kk-min-size` | (from config) | kk linkage: KlustaKwik min cluster size for the within-group split. |
 | `--kk-big` | (from config) | kk linkage: atoms with >= this many spikes are 'big' (kept as grouping anchors); smaller atoms are folded into the nearest big atom by gated median-waveform cosine, or reserved if none matches. fiber_stochastic emits mostly tiny atoms, so this fold is what brings the singles into the fold and prevents the over-split. |
 | `--kk-fold-thr` | (from config) | kk linkage: a small atom folds into the nearest big atom only if their windowed median-waveform cosine >= this; else it goes to the reserve (id 1). This gate is the reject option a Mahalanobis assignment lacks -- a tiny fragment of a real cell folds in, a tiny distinct/noise atom stays out (holds zero false-merge). |
-| `--kk-strip` | (from config) | kk linkage: OPT-IN per-channel polynomial-coefficient contamination strip run after the split (0 = off, 1 = on). Fits each spike's per-channel waveform with a Legendre polynomial (smooths per-sample stderiv noise into stable coeffs) and moves robust-z outlier spikes to the reserve. Cleans most contaminated units while keeping clean units usable (raw per-sample strips cannot -- stderiv self-correlation ~0.6 drowns the signal). |
+| `--kk-strip` | (from config) | kk linkage: per-channel polynomial-coefficient contamination strip run after the split (0 = off, 1 = on; ON by default). Fits each spike's per-channel waveform with a Legendre polynomial (smooths per-sample stderiv noise into stable coeffs) and moves robust-z outlier spikes to the reserve. Cleans most contaminated units while keeping clean units usable (raw per-sample strips cannot -- stderiv self-correlation ~0.6 drowns the signal). |
 | `--kk-strip-deg` | (from config) | kk linkage: Legendre polynomial degree for the per-channel strip (validated: 4 best; 3 under-cleans, 5 over-strips). |
 | `--kk-strip-z` | (from config) | kk linkage: robust-z (MAD-scaled) threshold on the per-channel polynomial coefficients; a spike is a per-channel outlier if any coefficient exceeds this. |
 | `--kk-strip-maxbad` | (from config) | kk linkage: a spike is stripped to the reserve if it is a polynomial-coeff outlier on MORE than this many signal channels (0 = strictest). |
@@ -367,6 +376,22 @@ Positional: `session`, `group`
 | `--warp-resid-thr` | (from config) | single-channel warp-incongruity SUB-GATE (layers on warp_thr): among already-coherent pairs (corr>=0.85), veto if any ONE centroid-range channel's group-delay residual (Theil-Sen line) > this many samples -- a strong-channel-masked different source. g5 knee ~1.0. empty=off. |
 | `--off-thr-int` | (from config) | DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have stable offsets (~0.23) so off_thr=1.0 is inert; tighten to ~0.5. Needs raw .spk for cell-typing. empty=off (use off_thr). |
 | `--off-thr-pyr` | (from config) | DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak); ~1.0. Set BOTH off_thr_int and off_thr_pyr to enable the dual gate; mixed pairs use the stricter. empty=off. |
+| `--cons-mode` | `off` | FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
+| `--cons-max-dist` | `0.5` | FK_CONS_MAX_DIST (default 0.5) |
+| `--cons-gmin` | `0.0` | FK_CONS_GMIN (default 0.0) |
+| `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
+| `--cons-chan` | `0.0` | FK_CONS_CHAN (default 0.0) |
+| `--cons-margin` | `0.85` | FK_CONS_MARGIN (default 0.85) |
+| `--cons-tpl-cap` | `1024` | FK_CONS_TPL_CAP (default 1024) |
+| `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
+| `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
+| `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
+| `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
+| `--cons-knn-minnew` | `30` | FK_CONS_KNN_MINNEW (default 30) |
+| `--cons-knn-dims` | `16` | FK_CONS_KNN_DIMS (default 16) |
+| `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
+| `--cons-scorr` | `1.0` | FK_CONS_SCORR (default 1.0) |
+| `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
 | `--profile` | `default` | fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: 'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline. — choices: `default`, `recommended` |
 | `--off-n-ref` | — | SNR-adaptive offset gate: spike count at which --off-thr applies as-is; loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr. |
 | `--off-ceil` | `2.0` | cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee). |
@@ -458,12 +483,12 @@ Positional: `session`, `elec`
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--channels` | — | pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary |
 | `--out-stage` (`--out-tag`) | `backbone_linked` | post-fiber stage tag of the output .clu (single token) |
-| `--hierarchy` | flag (off) | also write the Klusters hierarchy siblings: .clc (per-spike CHILD id) + .clp (child->parent map), so the chains are browsable/undoable as parents of their fragments. Composes across passes: an input .clc is carried through, so the leaves stay the ORIGINAL fiber-session fragments however many times you re-link. |
 | `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness against |
 | `--gt-res` | — | reserved: .res for the GT (unused when GT shares the session res) |
 | `--spk-cap` | `600` | spikes per fragment for the template |
 | `--chunk-min` | — | chunk length (min); default from <session>.yaml or 12 |
 | `--seed` | `0` |  |
+| `--drift-fibers` | — | path to the .fibers npz carrying fiber-session's overlap-anchor drift transform (default: derive from --clu-method); only consulted when --drift=1 |
 | `--z` | `1.0` | FK_BBLINK_Z (default 1.0) |
 | `--win` | `8` | FK_BBLINK_WIN (default 8) |
 | `--slide` | `4` | FK_BBLINK_SLIDE (default 4) |
@@ -477,6 +502,9 @@ Positional: `session`, `elec`
 | `--max-gap` | `1` | FK_BBLINK_MAX_GAP (default 1) |
 | `--complexity-scale` | `0.0` | FK_BBLINK_CX_SCALE (default 0.0) |
 | `--min-snr-q` | `0.0` | FK_BBLINK_MIN_SNR_Q (default 0.0) |
+| `--drift` | `0` | FK_BBLINK_DRIFT (default 0) |
+| `--drift-recenter` | `1` | FK_BBLINK_DRIFT_RECENTER (default 1) |
+| `--hierarchy` | `1` | FK_BBLINK_HIERARCHY (default 1) |
 ### `fiber-xcorr-merge`
 
 Confidence-ordered Klusters roll-shift cosine merge (realign after each merge).
@@ -505,6 +533,11 @@ Positional: `session`, `elec`
 | `--spk-cap` | `300` | FK_XCM_SPK_CAP (default 300) |
 | `--complexity-scale` | `0.0` | FK_XCM_CX_SCALE (default 0.0) |
 | `--band-thr` | `0.5` | FK_XCM_BAND_THR (default 0.5) |
+| `--off-thr` | `0.0` | FK_XCM_OFF_THR (default 0.0) |
+| `--off-amp-frac` | `0.3` | FK_XCM_OFF_AMP_FRAC (default 0.3) |
+| `--emit-drift` | `1` | FK_XCM_EMIT_DRIFT (default 1) |
+| `--drift-k` | `6` | FK_XCM_DRIFT_K (default 6) |
+| `--drift-chunk-min` | `12.0` | FK_XCM_DRIFT_CHUNK_MIN (default 12.0) |
 ### `fiber-relink`
 
 Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).

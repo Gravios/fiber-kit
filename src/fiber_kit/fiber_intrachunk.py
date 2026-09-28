@@ -42,9 +42,11 @@ def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    from . import fiber_consolidate as fcons
     from .config import IntrachunkConfig
 except ImportError:
     import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    import fiber_consolidate as fcons
     from config import IntrachunkConfig
 
 try:
@@ -919,6 +921,7 @@ def main():
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     IntrachunkConfig.add_arguments(ap)        # gate/threshold knobs (CLI > env > <session>.yaml > default)
+    fcons.add_consolidate_args(ap)            # per-spike strip+knn cleanup of the final labels (default off)
     ap.add_argument("--profile", choices=("default", "recommended"), default="default",
                     help="fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: "
                          "'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, "
@@ -987,8 +990,21 @@ def main():
         """Write the result.  With a source triple, PRESERVE+re-parent atoms so the intrachunk
         merge lands in the hierarchy atomically with link (parent owns its merged set of children,
         unmergeable via FiberHierarchy.split_parent).  intrachunk is per-chunk, so an atom whose
-        spikes straddle a chunk boundary is SPLIT into per-chunk children first -- each child then
-        sits in exactly one unit, and the source atom remains recoverable for diagnosis."""
+        spikes straddle a chunk boundary is SPLIT into per-chunk children first -- and the child
+        key below also carries the FINAL UNIT, so each child sits in exactly one unit even under a
+        per-spike labelling ('ms' linkage, or the consolidation pass) while the source atom remains
+        recoverable for diagnosis."""
+        newids = np.asarray(newids, np.int64)
+        if a.cons_mode != "off":
+            # Per-spike cleanup of the finished labels: the Klusters template strip +
+            # knn-peel (fiber_consolidate), per chunk, reserves (0,1) untouched.
+            mode, strip_kw, knn_kw = fcons.kwargs_from_args(a)
+            chid_c = (res.astype(float) / sr / 60.0 / a.chunk_minutes).astype(np.int64)
+            newids, _ = fcons.consolidate(lambda ix: spkD[np.asarray(ix)].astype(np.float32),
+                                          newids, chid_c, mode=mode, exclude=(0, 1),
+                                          strip_kw=strip_kw, knn_kw=knn_kw, log=_log,
+                                          tag="intrachunk consolidate")
+            ncl = int(newids.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         if hier is None:
             nio.write_clu_file(out_path, newids, n_clusters=ncl); return
@@ -996,8 +1012,8 @@ def main():
         ch = np.asarray(hier.child, np.int64); nid = np.asarray(newids)
         chid_sp = (res.astype(float) / sr / 60.0 / a.chunk_minutes).astype(np.int64)
         nz = ch > 0
-        uk, inv = np.unique(np.stack([ch[nz], chid_sp[nz]], 1), axis=0, return_inverse=True)
-        newchild = np.zeros(len(ch), np.int64); newchild[nz] = inv + 1     # per-(atom,chunk) child
+        uk, inv = np.unique(np.stack([ch[nz], chid_sp[nz], nid[nz]], 1), axis=0, return_inverse=True)
+        newchild = np.zeros(len(ch), np.int64); newchild[nz] = inv + 1     # per-(atom,chunk,unit) child
         newpar = {}
         for cid in np.unique(newchild[newchild > 0]):
             sp = int(np.flatnonzero(newchild == cid)[0]); newpar[int(cid)] = int(nid[sp])
