@@ -435,6 +435,78 @@ FK_INTRA_BACKBONE_WARP:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay
                                   #   pushes the linker toward under-linking (collinear time-bands to rejoin by ISI) rather
                                   #   than trusting stderiv-similar anchors.  Set "" to fall back to the std-cos gate alone.
 
+# ----- fiber-consolidate : per-spike strip + knn cleanup (fiber-session / fiber-intrachunk / fiber-anchor-link) -----
+# The two per-spike curation moves (the Klusters waveform-template STRIP; the KNN split) as an opt-in pass
+# a host stage runs over its finished labels: fragment-level stages move whole atoms, so an atom carrying a
+# neighbour's spikes carries them into whichever unit it joins -- this pass takes them back out spike by
+# spike, per chunk, on chunk-realigned waves.  Moves land as NEW child atoms ((source atom -> destination)
+# buckets), so every move stays inspectable and revertible in Klusters.  The threshold knobs are SHARED by
+# the three host stages (they describe the metric, not the host); the MODE alone can be scoped per stage,
+# because the measured verdict is per LAYER (curated GT, session g6): at the fiber-session layer the strip
+# PURIFIES the over-split atoms (+0.7-1.0pp GT purity, fixed:broke 1.6-3.3 across the settings tried); on
+# curated-grade LINKED output it is net-negative at every setting tried (best 217 fixed vs 1,358 broken --
+# the curator's strips ran on curation-REALIGNED records, and the per-cell own-quantile outlier model
+# condemns legitimate burst/drift tails).  Keep it OFF after linking; enable it where the sort is still
+# over-split (fiber-session, pre-link intrachunk), which is what keeps the calibration honest.
+# IN THIS EXPERIMENTAL CONFIG the strip is ON for fiber-session (the measured win) and stays OFF for
+# the linkers; the exp pipeline's fiber-session picks FK_SESSION_CONS_MODE up automatically.
+FK_CONS_MODE:            "off"    # off | off/strip/knn/both.  Shared default for all three host stages.
+                                  #   strip = waveform-template strip only (the measured win); knn = fiber-
+                                  #   refine's KNN split; both = strip then knn.  knn at the session layer
+                                  #   measured net-NEGATIVE directed-vs-GT (+175 fixed / -371 broken) and
+                                  #   drags 'both' below strip-only -- prefer strip.
+FK_SESSION_CONS_MODE:    strip    # "" | off/strip/knn/both.  Stage-scoped override for fiber-session
+                                  #   ("" = inherit FK_CONS_MODE).  ON here: strip at the shared defaults
+                                  #   below measured +0.7pp GT purity (+1,727 fixed / -950 broken directed
+                                  #   moves) at the fiber-session layer on g6, and the gain COMPOUNDS
+                                  #   downstream: +1.3pp purity at the following intrachunk layer with ARI
+                                  #   unchanged (cleaner atoms make cleaner merges).
+FK_INTRA_CONS_MODE:      ""       # "" | as above, for fiber-intrachunk (pre-link units; strip only advised).
+FK_ALINK_CONS_MODE:      ""       # "" | as above, for fiber-anchor-link.  Net-negative on a curated-grade
+                                  #   sort -- keep off; treat knn kept-distinct buckets as an over-merge
+                                  #   AUDITOR (park + review), never a silent mover.
+FK_CONS_MAX_DIST:        0.5      # 0.5 | 0.4-0.6.  Absolute cap on the claim radius (the Klusters-dialog
+                                  #   default) over the calibrated per-cluster radius below.  The cap BINDS:
+                                  #   loosening to 0.6 measured net-negative on g6 (+2,637 fixed / -2,691
+                                  #   broken vs +2,233/-1,412 at 0.5, same quantiles) -- keep 0.5.
+FK_CONS_GMIN:            0        # 0 | 0-0.5.  Matched-gain lower bound on a claim (Klusters dialog).
+FK_CONS_GMAX:            10       # 10 | 2-10.  Matched-gain upper bound.
+FK_CONS_CHAN:            0        # 0 | 0 or 1.0-2.0.  Per-channel worst-distance uniformity gate; 0 = off.
+                                  #   Measured INERT on g6 (4,216 vs 4,220 moves at 1.5) -- leave off.
+FK_CONS_MARGIN:          0.85     # 0.85 | 0.60-0.95.  A claim needs D_target <= margin * D_own, so a template
+                                  #   cannot strip-mine an energy-level look-alike's core (load-bearing in the
+                                  #   test suite: without it the mining demonstrably happens).
+FK_CONS_OWN_Q:           0.90     # 0.90 | 0.75-0.99.  Strippable at D_own >= this quantile of the cluster's
+                                  #   OWN spike distances: a <=10% per-cell churn budget by construction.
+                                  #   Session-calibrated, replacing absolute floors (D_own median ~0.54 here;
+                                  #   absolute floors conflate noise level with misfit and moved 49% of the
+                                  #   session).  Lower = more purity at worse precision (g6 fiber-session
+                                  #   layer: 0.90 -> +1727/-950; 0.85 -> +2233/-1412; 0.80 -> +2660/-1895).
+FK_CONS_TGT_Q:           0.90     # 0.90 | 0.85-0.95.  Claim radius = TGT_SCALE x the TARGET's own-distance
+                                  #   quantile, capped at MAX_DIST.
+FK_CONS_TGT_SCALE:       1.25     # 1.25 | 1.0-1.5.  Out-of-sample allowance on the target radius (an
+                                  #   in-sample q90 radius rejects statistically exchangeable spikes).
+FK_CONS_TWIN:            0.93     # 0.93 | 0.85-0.97, 0 = off.  Template pairs shape-identical at some scale
+                                  #   (best-lag ncorr >= this) never trade: in an over-split sort they are one
+                                  #   neuron's energy levels awaiting a MERGE, and the amplitude-sensitive D
+                                  #   otherwise reshuffles a ladder's low tail onto its amplitude-matched
+                                  #   sibling.  Chain-checked on g6: 0 (off) buys ~+0.6pp more purity at the
+                                  #   NEXT layer but costs ARI and completeness there -- the amplitude
+                                  #   reshuffles blur the trajectories the linkers read.  Keep it on.
+FK_CONS_TPL_CAP:         1024     # 1024 | 256-4096.  Spikes per median template (evenly strided).
+FK_CONS_MIN_TPL:         8        # 8 | 5-20.  Below this many spikes a cluster carries no template.  It can
+                                  #   still be stripped FROM: sub-min fragments absorb whole (kk-fold
+                                  #   philosophy).
+FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
+FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
+FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.
+FK_CONS_KNN_MINNEW:      30       # 30 | 15-60.  knn pass: min spikes for a kept-distinct NEW cluster.
+FK_CONS_KNN_DIMS:        16       # 16 | 8-24.  knn pass: PCA dims of the realigned-waveform features.
+FK_CONS_FOLD_THR:        0.9      # 0.9 | 0.8-0.95.  knn pass: fold-back threshold (fiber-refine's).
+FK_CONS_SCORR:           0.93     # 0.93 | 0.90-1.0.  knn pass: fiber-refine's shape-distinctness twin guard.
+                                  #   1.0 disables it and measured 32,843 relabels vs 488 at 0.93 -- keep it.
+FK_CONS_OFF_THR:         0        # 0 | 0 or 0.2-0.3.  knn pass: inter-channel-timing co-veto (0 = off).
+
 # ----- fiber-link : cross-chunk link ---------------------------------------
 # ----- EXPERIMENTAL intrachunk gates (newest; left OFF in production fiber-kit.yaml) ---------
 # Newly-wired knobs: warp coherence + single-channel warp-incongruity SUB-gate + cell-type-aware

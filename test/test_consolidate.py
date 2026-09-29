@@ -169,7 +169,30 @@ check(int((both[planted] == 3).sum()) >= 15 and set(both[planted]) <= {2, 3},
       "driver: planted contamination moves (conservative default; no mislabels)")
 check(tot["strip"] == int((both != LAB).sum()), "driver: reported strip count matches the moves")
 
-# ── 3. knn behaviour through the wrapper ─────────────────────────────────────
+# ── 3. knob resolution: global yaml + stage-scoped mode override ─────────────
+import argparse  # noqa: E402
+
+for _k in [k for k in os.environ if k.startswith("FK_CONS_") or k.endswith("_CONS_MODE")]:
+    del os.environ[_k]                                  # the resolution below must see only the dict
+gy = {"FK_CONS_MODE": "strip", "FK_INTRA_CONS_MODE": "off", "FK_CONS_OWN_Q": "0.8"}
+p_shared = argparse.ArgumentParser(); fc.add_consolidate_args(p_shared, gy)
+p_intra = argparse.ArgumentParser(); fc.add_consolidate_args(p_intra, gy, stage="INTRA")
+p_sess = argparse.ArgumentParser(); fc.add_consolidate_args(p_sess, gy, stage="SESSION")
+check(p_shared.parse_args([]).cons_mode == "strip"
+      and p_shared.parse_args([]).cons_own_q == 0.8,
+      "FK_CONS_* in the global yaml reaches the parser defaults")
+check(p_intra.parse_args([]).cons_mode == "off",
+      "FK_<stage>_CONS_MODE overrides the shared mode for its own stage")
+check(p_sess.parse_args([]).cons_mode == "strip",
+      "a stage without a scoped key inherits the shared FK_CONS_MODE")
+check(p_intra.parse_args(["--cons-mode", "both"]).cons_mode == "both",
+      "CLI still beats every yaml key")
+p_bool = argparse.ArgumentParser()
+fc.add_consolidate_args(p_bool, {"FK_CONS_MODE": False})    # yaml parses a bare `off` as boolean
+check(p_bool.parse_args([]).cons_mode == "off",
+      "a bare yaml off (boolean False) reads as mode 'off'")
+
+# ── 4. knn behaviour through the wrapper ─────────────────────────────────────
 k_lab = LAB.copy()
 k_planted = np.arange(40 + 200, 40 + 200 + 15)                              # 15 true-B spikes...
 k_lab[k_planted] = 2                                                        # ...mislabelled into 2
