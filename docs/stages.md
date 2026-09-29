@@ -171,6 +171,7 @@ Positional: `session`, `group`
 | `--cons-agg-every` | `3` | FK_CONS_AGG_EVERY (default 3) |
 | `--cons-agg-minnew` | `30` | FK_CONS_AGG_MINNEW (default 30) |
 | `--cons-agg-vac` | `0` | FK_CONS_AGG_VAC (default 0) |
+| `--cons-tpl-align` | `0` | FK_CONS_TPL_ALIGN (default 0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
@@ -432,6 +433,7 @@ Positional: `session`, `group`
 | `--cons-agg-every` | `3` | FK_CONS_AGG_EVERY (default 3) |
 | `--cons-agg-minnew` | `30` | FK_CONS_AGG_MINNEW (default 30) |
 | `--cons-agg-vac` | `0` | FK_CONS_AGG_VAC (default 0) |
+| `--cons-tpl-align` | `0` | FK_CONS_TPL_ALIGN (default 0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
@@ -576,6 +578,7 @@ Positional: `args`
 | `--cons-agg-every` | `3` | FK_CONS_AGG_EVERY (default 3) |
 | `--cons-agg-minnew` | `30` | FK_CONS_AGG_MINNEW (default 30) |
 | `--cons-agg-vac` | `0` | FK_CONS_AGG_VAC (default 0) |
+| `--cons-tpl-align` | `0` | FK_CONS_TPL_ALIGN (default 0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
