@@ -108,6 +108,8 @@ _KNOBS = {
     "FK_CONS_TWIN": ("cons_twin", float, 0.93),
     "FK_CONS_TPL_CAP": ("cons_tpl_cap", int, 1024),
     "FK_CONS_MIN_TPL": ("cons_min_tpl", int, 8),
+    "FK_CONS_ITERS": ("cons_iters", int, 1),
+    "FK_CONS_CAP_AMP": ("cons_cap_amp", float, 0.0),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),
@@ -167,7 +169,8 @@ def kwargs_from_args(a):
                     chan_uniform=a.cons_chan, margin=a.cons_margin,
                     own_q=a.cons_own_q, tgt_q=a.cons_tgt_q, tgt_scale=a.cons_tgt_scale,
                     twin_thr=(a.cons_twin if a.cons_twin > 0 else None),
-                    tpl_cap=a.cons_tpl_cap, min_tpl=a.cons_min_tpl)
+                    tpl_cap=a.cons_tpl_cap, min_tpl=a.cons_min_tpl,
+                    iters=a.cons_iters, cap_amp=a.cons_cap_amp)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -231,12 +234,19 @@ def _chan_worst(X, t):
 def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
                chan_uniform=0.0, margin=0.85, own_q=0.90, tgt_q=0.90,
                tgt_scale=1.25, twin_thr=0.93, tpl_cap=1024, min_tpl=8, exclude=(0,),
-               block=20000, rng=None, log=None):
+               cap_amp=0.0, block=20000, rng=None, log=None):
     """One template-strip pass over the spikes `idx` (absolute indices; one
     chunk).  Returns (labels, n_moved): labels is a full-length copy with the
     moved spikes reassigned to the claiming template's cluster.  Thresholds
     are per-cluster quantiles of each cluster's own-spike distances (see the
-    module preamble); max_dist survives as the hard cap on any claim."""
+    module preamble); max_dist survives as the hard cap on any claim.
+
+    cap_amp makes that cap AMPLITUDE-AWARE: D is normalized by each template's
+    kernel RMS (denom), so with additive noise D_own scales as ~1/amplitude and
+    one fixed cap is a different absolute-residual bound per cluster — tight on
+    faint cells, loose on big ones.  cap_c = max_dist * (denom_med/denom_c)
+    ** cap_amp refers every cluster's cap to the chunk's median template
+    amplitude: 0 keeps the fixed cap, 1 caps a constant ABSOLUTE residual."""
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     lab = labels[idx]
@@ -299,12 +309,15 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         d_own_all[r[has_own]] = np.sqrt(qo / Wv[cols]) / Dv[cols]
     floor_c = np.full(C, np.inf)                       # own_q quantile per cluster
     radius_c = np.zeros(C)                             # tgt_q quantile per cluster, capped
+    cap_c = np.full(C, float(max_dist))
+    if cap_amp > 0.0 and C > 1:
+        cap_c = float(max_dist) * (float(np.median(Dv)) / Dv) ** float(cap_amp)
     for c, i in col.items():
         dc = d_own_all[lab == c]
         dc = dc[np.isfinite(dc)]
         if dc.size:
             floor_c[i] = float(np.quantile(dc, own_q))
-            radius_c[i] = min(tgt_scale * float(np.quantile(dc, tgt_q)), max_dist)
+            radius_c[i] = min(tgt_scale * float(np.quantile(dc, tgt_q)), float(cap_c[i]))
 
     # Pass 2 — claims.
     for s in range(0, idx.size, block):
@@ -407,6 +420,14 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     chunk_ids = np.asarray(chunk_ids)
     next_id = int(labels.max()) + 1
     tot = dict(strip=0, knn=0, new=0)
+    strip_kw = dict(strip_kw or {})
+    # The curator's strip is ITERATIVE: strip, re-template on the result,
+    # adjust the distance, strip again.  iters automates that loop — every
+    # round refits the templates AND the calibration quantiles on the updated
+    # membership, so each cluster's floor and radius tighten as it purifies
+    # (the per-cluster, amplitude-aware "adjusting the distance").  Rounds
+    # stop early once a chunk trades nothing.
+    strip_iters = max(1, int(strip_kw.pop("iters", 1)))
     for ch in np.unique(chunk_ids[chunk_ids >= 0]):
         idx = np.flatnonzero(chunk_ids == ch)
         # One realignment per chunk, shared by both passes (see ALIGNMENT above).
@@ -416,9 +437,12 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
             return _al[np.searchsorted(_idx, np.asarray(ix))]
 
         if mode in ("strip", "both"):
-            labels, n = strip_pass(aw, labels, idx, exclude=exclude,
-                                   rng=rng, **(strip_kw or {}))
-            tot["strip"] += n
+            for _ in range(strip_iters):
+                labels, n = strip_pass(aw, labels, idx, exclude=exclude,
+                                       rng=rng, **strip_kw)
+                tot["strip"] += n
+                if n == 0:
+                    break
         if mode in ("knn", "both"):
             labels, n, k_new, next_id = knn_pass(aw, labels, idx, exclude=exclude,
                                                  next_id=next_id, realigned=True,
