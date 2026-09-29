@@ -537,6 +537,7 @@ Positional: `args`
 | `--clu-method` | `stderiv` | fragment .clu feature space (before the group) |
 | `--clu-stage` | `fiber_session` | fragment .clu stage tag |
 | `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
+| `--frag-layer` | `atoms` | which layer of the source stage is the fragment layer: 'atoms' (default) prefers the .clc sibling -- the overlap anchors index .clc labels; 'units' reads the stage's FLAT .clu, so the linker consolidates the stage's UNITS (e.g. fiber-intrachunk output) instead of re-linking its atoms from scratch. An explicit --in-clu overrides both. — choices: `atoms`, `units` |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--fibers` | — | path to the .fibers npz carrying the overlap anchors (default: derive from --clu-method/--clu-stage) |
 | `--out-stage` (`--out-tag`) | `anchor_linked` | post-fiber stage tag of the output .clu (single token) |
