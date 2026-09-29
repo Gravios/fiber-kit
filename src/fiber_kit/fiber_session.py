@@ -58,6 +58,10 @@ try:
     from . import config as cfgmod
 except ImportError:
     import config as cfgmod
+try:
+    from . import fiber_consolidate as fcons
+except ImportError:
+    import fiber_consolidate as fcons
 from sklearn.mixture import GaussianMixture
 
 # ── splitting primitives now live in fiber_split ─────────────────────────────
@@ -1556,6 +1560,8 @@ def add_core_arguments(ap):
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
     ap.add_argument("--out", default=None)
+    fcons.add_consolidate_args(ap, _gcfg, stage="SESSION")   # per-spike strip+knn cleanup of the
+                                            # finished labels (default off; FK_SESSION_CONS_MODE scopes the mode)
     return ap
 
 
@@ -1588,6 +1594,27 @@ def build_cf(a, meth, cluster_basis):
         adapt_taumax=a.adapt_taumax, collision_flag=a.collision_flag,
         collision_gain=a.collision_gain, collision_shift=a.collision_shift,
         quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
+
+
+def _park_consolidated(clu, new_clu, child, parent, next_atom):
+    """Fold a consolidation pass's per-spike moves into the atom hierarchy.
+
+    Per-spike moves cannot be expressed in the atom->fiber map, so every moved
+    (source atom -> destination fiber) bucket becomes its own NEW child atom
+    under the destination fiber — the same parking fiber-anchor-link uses —
+    keeping each move a Klusters-inspectable, revertible atom.  `child` is
+    patched in place; `parent` (atom -> 1-based fiber id) gains the new atoms.
+    Returns (clu, next_atom) with the moves applied."""
+    new_clu = np.asarray(new_clu)
+    m = new_clu != np.asarray(clu)
+    if m.any():
+        key = np.stack([np.asarray(child)[m], new_clu[m]], 1)
+        uk, inv = np.unique(key, axis=0, return_inverse=True)
+        child[m] = next_atom + inv
+        for j, fid in enumerate(uk[:, 1]):
+            parent[int(next_atom + j)] = int(fid)
+        next_atom += len(uk)
+    return new_clu.astype(np.int32), next_atom
 
 
 def main():
@@ -1766,6 +1793,24 @@ def main():
                     parent[aid] = gid[(c, l)] + 1          # fiber id (+1; matches the .clu convention)
                 child[g] = aid
     clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
+
+    # ── optional per-spike consolidation (strip / knn) of the finished labels ──
+    #   Session fibers are chunk-local by construction (linking only NAMES them across
+    #   chunks), so the pass runs per chunk on core spikes, exactly as in the other host
+    #   stages.  Per-spike moves cannot be expressed in the atom->fiber map, so each
+    #   (source atom -> destination fiber) bucket becomes its own NEW child atom — the
+    #   same parking fiber-anchor-link uses — keeping every move Klusters-inspectable
+    #   and revertible.  The .fibers geometry stays pre-consolidation (diagnostic).
+    if a.cons_mode != "off":
+        cons_mode, strip_kw, knn_kw = fcons.kwargs_from_args(a)
+        chid = np.minimum(((res - t_min) / chunk_s).astype(np.int64), nchunks - 1)
+        chid = np.where(clu > 0, chid, -1)             # cluster 0 never joins a chunk
+        new_clu, _ctot = fcons.consolidate(
+            lambda ix: spk[np.asarray(ix)], clu.astype(np.int64), chid,
+            mode=cons_mode, exclude=(0,), strip_kw=strip_kw, knn_kw=knn_kw,
+            log=log, tag="consolidate")
+        clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom)
+
     if a.out:
         clu_out = a.out
         nio.write_clu_file(clu_out, clu)
