@@ -192,6 +192,76 @@ fc.add_consolidate_args(p_bool, {"FK_CONS_MODE": False})    # yaml parses a bare
 check(p_bool.parse_args([]).cons_mode == "off",
       "a bare yaml off (boolean False) reads as mode 'off'")
 
+# ── 3b. the curator's loop: iterative rounds + amplitude-aware cap ───────────
+# Iteration: strip, re-template on the result, strip again — every round
+# refits templates AND calibration quantiles, so the per-cluster distance
+# self-adjusts.  Rounds must accumulate (>= single pass) and stop early on a
+# converged fixture.
+it1, t1 = fc.consolidate(get_waves, LAB, CHUNK, mode="strip", exclude=(0,),
+                         strip_kw=dict(margin=0.85, iters=1), log=None)
+it2, t2 = fc.consolidate(get_waves, LAB, CHUNK, mode="strip", exclude=(0,),
+                         strip_kw=dict(margin=0.85, iters=2), log=None)
+check(t2["strip"] >= t1["strip"], "iters=2 accumulates at least the single pass's moves")
+check(int((it2[planted] == 3).sum()) >= int((it1[planted] == 3).sum())
+      and set(it2[planted].tolist()) <= {2, 3},
+      "a second round only adds planted recoveries, never mislabels")
+_, t_conv = fc.consolidate(lambda ix: TW[np.asarray(ix)], TL, np.zeros(300, int),
+                           mode="strip", exclude=(0,), strip_kw=dict(iters=5), log=None)
+check(t_conv["strip"] == 0, "iteration stops early: a converged (twin) fixture trades nothing x5")
+
+# cap_amp: D is normalized by the template's kernel RMS, so a FAINT cluster's
+# distances run large and a fixed cap gates it far below its own core, while a
+# BRIGHT cluster's cap sits near its core.  cap_amp refers the cap to the
+# chunk's median template amplitude: faint caps loosen, bright caps tighten.
+def at_D(tpl, n, targets, seed):
+    """Spikes at EXACT strip distance from `tpl`: D(tpl + a*u) is linear in a,
+    so each unit-noise direction is rescaled onto its target distance."""
+    r = np.random.default_rng(seed)
+    u = r.normal(0, 1.0, (n, NSAMP, NCH))
+    t = fc._tpl_terms(tpl)
+    Du, _ = fc._score_block((tpl[None] + u).reshape(n, -1), t)
+    return tpl[None] + u * (np.asarray(targets) / Du)[:, None, None]
+
+FAINT = TPL_A * 0.10
+r21 = np.random.default_rng(21)
+f_own = at_D(FAINT, 160, r21.uniform(0.20, 0.90, 160), seed=21)   # faint: D runs big
+f_pl = at_D(FAINT, 25, r21.uniform(0.55, 0.70, 25), seed=22)      # beyond the 0.5 cap...
+b_own = spikes(TPL_B, 300, noise=3.0, seed=23)                    # ...planted inside bright B
+CW = np.concatenate([f_own, b_own, f_pl]).astype(np.float32)
+CL = np.concatenate([np.full(160, 2), np.full(325, 3)])
+c_pl = np.arange(160 + 300, 160 + 325)
+def cgw(ix):
+    return CW[np.asarray(ix)]
+t_f = fc._tpl_terms(np.median(f_own, 0))
+Dpl, _ = fc._score_block(f_pl.reshape(25, -1), t_f)
+check(Dpl.min() > 0.5, "fixture: faint-shaped contamination sits BEYOND the fixed cap "
+                       f"(min D_target {Dpl.min():.2f})")
+cap0, _ = fc.strip_pass(cgw, CL, np.arange(485), exclude=(0,), twin_thr=None, rng=rng)
+capA, _ = fc.strip_pass(cgw, CL, np.arange(485), exclude=(0,), twin_thr=None,
+                        cap_amp=1.0, rng=rng)
+check((cap0[c_pl] == 3).all(), "fixed cap: the faint cluster cannot claim its own spikes back")
+check((capA[c_pl] == 2).sum() >= 15 and set(capA.tolist()) <= {2, 3},
+      f"cap_amp=1 unlocks the faint claim ({int((capA[c_pl] == 2).sum())}/25 recovered)")
+check((capA[:160] == 2).all() and (capA[160:460] == 3).all(),
+      "cap_amp moves nothing else in the fixture")
+# ...and the bright side TIGHTENS: donor spikes at exact D 0.36-0.44 from B are
+# claimable under the fixed cap 0.5 but not once cap_amp pulls B's cap below.
+band = at_D(TPL_B, 40, np.random.default_rng(31).uniform(0.36, 0.44, 40), seed=31)
+BW = np.concatenate([b_own, f_own, band]).astype(np.float32)
+BL = np.concatenate([np.full(len(b_own), 3), np.full(len(f_own), 2), np.full(len(band), 4)])
+b_band = np.arange(len(BL) - len(band), len(BL))
+def bgw(ix):
+    return BW[np.asarray(ix)]
+# min_tpl 50 leaves the band untemplated (no own column) and tgt_scale 1e9
+# makes the CAP the binding radius, isolating the knob under test.
+tight0, _ = fc.strip_pass(bgw, BL, np.arange(len(BL)), exclude=(0,), twin_thr=None,
+                          tgt_scale=1e9, tgt_q=1.0, min_tpl=50, rng=rng)
+tightA, _ = fc.strip_pass(bgw, BL, np.arange(len(BL)), exclude=(0,), twin_thr=None,
+                          tgt_scale=1e9, tgt_q=1.0, min_tpl=50, cap_amp=1.0, rng=rng)
+check((tight0[b_band] == 3).sum() > 0, "fixed cap: bright B claims the 0.35-0.45 band")
+check((tightA[b_band] == 3).sum() == 0,
+      "cap_amp=1 tightens the bright cap below the band (no claim)")
+
 # ── 4. knn behaviour through the wrapper ─────────────────────────────────────
 k_lab = LAB.copy()
 k_planted = np.arange(40 + 200, 40 + 200 + 15)                              # 15 true-B spikes...

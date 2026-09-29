@@ -456,11 +456,13 @@ FK_CONS_MODE:            "off"    # off | off/strip/knn/both.  Shared default fo
                                   #   measured net-NEGATIVE directed-vs-GT (+175 fixed / -371 broken) and
                                   #   drags 'both' below strip-only -- prefer strip.
 FK_SESSION_CONS_MODE:    strip    # "" | off/strip/knn/both.  Stage-scoped override for fiber-session
-                                  #   ("" = inherit FK_CONS_MODE).  ON here: strip at the shared defaults
-                                  #   below measured +0.7pp GT purity (+1,727 fixed / -950 broken directed
-                                  #   moves) at the fiber-session layer on g6, and the gain COMPOUNDS
-                                  #   downstream: +1.3pp purity at the following intrachunk layer with ARI
-                                  #   unchanged (cleaner atoms make cleaner merges).
+                                  #   ("" = inherit FK_CONS_MODE).  ON here, with ITERS 10 + CAP_AMP 0.5
+                                  #   below (the curator's iterate-and-adjust strategy, automated): on g6
+                                  #   the converged strip moves 3,050 spikes at 4.9:1 fixed:broken
+                                  #   (+1,639/-335), GT purity 0.779 -> 0.791 at the session layer, and
+                                  #   the gain COMPOUNDS downstream: +1.6pp purity at the following
+                                  #   intrachunk layer at unchanged ARI (single-pass fixed-cap strip
+                                  #   measured +0.7pp / +1.3pp at 1.8:1 -- cleaner atoms, cleaner merges).
 FK_INTRA_CONS_MODE:      ""       # "" | as above, for fiber-intrachunk (pre-link units; strip only advised).
 FK_ALINK_CONS_MODE:      ""       # "" | as above, for fiber-anchor-link.  Net-negative on a curated-grade
                                   #   sort -- keep off; treat knn kept-distinct buckets as an over-merge
@@ -497,6 +499,28 @@ FK_CONS_TPL_CAP:         1024     # 1024 | 256-4096.  Spikes per median template
 FK_CONS_MIN_TPL:         8        # 8 | 5-20.  Below this many spikes a cluster carries no template.  It can
                                   #   still be stripped FROM: sub-min fragments absorb whole (kk-fold
                                   #   philosophy).
+FK_CONS_ITERS:           10       # 1 | 1-10.  Strip ROUNDS per chunk: strip, re-template on the result,
+                                  #   re-calibrate, strip again -- the curator's iterate-and-adjust loop,
+                                  #   automated: every round refits templates AND quantiles on the updated
+                                  #   membership, so each cluster's floor and radius tighten as it
+                                  #   purifies.  Rounds stop early once a chunk trades nothing.  Under the
+                                  #   FIXED cap, round 3 turns net-negative on g6 (+337/-401 marginal);
+                                  #   under CAP_AMP 0.5 every round measured stays net-positive through
+                                  #   convergence (10-round cap: +1,639 fixed / -335 broken total, GT
+                                  #   purity 0.779 -> 0.791) -- raise iters only together with CAP_AMP.
+FK_CONS_CAP_AMP:         0.5      # 0 | 0-0.7; 0.5 measured best (0.3 under-corrects, 0.7 over-tightens).
+                                  #   AMPLITUDE-AWARE claim cap.  D is normalized by the template's kernel
+                                  #   RMS, so with additive noise D_own ~ 1/amplitude -- measured on g6:
+                                  #   corr(log amp, log q90 D_own) = -0.80, faint-tercile q90 D_own 1.07
+                                  #   vs bright 0.57 -- and ONE fixed cap is a different gate per cell
+                                  #   (~0.47x a faint cell's core distance, ~0.88x a bright one's).  The
+                                  #   fixed cap, not the calibration, was the binding gate for 254/270
+                                  #   clusters.  cap_c = MAX_DIST * (denom_med/denom_c)**this re-refers
+                                  #   the cap to the chunk's median template amplitude: 0 = fixed cap.
+                                  #   At 0.5, single-pass precision goes 1.8:1 -> 5.2:1 fixed:broke at
+                                  #   equal purity (+1,089/-209), and it is what makes iteration and
+                                  #   looser quantiles safe (own_q 0.85 holds 4.1:1 with it, 1.6:1
+                                  #   without).
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.
