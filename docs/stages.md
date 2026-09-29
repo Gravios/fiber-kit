@@ -376,7 +376,7 @@ Positional: `session`, `group`
 | `--warp-resid-thr` | (from config) | single-channel warp-incongruity SUB-GATE (layers on warp_thr): among already-coherent pairs (corr>=0.85), veto if any ONE centroid-range channel's group-delay residual (Theil-Sen line) > this many samples -- a strong-channel-masked different source. g5 knee ~1.0. empty=off. |
 | `--off-thr-int` | (from config) | DUAL gate: offset RMS threshold for suspected INTERNEURON pairs (narrow trough-to-peak). Fast cells have stable offsets (~0.23) so off_thr=1.0 is inert; tighten to ~0.5. Needs raw .spk for cell-typing. empty=off (use off_thr). |
 | `--off-thr-pyr` | (from config) | DUAL gate: offset RMS threshold for suspected PYRAMIDAL pairs (wide trough-to-peak); ~1.0. Set BOTH off_thr_int and off_thr_pyr to enable the dual gate; mixed pairs use the stricter. empty=off. |
-| `--cons-mode` | `off` | FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
+| `--cons-mode` | `off` | FK_INTRA_CONS_MODE > FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
 | `--cons-max-dist` | `0.5` | FK_CONS_MAX_DIST (default 0.5) |
 | `--cons-gmin` | `0.0` | FK_CONS_GMIN (default 0.0) |
 | `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
@@ -513,7 +513,7 @@ Positional: `args`
 | `--amp-thr` | `0.85` | FK_ALINK_AMP_THR (default 0.85) |
 | `--min-frag` | `15` | FK_ALINK_MIN_FRAG (default 15) |
 | `--feat-lag` | `0` | FK_ALINK_FEAT_LAG (default 0) |
-| `--cons-mode` | `off` | FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
+| `--cons-mode` | `off` | FK_ALINK_CONS_MODE > FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
 | `--cons-max-dist` | `0.5` | FK_CONS_MAX_DIST (default 0.5) |
 | `--cons-gmin` | `0.0` | FK_CONS_GMIN (default 0.0) |
 | `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |

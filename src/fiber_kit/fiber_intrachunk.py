@@ -43,11 +43,11 @@ def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     from . import fiber_consolidate as fcons
-    from .config import IntrachunkConfig
+    from .config import IntrachunkConfig, load_global_config as _load_gcfg
 except ImportError:
     import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     import fiber_consolidate as fcons
-    from config import IntrachunkConfig
+    from config import IntrachunkConfig, load_global_config as _load_gcfg
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -921,7 +921,9 @@ def main():
     ap.add_argument("--clu-method", default=None); ap.add_argument("--clu-stage", default=None)
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     IntrachunkConfig.add_arguments(ap)        # gate/threshold knobs (CLI > env > <session>.yaml > default)
-    fcons.add_consolidate_args(ap)            # per-spike strip+knn cleanup of the final labels (default off)
+    fcons.add_consolidate_args(ap, _load_gcfg(), stage="INTRA")   # per-spike strip+knn cleanup of the
+                                                   # final labels (default off; FK_CONS_* / FK_INTRA_CONS_MODE
+                                                   # defaults from the global yaml)
     ap.add_argument("--profile", choices=("default", "recommended"), default="default",
                     help="fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: "
                          "'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, "

@@ -121,6 +121,10 @@ _KNOBS = {
 
 def _knob_default(name, typ, fallback, gcfg):
     for src in (os.environ.get(name), (gcfg or {}).get(name)):
+        if isinstance(src, bool):
+            # YAML parses a bare off/on as a boolean -- read it as the mode it
+            # spelled (off -> "off", on -> "both") rather than str(False).
+            return ("both" if src else "off") if typ is str else typ(src)
         if src is None or str(src).strip() == "":
             continue
         try:
@@ -130,15 +134,28 @@ def _knob_default(name, typ, fallback, gcfg):
     return fallback
 
 
-def add_consolidate_args(ap, gcfg=None):
+def add_consolidate_args(ap, gcfg=None, stage=None):
     """Attach the FK_CONS_* knob group to a stage's parser (same resolution
-    order as the stage's own knobs: CLI > env > global yaml > default)."""
+    order as the stage's own knobs: CLI > env > global yaml > default).
+
+    `stage` (e.g. "SESSION", "INTRA", "ALINK") additionally lets a
+    stage-scoped FK_<stage>_CONS_MODE override the shared FK_CONS_MODE
+    default (scoped env > scoped yaml > shared env > shared yaml > off).
+    The measured verdict is PER LAYER -- the strip purifies fiber-session's
+    over-split output but contradicts a curated-grade linked sort -- so a
+    plan must be able to enable the pass in one host stage without enabling
+    it in the others.  The threshold knobs stay shared: they describe the
+    metric, not the host."""
     g = ap.add_argument_group("consolidation (per-spike strip + knn cleanup of the final labels)")
     for name, (dest, typ, fb) in _KNOBS.items():
         d = _knob_default(name, typ, fb, gcfg)
         if dest == "cons_mode":
+            label = name
+            if stage:
+                label = f"FK_{stage}_CONS_MODE > {name}"
+                d = _knob_default(f"FK_{stage}_CONS_MODE", typ, d, gcfg)
             g.add_argument("--cons-mode", dest=dest, choices=("off", "strip", "knn", "both"),
-                           default=d, help=f"{name}: which consolidation passes run (default {d})")
+                           default=d, help=f"{label}: which consolidation passes run (default {d})")
         else:
             g.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
                            help=f"{name} (default {d})")

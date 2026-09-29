@@ -338,7 +338,8 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ,
                         default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
-    fcons.add_consolidate_args(ap, gcfg)      # per-spike strip+knn cleanup of the linked cells (default off)
+    fcons.add_consolidate_args(ap, gcfg, stage="ALINK")   # per-spike strip+knn cleanup of the linked
+                                              # cells (default off; FK_ALINK_CONS_MODE scopes the mode)
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 
