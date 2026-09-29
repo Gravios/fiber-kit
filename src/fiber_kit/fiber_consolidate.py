@@ -115,6 +115,7 @@ _KNOBS = {
     "FK_CONS_AGG_EVERY": ("cons_agg_every", int, 3),
     "FK_CONS_AGG_MINNEW": ("cons_agg_minnew", int, 30),
     "FK_CONS_AGG_VAC": ("cons_agg_vac", int, 0),
+    "FK_CONS_TPL_ALIGN": ("cons_tpl_align", int, 0),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),
@@ -178,7 +179,7 @@ def kwargs_from_args(a):
                     iters=a.cons_iters, cap_amp=a.cons_cap_amp,
                     pure_iqr=a.cons_pure_iqr, agg_iqr=a.cons_agg_iqr,
                     agg_every=a.cons_agg_every, agg_minnew=a.cons_agg_minnew,
-                    agg_vac=a.cons_agg_vac)
+                    agg_vac=a.cons_agg_vac, tpl_align=bool(a.cons_tpl_align))
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -186,12 +187,22 @@ def kwargs_from_args(a):
 
 
 # ── the Klusters strip metric, vectorised ────────────────────────────────────
-def _template(get_waves, idx, tpl_cap, rng):
-    """Median template over ≤ tpl_cap evenly-strided spikes (stored alignment —
-    the strip scores unaligned records, exactly as Klusters does)."""
+def _template(get_waves, idx, tpl_cap, rng, tpl_align=False):
+    """Median template over ≤ tpl_cap evenly-strided spikes.
+
+    tpl_align=False scores stored alignment, exactly as Klusters does (in the
+    driver that means the shared per-chunk mixture frame).  tpl_align=True
+    additionally SELF-ALIGNS the subset to its own median first — the
+    curator's realign-the-cluster-then-strip step: a cluster whose spikes
+    carry a consistent lag against the chunk mixture gets a sharper template
+    in its own frame.  The systematic frame offset this introduces cancels in
+    every calibrated quantity (d_own, floor, radius and margin all derive
+    from distances to the SAME template), so only the sharpness gain acts."""
     idx = np.asarray(idx)
     step = max(1, idx.size // int(tpl_cap))
     w = np.asarray(get_waves(idx[::step][: int(tpl_cap)]), float)
+    if tpl_align and len(w) > 2:
+        w = fl.realign(w, iters=2)
     return np.median(w, 0)
 
 
@@ -242,7 +253,7 @@ def _chan_worst(X, t):
 def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
                chan_uniform=0.0, margin=0.85, own_q=0.90, tgt_q=0.90,
                tgt_scale=1.25, twin_thr=0.93, tpl_cap=1024, min_tpl=8, exclude=(0,),
-               cap_amp=0.0, pure_iqr=0.0, no_tpl=(), stats=None,
+               cap_amp=0.0, pure_iqr=0.0, no_tpl=(), stats=None, tpl_align=False,
                block=20000, rng=None, log=None):
     """One template-strip pass over the spikes `idx` (absolute indices; one
     chunk).  Returns (labels, n_moved): labels is a full-length copy with the
@@ -288,7 +299,7 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         ci = idx[lab == c]
         if ci.size < min_tpl:
             continue
-        t = _tpl_terms(_template(get_waves, ci, tpl_cap, rng))
+        t = _tpl_terms(_template(get_waves, ci, tpl_cap, rng, tpl_align=tpl_align))
         if t is not None:
             terms[c] = t
     if len(terms) < 1:

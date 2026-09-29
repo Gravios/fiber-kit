@@ -548,6 +548,17 @@ FK_CONS_AGG_VAC:         0        # 0 | 0/1.  0 = QUARANTINE (default): the pool
                                   #   0.185 vs 0.172 no-pool / 0.164 vacuum; purity 0.707; completeness
                                   #   0.209) -- the vacuum's deferral pool starves the linker.  Use
                                   #   VAC 1 only for a TERMINAL sort headed straight to Klusters.
+FK_CONS_TPL_ALIGN:       0        # 0 | 0/1.  1 = SELF-ALIGN each cluster's template subset to its own
+                                  #   median before taking the median (the curator's realign-the-cluster-
+                                  #   then-strip step; the driver's one realign per chunk is to the chunk
+                                  #   MIXTURE median, so a cluster with a consistent lag against the
+                                  #   mixture gets a blurred template).  The systematic frame offset it
+                                  #   introduces cancels in every calibrated quantity.  Measured on g6:
+                                  #   on the plain strip combo +96 fixed / +31 broken (net +65, purity
+                                  #   +0.08pp) at +20% wall; composed WITH the melting pot it shifts the
+                                  #   dissolve equilibrium slightly negative (+3,633/-2,399 vs
+                                  #   +3,425/-2,038) -- so it stays off by default and off in the exp
+                                  #   combo; worth 1 on strip-only runs where the last few claims matter.
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.

@@ -262,6 +262,14 @@ check((tight0[b_band] == 3).sum() > 0, "fixed cap: bright B claims the 0.35-0.45
 check((tightA[b_band] == 3).sum() == 0,
       "cap_amp=1 tightens the bright cap below the band (no claim)")
 
+# ── 3b2. per-cluster template self-alignment (the curator's realign step) ────
+ta, ta_n = fc.strip_pass(get_waves, LAB, np.flatnonzero(CHUNK == 0),
+                         exclude=(0,), margin=0.85, tpl_align=True, rng=rng)
+check(int((ta[planted] == 3).sum()) >= 17 and set(ta[planted].tolist()) <= {2, 3},
+      "tpl_align: planted contamination still moves, nothing mislabels")
+check((ta[LAB == 0] == 0).all() and (ta[LAB == 4] == 4).all(),
+      "tpl_align: reserves and the look-alike's core still hold")
+
 # ── 3c. the pure-claimant gate (only pure clusters strip) ────────────────────
 # Cluster 2 = X, an A-cell CONTAMINATED with off-channel B spikes at spread
 # scales: its own-gain IQR is wide, so with pure_iqr set it may not claim.
