@@ -62,10 +62,14 @@
 #    * exp_chunk     : intrachunk's within-chunk merge (+ amp-band partition + giqr
 #      recut).  realign re-extracts, cpos re-localizes; units stay chunk-local and
 #      cross-linkable.
-#    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk); the
-#      runner always invokes fiber-link with --from-units, so the link names the produced
-#      exp_chunk.units.npz.  The overlap-backbone in that units.npz carries the 0080
-#      standard-cosine + (here ON) warp co-gate -- see FK_INTRA_BACKBONE_* below.
+#    * the LINKER here is fiber-anchor-link on the UNITS layer (--frag-layer units):
+#      it consolidates intrachunk's units across chunks on the anchor-calibrated null
+#      (FK_ALINK_* knobs below), seeded by the .fibers overlap anchors where they
+#      resolve.  Measured on g6 (unseeded): 480 units -> 319 cells, ARI 0.190 -> 0.440,
+#      completeness x2.2 at purity 0.763.  The production fiber-kit.yaml carries the
+#      SAME plan with fiber-link as the linker -- run both templates on one session to
+#      compare the linkers (the linked tags differ: exp_linked here vs fk_linked there;
+#      intermediate tags are overwritten by whichever ran last).
 #    * exp_linked    : the linked output; a final realign re-extracts it for curation.
 # ============================================================================
 pipeline:
@@ -75,7 +79,7 @@ pipeline:
   - {stage: fiber-intrachunk, in: fiber_session, out: exp_chunk}
   - {stage: fiber-realign,    in: exp_chunk}
   - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
-  - {stage: fiber-link,       in: exp_chunk, units: exp_chunk, out: exp_linked}
+  - {stage: fiber-anchor-link, in: exp_chunk, out: exp_linked, params: {frag-layer: units}}
   - {stage: fiber-realign,    in: exp_linked}
 
 

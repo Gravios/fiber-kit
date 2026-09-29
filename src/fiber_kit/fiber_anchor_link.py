@@ -319,6 +319,12 @@ def main():
     ap.add_argument("--clu-method", default="stderiv", help="fragment .clu feature space (before the group)")
     ap.add_argument("--clu-stage", dest="clu_stage", default="fiber_session", help="fragment .clu stage tag")
     ap.add_argument("--in-clu", default=None, help="explicit fragment .clu path (overrides --clu-method/--clu-stage)")
+    ap.add_argument("--frag-layer", choices=("atoms", "units"), default="atoms",
+                    help="which layer of the source stage is the fragment layer: 'atoms' (default) "
+                         "prefers the .clc sibling -- the overlap anchors index .clc labels; 'units' "
+                         "reads the stage's FLAT .clu, so the linker consolidates the stage's UNITS "
+                         "(e.g. fiber-intrachunk output) instead of re-linking its atoms from scratch. "
+                         "An explicit --in-clu overrides both.")
     ap.add_argument("--spk-method", "--spk-variant", dest="spk_variant", default="standard",
                     help="waveform axis for templates/warp (standard = curation axis)")
     ap.add_argument("--fibers", default=None, help="path to the .fibers npz carrying the overlap anchors "
@@ -371,12 +377,22 @@ def main():
           f"warp-thr={a.warp_thr or 'off'} chunk-min={chunk_min:g} (fallback only)")
 
     res = nio.read_res(base, elec)
-    # The fragment layer is the ATOM layer.  Prefer .clc when the source stage wrote a
-    # hierarchy: the overlap anchors index .clc labels, and .clu renumbers (fewer labels,
-    # different ids), so reading .clu silently points every anchor at the wrong fragment.
+    # The fragment layer defaults to the ATOM layer.  Prefer .clc when the source stage
+    # wrote a hierarchy: the overlap anchors index .clc labels, and .clu renumbers (fewer
+    # labels, different ids), so reading .clu silently points every anchor at the wrong
+    # fragment.  --frag-layer units flips this deliberately: the stage's FLAT .clu is the
+    # fragment layer, so the linker consolidates that stage's UNITS (measured on g6:
+    # pointed at an intrachunk triple, the atom preference re-linked 6,224 atoms from
+    # scratch, ARI 0.021; the units layer consolidated 480 units into 319 cells at ARI
+    # 0.440).  Anchors still resolve only against .clc labels, so a units-layer run on a
+    # renumbering stage is effectively unseeded unless the anchors happen to survive.
     src = "in-clu"
     if a.in_clu:
         _, frag_clu = nio.read_clu_file(a.in_clu, n_spikes=res.size)
+    elif a.frag_layer == "units":
+        _, frag_clu = nio.read_clu_file(nio.session_path(base, "clu", elec, variant=a.clu_method,
+                                                         tag=a.clu_stage), n_spikes=res.size)
+        src = "clu (units layer, --frag-layer units)"
     else:
         clc_in = nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.clu_stage)
         if os.path.exists(clc_in):

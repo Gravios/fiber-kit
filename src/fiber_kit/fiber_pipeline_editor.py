@@ -105,6 +105,13 @@ CATALOG = {
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
         # note: --channels (pin backbone channels, e.g. 33,34) collides with the reserved structural
         # 'channels' (session channel list) so it is not a UI knob; set it in the plan text if needed.
+    "fiber-anchor-link": dict(input=True, tags=["in", "out"], params=[  # alt linker, anchor-seeded calibrated null; not in `all`
+        _p("frag-layer", "str", "atoms", "fragment layer: atoms (.clc; anchors resolve) | units (the stage's FLAT .clu -- consolidate its units, e.g. intrachunk output)"),
+        _p("target-fpr", "float", 2.0, "accept floor = this FPR (%) against the within-chunk different-cell null"),
+        _p("rate-dev", "float", 2.0, "max |log2| change of a fragment's relative rate across a link"),
+        _p("max-gap", "int", 4, "bridge a cell silent up to N chunks (rounds relax progressively)"),
+        _p("min-frag", "int", 15, "min spikes for a fragment to carry a template"),
+        _p("amp-thr", "float", 0.85, "Omlor-Giese amplitude-profile correlation gate")]),
     "fiber-xcorr-merge": dict(input=True, tags=["in", "out"], params=[  # roll-shift cosine merge; not in `all`
         _p("cos-thr", "float", 0.99, "min roll-shift cosine to merge; start high (0.985-0.999)"),
         _p("shift", "int", 4, "+/- circular-shift half-window, samples (Klusters xcorr)"),
@@ -126,6 +133,7 @@ STAGE_MODULES = {
     "fiber-link": "fiber_kit.fiber_link",
     "fiber-refit": "fiber_kit.fiber_refit",
     "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
+    "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
 }
 
@@ -387,6 +395,9 @@ def lint(steps):
             for al in d["aliases"]:
                 types[al] = d["type"]
         for flag, val in s.params.items():
+            # the runner normalizes plan param keys with replace("_", "-") before
+            # building the CLI flag -- lint the same spelling it will actually pass
+            flag = flag.replace("_", "-")
             if flag not in accepted:
                 errors.append("step %d (%s): unknown flag --%s (the stage would reject it)" % (i + 1, s.stage, flag))
                 continue

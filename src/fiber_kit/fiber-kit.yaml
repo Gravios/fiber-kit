@@ -32,6 +32,33 @@
 # ============================================================================
 
 
+# ============================================================================
+#  PRIMARY PLAN (embedded).  `fiber-pipeline <elec>` runs THIS by default when this
+#  file is the active $FK_CONFIG; an explicit `--plan <file>` still overrides it.
+#
+#  The fiber-link route: structurally the SAME 8 steps as the fiber-kit-exp.yaml
+#  plan, with fiber-link (driven off intrachunk's units.npz backbone, --from-units)
+#  as the linker -- run both templates on one session to COMPARE THE LINKERS
+#  against each other (fiber-anchor-link is the exp template's linker).  The
+#  linked outputs keep separate tags (fk_chunk/fk_linked here, exp_chunk/
+#  exp_linked there); the shared fiber_session tag and the in-place realign
+#  commits reflect whichever template ran LAST, so compare the *linked* triples.
+#  A fiber-realign runs after every clu-changing stage in --reextract
+#  --refeaturize mode; fiber-cpos requires probe geometry (probe files named in
+#  <session>.yaml or the probe library) and exits without it, in which case
+#  intrachunk falls back to the position-free 'ms' linkage.
+# ============================================================================
+pipeline:
+  - {stage: fiber-session,    out: fiber_session}
+  - {stage: fiber-realign,    in: fiber_session}
+  - {stage: fiber-cpos,       in: fiber_session, out: fiber_session, spk: standard}
+  - {stage: fiber-intrachunk, in: fiber_session, out: fk_chunk}
+  - {stage: fiber-realign,    in: fk_chunk}
+  - {stage: fiber-cpos,       in: fk_chunk, out: fk_chunk, spk: standard}
+  - {stage: fiber-link,       in: fk_chunk, units: fk_chunk, out: fk_linked}
+  - {stage: fiber-realign,    in: fk_linked}
+
+
 # ----- fiber-session : initial over-clustering -----------------------------
 # Deliberately OVER-clusters (many small, clean fragments) so the downstream merge
 # (intrachunk + link, or fiber-defrag) can reassemble units; over-split is recoverable,
