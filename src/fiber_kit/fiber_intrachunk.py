@@ -988,6 +988,141 @@ def _amp_band_partition(newids, child, get_std, top_frac, gap, min_n,
     return newids, n_extra
 
 
+def _residual_recut(newids, get_waves, *, gate="all", dims=4, rounds=2, min_n=40,
+                    min_spk=60, alpha=0.01, giqr_thr=0.4, win=10, peak=None,
+                    cap=3000, rng=None, log=None):
+    """Low-dimensional median-residual KlustaKwik denoising of every unit.
+
+    Per unit (>= min_spk spikes): realign, median template, residual cropped
+    to peak +/- win, top `dims` PCA features, one classic-KlustaKwik round.
+    The dominant component keeps the unit id; other components >= min_n
+    become NEW units; kk's noise bucket and sub-min_n components shed to
+    reserve (id 1), the kk-linkage strip convention.  Spikes beyond the
+    `cap` subsample are assigned to the nearest component median.  Products
+    >= min_spk are re-tested for up to `rounds` total passes (the curator's
+    "double round").
+
+    `gate` picks which units are tried: 'all' (default — surveyed on g6,
+    54/207 units split, 40 improved GT purity by >2pp and NONE got worse,
+    so the acceptance side is the real quality control and the whole sweep
+    costs ~30 s), 'dip' (Hartigan dip on the residual PCs < alpha; needs
+    diptest, and measured it covers only about half the improvable units —
+    a compute saver, not a safety gate), 'giqr' (own-gain IQR > giqr_thr,
+    same caveat).  Returns (newids, n_new_units, n_shed)."""
+    if not gate:
+        return np.asarray(newids, np.int64), 0, 0
+    rng = rng or np.random.default_rng(0)
+    newids = np.asarray(newids, np.int64).copy()
+    next_id = int(newids.max()) + 1
+    have_dip = None
+    if gate == "dip":
+        try:
+            import diptest as _dt
+            have_dip = _dt
+        except ImportError:
+            if log:
+                log("residual recut: diptest not installed -- gate 'dip' falls back to 'all'")
+            gate = "all"
+    try:
+        from .klustakwik import klustakwik as _kk
+        from . import fiber_consolidate as _fc
+    except ImportError:
+        from klustakwik import klustakwik as _kk
+        import fiber_consolidate as _fc
+    n_new = n_shed = 0
+    queue = [int(u) for u in np.unique(newids) if u > 1]
+    passes = {int(u): 0 for u in queue}
+    while queue:
+        U = queue.pop(0)
+        m = np.flatnonzero(newids == U)
+        if m.size < int(min_spk) or passes.get(U, 0) >= int(rounds):
+            continue
+        passes[U] = passes.get(U, 0) + 1
+        take = m[:: max(1, m.size // int(cap))][: int(cap)]
+        W = fl.realign(np.asarray(get_waves(take), float), iters=1)
+        pk = int(peak) if peak is not None else W.shape[1] // 2
+        med = np.median(W, 0)
+        lo, hi = max(0, pk - int(win)), min(W.shape[1], pk + int(win) + 1)
+        R = (W - med)[:, lo:hi, :].reshape(len(W), -1)
+        R = R - R.mean(0)
+        kdim = min(int(dims), R.shape[1], R.shape[0] - 1)
+        F = R @ np.linalg.svd(R, full_matrices=False)[2][:kdim].T
+        if gate == "dip":
+            if min(have_dip.diptest(np.sort(F[:, j]))[1] for j in range(kdim)) > float(alpha):
+                continue
+        elif gate == "giqr":
+            t = _fc._tpl_terms(med)
+            if t is None:
+                continue
+            _, g = _fc._score_block(W.reshape(len(W), -1), t)
+            if float(np.quantile(g, 0.75) - np.quantile(g, 0.25)) <= float(giqr_thr):
+                continue
+        lk = _kk(F, max_clusters=max(2, min(6, len(F) // (2 * int(min_n)))),
+                 min_clusters=2, splits=False, verbose=False,
+                 seed=int(rng.integers(2 ** 31)))
+        comps = [c for c in np.unique(lk) if c != 0 and (lk == c).sum() >= int(min_n)]
+        if len(comps) < 2 and not (len(comps) == 1 and (lk == 0).sum() >= int(min_n)):
+            continue                                   # nothing structural to take out
+        sizes = [(lk == c).sum() for c in comps]
+        dom = comps[int(np.argmax(sizes))]
+        cmed = {c: np.median(W[lk == c], 0) for c in comps}
+        # Shape-distinctness acceptance: a component whose median matches ANY
+        # already-kept component at REGISTERED cosine >= 0.98 (_register:
+        # sub-sample alignment, the merge gates' own comparator) is the same
+        # shape — kk cutting noise, an alignment-phase axis, or an amplitude
+        # sublevel (that axis belongs to the amp-band partition) — and folds
+        # back by nearest-median assignment instead of splitting.  All-pairs,
+        # not dominant-only, so same-shape SIBLING components merge too.
+        # Sub-sample registration matters: phase-split components of one cell
+        # measure ~0.92 at integer best-lag but 0.997 registered.  This is
+        # what keeps repeated rounds harmless.
+        kept = [dom]
+        for c in sorted((c for c in comps if c != dom),
+                        key=lambda c2: -int((lk == c2).sum())):
+            if all(_register(cmed[c], cmed[k], 6, 4)[2] < 0.98 for k in kept):
+                kept.append(c)
+        comps = kept
+        if len(comps) < 2 and (lk == 0).sum() < int(min_n):
+            continue
+        cmed = {c: cmed[c] for c in comps}
+        # assign every unit spike (incl. beyond the subsample) to its nearest
+        # component median; spikes nearest to NO component (kk noise pattern)
+        # follow the subsample's noise verdict only inside the subsample.
+        Wall = fl.realign(np.asarray(get_waves(m), float), iters=1) \
+            if m.size > take.size else W
+        flat = Wall.reshape(len(Wall), -1)
+        D = np.stack([np.linalg.norm(flat - cmed[c].reshape(1, -1), axis=1)
+                      for c in comps], 1)
+        best = np.asarray(comps)[D.argmin(1)]
+        sub_pos = {int(t_): i for i, t_ in enumerate(take)}
+        for i, sp in enumerate(m):
+            j = sub_pos.get(int(sp))
+            if j is not None and lk[j] == 0:
+                best[i] = 0                            # subsampled noise verdict wins
+        newid_of = {}
+        for c in comps:
+            if c == dom:
+                newid_of[c] = U
+            else:
+                newid_of[c] = next_id
+                next_id += 1
+                n_new += 1
+        out = np.where(best == 0, 1, 0)
+        for c in comps:
+            out = np.where(best == c, newid_of[c], out)
+        n_shed += int((out == 1).sum())
+        newids[m] = out
+        if log:
+            log(f"residual recut: unit {U} -> {len(comps)} component(s)"
+                + (f" + {int((out == 1).sum())} shed" if (out == 1).any() else ""))
+        for c in comps:                                # the curator's extra rounds
+            v = newid_of[c]
+            passes.setdefault(v, passes[U] if v != U else passes[U])
+            if passes.get(v, 0) < int(rounds):
+                queue.append(v)
+    return newids, n_new, n_shed
+
+
 def main():
     ap = argparse.ArgumentParser(description="Collapse over-split fragments within each "
                                              "chunk into units (stderiv cosine + offset + depth).")
@@ -1097,6 +1232,18 @@ def main():
                     _log(f"amp-band partition: {n_extra} amplitude-band split(s) "
                          f"(gap {a.amp_band_gap} log2, top {a.amp_band_top:.0%}, "
                          f"anchor >= {a.amp_band_min} spk)")
+        if a.recut_gate:
+            # Per-unit median-residual KlustaKwik denoise (curator's recipe:
+            # low-dimensional residual features, one or two rounds).
+            newids, n_rc, n_sh = _residual_recut(
+                newids, lambda ix: spkD[np.asarray(ix)], gate=a.recut_gate,
+                dims=a.recut_dims, rounds=a.recut_rounds, min_n=a.recut_min_n,
+                min_spk=a.recut_min_spk, alpha=a.recut_alpha, giqr_thr=a.recut_giqr,
+                win=a.kk_win, peak=getattr(cfg, "peak", None), log=None)
+            if n_rc or n_sh:
+                ncl = int(newids.max()) + 1
+                _log(f"residual recut ({a.recut_gate}): {n_rc} new unit(s), "
+                     f"{n_sh} spike(s) shed to reserve")
         if a.cons_mode != "off":
             # Per-spike cleanup of the finished labels: the Klusters template strip +
             # knn-peel (fiber_consolidate), per chunk, reserves (0,1) untouched.
