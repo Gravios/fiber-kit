@@ -203,5 +203,28 @@ check((k_new[k_planted] == 3).all(), "knn folds the mislabelled bucket back into
 check(k_moved >= 15, "knn reports at least the planted moves")
 check(nid == int(k_lab.max()) + 1 + k_fresh, "new-cluster ids allocated contiguously")
 
+# ── 5. fiber-session parking of consolidation moves ──────────────────────────
+try:
+    from fiber_kit.fiber_session import _park_consolidated  # noqa: E402
+except ImportError:
+    from fiber_session import _park_consolidated  # noqa: E402
+
+pk_clu = np.array([0, 2, 2, 3, 3, 2, 3])
+pk_new = np.array([0, 2, 3, 3, 3, 3, 2])          # spikes 2,5: 2->3 ; spike 6: 3->2
+pk_child = np.array([0, 7, 7, 8, 8, 7, 8])
+pk_parent = {7: 2, 8: 3}
+pk_out, pk_nxt = _park_consolidated(pk_clu, pk_new, pk_child, pk_parent, 9)
+check((pk_out == pk_new).all() and pk_out.dtype == np.int32, "parking returns the consolidated clu")
+check(pk_child[1] == 7 and pk_child[3] == 8 and pk_child[0] == 0,
+      "unmoved spikes keep their atoms")
+check(pk_child[2] == pk_child[5] and pk_child[2] >= 9,
+      "a moved (source atom -> dest fiber) bucket becomes ONE new atom")
+check(pk_child[6] >= 9 and pk_child[6] != pk_child[2], "a different bucket gets its own atom")
+check(pk_parent[int(pk_child[2])] == 3 and pk_parent[int(pk_child[6])] == 2,
+      "new atoms parent to the destination fiber")
+check(pk_nxt == 11 and set(pk_parent) == {7, 8, 9, 10}, "atom ids allocated contiguously")
+_, pk_same = _park_consolidated(pk_new.copy(), pk_new, pk_child.copy(), dict(pk_parent), 11)
+check(pk_same == 11, "a no-move pass allocates nothing")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)

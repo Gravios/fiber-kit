@@ -152,6 +152,26 @@ Positional: `session`, `group`
 | `--feature-align` | — | feature-building alignment: xcorr (default), centroid (pure, no refine -- adds the trough-position-vs-asymmetry structure to the clustering/linking features), or off (skip the sub-sample align entirely; features are built from the windows exactly as extracted). Does NOT touch committing alignment or fiber-realign. Overrides the FIBER_ALIGN env var. — choices: `xcorr`, `centroid`, `off` |
 | `--subsample` / `--no-subsample` | flag (off) | enable (--subsample) or disable (--no-subsample) realign's per-spike sub-sample (parabolic) refine in the feature build; default leaves the FIBER_SUBSAMPLE env var / lever untouched (off). Reaches pool workers. |
 | `--out` | — |  |
+| `--cons-mode` | `off` | FK_SESSION_CONS_MODE > FK_CONS_MODE: which consolidation passes run (default off) — choices: `off`, `strip`, `knn`, `both` |
+| `--cons-max-dist` | `0.5` | FK_CONS_MAX_DIST (default 0.5) |
+| `--cons-gmin` | `0.0` | FK_CONS_GMIN (default 0.0) |
+| `--cons-gmax` | `10.0` | FK_CONS_GMAX (default 10.0) |
+| `--cons-chan` | `0.0` | FK_CONS_CHAN (default 0.0) |
+| `--cons-margin` | `0.85` | FK_CONS_MARGIN (default 0.85) |
+| `--cons-own-q` | `0.9` | FK_CONS_OWN_Q (default 0.9) |
+| `--cons-tgt-q` | `0.9` | FK_CONS_TGT_Q (default 0.9) |
+| `--cons-tgt-scale` | `1.25` | FK_CONS_TGT_SCALE (default 1.25) |
+| `--cons-twin` | `0.93` | FK_CONS_TWIN (default 0.93) |
+| `--cons-tpl-cap` | `1024` | FK_CONS_TPL_CAP (default 1024) |
+| `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
+| `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
+| `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
+| `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
+| `--cons-knn-minnew` | `30` | FK_CONS_KNN_MINNEW (default 30) |
+| `--cons-knn-dims` | `16` | FK_CONS_KNN_DIMS (default 16) |
+| `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
+| `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
+| `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
 ### `fiber-realign`
 
 Per-spike Klusters-style realignment + corrected .res spike times, with optional re-extraction from .fil and re-featurisation (commit-and-reextract finalize).
