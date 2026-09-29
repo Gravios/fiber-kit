@@ -150,6 +150,26 @@ class IntrachunkConfig(StageConfig):
                                env="FK_INTRA_AMP_BAND_TOP")
     amp_band_min: int = knob(25, "min atom spikes to ANCHOR a band; smaller atoms attach to the nearest band",
                              env="FK_INTRA_AMP_BAND_MIN", type=int)
+    recut_gate: str = knob("", "post-linkage median-residual KlustaKwik denoise of every unit: '' off | all | "
+                           "dip | giqr.  'all' recuts every unit >= RECUT_MIN_SPK (surveyed g6: 40 units "
+                           "improved GT purity >2pp, none hurt -- kk's model selection + the component floor "
+                           "are the quality control at UNIT level, but chain-scored 'all' over-splits "
+                           "drifting cells: ARI 0.188 -> 0.144).  'giqr' (own-gain IQR) is the measured "
+                           "sweet spot -- it recuts only amplitude-impure units: +4.3pp GT purity with ARI "
+                           "UP (0.190), vs 'dip' +2.5pp/0.189 and 'all' +5.7pp at heavy ARI/completeness "
+                           "cost (terminal pre-curation use only)", env="FK_INTRA_RECUT",
+                           choices=("", "all", "dip", "giqr"), type=str, recommended="giqr")
+    recut_dims: int = knob(4, "residual-PCA features fed to the recut KlustaKwik round",
+                           env="FK_INTRA_RECUT_DIMS", type=int)
+    recut_rounds: int = knob(2, "max recut passes per unit lineage (products are re-tested -- the curator's "
+                             "double round)", env="FK_INTRA_RECUT_ROUNDS", type=int)
+    recut_min_n: int = knob(40, "min spikes for a recut component to become a unit; smaller components and "
+                            "kk's noise bucket shed to reserve", env="FK_INTRA_RECUT_MIN_N", type=int)
+    recut_min_spk: int = knob(60, "min unit spikes to attempt a recut", env="FK_INTRA_RECUT_MIN_SPK", type=int)
+    recut_alpha: float = knob(0.01, "gate 'dip': Hartigan dip p on the residual PCs below this = recut",
+                              env="FK_INTRA_RECUT_ALPHA")
+    recut_giqr: float = knob(0.4, "gate 'giqr': own-gain IQR above this = recut",
+                             env="FK_INTRA_RECUT_GIQR")
     refrac_ceiling: float = knob(None, "reject merge if combined 2ms-ISI violation > this percent (empty=off)",
                                  env="FK_INTRA_REFRAC_CEILING", recommended=1.0)
     pre_merge_cos: float = knob(0.0, "pre-collapse obvious mutual-NN pairs at cosine>=this (0=off)",

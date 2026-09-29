@@ -381,6 +381,13 @@ Positional: `session`, `group`
 | `--amp-band-gap` | (from config) | post-linkage amplitude-band partition (0=off): split a unit's atoms where the sorted log2 CEILING gap exceeds this. Ceilings = median best-channel p2p of each atom's top AMP_BAND_TOP fraction on the raw .spk.standard -- the un-adapted top of the adaptation ladder -- so the same-cell tolerance is tight (~1.3x = 0.33 log2 measured) where whole-cluster amplitude is adaptation-confounded (the 3x amp_gate). Covers EVERY linkage incl. 'ms', which carries no pairwise amplitude gate at all. 0.4 measured best on g6 (+2.6pp GT purity, completeness unchanged). Inert without .spk.standard. |
 | `--amp-band-top` | (from config) | top fraction of an atom's spikes (by best-channel p2p) defining its ceiling |
 | `--amp-band-min` | (from config) | min atom spikes to ANCHOR a band; smaller atoms attach to the nearest band |
+| `--recut-gate` | (from config) | post-linkage median-residual KlustaKwik denoise of every unit: '' off \| all \| dip \| giqr. 'all' recuts every unit >= RECUT_MIN_SPK (surveyed g6: 40 units improved GT purity >2pp, none hurt -- kk's model selection + the component floor are the quality control at UNIT level, but chain-scored 'all' over-splits drifting cells: ARI 0.188 -> 0.144). 'giqr' (own-gain IQR) is the measured sweet spot -- it recuts only amplitude-impure units: +4.3pp GT purity with ARI UP (0.190), vs 'dip' +2.5pp/0.189 and 'all' +5.7pp at heavy ARI/completeness cost (terminal pre-curation use only) — choices: ``, `all`, `dip`, `giqr` |
+| `--recut-dims` | (from config) | residual-PCA features fed to the recut KlustaKwik round |
+| `--recut-rounds` | (from config) | max recut passes per unit lineage (products are re-tested -- the curator's double round) |
+| `--recut-min-n` | (from config) | min spikes for a recut component to become a unit; smaller components and kk's noise bucket shed to reserve |
+| `--recut-min-spk` | (from config) | min unit spikes to attempt a recut |
+| `--recut-alpha` | (from config) | gate 'dip': Hartigan dip p on the residual PCs below this = recut |
+| `--recut-giqr` | (from config) | gate 'giqr': own-gain IQR above this = recut |
 | `--refrac-ceiling` | (from config) | reject merge if combined 2ms-ISI violation > this percent (empty=off) |
 | `--pre-merge-cos` | (from config) | pre-collapse obvious mutual-NN pairs at cosine>=this (0=off) |
 | `--iter` | (from config) | iterate group->re-estimate->regroup this many passes (1=single pass); >1 keeps the tight gate but re-merges DENOISED units across passes, consolidating over-split fragments a single pass leaves. Early-converges when a pass merges nothing (g5: 5 -> ~1124). Left at 1 in production; the exp config opts in (FK_INTRA_ITER). |

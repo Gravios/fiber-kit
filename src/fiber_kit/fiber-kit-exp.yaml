@@ -429,6 +429,34 @@ FK_INTRA_AMP_BAND_TOP:   0.2      # 0.2 | 0.1-0.3.  Top fraction of an atom's sp
                                   #   defining its ceiling.
 FK_INTRA_AMP_BAND_MIN:   25       # 25 | 15-50.  Min atom spikes to ANCHOR a band; smaller atoms attach to
                                   #   the nearest band instead of anchoring their own.
+FK_INTRA_RECUT:          giqr      # "" | ""/all/dip/giqr; "" = off.  QUALITY-GATED per-unit denoise:
+                                  #   low-dimensional median-residual KlustaKwik (the curator's manual
+                                  #   recipe -- realign, median template, residual cropped to peak +/-
+                                  #   KK_WIN, RECUT_DIMS PCA features, one classic-KK round).  The
+                                  #   dominant component keeps the unit id, shape-distinct components
+                                  #   (REGISTERED cosine < 0.98 vs every kept component -- sub-sample
+                                  #   registration, so phase splits and amplitude sublevels fold back)
+                                  #   become new units, kk's noise bucket sheds to reserve.  Gates,
+                                  #   chain-measured on g6 (over amp-bands; baseline 0.733 purity / 0.188
+                                  #   ARI): giqr (own-gain IQR > RECUT_GIQR -- recut only amplitude-
+                                  #   impure units) = +4.3pp purity AT ARI 0.190, the sweet spot; dip
+                                  #   (residual-PC Hartigan dip < RECUT_ALPHA; needs diptest) = +2.5pp,
+                                  #   conservative; all = +5.7pp purity but ARI 0.144 and -2.9pp
+                                  #   completeness (it also cuts drifting cells) -- terminal pre-curation
+                                  #   use only.  Curator-flagged units under giqr: 0.93 -> 0.98 core,
+                                  #   0.46 -> 0.98/0.96, 0.73 -> 0.98, 0.60 -> 0.84/0.76.
+FK_INTRA_RECUT_DIMS:     4        # 4 | 3-6.  Residual-PCA features fed to the recut KK round.
+FK_INTRA_RECUT_ROUNDS:   2        # 2 | 1-3.  Max passes per unit lineage (products re-tested -- the
+                                  #   curator's "double round"; the registered-cosine fold keeps extra
+                                  #   rounds harmless).
+FK_INTRA_RECUT_MIN_N:    40       # 40 | 30-80.  Min spikes for a component to become a unit; smaller
+                                  #   components and kk noise shed to reserve.
+FK_INTRA_RECUT_MIN_SPK:  60       # 60 | 50-150.  Min unit spikes to attempt a recut.
+FK_INTRA_RECUT_ALPHA:    0.01     # 0.01 | 0.005-0.05.  gate=dip only: dip p threshold.
+FK_INTRA_RECUT_GIQR:     0.4      # 0.4 | 0.3-0.5.  gate=giqr only: own-gain IQR above this = recut.
+                                  #   Swept: 0.3 over-recuts (ARI 0.141), 0.5 under-reaches (purity
+                                  #   0.762); 0.4 is the knee -- the same boundary the purity diagnostic
+                                  #   put between clean and mixed clusters.
 FK_INTRA_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_INTRA_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);
