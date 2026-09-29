@@ -449,6 +449,22 @@ FK_CONS_CAP_AMP:         0        # 0 | 0-0.7; 0.5 measured best (0.3 under-corr
                                   #   equal purity (+1,089/-209), and it is what makes iteration and
                                   #   looser quantiles safe (own_q 0.85 holds 4.1:1 with it, 1.6:1
                                   #   without).
+FK_CONS_PURE_IQR:        0        # 0 | 0 or 0.2-0.4; 0 = every templated cluster claims.  The
+                                  #   curator's only-strip-with-PURE-clusters rule: a cluster may CLAIM
+                                  #   only while the IQR of its own spikes' matched gain g is <= this.
+                                  #   Own-gain spread is the best GT-purity predictor measured (AUC 0.84,
+                                  #   vs own-distance tail 0.60 and split-half template ncorr 0.55; pure
+                                  #   clusters' median IQR 0.21 vs impure 0.41 on g6), and an impure
+                                  #   claimant is doubly wrong: its template is a mixture and its
+                                  #   inflated own-distance quantiles hand it an oversized radius.
+                                  #   Gated clusters stay strippable FROM, and under ITERS the score is
+                                  #   recomputed every round, so a cluster EARNS claiming rights as it
+                                  #   purifies (IQR quartile breakdown: under ~25% contamination).  On
+                                  #   top of ITERS+CAP_AMP: 0.2 -> 10.5:1 fixed:broken (+1,254/-119),
+                                  #   0.3 -> 6.4:1, 0.4 -> 5.5:1 (ungated 4.9:1) -- and it is what makes
+                                  #   looser quantiles PAY: with OWN_Q 0.85 / MARGIN 0.90 the combo is
+                                  #   the best of the 39 settings measured (+1,781/-400 at 4.5:1, GT
+                                  #   purity 0.779 -> 0.791, and +1.9pp at the next intrachunk layer).
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.

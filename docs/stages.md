@@ -166,6 +166,7 @@ Positional: `session`, `group`
 | `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
 | `--cons-iters` | `1` | FK_CONS_ITERS (default 1) |
 | `--cons-cap-amp` | `0.0` | FK_CONS_CAP_AMP (default 0.0) |
+| `--cons-pure-iqr` | `0.0` | FK_CONS_PURE_IQR (default 0.0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
@@ -412,6 +413,7 @@ Positional: `session`, `group`
 | `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
 | `--cons-iters` | `1` | FK_CONS_ITERS (default 1) |
 | `--cons-cap-amp` | `0.0` | FK_CONS_CAP_AMP (default 0.0) |
+| `--cons-pure-iqr` | `0.0` | FK_CONS_PURE_IQR (default 0.0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
@@ -551,6 +553,7 @@ Positional: `args`
 | `--cons-min-tpl` | `8` | FK_CONS_MIN_TPL (default 8) |
 | `--cons-iters` | `1` | FK_CONS_ITERS (default 1) |
 | `--cons-cap-amp` | `0.0` | FK_CONS_CAP_AMP (default 0.0) |
+| `--cons-pure-iqr` | `0.0` | FK_CONS_PURE_IQR (default 0.0) |
 | `--cons-knn-k` | `20` | FK_CONS_KNN_K (default 20) |
 | `--cons-knn-thr` | `0.3` | FK_CONS_KNN_THR (default 0.3) |
 | `--cons-knn-minref` | `50` | FK_CONS_KNN_MINREF (default 50) |
