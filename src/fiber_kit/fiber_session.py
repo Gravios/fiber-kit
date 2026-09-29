@@ -1542,6 +1542,15 @@ def add_core_arguments(ap):
     ap.add_argument("--clu-stage", dest="clu_stage", default="fiber_session",
                     help="post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] "
                          "(default 'fiber_session'); pass --clu-stage '' for an untagged .clu")
+    ap.add_argument("--skip-extant", dest="skip_extant", type=int,
+                    default=int(os.environ.get("FK_SESSION_SKIP_EXTANT") or
+                                (cfgmod.load_global_config() or {}).get("FK_SESSION_SKIP_EXTANT") or 0),
+                    help="FK_SESSION_SKIP_EXTANT.  1 = if the destination .clu this run would write "
+                         "already exists (--out, else <base>.clu.<out-variant or method>.<elec>"
+                         "[.<clu-stage>]), log it and exit before any compute -- a plan re-run "
+                         "resumes past its fiber-session step instead of regenerating hours of "
+                         "sort over the top of an extant (possibly hand-curated) one.  Delete "
+                         "the file, or set 0 (the default), to rebuild.")
     ap.add_argument("--emit-hierarchy", dest="emit_hierarchy", action=argparse.BooleanOptionalAction, default=True,
                     help="emit the .clu/.clc/.clp microfiber triple (atoms = pre-link fine fragments, "
                          "fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. "
@@ -1645,6 +1654,22 @@ def main():
     gch = np.array(cfg["channels"], int)
     assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
     mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full; p = len(mask) * a.nchan
+
+    # ── skip-if-extant: never rebuild (and silently overwrite) an existing sort ──
+    #   FK_SESSION_SKIP_EXTANT=1: when the destination .clu this invocation would write
+    #   already exists -- a previous plan run's output, possibly hand-curated in Klusters
+    #   since -- report it and stop BEFORE any compute (and before the working-.spk
+    #   resolve, so a session whose products are all under a feature-space alias still
+    #   skips cleanly).  The check is the EXACT path as invoked, so plan re-runs resume
+    #   past their fiber-session step; delete the file or set the knob to 0 to rebuild.
+    if a.skip_extant:
+        _dst = a.out or nio.session_path(a.base, "clu", a.elec,
+                                         variant=(a.out_variant or a.method), tag=a.clu_stage)
+        if os.path.exists(_dst):
+            log(f"group {a.elec} · {a.method}")
+            det("skip-extant", f"{os.path.basename(_dst)} exists -- nothing regenerated "
+                               f"(delete it or set FK_SESSION_SKIP_EXTANT=0 to rebuild)")
+            return
 
     t0 = time.time()
     res = read_res(a.base, a.elec); nspk = len(res)

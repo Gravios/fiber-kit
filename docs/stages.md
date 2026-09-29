@@ -146,6 +146,7 @@ Positional: `session`, `group`
 | `--exclude-clu` | — | per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0. |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the fine-split shape features and use a per-call local SVD (legacy behaviour) |
 | `--clu-stage` | `fiber_session` | post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] (default 'fiber_session'); pass --clu-stage '' for an untagged .clu |
+| `--skip-extant` | `0` | FK_SESSION_SKIP_EXTANT. 1 = if the destination .clu this run would write already exists (--out, else <base>.clu.<out-variant or method>.<elec>[.<clu-stage>]), log it and exit before any compute -- a plan re-run resumes past its fiber-session step instead of regenerating hours of sort over the top of an extant (possibly hand-curated) one. Delete the file, or set 0 (the default), to rebuild. |
 | `--emit-hierarchy` / `--no-emit-hierarchy` | flag (on) | emit the .clu/.clc/.clp microfiber triple (atoms = pre-link fine fragments, fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. --no-emit-hierarchy writes just the flat .clu (legacy). Ignored with --out. |
 | `--gpu` | flag (off) | run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra) |
 | `--jobs` (`-j`) | `1` | parallel worker processes over chunks (default 1 = serial; chunks are independent) |
