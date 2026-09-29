@@ -302,6 +302,82 @@ ung, _ = fc.consolidate(pgw, PL, np.zeros(len(PL), int), mode="strip",
                         strip_kw=dict(own_q=0.5, iters=1), exclude=(0,), log=None)
 check((ung[p_apl] == 2).sum() >= 12, "pure_iqr=0 (off): the impure X claims immediately, as before")
 
+# ── 3d. the aggregate pool: dissolve hopeless clusters, kk reseeds them ──────
+# A cluster whose remainder is hopeless (own-gain IQR above agg_iqr) dissolves
+# into ONE per-chunk aggregate; the pool never templates but stays claimable;
+# KlustaKwik over the pool seeds candidate templates later rounds vacuum toward.
+mixA = (TPL_A[None] * np.random.default_rng(51).uniform(0.5, 1.5, (120, 1, 1))
+        + np.random.default_rng(52).normal(0, 3.0, (120, NSAMP, NCH)))
+mixB = spikes(TPL_B, 120, noise=3.0, seed=53)
+mix2 = (TPL_A[None] * np.random.default_rng(54).uniform(0.5, 1.5, (100, 1, 1))
+        + np.random.default_rng(55).normal(0, 3.0, (100, NSAMP, NCH)))
+pureD = spikes(TPL_C, 140, noise=3.0, seed=56)
+pureD2 = spikes(TPL_C, 140, noise=3.0, seed=57)
+GW_ = np.concatenate([np.concatenate([mixA, mixB]), pureD, mix2, pureD2]).astype(np.float32)
+GL_ = np.concatenate([np.full(240, 6), np.full(140, 2), np.full(100, 6), np.full(140, 2)])
+GC_ = np.concatenate([np.zeros(380, int), np.ones(240, int)])
+g_h0 = np.arange(0, 240)                                    # chunk-0 hopeless members
+g_h1 = np.arange(380, 480)                                  # chunk-1 hopeless members
+def ggw(ix):
+    return GW_[np.asarray(ix)]
+# dissolve only (reseed starved by a huge minnew): one NEW aggregate id per chunk
+agg_lab, agg_tot = fc.consolidate(ggw, GL_, GC_, mode="strip", exclude=(0,),
+                                  strip_kw=dict(iters=1, agg_iqr=0.5,
+                                                agg_minnew=10 ** 6), log=None)
+a0 = set(agg_lab[g_h0].tolist()) - {2, 6}
+a1 = set(agg_lab[g_h1].tolist()) - {2, 6}
+check(len(a0) == 1 and min(a0) > 6, "a hopeless cluster dissolves into ONE new aggregate id")
+check(len(a1) == 1 and a1 != a0, "each chunk gets its OWN aggregate")
+check((agg_lab[GL_ == 2] == 2).all(), "pure clusters are untouched by the dissolve")
+check(agg_tot["agg"] >= 300 and agg_tot["agg_new"] == 0,
+      "dissolve is counted; the starved reseed makes nothing")
+# full arc (vacuum ON): dissolve -> kk finds the pooled shapes -> rounds vacuum
+arc_lab, arc_tot = fc.consolidate(ggw, GL_, np.where(GC_ == 0, 0, -1), mode="strip",
+                                  exclude=(0,),
+                                  strip_kw=dict(iters=3, agg_iqr=0.5, agg_every=1,
+                                                agg_minnew=30, agg_vac=1), log=None)
+check(arc_tot["agg_new"] >= 2, f"kk reseeds the pool ({arc_tot['agg_new']} candidate template(s))")
+new_ids = [c for c in np.unique(arc_lab[g_h0]) if c > 6]
+coh = 0
+for c in new_ids:
+    m = np.flatnonzero(arc_lab[:480] == c)
+    if m.size < 20: continue
+    fa = np.mean(m < 120)                                    # fraction from the A-scale group
+    coh += (fa >= 0.8 or fa <= 0.2)
+check(coh >= 2, f"reseeded clusters are shape-coherent ({coh} of {len(new_ids)} pure by origin)")
+
+# default = QUARANTINE: without agg_vac the pool's spikes are never claimed,
+# even by a pure cluster their shapes match; with it, the vacuum runs.
+qA = spikes(TPL_A, 150, noise=3.0, seed=61)
+qmix = np.concatenate([
+    TPL_A[None] * np.random.default_rng(62).uniform(0.5, 1.5, (120, 1, 1))
+    + np.random.default_rng(63).normal(0, 3.0, (120, NSAMP, NCH)),
+    spikes(TPL_B, 120, noise=3.0, seed=64)])
+QW_ = np.concatenate([qA, qmix]).astype(np.float32)
+QL_ = np.concatenate([np.full(150, 2), np.full(240, 6)])
+q_mix = np.arange(150, 390)
+def qgw(ix):
+    return QW_[np.asarray(ix)]
+QKW = dict(iters=3, agg_iqr=0.5, agg_minnew=10 ** 6)
+qv0, t_v0 = fc.consolidate(qgw, QL_, np.zeros(390, int), mode="strip", exclude=(0,),
+                           strip_kw=dict(QKW), log=None)
+qv1, t_v1 = fc.consolidate(qgw, QL_, np.zeros(390, int), mode="strip", exclude=(0,),
+                           strip_kw=dict(QKW, agg_vac=1), log=None)
+pool0 = int((qv0[q_mix] > 6).sum()); pool1 = int((qv1[q_mix] > 6).sum())
+nA0 = int((qv0[q_mix] == 2).sum()); nA1 = int((qv1[q_mix] == 2).sum())
+check(t_v0["agg"] > 0 and pool0 > pool1,
+      f"quarantine (default) holds the pool ({pool0} pooled vs {pool1} with the vacuum)")
+check(nA1 > nA0, f"agg_vac=1 vacuums matching pool spikes back ({nA0} -> {nA1} into the pure cell)")
+
+# excluded ids are HARD inert: even a template-perfect spike in cluster 0 stays
+ex_pl = spikes(TPL_A, 6, noise=1.0, seed=58)
+EW_ = np.concatenate([spikes(TPL_A, 150, noise=3.0, seed=59),
+                      spikes(TPL_B, 150, noise=3.0, seed=60), ex_pl]).astype(np.float32)
+EL_ = np.concatenate([np.full(150, 2), np.full(150, 3), np.zeros(6, int)])
+ex_new, _ = fc.strip_pass(lambda ix: EW_[np.asarray(ix)], EL_, np.arange(306),
+                          exclude=(0,), rng=rng)
+check((ex_new[300:] == 0).all(), "excluded spikes never move, even template-perfect ones")
+
 # ── 4. knn behaviour through the wrapper ─────────────────────────────────────
 k_lab = LAB.copy()
 k_planted = np.arange(40 + 200, 40 + 200 + 15)                              # 15 true-B spikes...

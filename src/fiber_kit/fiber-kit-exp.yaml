@@ -464,7 +464,10 @@ FK_SESSION_CONS_MODE:    strip    # "" | off/strip/knn/both.  Stage-scoped overr
                                   #   0.779 -> 0.791 at the session layer, and the gain COMPOUNDS
                                   #   downstream: +1.9pp purity at the following intrachunk layer at
                                   #   unchanged ARI (single-pass fixed-cap strip: +0.7pp / +1.3pp at
-                                  #   1.8:1 -- cleaner atoms, cleaner merges).
+                                  #   1.8:1 -- cleaner atoms, cleaner merges).  With the AGG_IQR 0.6
+                                  #   melting pot (quarantine) on top, the chain reaches intrachunk ARI
+                                  #   0.185 (baseline 0.173), purity 0.707, completeness 0.209, with
+                                  #   parents 1,825 -> ~1,700 and the residue quarantined per chunk.
 FK_INTRA_CONS_MODE:      ""       # "" | as above, for fiber-intrachunk (pre-link units; strip only advised).
 FK_ALINK_CONS_MODE:      ""       # "" | as above, for fiber-anchor-link.  Net-negative on a curated-grade
                                   #   sort -- keep off; treat knn kept-distinct buckets as an over-merge
@@ -541,6 +544,40 @@ FK_CONS_PURE_IQR:        0.3      # 0 | 0 or 0.2-0.4; 0 = every templated cluste
                                   #   looser quantiles PAY: with OWN_Q 0.85 / MARGIN 0.90 the combo is
                                   #   the best of the 39 settings measured (+1,781/-400 at 4.5:1, GT
                                   #   purity 0.779 -> 0.791, and +1.9pp at the next intrachunk layer).
+FK_CONS_AGG_IQR:         0.6      # 0 | 0 or 0.5-0.8; 0 = off.  The MELTING POT: after each round, a
+                                  #   cluster whose remainder is hopeless (own-gain IQR above this) is
+                                  #   dissolved into ONE per-chunk aggregate -- the strip has pulled out
+                                  #   what it could classify, and what is left stops posing as a unit.
+                                  #   The g6 band at IQR >= 0.6 runs mean GT purity 0.58 (68% of
+                                  #   clusters below 0.7 pure).  Pool-born parents are never
+                                  #   re-dissolved.  Lower = more quarantined (g6: 0.6 pooled 20,144
+                                  #   spikes, 0.8 pooled 6,432).
+FK_CONS_AGG_EVERY:       3        # 3 | 1-5 (rounds).  KlustaKwik cadence over a pool subsample (plus a
+                                  #   final pass): components >= AGG_MINNEW become NEW parents --
+                                  #   structured curation material in place of dozens of dissolved husks
+                                  #   (g6 at 0.6: parents 1,825 -> 1,615-1,696), occasionally a
+                                  #   recovered template.  kk's noise bucket and small components stay
+                                  #   pooled.  Cadence 2 measured ~= 3.
+FK_CONS_AGG_MINNEW:      30       # 30 | 20-60.  Min subsampled spikes for a kk component to be
+                                  #   promoted to a parent.
+FK_CONS_AGG_VAC:         0        # 0 | 0/1.  0 = QUARANTINE (default): the pool is inert both ways --
+                                  #   pure parent-reduction and review material, promotion ungated (a
+                                  #   mixture component still cannot STRIP: the PURE_IQR claim gate).
+                                  #   1 = VACUUM: the pool stops templating but its spikes become
+                                  #   claimable, protected by a runner-up CONTRAST margin (best D <=
+                                  #   MARGIN x second-best, replacing the own-distance margin pool
+                                  #   spikes no longer have), and promotion is held to the PURE_IQR bar
+                                  #   (failed components stay mineable; the few survivors ran 0.75 GT
+                                  #   purity vs 0.43 ungated).  Measured at AGG_IQR 0.6 on g6: vacuum
+                                  #   purifies the ASSIGNED sort to 0.833 GT (+4.2pp over the no-pool
+                                  #   combo) at +2,525/-705 assigned moves, deferring ~7k rightly-homed
+                                  #   spikes to the pool as the honest cost; quarantine holds assigned
+                                  #   precision nearer the combo and recovers more structure (85
+                                  #   components) at 0.804 pool-adjusted purity.  CHAIN-CHECKED: feeding
+                                  #   a PIPELINE, quarantine wins every downstream metric (intrachunk ARI
+                                  #   0.185 vs 0.172 no-pool / 0.164 vacuum; purity 0.707; completeness
+                                  #   0.209) -- the vacuum's deferral pool starves the linker.  Use
+                                  #   VAC 1 only for a TERMINAL sort headed straight to Klusters.
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.
