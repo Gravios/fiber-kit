@@ -1681,7 +1681,7 @@ def main():
             raise SystemExit(f"--exclude-clu has {_ex.size} labels, .res has {nspk}")
         keep = _ex == 0
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=a.method)
-    assert spk.shape[0] == nspk, f".res {nspk} vs {spkpath} {spk.shape[0]}"
+    nio.check_spk_count(nspk, spk, spkpath, a.nsamp, a.nchan)
     filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
     log(f"group {a.elec} \u00b7 {a.method} \u00b7 {nspk:,} spikes")
     if a.exclude_clu:

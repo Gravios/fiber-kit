@@ -135,7 +135,7 @@ def main():
     res = nio.read_res(base, elec); n = len(res)
     spkp = nio.session_path(base, "spk", elec, variant=a.spk_variant)
     spk = nio.open_spk_file(spkp, NS, NC)
-    assert spk.shape[0] == n, f".res {n} vs {os.path.basename(spkp)} {spk.shape[0]}"
+    nio.check_spk_count(n, spk, spkp, NS, NC)
     _log(f"group {elec} \u00b7 {n:,} spikes \u00b7 {os.path.basename(spkp)}")
 
     hf, dc, pk = spike_features(spk, n, NS, NC, batch=a.batch)

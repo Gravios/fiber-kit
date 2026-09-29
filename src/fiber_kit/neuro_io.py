@@ -539,6 +539,38 @@ def open_spkD(base, elec, nsamp, nch, mode="r", prefer=None):
     return mm, r.path
 
 
+def check_spk_count(nspk, spk, path, nsamp, nchan, res_name=".res"):
+    """Gate a stage on the working spk holding EXACTLY the .res' spike count.
+
+    A mismatch is almost never missing spikes -- it is GEOMETRY: the session
+    yaml's nSamples (or a --nsamp override) disagreeing with the window the
+    extraction that wrote this .spk actually used, so the same bytes reshape
+    into the wrong spike count and open_spk_file silently drops the trailing
+    partial (a 42-sample extraction read at nSamples 52 turns 138,319 spikes
+    into 111,719).  When the file's size divides exactly as nspk x nchan x
+    some other window, say so and name that window; otherwise fall back to
+    the per-spike-files-out-of-step reading.  Raises SystemExit; no-op when
+    the counts agree."""
+    n = int(spk.shape[0])
+    if n == nspk:
+        return
+    msg = f"{res_name} {nspk:,} vs {path} {n:,} spikes"
+    hint = (" -- per-spike files out of step: was the .res or this .spk "
+            "regenerated without the other?")
+    try:
+        total = os.path.getsize(path) // SPK_DTYPE.itemsize       # samples in the file
+        if nspk > 0 and nchan > 0 and total % (nspk * nchan) == 0:
+            true_nsamp = total // (nspk * nchan)
+            hint = (f" -- the file divides EXACTLY as {nspk:,} spikes x {nchan} ch x "
+                    f"{true_nsamp} samples per spike, but the session says nSamples "
+                    f"{nsamp}: this .spk was extracted at {true_nsamp}.  Fix the "
+                    f"group's nSamples/peakSampleIndex in the session yaml (or pass "
+                    f"--nsamp {true_nsamp}), or re-extract this variant at {nsamp}.")
+    except OSError:
+        pass
+    raise SystemExit(msg + hint)
+
+
 def open_spk_raw(base, elec, nsamp, nchan, mode="r"):
     """Resolve and memmap the RAW (standard) waveforms: <base>.spk.standard.N (then legacy
     <base>.spk.N).  For position/amplitude work — never returns the stderiv .spk.  Returns
