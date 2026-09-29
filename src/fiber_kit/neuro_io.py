@@ -515,10 +515,27 @@ def open_spk(base, elec, nsamp, nchan, prefer=None, mode="r"):
     return open_spk_file(r.path, nsamp, nchan, mode=mode), r
 
 
-def open_spkD(base, elec, nsamp, nch, mode="r"):
+def open_spkD(base, elec, nsamp, nch, mode="r", prefer=None):
     """Back-compat shim: same contract as the historical fiber_session.open_spkD
-    — returns (memmap, path), preferring the derived (stderiv) representation."""
-    mm, r = open_spk(base, elec, nsamp, nch, prefer=prefer_derived(), mode=mode)
+    — returns (memmap, path), preferring the derived (stderiv) representation.
+
+    `prefer` (one token or a list) is tried FIRST: a stage that knows its
+    --method / --clu-method token passes it here, so a directory holding
+    SEVERAL stderiv-family variants (e.g. stderiv_C5 next to stderiv_C5_D34)
+    resolves to the caller's token instead of raising resolve_input's
+    family-ambiguity error.  With no caller token, $FK_SPK_VARIANT (exported
+    by fiber-pipeline from its settled method token) fills the same slot for
+    the diagnostics and curation tools that carry no variant flag of their
+    own.  The prefer_derived() family walk still follows, so an exact token
+    with no waveform file (a _D lag alias, say) degrades to the historical
+    behaviour, and a family name left at its default keeps the explicit
+    ambiguity error and its guidance."""
+    if prefer is None or prefer == "":
+        prefer = os.environ.get("FK_SPK_VARIANT") or None
+    toks = ([prefer] if isinstance(prefer, str) else list(prefer)) if prefer else []
+    toks = [t for t in toks if t]
+    want = toks + [w for w in prefer_derived() if w not in toks]
+    mm, r = open_spk(base, elec, nsamp, nch, prefer=want, mode=mode)
     return mm, r.path
 
 
