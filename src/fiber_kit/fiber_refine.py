@@ -1449,7 +1449,7 @@ def main():
     t0 = time.time()
     res = nio.read_res(base, elec)
     spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan, prefer=a.out_method)
-    assert spk.shape[0] == len(res), f".res {len(res)} vs {spkpath} {spk.shape[0]}"
+    nio.check_spk_count(len(res), spk, spkpath, nsamp, nchan)
     waves = np.asarray(spk[:], dtype=float)
     init = None
     if a.in_clu is not None and os.path.exists(a.in_clu):
