@@ -639,6 +639,9 @@ usage() {
     echo "       $(basename "$0") <elec> --plan <plan.yaml>     # run a custom, reorderable, repeatable step plan"
     echo "       $(basename "$0") --emit-plan > plan.yaml        # write the canonical plan as an editable template"
     echo "options: --plan <file>  run an ordered step plan (stages may repeat with different in/out tags+params)"
+    echo "         --method <tok> | --variant <tok>  session method token for the WHOLE run (before any stage"
+    echo "                         name; works bare and with --plan) -- CLI form of FK_REALIGN_VARIANT,"
+    echo "                         e.g. $(basename "$0") 6 --method stderiv_C5_D34"
     echo "         --dry-run | -n  print the stage commands instead of running them (works with or without --plan)"
     echo "         --emit-plan     print the canonical plan template ; -l/--list  list stages ; -h/--help"
     echo "primary plan: a 'pipeline:' section embedded in fiber-kit.yaml (\$FK_CONFIG) runs by default ONLY when no --plan"
@@ -854,6 +857,28 @@ main() {
         echo "error: electrode group required as the first argument (e.g. '$(basename "$0") 5'), or set FK_ELEC" >&2
         usage >&2; exit 2
     }
+
+    # global method-token flag: '--method <tok>' / '--variant <tok>' may LEAD the stage list --
+    # or stand alone ('fiber-pipeline 6 --method stderiv_C5_D34', which then runs the embedded
+    # plan), or accompany --plan -- naming the session's feature/method token for the WHOLE run:
+    # the CLI counterpart of FK_REALIGN_VARIANT.  Before this, the token flag was only legal as a
+    # single-stage override arg, so plan runs had no CLI spelling at all and the natural
+    # invocation above died with 'override args must follow exactly one stage'.  Peeled only
+    # AHEAD of the first stage name: 'fiber-pipeline 6 fiber-realign --variant X' keeps its
+    # historical override-arg path (same token either way, via the settle scan below), and the
+    # stage still receives the flag verbatim.
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            --method|--variant)
+                [ -n "${2:-}" ] || { echo "error: $1 needs a token (e.g. $1 stderiv_C5_D34)" >&2; exit 2; }
+                REALIGN_VARIANT="$2"; shift 2 ;;
+            --method=*|--variant=*)
+                REALIGN_VARIANT="${1#*=}"
+                [ -n "$REALIGN_VARIANT" ] || { echo "error: ${1%%=*} needs a token" >&2; exit 2; }
+                shift ;;
+            *) break ;;
+        esac
+    done
 
     # build the requested stage set, then optional per-stage override args (BEFORE any cd, so bad
     # names report cleanly).  The first token after the stage name(s) that is NOT a stage name begins
