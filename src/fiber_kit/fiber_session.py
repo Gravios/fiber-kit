@@ -1303,8 +1303,8 @@ def _init_chunk_worker(cfg):
     _CTX.clear(); _CTX.update(cfg)
     if cfg.get("gpu"):
         _bk.use_gpu(True)
-    _CTX["spk"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
-                                  prefer=nio.prefer_derived())
+    _CTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                   prefer=cfg.get("method"))
     _CTX["spk_std"] = None
     if float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:      # inter-channel-timing gate needs RAW templates
         try:
@@ -1727,7 +1727,8 @@ def main():
     cf = build_cf(a, meth, cluster_basis)
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
-               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
+               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
+               method=a.method)
 
     tasks = []; ncore_of = {}
     for c in range(nchunks):

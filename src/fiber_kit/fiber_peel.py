@@ -252,7 +252,7 @@ def main():
 
     _, src = nio.read_clu_at(base, elec, variant=clu_method, tag=clu_stage)
     res = nio.read_res(base, elec)
-    spk, _ = nio.open_spk(base, elec, nsamp, nch)
+    spk, _ = nio.open_spkD(base, elec, nsamp, nch, prefer=clu_method)
 
     out, n_merged = peel_clu(
         src, res, spk, sr, min_n=a.min_n,

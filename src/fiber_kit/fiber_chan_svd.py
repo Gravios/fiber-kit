@@ -228,7 +228,7 @@ def main():
     res_t = nio.read_res(base, elec)
     n_spikes = len(res_t)
     if a.spk == "stderiv":
-        spk, r = nio.open_spk(base, elec, nsamp, nchan, prefer=nio.prefer_derived())
+        spk, r = nio.open_spkD(base, elec, nsamp, nchan, prefer=a.variant)
     else:
         spk, r = nio.open_spk_raw(base, elec, nsamp, nchan)
     ids = _load_clu(base, elec, n_spikes, a.in_clu, a.variant, a.stage)

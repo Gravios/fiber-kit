@@ -96,13 +96,36 @@ def main():
             mm, path = _open(base, prefer="stderiv_C5_D34")
             check("alias token with no alias .spk degrades to the family's one member",
                   path.endswith(".spk.stderiv_C5.1"))
+
+        # 9/10. the chunk-worker path (the reported crash site): fiber_session's
+        #    _init_chunk_worker used open_spk(prefer=prefer_derived()) directly, so it
+        #    family-walked PAST main()'s already-token-resolved open and raised in the
+        #    two-variant dir.  It now threads cfg['method'].
+        import fiber_kit.fiber_session as fs
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "sess")
+            _write_spk(f"{base}.spk.stderiv_C5.1", 5)
+            _write_spk(f"{base}.spk.stderiv_C5_D34.1", 34)
+            import numpy as _np
+            _np.zeros(100 * 2, dtype=_np.int16).tofile(f"{base}.fil")
+            cfg = dict(base=base, elec=1, nsamp=NSAMP, nchan=NCH,
+                       fil=f"{base}.fil", ntotal=2, cf={}, method="stderiv_C5_D34")
+            fs._init_chunk_worker(cfg)
+            check("chunk worker opens the exact-token spk from cfg['method']",
+                  int(fs._CTX["spk"][0, 0, 0]) == 34)
+            try:
+                fs._init_chunk_worker(dict(cfg, method=None))
+                raised = False
+            except ValueError as e:
+                raised = "several 'stderiv' variants" in str(e)
+            check("chunk worker without a token keeps the guidance error", raised)
     finally:
         if env_had is not None:
             os.environ["FK_SPK_VARIANT"] = env_had
         else:
             os.environ.pop("FK_SPK_VARIANT", None)
 
-    print(f"test_spk_variant_resolution: {ok}/8 checks passed")
+    print(f"test_spk_variant_resolution: {ok}/10 checks passed")
 
 
 if __name__ == "__main__":

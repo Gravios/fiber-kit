@@ -32,6 +32,8 @@
 #    recovery_freq, ...) documented in _dump_ensemble below.
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
+import os
+
 import numpy as np
 
 try:
@@ -311,7 +313,13 @@ def run_stochastic(a):
     # (same preference the workers use) rather than assuming plain "stderiv".
     clu_variant = getattr(a, "stochastic_clu_method", None)
     if not clu_variant:
-        _r = nio.resolve_input(a.base, "spk", a.elec, nio.prefer_derived())
+        # --method (the session token) and $FK_SPK_VARIANT lead the walk, so an exact
+        # token resolves even when several family variants share the directory; the
+        # default 'stderiv' already heads prefer_derived(), so nothing changes without one.
+        want = [t for t in ((getattr(a, "method", "") or ""),
+                            os.environ.get("FK_SPK_VARIANT") or "") if t]
+        _r = nio.resolve_input(a.base, "spk", a.elec,
+                               want + [w for w in nio.prefer_derived() if w not in want])
         clu_variant = _r.variant or "stderiv"      # untagged legacy -> the historical name
 
     res = nio.read_res(a.base, a.elec)

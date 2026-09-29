@@ -352,7 +352,7 @@ if __name__ == "__main__":
     ap.add_argument("--realign", action="store_true")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
-    mm, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan)
+    mm, _ = nio.open_spkD(a.base, a.elec, a.nsamp, a.nchan)   # $FK_SPK_VARIANT names the exact spk when the family is ambiguous
     spk = np.asarray(mm, float)
     basis = None if a.no_global_basis else fpca.read_cluster_basis(a.base, a.elec, a.method)
     F = fpca.cluster_features(spk, basis, realign=a.realign) if basis is not None else None
