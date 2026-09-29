@@ -1020,7 +1020,8 @@ def _init_refine_worker(cfg):
     """Pool initializer (also run for the serial path): stash the static config and open the
     .spkD / .fil memmaps once per worker process.  Mirrors fiber_session._init_chunk_worker."""
     _RCTX.clear(); _RCTX.update(cfg)
-    _RCTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"])
+    _RCTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                    prefer=cfg.get("method"))
     _RCTX["filmm"] = nio.open_signal(f'{cfg["base"]}.fil', cfg["ntotal"])
     if cfg.get("need_raw"):                     # standard .spk for the cell-type-aware warp-resid gate
         _RCTX["raw"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"], prefer=["standard"])
@@ -1047,7 +1048,8 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    chunk_min, overlap_min, *, init=None, refine_kw=None,
                    min_group=40, track_geometry=False, make_bundles=False,
                    strict_link=True, link_min_anchor=20,
-                   link_continuity=False, continuity_kw=None, chpos=None, jobs=1, verbose=True):
+                   link_continuity=False, continuity_kw=None, chpos=None, jobs=1, verbose=True,
+                   method=None):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
     then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
@@ -1082,7 +1084,8 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
     need_raw = (refine_kw.get("merge_warp_resid_thr_int") is not None
                 or refine_kw.get("merge_warp_resid_thr_pyr") is not None)
     cfg = dict(base=base, elec=elec, ntotal=ntotal, nsamp=nsamp, nchan=nchan, gch=gch,
-               mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw, need_raw=need_raw)
+               mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw, need_raw=need_raw,
+               method=method)
     jobs = max(1, int(jobs))
     if jobs == 1 or len(tasks) <= 1:                            # chunks are independent; serial == the former inline loop
         _init_refine_worker(cfg)
@@ -1445,7 +1448,7 @@ def main():
 
     t0 = time.time()
     res = nio.read_res(base, elec)
-    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan, prefer=a.out_method)
     assert spk.shape[0] == len(res), f".res {len(res)} vs {spkpath} {spk.shape[0]}"
     waves = np.asarray(spk[:], dtype=float)
     init = None
@@ -1511,7 +1514,7 @@ def main():
             link_continuity=a.link_continuity,
             continuity_kw=dict(sig_thr=a.continuity_sig_thr, depth_gate=a.continuity_depth_gate,
                                max_gap=a.continuity_max_gap),
-            verbose=True)
+            verbose=True, method=a.out_method)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
         clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
         res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)

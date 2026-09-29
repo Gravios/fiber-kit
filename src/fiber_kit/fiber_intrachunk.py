@@ -1270,7 +1270,7 @@ def main():
         _log(f"intrachunk hierarchy: {len(newpar)} per-chunk atoms -> "
              f"{len(set(newpar.values()))} units (.clu/.clc/.clp)")
 
-    spkD, _ = nio.open_spkD(base, elec, nsamp, nch)   # open_spkD returns (memmap, path)
+    spkD, _ = nio.open_spkD(base, elec, nsamp, nch, prefer=clu_method)   # returns (memmap, path)
     tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
     def _load_positions():
         # positions are only needed by the signature-based gates (build_signatures); the 'ms'

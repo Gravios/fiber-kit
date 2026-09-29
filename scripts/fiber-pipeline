@@ -923,6 +923,19 @@ main() {
         fi
     fi
 
+    # Every stage that owns a variant flag now threads the settled token into its working-.spk
+    # resolve (open_spkD prefer=<token>).  The diagnostics/curation tools (fiber-qc, fiber-stats,
+    # fiber-view, ...) carry no such flag, so export the token for THEM: neuro_io.open_spkD reads
+    # $FK_SPK_VARIANT when its caller passed nothing.  Without this, a session holding a
+    # hand-materialised feature-space-alias .spk (e.g. .spk.stderiv_C5_D34 copied next to
+    # .spk.stderiv_C5 so Klusters can display waveforms under the alias name) makes the bare
+    # stderiv-family walk ambiguous and every no-flag open raises resolve_input's guidance error.
+    # Exact (suffixed) tokens only: exporting the literal family default 'stderiv' would just
+    # re-run the same family walk it falls back to anyway.
+    case "${REALIGN_VARIANT:-}" in
+        *_*) export FK_SPK_VARIANT="$REALIGN_VARIANT" ;;
+    esac
+
     # --plan: run the ordered (possibly-repeating) plan and stop.  With no --plan, an embedded
     # `pipeline:` section in $FK_CONFIG (fiber-kit.yaml) is the PRIMARY plan and runs by default.
     if [ -z "$PLAN" ] && [ "$REQUESTED_STAGES" = 0 ] && [ -f "$FK_CONFIG" ] && grep -qE '^pipeline:[[:space:]]*$' "$FK_CONFIG"; then
