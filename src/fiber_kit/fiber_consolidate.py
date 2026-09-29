@@ -111,6 +111,10 @@ _KNOBS = {
     "FK_CONS_ITERS": ("cons_iters", int, 1),
     "FK_CONS_CAP_AMP": ("cons_cap_amp", float, 0.0),
     "FK_CONS_PURE_IQR": ("cons_pure_iqr", float, 0.0),
+    "FK_CONS_AGG_IQR": ("cons_agg_iqr", float, 0.0),
+    "FK_CONS_AGG_EVERY": ("cons_agg_every", int, 3),
+    "FK_CONS_AGG_MINNEW": ("cons_agg_minnew", int, 30),
+    "FK_CONS_AGG_VAC": ("cons_agg_vac", int, 0),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),
@@ -172,7 +176,9 @@ def kwargs_from_args(a):
                     twin_thr=(a.cons_twin if a.cons_twin > 0 else None),
                     tpl_cap=a.cons_tpl_cap, min_tpl=a.cons_min_tpl,
                     iters=a.cons_iters, cap_amp=a.cons_cap_amp,
-                    pure_iqr=a.cons_pure_iqr)
+                    pure_iqr=a.cons_pure_iqr, agg_iqr=a.cons_agg_iqr,
+                    agg_every=a.cons_agg_every, agg_minnew=a.cons_agg_minnew,
+                    agg_vac=a.cons_agg_vac)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -236,7 +242,8 @@ def _chan_worst(X, t):
 def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
                chan_uniform=0.0, margin=0.85, own_q=0.90, tgt_q=0.90,
                tgt_scale=1.25, twin_thr=0.93, tpl_cap=1024, min_tpl=8, exclude=(0,),
-               cap_amp=0.0, pure_iqr=0.0, block=20000, rng=None, log=None):
+               cap_amp=0.0, pure_iqr=0.0, no_tpl=(), stats=None,
+               block=20000, rng=None, log=None):
     """One template-strip pass over the spikes `idx` (absolute indices; one
     chunk).  Returns (labels, n_moved): labels is a full-length copy with the
     moved spikes reassigned to the claiming template's cluster.  Thresholds
@@ -258,13 +265,22 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     mixture and its inflated own-distance quantiles hand it an oversized
     radius.  Gated clusters remain strippable FROM, and under iteration the
     score is recomputed every round, so a cluster earns claiming rights as it
-    purifies.  0 = every templated cluster claims."""
+    purifies.  0 = every templated cluster claims.
+
+    no_tpl ids never template (so never claim, and carry no churn floor) but
+    their spikes remain CLAIMABLE — the aggregate-pool contract.  exclude ids
+    are fully inert both ways: they neither template nor lose spikes.
+    `stats`, when a dict, is filled with per-templated-cluster diagnostics
+    ("giqr": own-gain IQR) for the driver's dissolve decision."""
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     lab = labels[idx]
     excl = {int(e) for e in exclude}
-    clusters = [int(c) for c in np.unique(lab) if int(c) not in excl]
-    if len(clusters) < 2:
+    ntpl = {int(e) for e in no_tpl}
+    pooled = np.isin(lab, sorted(ntpl)) if ntpl else np.zeros(idx.size, bool)
+    clusters = [int(c) for c in np.unique(lab)
+                if int(c) not in excl and int(c) not in ntpl]
+    if len(clusters) < 2 and not ntpl:
         return labels, 0
 
     terms = {}
@@ -303,6 +319,7 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     best_d = np.full(idx.size, np.inf)
     best_t = np.full(idx.size, -1, int)
     own_col = np.array([col.get(int(c), -1) for c in lab])
+    movable = ~np.isin(lab, sorted(excl))              # excluded ids never lose spikes
 
     # Pass 1 — every spike's distance to its OWN template, then the
     # per-cluster calibration quantiles (see the module preamble).
@@ -333,11 +350,14 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         if dc.size:
             floor_c[i] = float(np.quantile(dc, own_q))
             radius_c[i] = min(tgt_scale * float(np.quantile(dc, tgt_q)), float(cap_c[i]))
-        if pure_iqr > 0.0:
+        if pure_iqr > 0.0 or stats is not None:
             gc = g_own_all[lab == c]
             gc = gc[np.isfinite(gc)]
-            claim_ok[i] = bool(gc.size) and \
-                float(np.quantile(gc, 0.75) - np.quantile(gc, 0.25)) <= pure_iqr
+            iq = float(np.quantile(gc, 0.75) - np.quantile(gc, 0.25)) if gc.size else float("inf")
+            if stats is not None:
+                stats.setdefault("giqr", {})[int(c)] = iq
+            if pure_iqr > 0.0:
+                claim_ok[i] = bool(gc.size) and iq <= pure_iqr
 
     # Pass 2 — claims.
     for s in range(0, idx.size, block):
@@ -356,6 +376,20 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
               & (margin * d_own[:, None] >= D) & (d_own >= own_floor)[:, None])
         ok &= claim_ok[None, :]                                 # only pure clusters claim
         ok &= pair_ok[np.where(has_own, oc, C)]                 # twin pairs never trade
+        ok[~movable[r]] = False                                 # excluded spikes sit out
+        pl = np.flatnonzero(pooled[r])
+        if pl.size:
+            # Pool spikes have no own template, so the own-distance margin
+            # cannot protect them — replace it with a CONTRAST margin: the
+            # best template must beat the runner-up by the same factor
+            # (best D <= margin * second-best D over the eligible columns),
+            # so a pool spike leaves only for an UNAMBIGUOUS home.  A single
+            # eligible column passes (runner-up = inf).
+            Dp = np.where(ok[pl], D[pl], np.inf)
+            if Dp.shape[1] >= 2:
+                two = np.partition(Dp, 1, axis=1)[:, :2]
+                bad = two[:, 0] > margin * two[:, 1]
+                ok[pl[bad]] = False
         ok[np.flatnonzero(has_own), oc[has_own]] = False        # own column never claims
         if chan_uniform > 0.0 and ok.any():
             for ci in range(len(tids)):
@@ -374,6 +408,62 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         log(f"strip: {int(moved.sum())} spike(s) reassigned across "
             f"{len(np.unique(best_t[moved]))} template(s)")
     return labels, int(moved.sum())
+
+
+def _agg_recluster(get_waves, labels, idx, agg_id, next_id, minnew, rng,
+                   promote_iqr=0.0, cap=6000, dims=10, log=None):
+    """KlustaKwik over the chunk's aggregate pool: components with >= minnew
+    member spikes become NEW clusters.  kk's noise bucket and sub-minnew
+    components stay pooled.  Only a <= cap evenly-strided subsample is
+    clustered — the recluster's job is to FIND structure, not to assign
+    every spike.
+
+    promote_iqr (>0; the driver passes the claim gate's pure_iqr when the
+    VACUUM is on) additionally holds components to the claimants' purity
+    bar — own-gain IQR against the component's own median template — and
+    failed components stay pooled, where the vacuum keeps mining them.
+    Measured on g6 pools: ungated promotion mints ~0.43-GT-purity mixture
+    parents; gated, the few survivors run ~0.75.  Under QUARANTINE the
+    driver leaves it 0: there the components ARE the deliverable —
+    structured curation parents in place of dozens of dissolved husks — and
+    a mixture component cannot strip anyway (the claim gate).  Returns
+    (labels, next_id, new_ids)."""
+    ai = idx[labels[idx] == agg_id]
+    if ai.size < max(2 * minnew, 60):
+        return labels, next_id, []
+    sub = ai[:: max(1, ai.size // int(cap))][: int(cap)]
+    W = np.asarray(get_waves(sub), float).reshape(sub.size, -1)
+    Wc = W - W.mean(0)
+    k = min(int(dims), Wc.shape[1], Wc.shape[0] - 1)
+    F = Wc @ np.linalg.svd(Wc, full_matrices=False)[2][:k].T
+    try:
+        from .klustakwik import klustakwik as _kk
+    except ImportError:
+        from klustakwik import klustakwik as _kk
+    kmax = int(np.clip(sub.size // (2 * max(minnew, 1)), 2, 20))
+    lab_kk = _kk(F, max_clusters=kmax, min_clusters=2, splits=False,
+                 verbose=False, seed=int(rng.integers(2 ** 31)))
+    new_ids = []
+    for c in np.unique(lab_kk):
+        if c == 0:
+            continue                                   # kk noise stays pooled
+        m = lab_kk == c
+        if int(m.sum()) < int(minnew):
+            continue
+        if promote_iqr > 0.0:
+            t = _tpl_terms(np.median(np.asarray(get_waves(sub[m]), float), 0))
+            if t is None:
+                continue
+            _, gg = _score_block(W[m], t)
+            if float(np.quantile(gg, 0.75) - np.quantile(gg, 0.25)) > promote_iqr:
+                continue                               # a mixture is not a template
+        labels[sub[m]] = next_id
+        new_ids.append(next_id)
+        next_id += 1
+    if log and new_ids:
+        log(f"aggregate recluster: {len(new_ids)} component(s) from "
+            f"{ai.size} pooled spike(s)")
+    return labels, next_id, new_ids
 
 
 # ── the fiber-refine knn-peel, on a chunk subset with arbitrary label ids ───
@@ -449,6 +539,25 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     # (the per-cluster, amplitude-aware "adjusting the distance").  Rounds
     # stop early once a chunk trades nothing.
     strip_iters = max(1, int(strip_kw.pop("iters", 1)))
+    # The AGGREGATE pool (agg_iqr > 0): after each round, clusters whose
+    # remainder is hopeless — own-gain IQR above agg_iqr, a mixture no pure
+    # claimant can finish pulling apart — dissolve into ONE per-chunk
+    # aggregate cluster; every agg_every rounds (and once more after the
+    # loop) KlustaKwik runs over a pool subsample and its components become
+    # new parents: structured curation material in place of dozens of husks,
+    # occasionally a recovered template.  Pool-born parents are never
+    # re-dissolved (one way through the pool, no oscillation).  By default
+    # the pool is a QUARANTINE — its spikes are not claimable — because the
+    # vacuum measurably costs precision (agg_vac=1 turns it on: the pool
+    # stops templating but its spikes become claimable, protected by a
+    # runner-up CONTRAST margin in place of the own-distance margin they
+    # no longer have).
+    agg_iqr = float(strip_kw.pop("agg_iqr", 0.0))
+    agg_every = max(1, int(strip_kw.pop("agg_every", 3)))
+    agg_minnew = int(strip_kw.pop("agg_minnew", 30))
+    agg_vac = int(strip_kw.pop("agg_vac", 0))
+    tot["agg"] = 0
+    tot["agg_new"] = 0
     for ch in np.unique(chunk_ids[chunk_ids >= 0]):
         idx = np.flatnonzero(chunk_ids == ch)
         # One realignment per chunk, shared by both passes (see ALIGNMENT above).
@@ -458,12 +567,50 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
             return _al[np.searchsorted(_idx, np.asarray(ix))]
 
         if mode in ("strip", "both"):
-            for _ in range(strip_iters):
-                labels, n = strip_pass(aw, labels, idx, exclude=exclude,
-                                       rng=rng, **strip_kw)
+            agg_id = -1
+            born = set()
+            since_recluster = 0
+            for r in range(strip_iters):
+                st = {} if agg_iqr > 0.0 else None
+                agg_args = {}
+                if agg_id > 0:
+                    agg_args = (dict(no_tpl=(agg_id,)) if agg_vac
+                                else dict(exclude=tuple(exclude) + (agg_id,)))
+                labels, n = strip_pass(aw, labels, idx,
+                                       **{**dict(exclude=exclude), **agg_args},
+                                       stats=st, rng=rng, **strip_kw)
                 tot["strip"] += n
-                if n == 0:
+                dissolved = reseeded = 0
+                if agg_iqr > 0.0:
+                    hopeless = [c for c, q in st.get("giqr", {}).items()
+                                if q > agg_iqr and c != agg_id and c not in born]
+                    if hopeless:
+                        if agg_id < 0:
+                            agg_id = next_id
+                            next_id += 1
+                        hm = np.isin(labels[idx], hopeless)
+                        labels[idx[hm]] = agg_id
+                        dissolved = int(hm.sum())
+                        tot["agg"] += dissolved
+                        since_recluster += 1
+                    if agg_id > 0 and since_recluster and (r + 1) % agg_every == 0:
+                        labels, next_id, k_new = _agg_recluster(
+                            aw, labels, idx, agg_id, next_id, agg_minnew, rng,
+                            promote_iqr=(float(strip_kw.get("pure_iqr", 0.0))
+                                         if agg_vac else 0.0), log=log)
+                        born.update(k_new)
+                        tot["agg_new"] += len(k_new)
+                        reseeded = len(k_new)
+                        since_recluster = 0
+                if n == 0 and dissolved == 0 and reseeded == 0:
                     break
+            if agg_id > 0 and since_recluster:          # final reseed of a changed pool
+                labels, next_id, k_new = _agg_recluster(
+                    aw, labels, idx, agg_id, next_id, agg_minnew, rng,
+                    promote_iqr=(float(strip_kw.get("pure_iqr", 0.0))
+                                 if agg_vac else 0.0), log=log)
+                born.update(k_new)
+                tot["agg_new"] += len(k_new)
         if mode in ("knn", "both"):
             labels, n, k_new, next_id = knn_pass(aw, labels, idx, exclude=exclude,
                                                  next_id=next_id, realigned=True,
@@ -471,6 +618,8 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
             tot["knn"] += n
             tot["new"] += k_new
     if log:
+        agg_line = (f", dissolved {tot['agg']} into per-chunk aggregates "
+                    f"({tot['agg_new']} reseeded template(s))" if tot.get("agg") else "")
         log(f"[{tag}] mode={mode}: strip moved {tot['strip']}, knn relabelled {tot['knn']} "
-            f"({tot['new']} new cluster(s))")
+            f"({tot['new']} new cluster(s)){agg_line}")
     return labels, tot
