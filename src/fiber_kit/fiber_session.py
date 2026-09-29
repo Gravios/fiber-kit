@@ -1786,7 +1786,12 @@ def main():
         print(f"{IND}{'─' * (lw + 1 + nw)}")
         det("total", f"{uns:>{nw},}", lw)
 
-    anchor_links = []
+    # anchor_links ALWAYS holds one (possibly empty) list per adjacent chunk pair -- the
+    # shape link_chunks returns.  The no-link branch used to leave it [] outright, which
+    # the drift-fit block survived (any([]) is False) but the drift_anchor_pairs
+    # comprehension below did not: anchor_links[c] raised IndexError AFTER the sort was
+    # finished and the .clu/.clc/.clp were already written.
+    anchor_links = [[] for _ in range(max(nchunks - 1, 0))]
     if a.no_link:
         gid = {}; n = 0
         for c in range(nchunks):
