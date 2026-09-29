@@ -63,6 +63,12 @@ pipeline:
 # Deliberately OVER-clusters (many small, clean fragments) so the downstream merge
 # (intrachunk + link, or fiber-defrag) can reassemble units; over-split is recoverable,
 # over-merge is not.
+FK_SESSION_SKIP_EXTANT:  0        # 0 | 0/1.  1 = fiber-session checks the exact destination .clu it would write
+                                  #   (<base>.clu.<out-variant or method>.<elec>[.<clu-stage>]) and, when it exists,
+                                  #   exits before any compute -- a plan re-run RESUMES past its fiber-session step
+                                  #   instead of regenerating hours of sort over an extant (possibly hand-curated)
+                                  #   one.  Delete the file, or FK_SESSION_SKIP_EXTANT=0 (env overrides this yaml),
+                                  #   to force a rebuild.  0 = always rebuild (historical behaviour).
 FK_SESSION_FINE_METHOD:  rkk      # rkk | gmm | fiber | none.  Per-fiber fine clusterer.  rkk (default) = masked-EM
                                   #   KlustaKwik with per-cluster realign + BIC model selection (robust to unequal
                                   #   covariances); gmm = Gaussian-mixture split; fiber = fiber-kit's native cluster_chunk;
