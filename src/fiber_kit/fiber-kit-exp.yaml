@@ -36,27 +36,32 @@
 #  PRIMARY PLAN (embedded).  `fiber-pipeline <elec>` runs THIS by default when this
 #  file is the active $FK_CONFIG; an explicit `--plan <file>` still overrides it.
 #
-#  Experimental WITH-REFINE, FULL-REEXTRACT route: run fiber-refine (split + fold +
-#  merge-back), then collapse over-split fragments WITHIN each chunk (fiber-intrachunk)
-#  and link across chunks.  A fiber-realign runs after EVERY clu-changing stage, in
-#  --reextract --refeaturize mode (re-reads the .fil at the corrected per-spike times and
-#  rebuilds raw+stderiv .spk and .fet), so each stage reads freshly re-extracted spikes
-#  rather than shift-rolled ones -- at the cost of a .fil pass per step.  (fiber-peel is
-#  still skipped; intrachunk does the cross-fragment consolidation refine leaves.)
+#  NO-REFINE, FULL-REEXTRACT route: fiber-session (with the in-stage curator combo --
+#  strip + melting pot, FK_SESSION_CONS_MODE below) already emits clean enough atoms
+#  that fiber-refine earns nothing here, so intrachunk consumes the session output
+#  directly.  A fiber-realign runs after EVERY clu-changing stage, in --reextract
+#  --refeaturize mode (re-reads the .fil at the corrected per-spike times, rebuilds
+#  raw+stderiv .spk, reprojects every variant's .fet onto its on-disk .pca, and
+#  refreshes _D lag-alias .fet), so each stage reads freshly re-extracted spikes
+#  rather than shift-rolled ones -- at the cost of a .fil pass per step.  (fiber-peel
+#  stays skipped; intrachunk's amp-band partition + giqr recut do the per-unit
+#  cleanup refine used to.)
 #
-#    fiber-session -> realign
-#                  -> fiber-refine -> realign -> fiber-cpos
+#    fiber-session -> realign -> fiber-cpos
 #                  -> fiber-intrachunk -> realign -> fiber-cpos
 #                  -> fiber-link -> realign
 #
 #  Tag handoff (every `in`/`cpos` is produced by an earlier `out`; cpos augments its own
 #  clu stage in place, out==in; realign is in-place from the .fil, no out):
-#    * fiber_session : shared base tag.  session over-clusters -> realign re-extracts.
-#    * exp_refine    : fiber-refine's split/merge-back output.  realign re-extracts the
-#      refined groups, cpos localizes them (raw .spk) for intrachunk's gate.
-#    * exp_chunk     : intrachunk's within-chunk merge.  realign re-extracts, cpos re-
-#      localizes; intrachunk keeps each unit chunk-local, so these rows stay per-chunk
-#      and remain cross-linkable.
+#    * fiber_session : shared base tag.  session over-clusters, strips and pools
+#      in-stage -> realign re-extracts -> cpos localizes the groups (raw .spk) for
+#      intrachunk's depth gate.  NOTE cpos REQUIRES probe geometry (probe files named
+#      in <session>.yaml or the probe library); without it it exits and intrachunk
+#      falls back to the position-free 'ms' linkage -- the configuration all the g6
+#      numbers in this file were measured under.
+#    * exp_chunk     : intrachunk's within-chunk merge (+ amp-band partition + giqr
+#      recut).  realign re-extracts, cpos re-localizes; units stay chunk-local and
+#      cross-linkable.
 #    * fiber-link is driven off intrachunk's units.npz backbone (units: exp_chunk); the
 #      runner always invokes fiber-link with --from-units, so the link names the produced
 #      exp_chunk.units.npz.  The overlap-backbone in that units.npz carries the 0080
@@ -66,10 +71,8 @@
 pipeline:
   - {stage: fiber-session,    out: fiber_session}
   - {stage: fiber-realign,    in: fiber_session}
-  - {stage: fiber-refine,     in: fiber_session, out: exp_refine}
-  - {stage: fiber-realign,    in: exp_refine}
-  - {stage: fiber-cpos,       in: exp_refine, out: exp_refine, spk: standard}
-  - {stage: fiber-intrachunk, in: exp_refine, out: exp_chunk}
+  - {stage: fiber-cpos,       in: fiber_session, out: fiber_session, spk: standard}
+  - {stage: fiber-intrachunk, in: fiber_session, out: exp_chunk}
   - {stage: fiber-realign,    in: exp_chunk}
   - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
   - {stage: fiber-link,       in: exp_chunk, units: exp_chunk, out: exp_linked}
