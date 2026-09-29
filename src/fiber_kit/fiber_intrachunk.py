@@ -908,6 +908,86 @@ def intrachunk_clu(src_ids, sig_ids, label, *, reserve=(0, 1)):
     return out, int(out.max()) + 1
 
 
+def _amp_band_partition(newids, child, get_std, top_frac, gap, min_n,
+                        sub_cap=300, log=None):
+    """Post-linkage amplitude-band partition of every unit (any linkage).
+
+    The stderiv shape gates are near-blind to amplitude, and the 'ms'
+    linkage carries no pairwise amplitude gate at all — so same-shape cells
+    of different sizes weld on correlation alone (measured: welded units at
+    stderiv ncorr 0.92-0.95 with 2.3-2.7x amplitude ratio between their
+    atoms' ceilings).  A CEILING is the median best-channel peak-to-peak of
+    an atom's top `top_frac` spikes on the RAW standard waveforms: the
+    un-adapted top of the adaptation ladder, so it is free of the
+    burst-attenuation spread that forces the whole-cluster amp_gate to
+    tolerate 3x.  Same-cell ceilings agree within ~1.3x (measured);
+    different cells sit >= 2.3x apart.
+
+    Within each unit, anchor atoms (>= min_n spikes) are sorted by log2
+    ceiling and CUT wherever the gap between neighbours exceeds `gap` —
+    banding, not pairwise ratio, because a mixed unit's ceilings form a
+    ladder that chains any transitive pairwise test.  Sub-anchor atoms
+    attach to the nearest band.  The most populous band keeps the unit id;
+    the rest become new units.  Returns (newids, n_extra_units)."""
+    newids = np.asarray(newids, np.int64).copy()
+    child = np.asarray(child, np.int64)
+    next_id = int(newids.max()) + 1
+    n_extra = 0
+    for u in np.unique(newids):
+        if u <= 1:
+            continue                                   # reserves never band
+        um = np.flatnonzero(newids == u)
+        uch = child[um]
+        atoms = np.unique(uch)
+        atoms = atoms[atoms > 0]
+        if atoms.size < 2:
+            continue
+        counts = {int(at): int((uch == at).sum()) for at in atoms}
+        anchors = [at for at in atoms if counts[int(at)] >= int(min_n)]
+        if len(anchors) < 2:
+            continue
+        ceil_ = {}
+        for at in atoms:
+            ai = um[uch == at]
+            take = ai[:: max(1, ai.size // int(sub_cap))][: int(sub_cap)]
+            W = fl.realign(np.asarray(get_std(take), float))
+            p2p = (W.max(1) - W.min(1)).max(1)
+            k = max(1, int(np.ceil(float(top_frac) * p2p.size)))
+            ceil_[int(at)] = float(np.median(np.sort(p2p)[-k:]))
+        lc = np.log2(np.maximum([ceil_[int(a_)] for a_ in anchors], 1.0))
+        order = np.argsort(lc)
+        cuts = np.flatnonzero(np.diff(lc[order]) > float(gap))
+        if cuts.size == 0:
+            continue
+        band_idx = np.zeros(len(order), int)
+        for cpos in cuts:
+            band_idx[cpos + 1:] += 1
+        band_of = {int(anchors[order[p]]): int(band_idx[p]) for p in range(len(order))}
+        anchor_lc = {int(anchors[order[p]]): float(lc[order][p]) for p in range(len(order))}
+        for at in atoms:
+            if int(at) in band_of:
+                continue
+            l2 = np.log2(max(ceil_[int(at)], 1.0))
+            near = min(anchor_lc, key=lambda k2: abs(anchor_lc[k2] - l2))
+            band_of[int(at)] = band_of[near]
+        bmap = np.array([band_of[int(c2)] for c2 in uch])
+        nb = int(band_idx.max()) + 1
+        keep = int(np.argmax([(bmap == b2).sum() for b2 in range(nb)]))
+        for b2 in range(nb):
+            if b2 == keep:
+                continue
+            newids[um[bmap == b2]] = next_id
+            next_id += 1
+            n_extra += 1
+        if log:
+            spans = []
+            for b2 in range(nb):
+                v = [anchor_lc[k3] for k3 in anchor_lc if band_of[k3] == b2]
+                spans.append(f"{2 ** min(v):.0f}-{2 ** max(v):.0f}" if v else "?")
+            log(f"amp-band: unit {u} -> {nb} bands (ceilings {' | '.join(spans)})")
+    return newids, n_extra
+
+
 def main():
     ap = argparse.ArgumentParser(description="Collapse over-split fragments within each "
                                              "chunk into units (stderiv cosine + offset + depth).")
@@ -997,6 +1077,26 @@ def main():
         per-spike labelling ('ms' linkage, or the consolidation pass) while the source atom remains
         recoverable for diagnosis."""
         newids = np.asarray(newids, np.int64)
+        if a.amp_band_gap > 0 and hier is not None:
+            # Post-linkage amplitude-band partition: split units whose atoms'
+            # top-cohort CEILINGS (raw standard waveforms) fall in separated
+            # amplitude bands -- the correlation gates are stderiv-blind to
+            # amplitude and 'ms' has no pairwise amplitude gate at all.
+            try:
+                _std, _ = nio.open_spk(base, elec, nsamp, nch, prefer=["standard"])
+            except FileNotFoundError:
+                _std = None
+            if _std is None:
+                _log("amp-band partition: no .spk.standard on disk -- gate inert")
+            else:
+                newids, n_extra = _amp_band_partition(
+                    newids, hier.child, lambda ix: _std[np.asarray(ix)],
+                    a.amp_band_top, a.amp_band_gap, a.amp_band_min, log=_log)
+                if n_extra:
+                    ncl = int(newids.max()) + 1
+                    _log(f"amp-band partition: {n_extra} amplitude-band split(s) "
+                         f"(gap {a.amp_band_gap} log2, top {a.amp_band_top:.0%}, "
+                         f"anchor >= {a.amp_band_min} spk)")
         if a.cons_mode != "off":
             # Per-spike cleanup of the finished labels: the Klusters template strip +
             # knn-peel (fiber_consolidate), per chunk, reserves (0,1) untouched.

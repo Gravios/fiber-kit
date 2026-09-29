@@ -408,6 +408,27 @@ FK_INTRA_KK_STRIP:       1        # 0 = off, 1 = on.  ON by default: per-channel
 FK_INTRA_KK_STRIP_DEG:   4        # 4 | 3-5.  Legendre degree for the strip (4 best; 3 under-cleans, 5 over-strips).
 FK_INTRA_KK_STRIP_Z:     4.0      # 4.0 | 3-5.  robust-z (MAD-scaled) outlier threshold on the per-channel poly coefficients.
 FK_INTRA_KK_STRIP_MAXBAD: 1       # 1 | 0-2.  strip a spike if it is a poly-coeff outlier on MORE than this many signal channels.
+FK_INTRA_AMP_BAND_GAP:   0.4       # 0 | 0 or 0.35-0.6 (log2); 0 = off.  POST-LINKAGE amplitude-band
+                                  #   partition, covering every linkage including 'ms' (which carries no
+                                  #   pairwise amplitude gate at all -- the stderiv shape gates are
+                                  #   near-blind to amplitude, so same-shape cells of different sizes weld
+                                  #   on correlation alone: measured welds at stderiv ncorr 0.92-0.95 with
+                                  #   2.3-2.7x amplitude ratio).  A unit's atoms are sorted by the log2 of
+                                  #   their CEILING -- median best-channel p2p of the atom's top
+                                  #   AMP_BAND_TOP spikes on the raw .spk.standard, the un-adapted top of
+                                  #   the adaptation ladder, so same-cell tolerance is tight (~1.3x = 0.33
+                                  #   log2 measured) where whole-cluster amplitude must tolerate 3x
+                                  #   adaptation spread (AMP_GATE) -- and CUT at every gap above this
+                                  #   (banding, not pairwise ratio: a mixed unit's ceilings form a ladder
+                                  #   that chains any transitive pairwise test).  g6, on the melting-pot
+                                  #   chain: 0.4 -> +2.6pp GT purity (0.708 -> 0.733), ARI 0.185 -> 0.188,
+                                  #   completeness UNCHANGED (true splits); the two curator-reported welds
+                                  #   split 0.44 -> 0.96/0.68 and 0.71 -> 0.98/0.89.  Gaps >= 0.6 miss the
+                                  #   0.58-log2 weld.  Inert without .spk.standard on disk.
+FK_INTRA_AMP_BAND_TOP:   0.2      # 0.2 | 0.1-0.3.  Top fraction of an atom's spikes (by best-channel p2p)
+                                  #   defining its ceiling.
+FK_INTRA_AMP_BAND_MIN:   25       # 25 | 15-50.  Min atom spikes to ANCHOR a band; smaller atoms attach to
+                                  #   the nearest band instead of anchoring their own.
 FK_INTRA_ALIGN_LAG:            6        # 6 | 4-8 (native samples; 0=off).  Best-lag half-window: align two templates within +/- this
                                   #   before scoring, so a sub-sample jitter is not read as a shape difference.
 FK_INTRA_ALIGN_UPSAMPLE:       1        # 1 | 1-4.  Cubic-spline upsampling factor for the align-lag search (sub-sample precision);

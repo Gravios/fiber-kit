@@ -137,6 +137,19 @@ class IntrachunkConfig(StageConfig):
     depth_gate: float = knob(35.0, "depth gate (um)", env="FK_INTRA_DEPTH_GATE")
     amp_gate: float = knob(0.0, "absolute log-amplitude (energy) gate, natural log; ln(3)=1.1 -> 3x (0=off)",
                            env="FK_INTRA_AMP_GATE", recommended=1.10)
+    amp_band_gap: float = knob(0.0, "post-linkage amplitude-band partition (0=off): split a unit's atoms where "
+                               "the sorted log2 CEILING gap exceeds this.  Ceilings = median best-channel p2p of "
+                               "each atom's top AMP_BAND_TOP fraction on the raw .spk.standard -- the un-adapted "
+                               "top of the adaptation ladder -- so the same-cell tolerance is tight (~1.3x = "
+                               "0.33 log2 measured) where whole-cluster amplitude is adaptation-confounded (the "
+                               "3x amp_gate).  Covers EVERY linkage incl. 'ms', which carries no pairwise "
+                               "amplitude gate at all.  0.4 measured best on g6 (+2.6pp GT purity, completeness "
+                               "unchanged).  Inert without .spk.standard.",
+                               env="FK_INTRA_AMP_BAND_GAP", recommended=0.4)
+    amp_band_top: float = knob(0.2, "top fraction of an atom's spikes (by best-channel p2p) defining its ceiling",
+                               env="FK_INTRA_AMP_BAND_TOP")
+    amp_band_min: int = knob(25, "min atom spikes to ANCHOR a band; smaller atoms attach to the nearest band",
+                             env="FK_INTRA_AMP_BAND_MIN", type=int)
     refrac_ceiling: float = knob(None, "reject merge if combined 2ms-ISI violation > this percent (empty=off)",
                                  env="FK_INTRA_REFRAC_CEILING", recommended=1.0)
     pre_merge_cos: float = knob(0.0, "pre-collapse obvious mutual-NN pairs at cosine>=this (0=off)",
