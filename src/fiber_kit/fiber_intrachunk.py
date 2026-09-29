@@ -500,6 +500,8 @@ def _collapse_sig(sig, label):
             elif k == "var":      out[k].append(cv)
             elif k == "n":        out[k].append(ntot)
             elif k == "times":    out[k].append(np.sort(np.concatenate([np.asarray(sig["times"][m], float) for m in mem])))
+            elif k == "sigma":    out[k].append(_pooled_sigma(sig, mem, w))   # band gate: pooled, not representative
+            elif k == "celltype": out[k].append(int((np.asarray(sig["celltype"], float)[mem] * w).sum() >= 0.5))
             elif k in wmean_keys:
                 arr = np.asarray(sig[k], float)[mem]
                 out[k].append((arr * w.reshape(-1, *([1] * (arr.ndim - 1)))).sum(0))
@@ -720,24 +722,72 @@ def dynamic_merge_split(realigned, times, init_label, mask, *, sr=32552.0,
     return dense.astype(int)
 
 
+def _pooled_sigma(sig, mm, wn):
+    """Pooled per-sample std of the union stack from member (template, sigma, weight):
+    law of total variance, elementwise -- member spread PLUS between-member template
+    disagreement, so a merge of shape-divergent fragments correctly widens the band."""
+    t = sig["template"][mm].astype(float)
+    tw = (t * wn.reshape(-1, 1, 1)).sum(0)
+    s2 = (wn.reshape(-1, 1, 1) * (sig["sigma"][mm].astype(float) ** 2 + (t - tw) ** 2)).sum(0)
+    return np.sqrt(s2)
+
+
 def aggregate_units(sig, label):
     """Collapse fragment signatures into per-chunk UNIT signatures (n-weighted,
     re-centred template; n-weighted position).  This is the table fiber_link links
     across chunks.  Returns a dict shaped like build_signatures' output plus
-    `members` (list of source-cluster-id arrays) and `unit` (0-based unit id)."""
+    `members` (list of source-cluster-id arrays) and `unit` (0-based unit id).
+
+    'Shaped like build_signatures' output' is a CONTRACT: group_intrachunk_iter feeds
+    this dict straight back into group_intrachunk, whose gates read sigma (band),
+    feat (mmd/kcov), celltype (dual off-thr), times (ccg/refrac) and var.  Dropping
+    those keys made every pass>=2 of the iterated grouping crash for gate='band'
+    (KeyError: 'sigma') and silently disarm the dual/ccg gates for the rest."""
     U = np.unique(label); uN = len(U)
     out = dict(unit=np.arange(uN), template=np.zeros((uN, *sig["template"].shape[1:]), np.float32),
                offset=np.zeros((uN, sig["offset"].shape[1]), np.float32),
                x0=np.zeros(uN), y0=np.zeros(uN), z0=np.zeros(uN), A=np.zeros(uN),
                chunk=np.zeros(uN, int), t_mid=np.zeros(uN), n=np.zeros(uN, int), members=[])
+    if "sigma" in sig:    out["sigma"] = np.zeros((uN, *sig["sigma"].shape[1:]), np.float32)
+    if "celltype" in sig: out["celltype"] = np.zeros(uN, int)
+    if "var" in sig:      out["var"] = np.zeros(uN)
+    _ragged = [k for k in ("times", "feat") if k in sig]
+    _rest = [k for k in sig if k not in out and k not in _ragged and k != "ids"]
+    for k in _ragged + _rest: out[k] = []
+    _rng = np.random.default_rng(0)
+    _flat = sig["template"].astype(float).reshape(len(label), -1) if "var" in sig else None
     for k, L in enumerate(U):
         mm = np.flatnonzero(label == L); w = sig["n"][mm].astype(float); wn = w / w.sum()
-        t = fg.mutual_center((sig["template"][mm] * w[:, None, None]).sum(0) / w.sum())
+        tw = (sig["template"][mm] * w[:, None, None]).sum(0) / w.sum()
+        t = fg.mutual_center(tw)
         out["template"][k] = t; out["offset"][k] = fg.interchannel_offsets(t)
         for f in ("x0", "y0", "z0", "A", "t_mid"):
             out[f][k] = float((sig[f][mm] * wn).sum())
         out["chunk"][k] = int(sig["chunk"][mm[0]]); out["n"][k] = int(w.sum())
         out["members"].append(sig["ids"][mm])
+        if "sigma" in sig:
+            out["sigma"][k] = _pooled_sigma(sig, mm, wn)
+        if "celltype" in sig:                                # n-weighted majority
+            out["celltype"][k] = int((np.asarray(sig["celltype"], float)[mm] * wn).sum() >= 0.5)
+        if "var" in sig:                                     # exact pooled within-unit variance
+            cf = _flat[mm[0]].copy(); cv = float(sig["var"][mm[0]]); cn = float(w[0])
+            for pi in range(1, len(mm)):
+                cv, cf = _merge_var(cf, cv, cn, _flat[mm[pi]], float(sig["var"][mm[pi]]), float(w[pi]))
+                cn += float(w[pi])
+            out["var"][k] = cv
+        if "times" in sig:
+            out["times"].append(np.sort(np.concatenate([np.asarray(sig["times"][m], float) for m in mm])))
+        if "feat" in sig:                                    # union of member feature samples, re-capped
+            fv = np.vstack([np.asarray(sig["feat"][m], float) for m in mm])
+            if len(fv) > 80: fv = fv[np.sort(_rng.choice(len(fv), 80, replace=False))]
+            out["feat"].append(fv)
+        for kk in _rest:                                     # shape_null etc.: representative
+            out[kk].append(sig[kk][mm[0]])
+    for kk in _ragged:
+        out[kk] = np.array(out[kk], dtype=object)
+    for kk in _rest:
+        try:    out[kk] = np.array(out[kk], dtype=np.asarray(sig[kk]).dtype)
+        except Exception:    out[kk] = np.array(out[kk], dtype=object)
     return out
 
 
