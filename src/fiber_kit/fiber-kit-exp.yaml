@@ -456,13 +456,15 @@ FK_CONS_MODE:            "off"    # off | off/strip/knn/both.  Shared default fo
                                   #   measured net-NEGATIVE directed-vs-GT (+175 fixed / -371 broken) and
                                   #   drags 'both' below strip-only -- prefer strip.
 FK_SESSION_CONS_MODE:    strip    # "" | off/strip/knn/both.  Stage-scoped override for fiber-session
-                                  #   ("" = inherit FK_CONS_MODE).  ON here, with ITERS 10 + CAP_AMP 0.5
-                                  #   below (the curator's iterate-and-adjust strategy, automated): on g6
-                                  #   the converged strip moves 3,050 spikes at 4.9:1 fixed:broken
-                                  #   (+1,639/-335), GT purity 0.779 -> 0.791 at the session layer, and
-                                  #   the gain COMPOUNDS downstream: +1.6pp purity at the following
-                                  #   intrachunk layer at unchanged ARI (single-pass fixed-cap strip
-                                  #   measured +0.7pp / +1.3pp at 1.8:1 -- cleaner atoms, cleaner merges).
+                                  #   ("" = inherit FK_CONS_MODE).  ON here, with the full curator's
+                                  #   strategy below -- ITERS 10 + CAP_AMP 0.5 (iterate and adjust the
+                                  #   amplitude-dependent distance) + PURE_IQR 0.3 with OWN_Q 0.85 /
+                                  #   MARGIN 0.90 (only pure clusters strip): on g6 the converged pass
+                                  #   moves 3,426 spikes at 4.5:1 fixed:broken (+1,781/-400), GT purity
+                                  #   0.779 -> 0.791 at the session layer, and the gain COMPOUNDS
+                                  #   downstream: +1.9pp purity at the following intrachunk layer at
+                                  #   unchanged ARI (single-pass fixed-cap strip: +0.7pp / +1.3pp at
+                                  #   1.8:1 -- cleaner atoms, cleaner merges).
 FK_INTRA_CONS_MODE:      ""       # "" | as above, for fiber-intrachunk (pre-link units; strip only advised).
 FK_ALINK_CONS_MODE:      ""       # "" | as above, for fiber-anchor-link.  Net-negative on a curated-grade
                                   #   sort -- keep off; treat knn kept-distinct buckets as an over-merge
@@ -475,10 +477,12 @@ FK_CONS_GMIN:            0        # 0 | 0-0.5.  Matched-gain lower bound on a cl
 FK_CONS_GMAX:            10       # 10 | 2-10.  Matched-gain upper bound.
 FK_CONS_CHAN:            0        # 0 | 0 or 1.0-2.0.  Per-channel worst-distance uniformity gate; 0 = off.
                                   #   Measured INERT on g6 (4,216 vs 4,220 moves at 1.5) -- leave off.
-FK_CONS_MARGIN:          0.85     # 0.85 | 0.60-0.95.  A claim needs D_target <= margin * D_own, so a template
+FK_CONS_MARGIN:          0.90     # 0.85 | 0.60-0.95.  0.90 here: safe under the PURE_IQR gate below, and part
+                                  #   of the measured-best combo.  A claim needs D_target <= margin * D_own, so a template
                                   #   cannot strip-mine an energy-level look-alike's core (load-bearing in the
                                   #   test suite: without it the mining demonstrably happens).
-FK_CONS_OWN_Q:           0.90     # 0.90 | 0.75-0.99.  Strippable at D_own >= this quantile of the cluster's
+FK_CONS_OWN_Q:           0.85     # 0.90 | 0.75-0.99.  0.85 here: the PURE_IQR gate is what makes it pay (4.5:1
+                                  #   fixed:broken; 1.6:1 without cap+gate).  Strippable at D_own >= this quantile of the cluster's
                                   #   OWN spike distances: a <=10% per-cell churn budget by construction.
                                   #   Session-calibrated, replacing absolute floors (D_own median ~0.54 here;
                                   #   absolute floors conflate noise level with misfit and moved 49% of the
@@ -521,6 +525,22 @@ FK_CONS_CAP_AMP:         0.5      # 0 | 0-0.7; 0.5 measured best (0.3 under-corr
                                   #   equal purity (+1,089/-209), and it is what makes iteration and
                                   #   looser quantiles safe (own_q 0.85 holds 4.1:1 with it, 1.6:1
                                   #   without).
+FK_CONS_PURE_IQR:        0.3      # 0 | 0 or 0.2-0.4; 0 = every templated cluster claims.  The
+                                  #   curator's only-strip-with-PURE-clusters rule: a cluster may CLAIM
+                                  #   only while the IQR of its own spikes' matched gain g is <= this.
+                                  #   Own-gain spread is the best GT-purity predictor measured (AUC 0.84,
+                                  #   vs own-distance tail 0.60 and split-half template ncorr 0.55; pure
+                                  #   clusters' median IQR 0.21 vs impure 0.41 on g6), and an impure
+                                  #   claimant is doubly wrong: its template is a mixture and its
+                                  #   inflated own-distance quantiles hand it an oversized radius.
+                                  #   Gated clusters stay strippable FROM, and under ITERS the score is
+                                  #   recomputed every round, so a cluster EARNS claiming rights as it
+                                  #   purifies (IQR quartile breakdown: under ~25% contamination).  On
+                                  #   top of ITERS+CAP_AMP: 0.2 -> 10.5:1 fixed:broken (+1,254/-119),
+                                  #   0.3 -> 6.4:1, 0.4 -> 5.5:1 (ungated 4.9:1) -- and it is what makes
+                                  #   looser quantiles PAY: with OWN_Q 0.85 / MARGIN 0.90 the combo is
+                                  #   the best of the 39 settings measured (+1,781/-400 at 4.5:1, GT
+                                  #   purity 0.779 -> 0.791, and +1.9pp at the next intrachunk layer).
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.

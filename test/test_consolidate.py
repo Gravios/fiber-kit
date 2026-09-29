@@ -262,6 +262,46 @@ check((tight0[b_band] == 3).sum() > 0, "fixed cap: bright B claims the 0.35-0.45
 check((tightA[b_band] == 3).sum() == 0,
       "cap_amp=1 tightens the bright cap below the band (no claim)")
 
+# ── 3c. the pure-claimant gate (only pure clusters strip) ────────────────────
+# Cluster 2 = X, an A-cell CONTAMINATED with off-channel B spikes at spread
+# scales: its own-gain IQR is wide, so with pure_iqr set it may not claim.
+# Cluster 3 = BB, pure B: tight gain, a licensed claimant.  Cluster 4 = pure
+# C holding 15 planted A spikes that only X could claim back.  Round 1: BB
+# strips its B spikes out of X (gated clusters stay strippable FROM); X's
+# gain tightens; round 2: X has EARNED claiming rights and recovers its
+# planted spikes — the gate is recomputed every round.
+TPL_C = bump(8, 3.0, (0, 3), (60.0, 45.0))
+x_a = spikes(TPL_A, 150, noise=3.0, seed=41)
+x_b = (TPL_B[None] * np.random.default_rng(42).uniform(0.7, 1.3, (60, 1, 1))
+       + np.random.default_rng(43).normal(0, 3.0, (60, NSAMP, NCH)))
+bb = spikes(TPL_B, 200, noise=3.0, seed=44)
+cc = spikes(TPL_C, 120, noise=3.0, seed=45)
+c_apl = spikes(TPL_A, 15, noise=3.0, seed=46)               # A spikes planted in C
+PW = np.concatenate([x_a, x_b, bb, cc, c_apl]).astype(np.float32)
+PL = np.concatenate([np.full(210, 2), np.full(200, 3), np.full(135, 4)])
+p_bcont = np.arange(150, 210)                               # B contamination inside X
+p_apl = np.arange(410 + 120, 410 + 135)                     # planted A inside C
+def pgw(ix):
+    return PW[np.asarray(ix)]
+PKW = dict(own_q=0.5, pure_iqr=0.2)
+one, _ = fc.consolidate(pgw, PL, np.zeros(len(PL), int), mode="strip",
+                        strip_kw=dict(PKW, iters=1), exclude=(0,), log=None)
+# BB's calibrated radius reaches only the near-unit-scale part of the planted
+# ladder in one round — enough to push X's contamination under the IQR's
+# quartile breakdown point (25%), which is what flips the gate next round.
+check((one[p_bcont] == 3).sum() >= 15, "round 1: pure BB strips its spikes out of impure X "
+                                       f"({int((one[p_bcont] == 3).sum())}/60)")
+check((one[p_apl] == 4).all(), "round 1: impure X is gated and cannot claim its planted spikes")
+two, _ = fc.consolidate(pgw, PL, np.zeros(len(PL), int), mode="strip",
+                        strip_kw=dict(PKW, iters=3), exclude=(0,), log=None)
+check((two[p_apl] == 2).sum() >= 12, "later rounds: X, now purified, has EARNED claiming rights "
+                                     f"({int((two[p_apl] == 2).sum())}/15 recovered)")
+check((two[:150] == 2).all() and (two[210:410] == 3).all() and (two[410:530] == 4).all(),
+      "the gate moves nothing else")
+ung, _ = fc.consolidate(pgw, PL, np.zeros(len(PL), int), mode="strip",
+                        strip_kw=dict(own_q=0.5, iters=1), exclude=(0,), log=None)
+check((ung[p_apl] == 2).sum() >= 12, "pure_iqr=0 (off): the impure X claims immediately, as before")
+
 # ── 4. knn behaviour through the wrapper ─────────────────────────────────────
 k_lab = LAB.copy()
 k_planted = np.arange(40 + 200, 40 + 200 + 15)                              # 15 true-B spikes...

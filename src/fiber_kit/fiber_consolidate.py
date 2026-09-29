@@ -110,6 +110,7 @@ _KNOBS = {
     "FK_CONS_MIN_TPL": ("cons_min_tpl", int, 8),
     "FK_CONS_ITERS": ("cons_iters", int, 1),
     "FK_CONS_CAP_AMP": ("cons_cap_amp", float, 0.0),
+    "FK_CONS_PURE_IQR": ("cons_pure_iqr", float, 0.0),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),
@@ -170,7 +171,8 @@ def kwargs_from_args(a):
                     own_q=a.cons_own_q, tgt_q=a.cons_tgt_q, tgt_scale=a.cons_tgt_scale,
                     twin_thr=(a.cons_twin if a.cons_twin > 0 else None),
                     tpl_cap=a.cons_tpl_cap, min_tpl=a.cons_min_tpl,
-                    iters=a.cons_iters, cap_amp=a.cons_cap_amp)
+                    iters=a.cons_iters, cap_amp=a.cons_cap_amp,
+                    pure_iqr=a.cons_pure_iqr)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -234,7 +236,7 @@ def _chan_worst(X, t):
 def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
                chan_uniform=0.0, margin=0.85, own_q=0.90, tgt_q=0.90,
                tgt_scale=1.25, twin_thr=0.93, tpl_cap=1024, min_tpl=8, exclude=(0,),
-               cap_amp=0.0, block=20000, rng=None, log=None):
+               cap_amp=0.0, pure_iqr=0.0, block=20000, rng=None, log=None):
     """One template-strip pass over the spikes `idx` (absolute indices; one
     chunk).  Returns (labels, n_moved): labels is a full-length copy with the
     moved spikes reassigned to the claiming template's cluster.  Thresholds
@@ -246,7 +248,17 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     one fixed cap is a different absolute-residual bound per cluster — tight on
     faint cells, loose on big ones.  cap_c = max_dist * (denom_med/denom_c)
     ** cap_amp refers every cluster's cap to the chunk's median template
-    amplitude: 0 keeps the fixed cap, 1 caps a constant ABSOLUTE residual."""
+    amplitude: 0 keeps the fixed cap, 1 caps a constant ABSOLUTE residual.
+
+    pure_iqr (>0) is the curator's only-strip-with-pure-clusters rule: a
+    cluster may CLAIM only while the IQR of its own spikes' matched gain g is
+    at or below this — a mixture's or energy ladder's own-gain spread is wide
+    where a single unit's is tight (the best GT-purity predictor measured,
+    AUC 0.84), and an impure claimant is doubly wrong: its template is a
+    mixture and its inflated own-distance quantiles hand it an oversized
+    radius.  Gated clusters remain strippable FROM, and under iteration the
+    score is recomputed every round, so a cluster earns claiming rights as it
+    purifies.  0 = every templated cluster claims."""
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     lab = labels[idx]
@@ -295,6 +307,7 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
     # Pass 1 — every spike's distance to its OWN template, then the
     # per-cluster calibration quantiles (see the module preamble).
     d_own_all = np.full(idx.size, np.inf)
+    g_own_all = np.full(idx.size, np.nan)
     for s in range(0, idx.size, block):
         r = np.arange(s, min(s + block, idx.size))
         oc = own_col[r]
@@ -307,17 +320,24 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         Bo = np.einsum("ij,ij->i", X, WTm[cols])
         qo = np.maximum(A2 - 2.0 * Bo + Ev[cols], 0.0)
         d_own_all[r[has_own]] = np.sqrt(qo / Wv[cols]) / Dv[cols]
+        g_own_all[r[has_own]] = Bo / Ev[cols]
     floor_c = np.full(C, np.inf)                       # own_q quantile per cluster
     radius_c = np.zeros(C)                             # tgt_q quantile per cluster, capped
     cap_c = np.full(C, float(max_dist))
     if cap_amp > 0.0 and C > 1:
         cap_c = float(max_dist) * (float(np.median(Dv)) / Dv) ** float(cap_amp)
+    claim_ok = np.ones(C, bool)
     for c, i in col.items():
         dc = d_own_all[lab == c]
         dc = dc[np.isfinite(dc)]
         if dc.size:
             floor_c[i] = float(np.quantile(dc, own_q))
             radius_c[i] = min(tgt_scale * float(np.quantile(dc, tgt_q)), float(cap_c[i]))
+        if pure_iqr > 0.0:
+            gc = g_own_all[lab == c]
+            gc = gc[np.isfinite(gc)]
+            claim_ok[i] = bool(gc.size) and \
+                float(np.quantile(gc, 0.75) - np.quantile(gc, 0.25)) <= pure_iqr
 
     # Pass 2 — claims.
     for s in range(0, idx.size, block):
@@ -334,6 +354,7 @@ def strip_pass(get_waves, labels, idx, *, max_dist=0.5, gmin=0.0, gmax=10.0,
         own_floor = np.where(has_own, floor_c[np.maximum(oc, 0)], 0.0)
         ok = ((radius_c[None, :] >= D) & (g >= gmin) & (g <= gmax)
               & (margin * d_own[:, None] >= D) & (d_own >= own_floor)[:, None])
+        ok &= claim_ok[None, :]                                 # only pure clusters claim
         ok &= pair_ok[np.where(has_own, oc, C)]                 # twin pairs never trade
         ok[np.flatnonzero(has_own), oc[has_own]] = False        # own column never claims
         if chan_uniform > 0.0 and ok.any():
