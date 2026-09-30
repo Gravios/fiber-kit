@@ -108,10 +108,10 @@ FK_SESSION_SKIP_EXTANT:  1        # 0 | 0/1.  1 = fiber-session checks the exact
                                   #   KlustaKwik with per-cluster realign + BIC model selection (robust to unequal
                                   #   covariances); gmm = Gaussian-mixture split; fiber = fiber-kit's native cluster_chunk;
                                   #   none = no fine split (keep the coarse cluster whole).  Categorical.
-FK_SESSION_CHUNK_MIN:    18       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
+FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.
-FK_SESSION_OVERLAP_MIN:  6        # 4 | 0 or 3-8 (min).  Overlap between adjacent chunks for OVERLAP-ANCHOR cross-chunk
+FK_SESSION_OVERLAP_MIN:  4        # 4 | 0 or 3-8 (min).  Overlap between adjacent chunks for OVERLAP-ANCHOR cross-chunk
                                   #   linking: the same physical spikes fall in both chunks' overlap, so two fibers that
                                   #   share those spikes are the same unit (drift-free identity).  Needs enough shared
                                   #   spikes (~>=50 for the slowest cells) so keep it a few minutes; 0 DISABLES cross-chunk
@@ -296,20 +296,28 @@ FK_INTRA_GATE:           band     # band | cfiber | cosine | mmd | kcov.  Shape 
                                   #   matters under drift.  Set cosine to revert.
 FK_INTRA_BAND_THR:       ""       # "" | 0.4-0.6.  gate=band only: min energy-scaled median+/-sigma band-overlap IoU
                                   #   to merge two fragments.  Empty defaults to 0.5.  Inert unless FK_INTRA_GATE=band.
-FK_INTRA_COS_THR:        0.90     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
+FK_INTRA_COS_THR:        0.85     # 0.85 | 0.82-0.88.  Cheap cosine recall PREFILTER for merge candidates (the real shape
                                   #   decision is the gate above).
 FK_INTRA_OFF_THR:        1.0      # 1.0 | 0.8-1.2 (samples).  Inter-channel offset RMS gate: fragments of one neuron share
                                   #   per-channel timing; > ~1 sample mismatch implies a different source.
-FK_INTRA_DEPTH_GATE:     10.0     # 35 | 25-45 (um).  Depth gate.  On 20-um pitch a single neuron's localized depth
+FK_INTRA_DEPTH_GATE:     35     # 35 | 25-45 (um).  Depth gate.  On 20-um pitch a single neuron's localized depth
                                   #   wanders < ~1.5 sites; 35 um ~ 1.75 sites caps drift and rejects far-apart merges.
-FK_INTRA_AMP_GATE:       0.90     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
+FK_INTRA_AMP_GATE:       1.10     # 1.10 | 0.92-1.39 (nat-log; 0=off).  Absolute log-amplitude (energy) gate.  ln(3)=1.10
                                   #   caps a merge to <=3x amplitude ratio (a single unit's drift amplitude range).
 FK_INTRA_REFRAC_CEILING:       0.5      # 1.0 | 0.5-2.0 (%, ""=off).  Reject a merge whose COMBINED 2 ms-ISI refractory violation
                                   #   exceeds this percent -- two genuine units merged manufacture cross-refractory spikes.
 FK_INTRA_PRE_MERGE_COS:        0.98     # 0.97 | 0.96-0.98 (0=off).  Pre-collapse obvious mutual-NN pairs at cosine >= this before
                                   #   the full gate (cheap, safe consolidation that shrinks the agglomeration).
-FK_INTRA_LINKAGE:        complete # complete | dynamic | ms | kk.  Agglomeration linkage.  complete (farthest-point) yields tight,
-                                  #   conservative clusters; dynamic/ms are density-adaptive.
+FK_INTRA_LINKAGE:        ms       # complete | dynamic | ms | kk.  Agglomeration linkage.  ms is the GT-VALIDATED
+                                  #   lane (merge+split; with RECUT=giqr + AMP_BAND_GAP it is the measured chain:
+                                  #   g6 units ARI 0.19 -> anchor-link 0.44).  LAB-VALIDATED 2026-09-30 on a fresh
+                                  #   full-plan session: the complete+band+dual lane (with cpos positions ARMING
+                                  #   the depth gate, then set 10 um) left ~2x fragments per big cell WITHIN chunks
+                                  #   -- splits the linker cannot repair -- and the chain fell to ARI 0.097; the
+                                  #   same session re-cut through ms+giqr relinked at ARI 0.393, cmp 0.465.
+                                  #   complete (farthest-point) yields tight, conservative clusters and reads the
+                                  #   gate stack below; treat that lane as UNVALIDATED-WITH-POSITIONS until a
+                                  #   depth/dual sweep on a localized session says otherwise.
 FK_INTRA_KK_DIMS:        5        # 5 | 0 or >=ncol = all.  kk linkage (MW-cluster + median-residual KlustaKwik):
                                   #   PCs of the median-residual waveform used to SPLIT within each MW group.
 FK_INTRA_KK_MW_THR:      0.10     # 0.10 | 0.05-0.15.  kk linkage: median-waveform grouping cut = 1-cosine (complete-
@@ -393,9 +401,12 @@ FK_INTRA_CFIBER_THR_FLOOR:     0.0      # 0.0 = off.  Absolute floor on the self
                                   #   pathologically tight null on a very clean fragment.
 FK_INTRA_SIG_CAP:        8000     # 8000 | "" = no cap.  Per-fragment spikes used for the mean template; beyond ~8000 the
                                   #   template is already stable, so the cap only bounds compute.
-# ----- intrachunk precision gates: warp / warp-resid / DUAL offset (ON here; OFF in production) -----
+# ----- intrachunk precision gates: warp / warp-resid / DUAL offset (complete/dynamic lanes only) -----
 # Newly-wired knobs: warp coherence + single-channel warp-incongruity SUB-gate + cell-type-aware
 # DUAL offset. All are merge-PRECISION vetoes -- calibrate on curated merges before trusting counts.
+# INERT under LINKAGE=ms (the validated lane above).  When you switch a localized session to the
+# complete lane, remember every veto here ANDs with the depth gate: the 2026-09-30 lab run showed
+# the stack over-vetoing within-chunk merges into linker-unreachable splits (ARI 0.097 vs 0.393).
 FK_INTRA_WARP_THR:       0.3      # 0.3 | 0.2-0.5 ("" off).  Group-delay (warp) coherence gate (Omlor-Giese): merge only
                                   #   if cross-channel corr of the two per-channel group-delay profiles >= this. Group-
                                   #   delay is noisy at low spike count -> keep LOW (~0.3).
@@ -759,7 +770,7 @@ FK_REFINE_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters w
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
 FK_REFINE_SPLIT_MIN_CORR: 0.95    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
                                   #   (within-piece template correlation >= this); else the split was noise.
-FK_REFINE_CHUNK_MINUTES: 18       # 12 | 8-20 (min).  Refine chunk length; match FK_SESSION_CHUNK_MIN.
+FK_REFINE_CHUNK_MINUTES: 12       # 12 | 8-20 (min).  Refine chunk length; match FK_SESSION_CHUNK_MIN.
 FK_REFINE_CHUNK_JOBS:    1        # 1 | 1-N (processes).  Parallel worker processes over chunks in drift-aware mode
                                   #   (chunk-minutes>0).  Chunks are independent (own whitener + refine), so this is
                                   #   the main speedup for a chunked run; the cross-window link runs serially after.
