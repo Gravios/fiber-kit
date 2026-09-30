@@ -96,7 +96,7 @@ CATALOG = {
         _p("gate", "choice", "cfiber", "shape descriptor to attach per signature", ["cfiber", "wave", "none"]),
         _p("chunk-minutes", "int", 12, "per-chunk signature length (min)"),
         _p("min-n", "int", 12, "min spikes for a per-chunk signature (12-30)")]),
-    "fiber-backbone-link": dict(input=True, tags=["in", "out"], params=[  # alt linker on fiber-session output; not in `all`
+    "fiber-backbone-link": dict(input=True, tags=["in", "out", "drift"], params=[  # alt linker on fiber-session output; not in `all`
         _p("min-snr-q", "float", 0.5, "START-WITH-HIGH-SNR floor quantile (0=link all; 0.5=clean backbone first)"),
         _p("z", "float", 1.0, "energy-scaled band half-width in sigma (0.8-1.5)"),
         _p("amp-thr", "float", 0.85, "Omlor-Giese amplitude-profile veto, eq.10 (the effective term; 0.75-0.92)"),

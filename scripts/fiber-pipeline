@@ -657,9 +657,16 @@ fiber_backbone_link() {   # link fiber-session fragments on the invariant backbo
     # needs NO fiber-refine / fiber-intrachunk / fiber-cpos.  FK_BBLINK_* knobs come from $FK_CONFIG / the
     # exported env; per-step plan `params:` (e.g. channels, min-snr-q) override via argparse last-wins.
     echo "== fiber-backbone-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-backbone_linked}) =="
+    local drift_args=()
+    # plan key `drift: <tag>`: consume the drift transform another stage EMITTED at that tag
+    # (fiber-xcorr-merge with FK_XCM_EMIT_DRIFT writes .fibers.<tok>.<elec>.<its out tag>), so the
+    # fitted chunk-pair transforms are actually APPLIED instead of defaulting to the untagged
+    # session .fibers.  Composed here because plan params take literal values, not session paths.
+    [ -n "${STEP_DRIFT:-}" ] && drift_args+=(--drift-fibers "$SESS.fibers.$(clu_variant).$ELEC.${STEP_DRIFT}")
     _run fiber-backbone-link "$SESS" "$ELEC" \
         --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-fiber_session}" \
         --out-stage "${STEP_OUT:-backbone_linked}" \
+        "${drift_args[@]+"${drift_args[@]}"}" \
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -768,7 +775,8 @@ for i, st in enumerate(steps):
         args += [str(a) for a in extra]
     argq = " ".join(shlex.quote(a) for a in args)
     rows.append("\x1f".join([stage, field(st, "in"), field(st, "out"),
-                           field(st, "units"), field(st, "spk"), field(st, "cpos"), argq]))
+                           field(st, "units"), field(st, "spk"), field(st, "cpos"),
+                           field(st, "drift"), argq]))
 sys.stdout.write("\n".join(rows))
 PYPLAN
 }
@@ -783,15 +791,16 @@ run_plan() {           # run an ordered, possibly-repeating plan of steps
     # this the default is the canonical 'refine_intrachunk', which is wrong for
     # any plan whose intrachunk writes a different stage (e.g. exp_chunk) and
     # makes link abort with a missing <stage>.units.npz.
-    local n=0 st pin pout punits pspk pcpos pargs
+    local n=0 st pin pout punits pspk pcpos pdrift pargs
     local last_intrachunk_out=refine_intrachunk
-    while IFS=$'\x1f' read -r st pin pout punits pspk pcpos pargs; do
+    while IFS=$'\x1f' read -r st pin pout punits pspk pcpos pdrift pargs; do
         [ -z "$st" ] && continue
         n=$((n + 1))
         printf '== [plan %d] %s ==\n' "$n" "$st"
         [ "$st" = fiber-intrachunk ] && last_intrachunk_out="${pout:-refine_intrachunk}"
         (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
             STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="${punits:-$last_intrachunk_out}"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
+            STEP_DRIFT="$pdrift"
             eval "STEP_ARGS=( $pargs )"
             run_plan_stage "$st"
         )
