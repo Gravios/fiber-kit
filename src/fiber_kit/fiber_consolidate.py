@@ -116,6 +116,7 @@ _KNOBS = {
     "FK_CONS_AGG_MINNEW": ("cons_agg_minnew", int, 30),
     "FK_CONS_AGG_VAC": ("cons_agg_vac", int, 0),
     "FK_CONS_TPL_ALIGN": ("cons_tpl_align", int, 0),
+    "FK_CONS_PARK_MIN": ("cons_park_min", int, 0),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),

@@ -592,6 +592,15 @@ FK_CONS_TPL_ALIGN:       0        # 0 | 0/1.  1 = SELF-ALIGN each cluster's temp
                                   #   dissolve equilibrium slightly negative (+3,633/-2,399 vs
                                   #   +3,425/-2,038) -- so it stays off by default and off in the exp
                                   #   combo; worth 1 on strip-only runs where the last few claims matter.
+FK_CONS_PARK_MIN:        0        # 0 | 0 or 3-8.  Parking floor for the strip's per-spike moves: a
+                                  #   (source atom -> destination fiber) bucket below this many spikes
+                                  #   collapses into ONE shared sweep atom per DESTINATION instead of its
+                                  #   own tree entry.  An iterated strip parks mostly 1-2-spike buckets
+                                  #   (g6 @ the settings above: 3,407 park atoms; floor 3 -> 1,761,
+                                  #   5 -> 1,380, 8 -> 1,140), so Klusters' tree drowns in micro-atoms
+                                  #   at 0.  The FLAT clu is identical at any value -- only the atom
+                                  #   structure changes; per-destination sweeps stay inspectable and
+                                  #   revertible.  0 = historical per-bucket parking.
 FK_CONS_KNN_K:           20       # 20 | 10-30.  knn pass: neighbours (mirrors fiber-refine).
 FK_CONS_KNN_THR:         0.3      # 0.3 | 0.2-0.5.  knn pass: relabel majority threshold (fiber-refine's).
 FK_CONS_KNN_MINREF:      50       # 50 | 30-100.  knn pass: min reference spikes for a cluster to vote.

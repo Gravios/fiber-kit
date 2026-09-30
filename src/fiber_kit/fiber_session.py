@@ -1605,7 +1605,7 @@ def build_cf(a, meth, cluster_basis):
         quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
 
 
-def _park_consolidated(clu, new_clu, child, parent, next_atom):
+def _park_consolidated(clu, new_clu, child, parent, next_atom, park_min=0):
     """Fold a consolidation pass's per-spike moves into the atom hierarchy.
 
     Per-spike moves cannot be expressed in the atom->fiber map, so every moved
@@ -1613,12 +1613,27 @@ def _park_consolidated(clu, new_clu, child, parent, next_atom):
     under the destination fiber — the same parking fiber-anchor-link uses —
     keeping each move a Klusters-inspectable, revertible atom.  `child` is
     patched in place; `parent` (atom -> 1-based fiber id) gains the new atoms.
-    Returns (clu, next_atom) with the moves applied."""
+    Returns (clu, next_atom) with the moves applied.
+
+    park_min (FK_CONS_PARK_MIN): with an iterated strip, most (src -> dst)
+    buckets hold one or two spikes, and per-bucket parking explodes the atom
+    count (a lab session: 2,368 atoms for 996 fibers, median bucket size 1 —
+    a wall of micro-fragments in Klusters' tree).  Buckets BELOW this many
+    spikes collapse into ONE shared sweep atom per DESTINATION fiber instead:
+    still inspectable and revertible at the destination, without a tree entry
+    per stray spike.  0 (default) keeps the historical per-bucket parking.
+    The flat clu is identical either way — only the atom structure changes."""
     new_clu = np.asarray(new_clu)
     m = new_clu != np.asarray(clu)
     if m.any():
         key = np.stack([np.asarray(child)[m], new_clu[m]], 1)
         uk, inv = np.unique(key, axis=0, return_inverse=True)
+        if park_min and park_min > 1:
+            small = np.bincount(inv) < park_min
+            if small.any():
+                uk2 = uk.copy(); uk2[small, 0] = -1        # per-dest sweep slot
+                uk, inv2 = np.unique(uk2, axis=0, return_inverse=True)
+                inv = inv2[inv]
         child[m] = next_atom + inv
         for j, fid in enumerate(uk[:, 1]):
             parent[int(next_atom + j)] = int(fid)
@@ -1840,7 +1855,8 @@ def main():
             lambda ix: spk[np.asarray(ix)], clu.astype(np.int64), chid,
             mode=cons_mode, exclude=(0,), strip_kw=strip_kw, knn_kw=knn_kw,
             log=log, tag="consolidate")
-        clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom)
+        clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom,
+                                            park_min=getattr(a, "cons_park_min", 0))
 
     if a.out:
         clu_out = a.out

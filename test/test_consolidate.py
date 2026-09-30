@@ -420,5 +420,28 @@ check(pk_nxt == 11 and set(pk_parent) == {7, 8, 9, 10}, "atom ids allocated cont
 _, pk_same = _park_consolidated(pk_new.copy(), pk_new, pk_child.copy(), dict(pk_parent), 11)
 check(pk_same == 11, "a no-move pass allocates nothing")
 
+# 5b. park_min: sub-floor buckets collapse into ONE sweep atom per destination
+#     sources 20/21/22 each donate ONE spike to fiber 3 (three 1-spike buckets),
+#     source 23 donates three spikes (a real bucket), source 24 one spike to fiber 4.
+pm_clu = np.array([2, 2, 2, 2, 2, 2, 2, 2])
+pm_new = np.array([3, 3, 3, 3, 3, 3, 4, 2])
+pm_child = np.array([20, 21, 22, 23, 23, 23, 24, 25])
+pm_parent = {20: 2, 21: 2, 22: 2, 23: 2, 24: 2, 25: 2}
+pm_out, pm_nxt = _park_consolidated(pm_clu, pm_new, pm_child, pm_parent, 30, park_min=2)
+check((pm_out == pm_new).all(), "park_min: flat clu unchanged by the floor")
+check(pm_child[0] == pm_child[1] == pm_child[2],
+      "park_min: three 1-spike buckets to one dest share ONE sweep atom")
+check(pm_child[3] == pm_child[4] == pm_child[5] and pm_child[3] != pm_child[0],
+      "park_min: an at-floor bucket keeps its own atom")
+check(pm_child[6] not in (pm_child[0], pm_child[3]),
+      "park_min: a sub-floor bucket to ANOTHER dest gets that dest's sweep atom")
+check(pm_parent[int(pm_child[0])] == 3 and pm_parent[int(pm_child[6])] == 4,
+      "park_min: sweep atoms parent to their destination fiber")
+check(pm_nxt == 33, "park_min: 3 atoms allocated (sweep@3, bucket 23, sweep@4)")
+# floor off reproduces per-bucket parking on the same input
+pm_child0 = np.array([20, 21, 22, 23, 23, 23, 24, 25])
+_, pm_nxt0 = _park_consolidated(pm_clu, pm_new, pm_child0, dict(pm_parent), 30, park_min=0)
+check(pm_nxt0 == 35, "park_min=0: historical per-bucket parking (5 atoms)")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)
