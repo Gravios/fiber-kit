@@ -443,5 +443,26 @@ pm_child0 = np.array([20, 21, 22, 23, 23, 23, 24, 25])
 _, pm_nxt0 = _park_consolidated(pm_clu, pm_new, pm_child0, dict(pm_parent), 30, park_min=0)
 check(pm_nxt0 == 35, "park_min=0: historical per-bucket parking (5 atoms)")
 
+# ── 6. shed mode: the inverse strip -- expel a cluster's own outliers to reserve ──
+sh_rng = np.random.default_rng(7)
+NSAMP_S, NCH_S = 20, 2
+base_w = np.zeros((NSAMP_S, NCH_S)); base_w[8:14, 0] = -np.hanning(6) * 800
+sh_waves = np.tile(base_w, (120, 1, 1)) + sh_rng.normal(0, 12, (120, NSAMP_S, NCH_S))
+sh_waves[100:110] += sh_rng.normal(0, 240, (10, NSAMP_S, NCH_S))   # 10 implanted outliers in A
+sh_lab = np.full(120, 2, np.int64)
+sh_lab[110:] = 3                                                    # B: clean but SMALL (10 < shed_min)
+sh_chunk = np.zeros(120, np.int64)
+sh_out, sh_tot = fc.consolidate(lambda ix: sh_waves[np.asarray(ix)], sh_lab, sh_chunk,
+                                   mode="shed", exclude=(0,),
+                                   strip_kw=dict(shed_k=3.0, shed_min=40), log=lambda *_: None)
+check(sh_tot["shed"] >= 8 and (sh_out[100:110] == 1).sum() >= 8,
+      "shed expels the implanted outliers to reserve 1")
+check((sh_out[:100] == 2).sum() >= 97, "shed leaves the clean core in place")
+check((sh_out[110:] == 3).all(), "a cluster below shed_min is never shed")
+sh_out2, sh_tot2 = fc.consolidate(lambda ix: sh_waves[np.asarray(ix)], sh_lab, sh_chunk,
+                                     mode="shed", exclude=(0, 2),
+                                     strip_kw=dict(shed_k=3.0, shed_min=40), log=lambda *_: None)
+check((sh_out2 == sh_lab).all(), "an excluded cluster is never shed")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)
