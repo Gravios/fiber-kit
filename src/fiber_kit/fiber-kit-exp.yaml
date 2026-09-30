@@ -23,7 +23,8 @@
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
 #  Plan order (the embedded pipeline below):
-#    fiber-session -> realign -> cpos -> fiber-intrachunk -> realign -> cpos -> fiber-anchor-link -> realign
+#    fiber-session -> realign -> cpos -> fiber-intrachunk -> realign -> cpos
+#                  -> fiber-anchor-link -> fiber-xcorr-merge -> realign
 #
 #  LAYOUT -- knob sections follow the plan order:
 #    [1] fiber-session   [2] fiber-realign   [3] fiber-cpos   [4] fiber-intrachunk
@@ -77,7 +78,12 @@
 #      SAME plan with fiber-link as the linker -- run both templates on one session to
 #      compare the linkers (the linked tags differ: exp_linked here vs fk_linked there;
 #      intermediate tags are overwritten by whichever ran last).
-#    * exp_linked    : the linked output; a final realign re-extracts it for curation.
+#    * exp_linked    : the linked output.  fiber-xcorr-merge then fuses the >=0.98
+#      roll-shift-cosine survivors the chunk-split chain cannot see (same-chunk and
+#      cross-chunk alike; CCG two-cell veto + band co-gate carry precision) -- measured
+#      2026-09-30 on the lab session's recovered chain: cmp 0.465 -> 0.608, ARI 0.393
+#      -> 0.433, purity -0.3pp -- writing exp_final, which the last realign re-extracts
+#      for curation.
 # ============================================================================
 pipeline:
   - {stage: fiber-session,    out: fiber_session}
@@ -87,7 +93,8 @@ pipeline:
   - {stage: fiber-realign,    in: exp_chunk}
   - {stage: fiber-cpos,       in: exp_chunk, out: exp_chunk, spk: standard}
   - {stage: fiber-anchor-link, in: exp_chunk, out: exp_linked, params: {frag-layer: units}}
-  - {stage: fiber-realign,    in: exp_linked}
+  - {stage: fiber-xcorr-merge, in: exp_linked, out: exp_final}
+  - {stage: fiber-realign,    in: exp_final}
 
 
 
@@ -872,7 +879,12 @@ FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to pa
 # CCG veto.  Default cos-thr is a conservative 0.99: scored on a curated g5 sort, lower floors fused co-located
 # same-site fragments (near-identical footprints; the refractory gate is powerless on sparse g5).  That GT is
 # INCOMPLETE, so treat the reported purity as a lower bound and tune cos-thr on your own review.  Knobs FK_XCM_*.
-FK_XCM_COS_THR:          0.99     # 0.99 | 0.985-0.999.  Min roll-shift cosine to merge; start HIGH.
+FK_XCM_COS_THR:          0.98     # 0.99 | 0.975-0.999.  Min roll-shift cosine to merge.  0.98 measured
+                                  #   on the lab session's recovered chain (2026-09-30): after anchor-link,
+                                  #   cosine grid 0.995/0.99/0.985/0.98/0.975 gave cmp 0.51/0.55/0.58/0.61/0.61
+                                  #   at purity 0.734/0.734/0.733/0.731/0.724 -- 0.98 is the knee (ARI 0.433,
+                                  #   +14pp completeness over the linker alone, purity -0.3pp; the CCG veto and
+                                  #   band co-gate carry the precision).  Below 0.975 purity starts paying.
 FK_XCM_SHIFT:            4        # 4 | 2-6 (samples).  +/- circular-shift half-window (Klusters xcorr).
 FK_XCM_REFRAC_MS:        2.0      # 2.0 | 1.5-3.0.  Refractory window; 0 disables the CCG veto.
 FK_XCM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powered pair is vetoed as two cells.
