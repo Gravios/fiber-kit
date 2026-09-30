@@ -117,6 +117,8 @@ _KNOBS = {
     "FK_CONS_AGG_VAC": ("cons_agg_vac", int, 0),
     "FK_CONS_TPL_ALIGN": ("cons_tpl_align", int, 0),
     "FK_CONS_PARK_MIN": ("cons_park_min", int, 0),
+    "FK_CONS_SHED_K": ("cons_shed_k", float, 3.0),
+    "FK_CONS_SHED_MIN": ("cons_shed_min", int, 40),
     "FK_CONS_KNN_K": ("cons_knn_k", int, 20),
     "FK_CONS_KNN_THR": ("cons_knn_thr", float, 0.3),
     "FK_CONS_KNN_MINREF": ("cons_knn_minref", int, 50),
@@ -163,7 +165,7 @@ def add_consolidate_args(ap, gcfg=None, stage=None):
             if stage:
                 label = f"FK_{stage}_CONS_MODE > {name}"
                 d = _knob_default(f"FK_{stage}_CONS_MODE", typ, d, gcfg)
-            g.add_argument("--cons-mode", dest=dest, choices=("off", "strip", "knn", "both"),
+            g.add_argument("--cons-mode", dest=dest, choices=("off", "strip", "knn", "both", "shed"),
                            default=d, help=f"{label}: which consolidation passes run (default {d})")
         else:
             g.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
@@ -180,7 +182,8 @@ def kwargs_from_args(a):
                     iters=a.cons_iters, cap_amp=a.cons_cap_amp,
                     pure_iqr=a.cons_pure_iqr, agg_iqr=a.cons_agg_iqr,
                     agg_every=a.cons_agg_every, agg_minnew=a.cons_agg_minnew,
-                    agg_vac=a.cons_agg_vac, tpl_align=bool(a.cons_tpl_align))
+                    agg_vac=a.cons_agg_vac, tpl_align=bool(a.cons_tpl_align),
+                    shed_k=a.cons_shed_k, shed_min=a.cons_shed_min)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -568,6 +571,9 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     agg_every = max(1, int(strip_kw.pop("agg_every", 3)))
     agg_minnew = int(strip_kw.pop("agg_minnew", 30))
     agg_vac = int(strip_kw.pop("agg_vac", 0))
+    shed_k = float(strip_kw.pop("shed_k", 3.0))
+    shed_min = int(strip_kw.pop("shed_min", 40))
+    tot["shed"] = 0
     tot["agg"] = 0
     tot["agg_new"] = 0
     for ch in np.unique(chunk_ids[chunk_ids >= 0]):
@@ -623,6 +629,38 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
                                  if agg_vac else 0.0), log=log)
                 born.update(k_new)
                 tot["agg_new"] += len(k_new)
+        if mode == "shed":
+            # ── the INVERSE of the strip: expel a cluster's own outliers ──
+            #   The strip PULLS matching spikes in from other clusters; shed PUSHES a
+            #   cluster's own worst-fitting spikes OUT, to the reserve (label 1), for a
+            #   partially contaminated cluster whose junk no template claims.  Per
+            #   cluster: median template (same _template as the strip), amplitude-
+            #   weighted residual distance per spike, and a robust self-threshold
+            #   (median + shed_k * 1.4826*MAD) -- self-relative, so the metric's scale
+            #   cancels and no cross-cluster calibration is needed.  Shed spikes stay
+            #   Klusters-inspectable in the reserve (the hosts park (src -> 1) buckets),
+            #   so this is park-and-review, never deletion.  Measured on the lab
+            #   session's linked chain: shed_k=3 bought +1.5pp purity for -1.1pp
+            #   completeness (4,916 spikes reserved) -- a terminal-curation precision
+            #   dial, deliberately NOT part of strip/both.
+            for c in np.unique(labels[idx]):
+                if c <= 0 or c == 1 or c in exclude:
+                    continue
+                ci = idx[labels[idx] == c]
+                if len(ci) < shed_min:
+                    continue
+                T = _template(aw, ci, int(strip_kw.get("tpl_cap", 1024)), rng)
+                w = np.abs(T)
+                W = aw(ci)
+                D = np.sqrt((w * (W - T) ** 2).sum((1, 2)) / (w.sum() + 1e-9))
+                med = float(np.median(D))
+                mad = float(np.median(np.abs(D - med))) + 1e-9
+                thr = med + shed_k * 1.4826 * mad
+                bad = ci[thr < D]
+                if bad.size:
+                    labels[bad] = 1
+                    tot["shed"] += int(bad.size)
+
         if mode in ("knn", "both"):
             labels, n, k_new, next_id = knn_pass(aw, labels, idx, exclude=exclude,
                                                  next_id=next_id, realigned=True,
@@ -632,6 +670,7 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     if log:
         agg_line = (f", dissolved {tot['agg']} into per-chunk aggregates "
                     f"({tot['agg_new']} reseeded template(s))" if tot.get("agg") else "")
+        shed_line = f", shed {tot['shed']} own-outlier(s) to reserve" if tot.get("shed") else ""
         log(f"[{tag}] mode={mode}: strip moved {tot['strip']}, knn relabelled {tot['knn']} "
-            f"({tot['new']} new cluster(s)){agg_line}")
+            f"({tot['new']} new cluster(s)){agg_line}{shed_line}")
     return labels, tot
