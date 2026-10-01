@@ -147,6 +147,60 @@ def test_from_decomposition_end_to_end():
         assert spk.shape[0] == 12
 
 
+def test_all_variants_spk_per_variant():
+    """decollide_all_variants writes new units' .spk in EVERY variant, each
+    subtracted in its OWN space (so the two variants' recovered constituents
+    differ), with shared res/clu/manifest.  .fet is gated on a PCA basis, so this
+    core test runs write_fet=False (the .fet path is validated on a real basis)."""
+    rng = np.random.default_rng(0)
+    # two distinct per-variant template sets for the SAME cells (10, 11)
+    T10s = _pulse(16, 1000, 0); T11s = _pulse(16, 700, 1)           # standard space
+    T10d = _pulse(16, 600, 2);  T11d = _pulse(16, 900, 3)           # stderiv space (different)
+    waves_s, waves_d, res, clu = [], [], [], []
+    for i in range(5):
+        waves_s.append(T10s + rng.standard_normal((NS, NCH)) * 2); waves_d.append(T10d + rng.standard_normal((NS, NCH)) * 2)
+        res.append(100 + i * 50); clu.append(10)
+    for i in range(5):
+        waves_s.append(T11s + rng.standard_normal((NS, NCH)) * 2); waves_d.append(T11d + rng.standard_normal((NS, NCH)) * 2)
+        res.append(1000 + i * 50); clu.append(11)
+    # a collision of 10+11 in BOTH spaces at idx 10 (same shift)
+    waves_s.append(T10s + fd._roll0(T11s, 3)); waves_d.append(T10d + fd._roll0(T11d, 3))
+    res.append(2000); clu.append(10)
+    ws = np.rint(np.stack(waves_s)).astype(nio.SPK_DTYPE)
+    wd = np.rint(np.stack(waves_d)).astype(nio.SPK_DTYPE)
+    res = np.array(res, np.int64); clu = np.array(clu, np.int64)
+
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "sess")
+        nio.write_res(b, 6, res, variant="stderiv")
+        nio.write_clu(b, 6, clu, variant="stderiv_C5_D34")
+        nio.write_spk(b, 6, ws, variant="standard")
+        nio.write_spk(b, 6, wd, variant="stderiv_C5_D34")
+        decomp = dict(k1=[10], a1=[1.0], tau1=[0], k2=[11], a2=[1.0], tau2=[3], gain=[0.9])
+        paths = fd.decollide_all_variants(
+            b, 6, nsamp=NS, nch=NCH, sel=[10], decomp=decomp, tag="decollided",
+            clu_variant="stderiv_C5_D34", res_variant="stderiv",
+            spk_variants=("standard", "stderiv_C5_D34"), min_tmpl=2, write_fet=False)
+
+        # both variants' .spk written; shared res/clu/manifest; net +1 (12 rows)
+        assert "spk.standard" in paths and "spk.stderiv_C5_D34" in paths
+        assert "fet.standard" not in paths                        # write_fet=False
+        for v in ("standard", "stderiv_C5_D34"):
+            spk = nio.open_spk_at(b, 6, NS, NCH, variant=v, tag="decollided")
+            assert spk.shape[0] == 12
+        cr = nio.read_cluster_res_at(b, 6, clu_variant="stderiv_C5_D34",
+                                     res_variant="stderiv", tag="decollided")
+        assert cr.ok and cr.times.size == 12
+        # each variant recovered its OWN constituents: cell 10's recovered spike
+        # (time 2000) peaks on ch0 in standard but ch2 in stderiv
+        ss = nio.open_spk_at(b, 6, NS, NCH, variant="standard", tag="decollided")
+        sd = nio.open_spk_at(b, 6, NS, NCH, variant="stderiv_C5_D34", tag="decollided")
+        r2000 = int(np.flatnonzero(cr.times == 2000)[0])
+        assert int(np.unravel_index(np.argmin(ss[r2000]), (NS, NCH))[1]) == 0
+        assert int(np.unravel_index(np.argmin(sd[r2000]), (NS, NCH))[1]) == 2
+        assert os.path.exists(paths["manifest"])
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

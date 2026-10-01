@@ -30,6 +30,8 @@
 #  at the .decollided stage (same as the rest of the pipeline) -- de-collision is
 #  a detection-level edit; feature extraction follows it.
 # ═══════════════════════════════════════════════════════════════════════════
+import os
+
 import numpy as np
 
 try:
@@ -150,9 +152,8 @@ def write_decollided_stage(base, elec, new_times, new_clu, new_waves, manifest, 
     shared `tag` -- plus the .decollide.tsv manifest.  Each file keeps its own
     variant; only the tag is shared (the staging rule).  Returns the paths dict.
 
-    The stderiv .spk and .fet are NOT written here -- regenerate them by running
-    the normal extract/realign step against this stage (de-collision is a
-    detection-level edit)."""
+    Writes ONE spk variant and no .fet; for new units in EVERY variant's .spk +
+    .fet (the linear-subtraction-per-variant path), use decollide_all_variants."""
     paths = {}
     paths["res"] = nio.write_res(base, elec, new_times, variant=res_variant, tag=tag)
     paths["clu"] = nio.write_clu(base, elec, new_clu, n_clusters=n_clusters,
@@ -216,6 +217,82 @@ def decollide_from_decomposition(base, elec, *, nsamp, nch, sel, decomp, tag,
                                   spk_variant=spk_variant)
 
 
+# ── new units in EVERY variant (.spk + .fet) ─────────────────────────────────
+# A de-collided constituent is a NEW spike: its waveform is the recovered
+# (mutually-subtracted) one, which cannot be re-extracted from the .dat (the .dat
+# holds the collision SUM).  But the subtraction is LINEAR, so running it in a
+# given variant's .spk space -- that variant's collision window minus that
+# variant's scaled, shifted partner template -- yields the constituent's waveform
+# in that variant.  So the stage carries new units' .spk AND .fet in every
+# method: run the SAME decomposition once per variant, then featurise each with
+# that variant's PCA basis.  res/clu/manifest are shared (one physical spike set).
+
+def _variant_templates(base, elec, nsamp, nch, clu_ids, variant, parent_tag, min_tmpl):
+    """(waves, {k: mean template}) in `variant`'s .spk space, for the subtraction."""
+    w = np.asarray(nio.open_spk_at(base, elec, nsamp, nch, variant=variant, tag=parent_tag), float)
+    if w.shape[0] != clu_ids.size:
+        raise RuntimeError(f"{variant} .spk length {w.shape[0]} != clu {clu_ids.size}")
+    T = {int(k): w[clu_ids == k].mean(0)
+         for k in np.unique(clu_ids[clu_ids >= 0])
+         if np.count_nonzero(clu_ids == k) >= min_tmpl}
+    return w, T
+
+
+def write_variant_spk_fet(base, elec, waves, *, variant, tag, write_fet=True, realign=True):
+    """Write the stage's .spk for `variant`, and -- when a PCA basis for that
+    variant exists (<base>.pca.<variant>.<elec>) -- its .fet, projecting the
+    waveforms onto that basis (fiber_pca.cluster_features).  Returns {'spk':…[,
+    'fet':…]}; .fet is skipped (no error) when no basis exists."""
+    out = {"spk": nio.write_spk(base, elec, waves, variant=variant, tag=tag)}
+    if not write_fet:
+        return out
+    pca_path = nio.session_path(base, "pca", elec, variant=variant)
+    if not os.path.exists(pca_path):
+        return out
+    try:
+        from . import fiber_pca as fp
+    except ImportError:
+        import fiber_pca as fp
+    basis = fp.read_pcad(pca_path)
+    feats = fp.cluster_features(np.asarray(waves, np.float32), basis, realign=realign)
+    if feats is not None:
+        out["fet"] = nio.write_fet(base, elec, feats, variant=variant, tag=tag)
+    return out
+
+
+def decollide_all_variants(base, elec, *, nsamp, nch, sel, decomp, tag, clu_variant,
+                           res_variant="stderiv", spk_variants=("standard",),
+                           parent_tag="", min_tmpl=40, write_fet=True, realign=True):
+    """De-collide and write the stage with new units' .spk AND .fet in EVERY
+    variant in @p spk_variants.  The mutual subtraction is run once per variant
+    (that variant's .spk + templates, the SAME decomposition), so each new
+    constituent gets its waveform in every method's space; res (detection variant),
+    clu (feature variant) and the manifest are shared.  Returns the paths dict:
+    'res','clu','manifest' plus 'spk.<variant>' / 'fet.<variant>' per variant."""
+    res_times = nio.read_res_at(base, elec, variant=res_variant, tag=parent_tag)
+    _, clu_ids = nio.read_clu_at(base, elec, variant=clu_variant, tag=parent_tag,
+                                 n_spikes=res_times.size)
+    if clu_ids.size != res_times.size:
+        raise RuntimeError("parent res/clu length mismatch")
+
+    paths = {}
+    nt = nc = manifest = None
+    for v in spk_variants:
+        w, T = _variant_templates(base, elec, nsamp, nch, clu_ids, v, parent_tag, min_tmpl)
+        vt, vc, vw, vman = decollide_spikes(w, res_times, clu_ids, sel, decomp, T)
+        if nt is None:                       # identical across variants (shared decomposition)
+            nt, nc, manifest = vt, vc, vman
+        for k, p in write_variant_spk_fet(base, elec, vw, variant=v, tag=tag,
+                                          write_fet=write_fet, realign=realign).items():
+            paths[f"{k}.{v}"] = p
+
+    paths["res"] = nio.write_res(base, elec, nt, variant=res_variant, tag=tag)
+    paths["clu"] = nio.write_clu(base, elec, nc, variant=clu_variant, tag=tag)
+    man = nio.session_path(base, "decollide", elec, variant=clu_variant, tag=tag) + ".tsv"
+    paths["manifest"] = write_manifest(man, manifest)
+    return paths
+
+
 def main():
     import argparse
     ap = argparse.ArgumentParser(
@@ -225,6 +302,10 @@ def main():
     ap.add_argument("--clu-method", required=True, help="feature variant of the .clu (e.g. stderiv_C5_D34)")
     ap.add_argument("--res-method", default="stderiv", help="detection variant of the .res (default stderiv)")
     ap.add_argument("--spk-variant", default="standard", help="raw .spk variant to subtract in (default standard)")
+    ap.add_argument("--spk-variants", nargs="+", default=None,
+                    help="write new units' .spk + .fet in EVERY listed variant "
+                         "(e.g. standard stderiv_C5_D34) via decollide_all_variants")
+    ap.add_argument("--no-fet", action="store_true", help="with --spk-variants, skip the .fet projection")
     ap.add_argument("--tag", default="decollided", help="shared stage tag for the derived files")
     ap.add_argument("--parent-tag", default="", help="stage of the parent being de-collided ('' = base files)")
     ap.add_argument("--nsamp", type=int, required=True)
@@ -235,10 +316,16 @@ def main():
     z = np.load(a.decomp)
     sel = np.asarray(z["sel"], np.int64)
     decomp = {k: np.asarray(z[k]) for k in DECOMP_KEYS}
-    paths = decollide_from_decomposition(
-        a.base, a.elec, nsamp=a.nsamp, nch=a.nch, sel=sel, decomp=decomp, tag=a.tag,
-        clu_variant=a.clu_method, res_variant=a.res_method, spk_variant=a.spk_variant,
-        parent_tag=a.parent_tag)
+    if a.spk_variants:
+        paths = decollide_all_variants(
+            a.base, a.elec, nsamp=a.nsamp, nch=a.nch, sel=sel, decomp=decomp, tag=a.tag,
+            clu_variant=a.clu_method, res_variant=a.res_method,
+            spk_variants=tuple(a.spk_variants), parent_tag=a.parent_tag, write_fet=not a.no_fet)
+    else:
+        paths = decollide_from_decomposition(
+            a.base, a.elec, nsamp=a.nsamp, nch=a.nch, sel=sel, decomp=decomp, tag=a.tag,
+            clu_variant=a.clu_method, res_variant=a.res_method, spk_variant=a.spk_variant,
+            parent_tag=a.parent_tag)
     for k, v in paths.items():
         print(f"[decollide] {k}: {v}")
 
