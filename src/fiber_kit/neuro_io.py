@@ -53,6 +53,7 @@ __all__ = [
     "read_cluster_res",
     "read_fet_file", "read_fet", "write_fet_file", "write_fet",
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
+    "write_wtf", "read_wtf", "write_wtf_info", "read_wtf_info", "WTF_INFO_COLS",
     "open_signal",
     "fibers_path",
     "add_clu_args",
@@ -669,6 +670,67 @@ def write_spk(base, elec, waves, variant="", tag=""):
     """Write <base>.spk[.<variant>].<elec>[.<tag>] (int16, sample-major).  `variant` =
     method (before group), `tag` = fiber stage (after group)."""
     return write_spk_file(session_path(base, "spk", elec, variant=variant, tag=tag), waves)
+
+
+# ── .wtf.N — waveform template file (linked per-unit medians, .spk-style) ─────
+# A .wtf is BYTE-IDENTICAL to a .spk slice: int16, sample-major, no header, one
+# median waveform per ROW.  Each row is a (unit, link, bin) median, named by the
+# companion index (write_wtf_info): a unit's templates are LINKED along an axis --
+# "drift" (per time CHUNK, like a fiber's per-chunk `template`) or "adapt" (per
+# ENERGY bin).  One .wtf per variant (method) and tag (stage), the same axes as
+# .spk, so any .spk reader reads a .wtf and every variant row-aligns to one index.
+WTF_INFO_COLS = ["row", "unit", "link", "bin", "lo", "hi", "nspk", "src_clu_variant", "src_clu_tag"]
+# `link` is the axis the templates of a unit are linked along:
+#   "drift" -> bin = time CHUNK index, [lo,hi] = chunk time range (s)   -- tracks drift
+#   "adapt" -> bin = ENERGY bin index, [lo,hi] = spike-energy range     -- tracks adaptation
+# Each (unit, link) is a linked SERIES of per-bin median templates.
+
+
+def write_wtf(base, elec, templates, variant="", tag=""):
+    """Write <base>.wtf[.<variant>].<elec>[.<tag>] -- int16 sample-major (R, nsamp,
+    nchan), one median waveform per (chunk,unit) row.  Pair with write_wtf_info."""
+    return write_spk_file(session_path(base, "wtf", elec, variant=variant, tag=tag), templates)
+
+
+def read_wtf(base, elec, nsamp, nchan, variant="", tag=""):
+    """Read a .wtf written by write_wtf -> (R, nsamp, nchan) float array (int16 on
+    disk).  R is inferred from the file size, as for .spk."""
+    raw = np.fromfile(session_path(base, "wtf", elec, variant=variant, tag=tag), dtype=SPK_DTYPE)
+    r = raw.size // (nsamp * nchan)
+    return raw[: r * nsamp * nchan].reshape(r, nsamp, nchan).astype(float)
+
+
+def write_wtf_info(base, elec, rows, variant="", tag=""):
+    """Write the template index <base>.wtfinfo[.<variant>].<elec>[.<tag>] (TSV, one
+    line per .wtf ROW, columns WTF_INFO_COLS).  Shared across variants (the rows
+    align), so callers normally pass variant="".  `rows` is a list of dicts; the
+    'row' column is filled from the row position."""
+    path = session_path(base, "wtfinfo", elec, variant=variant, tag=tag)
+    with open(path, "w") as f:
+        f.write("\t".join(WTF_INFO_COLS) + "\n")
+        for i, rd in enumerate(rows):
+            vals = [i if c == "row" else rd.get(c, "") for c in WTF_INFO_COLS]
+            f.write("\t".join(str(v) for v in vals) + "\n")
+    return path
+
+
+def read_wtf_info(base, elec, variant="", tag=""):
+    """Read the .wtfinfo index -> list of dicts (int for row/unit/chunk/nspk, float
+    for tmin/tmax, str otherwise)."""
+    path = session_path(base, "wtfinfo", elec, variant=variant, tag=tag)
+    ints, floats = {"row", "unit", "bin", "nspk"}, {"lo", "hi"}
+    out = []
+    with open(path) as f:
+        hdr = f.readline().rstrip("\n").split("\t")
+        for line in f:
+            if not line.strip():
+                continue
+            parts = line.rstrip("\n").split("\t")
+            d = {}
+            for c, v in zip(hdr, parts):
+                d[c] = int(v) if c in ints and v != "" else float(v) if c in floats and v != "" else v
+            out.append(d)
+    return out
 
 
 # ── group-wide spike-count edit (dedup propagation) ──────────────────────────
