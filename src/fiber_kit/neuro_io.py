@@ -246,6 +246,24 @@ def read_res(base, elec, prefer=None):
     return read_res_file(r.path)
 
 
+def read_res_at(base, elec, variant="", tag=""):
+    """Read a method-pinned staged .res directly (no resolve_any / probing):
+    <base>.res[.<variant>].<elec>[.<tag>], e.g. variant='stderiv', tag='decollided'
+    -> <base>.res.stderiv.<elec>.decollided.  Mirrors read_clu_at.
+
+    read_res() treats .res as the SHARED detection artifact and takes whichever
+    copy exists.  A STAGED res that DEVIATES from it -- a de-collision adds spikes,
+    so its spike set differs -- must be named by its exact (variant, tag) and never
+    reached through resolve_any, or the shared-resolve default would conflate the
+    staged res with the original.  The detection method rides `variant` (held
+    unchanged), the pipeline/curation stage rides `tag`."""
+    path = session_path(base, "res", elec, variant=variant, tag=tag)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            _pinned_miss_message("res", path, base, "res", elec, variant, tag))
+    return read_res_file(path)
+
+
 def session_path(base, type_, group, variant="", tag=""):
     """Canonical neurosuite-3 path:  <base>.<type>[.<variant>].<group>[.<tag>].
 
@@ -447,6 +465,35 @@ def read_cluster_res(base, elec, prefer=None):
     return ClusterResData(n_clu, ids, times, True, ok)
 
 
+def read_cluster_res_at(base, elec, clu_variant="", res_variant="", tag="",
+                        n_spikes=None):
+    """Read a method-pinned staged .clu/.res PAIR, each at its own variant but the
+    SAME stage `tag`.  This is the staging rule made explicit: the res keeps its
+    detection method (res_variant) while the clu keeps its feature variant
+    (clu_variant), and both move to the derived stage together -- so a de-collided
+    pair is <base>.res.<res_variant>.<elec>.<tag> + <base>.clu.<clu_variant>.<elec>.<tag>.
+
+    Unlike read_cluster_res, a single `prefer` cannot name two different variants,
+    so this takes them separately and builds both paths directly (no probing).  A
+    missing staged file RAISES with the pinned-miss message (an explicitly named
+    stage file that is absent is an error worth naming); a length mismatch returns
+    ClusterResData.ok=False without raising, mirroring read_cluster_res -- after a
+    de-collision adds spikes, that count check is the guard that res and clu grew
+    in lockstep."""
+    res_path = session_path(base, "res", elec, variant=res_variant, tag=tag)
+    clu_path = session_path(base, "clu", elec, variant=clu_variant, tag=tag)
+    if not os.path.exists(res_path):
+        raise FileNotFoundError(
+            _pinned_miss_message("res", res_path, base, "res", elec, res_variant, tag))
+    if not os.path.exists(clu_path):
+        raise FileNotFoundError(
+            _pinned_miss_message("clu", clu_path, base, "clu", elec, clu_variant, tag))
+    times = read_res_file(res_path)
+    n_clu, ids = read_clu_file(clu_path, n_spikes=n_spikes)
+    ok = ids.size == times.size
+    return ClusterResData(n_clu, ids, times, True, ok)
+
+
 # ── .fet.N (binary; mirrors KK::LoadData binary path / readFetBinary) ────────
 FetBinaryFile = namedtuple("FetBinaryFile", ["n_features", "n_spikes", "values", "ok"])
 
@@ -474,6 +521,17 @@ def read_fet(base, elec, prefer=None):
     if not r.found:
         raise FileNotFoundError(f"no .fet for {base} elec {elec}")
     return read_fet_file(r.path)
+
+
+def read_fet_at(base, elec, variant="", tag=""):
+    """Read a method-pinned staged .fet directly (no resolve_input probing):
+    <base>.fet[.<variant>].<elec>[.<tag>].  Mirrors read_clu_at; raises with the
+    expected path and the tokens present for that stage if absent."""
+    path = session_path(base, "fet", elec, variant=variant, tag=tag)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            _pinned_miss_message("fet", path, base, "fet", elec, variant, tag))
+    return read_fet_file(path)
 
 
 def write_fet_file(path, values):
@@ -513,6 +571,24 @@ def open_spk(base, elec, nsamp, nchan, prefer=None, mode="r"):
     if not r.found:
         raise FileNotFoundError(f"no .spkD/.spk for {base} elec {elec}")
     return open_spk_file(r.path, nsamp, nchan, mode=mode), r
+
+
+def open_spk_at(base, elec, nsamp, nchan, variant="", tag="", mode="r"):
+    """Memmap a method-pinned staged .spk directly (no prefer_derived probing):
+    <base>.spk[.<variant>].<elec>[.<tag>] as (nSpikes, nsamp, nchan) int16.
+    Mirrors read_clu_at.  Returns the memmap only.
+
+    Unlike open_spk() this does NOT fall back across spk variants -- the (variant,
+    tag) names the exact physical file.  That is the point for a staged waveform: a
+    de-collided .spk.standard.<elec>.<stage> holds RAW amplitudes and must be read
+    as itself, never silently substituted by a transformed variant, because the
+    stderiv transform breaks the amplitude-distance law (the same reason read_res's
+    resolve_any is deliberately not used for .spk)."""
+    path = session_path(base, "spk", elec, variant=variant, tag=tag)
+    if not os.path.exists(path):
+        raise FileNotFoundError(
+            _pinned_miss_message("spk", path, base, "spk", elec, variant, tag))
+    return open_spk_file(path, nsamp, nchan, mode=mode)
 
 
 def open_spkD(base, elec, nsamp, nch, mode="r", prefer=None):
