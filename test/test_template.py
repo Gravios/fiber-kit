@@ -1,5 +1,5 @@
 """fiber_template: LINKED per-unit median templates (drift + adapt) written one
-.wtf per variant, plus the .wtf/.wtfinfo IO.  Synthetic session (res/clu/spk in
+.wtf per variant, plus the .wtf/.wti IO.  Synthetic session (res/clu/spk in
 two variants) with a unit whose amplitude varies — so the drift series (per time
 chunk) and the adapt series (per energy bin) both resolve the variation, the
 point of "templates like fibers"."""
@@ -66,10 +66,14 @@ def test_wtf_io_roundtrip():
         assert np.array_equal(back.astype(nio.SPK_DTYPE), arr)       # byte-identical, .spk-style
         rows = [dict(unit=2, link="drift", bin=0, lo=0.0, hi=1.0, nspk=10,
                      src_clu_variant="stderiv_C5_D34", src_clu_tag="lab_units")]
-        nio.write_wtf_info(b, 6, rows, tag="t")
-        info = nio.read_wtf_info(b, 6, tag="t")
+        nio.write_wti(b, 6, rows, NS, NCH, sr=SR, tag="t")
+        wti = nio.read_wti(b, 6, tag="t")
+        assert wti["version"] == 1 and wti["nSamples"] == NS and wti["nChannels"] == NCH
+        info = wti["rows"]
         assert len(info) == 1 and info[0]["unit"] == 2 and info[0]["row"] == 0
         assert info[0]["link"] == "drift" and info[0]["bin"] == 0
+        assert info[0]["a"] == 0.0 and info[0]["b"] == 1.0 and info[0]["nSpikes"] == 10
+        assert info[0]["src_clu_variant"] == "stderiv_C5_D34"   # provenance round-trips
 
 
 def test_drift_and_adapt_series():
@@ -83,7 +87,7 @@ def test_drift_and_adapt_series():
 
         T_std = nio.read_wtf(b, 6, NS, NCH, variant="standard", tag="wtf")
         T_sd = nio.read_wtf(b, 6, NS, NCH, variant="stderiv_C5_D34", tag="wtf")
-        info = nio.read_wtf_info(b, 6, tag="wtf")
+        info = nio.read_wti(b, 6, tag="wtf")["rows"]
         assert T_std.shape[0] == T_sd.shape[0] == len(info) == len(rows)
 
         idx = {(r["unit"], r["link"], r["bin"]): i for i, r in enumerate(info)}

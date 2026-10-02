@@ -13,8 +13,9 @@
 #
 #  Both are generated in EVERY requested variant's .spk space and written
 #  .spk-style as <base>.wtf.<variant>.<elec>[.<tag>] (one file per method and
-#  stage), ROW-ALIGNED across variants to one shared index
-#  <base>.wtfinfo.<elec>[.<tag>] (row, unit, link, bin, lo, hi, nspk, src…).
+#  stage), ROW-ALIGNED across variants to one shared, method-less index
+#  <base>.wti.<elec>[.<tag>] -- the canonical .wti (row, unit, link, bin, a, b,
+#  nSpikes, src…), the same contract the shared C++ reader (neurofileio) reads.
 # ═══════════════════════════════════════════════════════════════════════════
 import argparse
 
@@ -79,7 +80,7 @@ def generate(base, elec, *, nsamp, nchan, sr, variants, clu_variant, clu_tag="",
              out_tag="", units=None, links=("drift",), n_chunks=6, chunk_min=None,
              n_energy=5, energy_variant=None, max_per=800, drop_empty=True):
     """Build LINKED per-unit median templates (drift and/or adapt series) in each
-    variant; write one .wtf per variant + the shared .wtfinfo index.  Returns
+    variant; write one .wtf per variant + the shared .wti index.  Returns
     (rows, paths)."""
     times = nio.read_res(base, elec)                        # SHARED detection res
     _, clu = nio.read_clu_at(base, elec, variant=clu_variant, tag=clu_tag)
@@ -130,7 +131,7 @@ def generate(base, elec, *, nsamp, nchan, sr, variants, clu_variant, clu_tag="",
         arr = (np.rint(np.stack(tpl[v])).astype(nio.SPK_DTYPE) if tpl[v]
                else np.zeros((0, nsamp, nchan), nio.SPK_DTYPE))
         paths[v] = nio.write_wtf(base, elec, arr, variant=v, tag=out_tag)
-    paths["info"] = nio.write_wtf_info(base, elec, rows, variant="", tag=out_tag)
+    paths["info"] = nio.write_wti(base, elec, rows, nsamp, nchan, sr=sr, variant="", tag=out_tag)
     return rows, paths
 
 
@@ -143,7 +144,7 @@ def main():
                     help="spk variants to template, e.g. standard stderiv_C5_D34")
     ap.add_argument("--clu-variant", required=True, help="variant of the units .clu")
     ap.add_argument("--clu-tag", default="", help="tag/stage of the units .clu")
-    ap.add_argument("--out-tag", default="", help="stage tag for the written .wtf/.wtfinfo")
+    ap.add_argument("--out-tag", default="", help="stage tag for the written .wtf/.wti")
     ap.add_argument("--links", nargs="+", default=["drift"], choices=["drift", "adapt"],
                     help="template link axes to generate (default: drift)")
     ap.add_argument("--nsamp", type=int, required=True)
