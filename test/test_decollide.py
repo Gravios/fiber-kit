@@ -201,6 +201,96 @@ def test_all_variants_spk_per_variant():
         assert os.path.exists(paths["manifest"])
 
 
+def _eap_fixture(d):
+    """11 parent spikes (idx 0..10), a collision of units 10 & 11 at source_idx 10."""
+    rng = np.random.default_rng(0)
+    T1 = _pulse(16, 1000, 0); T2 = _pulse(16, 700, 1)
+    waves, res, clu = [], [], []
+    for i in range(5):
+        waves.append(T1 + rng.standard_normal((NS, NCH)) * 2); res.append(100 + i * 50); clu.append(10)
+    for i in range(5):
+        waves.append(T2 + rng.standard_normal((NS, NCH)) * 2); res.append(1000 + i * 50); clu.append(11)
+    waves.append(T1 + fd._roll0(T2, 3)); res.append(2000); clu.append(10)        # collision @ idx 10
+    waves = np.rint(np.stack(waves)).astype(nio.SPK_DTYPE)
+    res = np.array(res, np.int64); clu = np.array(clu, np.int64)
+    b = os.path.join(d, "sess")
+    nio.write_res(b, 6, res, variant="stderiv")                                  # parent: no tag
+    nio.write_clu(b, 6, clu, variant="stderiv_C5_D34")
+    nio.write_spk(b, 6, waves, variant="standard")
+    decomp = dict(k1=[10], a1=[1.0], tau1=[0], k2=[11], a2=[1.0], tau2=[3], gain=[0.9])
+    return b, decomp
+
+
+def test_eap_membership_from_decomposition():
+    """decollide writes .eap membership on the PARENT stage: the collision row
+    carries both constituent units at their integer offsets, each mapped to a
+    stable .tcl class (provenance = the unit)."""
+    with tempfile.TemporaryDirectory() as d:
+        b, decomp = _eap_fixture(d)
+        paths = fd.decollide_from_decomposition(
+            b, 6, nsamp=NS, nch=NCH, sel=[10], decomp=decomp, tag="decollided",
+            clu_variant="stderiv_C5_D34", res_variant="stderiv", min_tmpl=2,
+            eap=True, n_cells=16)
+        assert "eap" in paths and "tcl" in paths
+
+        e = nio.read_eap(b, 6, tag="")                      # parent_tag "" -> base .eap
+        assert e["ok"] and e["nSpikes"] == 11 and e["nClasses"] == 16
+        reg = nio.read_tcl(b, 6)
+        c10 = fd._eap_class_for_unit(reg["entries"], 10)
+        c11 = fd._eap_class_for_unit(reg["entries"], 11)
+        assert c10 >= 0 and c11 >= 0 and c10 != c11
+        assert int(e["cells"][10, c10]) == 0               # unit 10 @ tau 0
+        assert int(e["cells"][10, c11]) == 3               # unit 11 @ tau +3
+        # non-collision parent rows stay all-absent
+        assert (e["cells"][0] == nio.EAP_ABSENT).all()
+        # the collision row has exactly the two constituents present
+        assert int(np.count_nonzero(e["cells"][10] != nio.EAP_ABSENT)) == 2
+        ent = {int(x["col"]): x for x in reg["entries"]}
+        assert ent[c10]["status"] == "active" and int(ent[c10]["provenance_clu"]) == 10
+        assert ent[c11]["status"] == "active" and int(ent[c11]["provenance_clu"]) == 11
+
+
+def test_eap_skipped_when_disabled():
+    """eap=False writes no .eap (the grown stage still lands)."""
+    with tempfile.TemporaryDirectory() as d:
+        b, decomp = _eap_fixture(d)
+        paths = fd.decollide_from_decomposition(
+            b, 6, nsamp=NS, nch=NCH, sel=[10], decomp=decomp, tag="decollided",
+            clu_variant="stderiv_C5_D34", res_variant="stderiv", min_tmpl=2, eap=False)
+        assert "eap" not in paths and "res" in paths
+        assert not os.path.exists(nio.session_path(b, "eap", 6, variant="", tag=""))
+
+
+def test_eap_writer_reuse_allocation_and_grow():
+    """The writer reuses a unit's class by provenance across calls, allocates a
+    fresh column for a new unit, and grows the pool when it is exhausted."""
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "sess")
+        # first call: units 10,11,12 (10 shared across the two rows) -> 3 classes in a pool of 4
+        man1 = [dict(source_idx=10, k1=10, tau1=0, k2=11, tau2=3),
+                dict(source_idx=20, k1=10, tau1=1, k2=12, tau2=-2)]
+        fd.write_eap_membership(b, 6, parent_tag="", n_spikes=30, manifest=man1, n_cells=4)
+        reg1 = nio.read_tcl(b, 6)
+        c10 = fd._eap_class_for_unit(reg1["entries"], 10)
+        assert c10 >= 0
+        assert fd._eap_class_for_unit(reg1["entries"], 11) >= 0
+        assert fd._eap_class_for_unit(reg1["entries"], 12) >= 0
+
+        # second call on the SAME parent .eap: unit 10 recurs (reuse); 99,98,97 are
+        # new -> one free slot left, then the pool (4) must grow.
+        man2 = [dict(source_idx=5, k1=10, tau1=2, k2=99, tau2=0),
+                dict(source_idx=6, k1=98, tau1=0, k2=97, tau2=0)]
+        fd.write_eap_membership(b, 6, parent_tag="", n_spikes=30, manifest=man2, n_cells=4)
+        reg2 = nio.read_tcl(b, 6)
+        assert fd._eap_class_for_unit(reg2["entries"], 10) == c10             # reused, not duplicated
+        for u in (99, 98, 97):
+            assert fd._eap_class_for_unit(reg2["entries"], u) >= 0            # allocated
+        e = nio.read_eap(b, 6, tag="")
+        assert e["nClasses"] >= 6                                            # grew past the initial 4
+        assert int(e["cells"][5, c10]) == 2                                 # unit 10's offset updated
+        assert int(e["cells"][10, c10]) == 0                                # first call's cell preserved
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

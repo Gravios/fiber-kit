@@ -190,9 +190,128 @@ def reconstruct_collision(manifest_row, raw_templates, nsamp, nch):
 DECOMP_KEYS = ("k1", "a1", "tau1", "k2", "a2", "tau2", "gain")
 
 
+# ── .eap membership (annotate-in-place) ──────────────────────────────────────
+# The .decollided stage above is the GROW/export representation (each collision
+# split into two physical spikes).  The .eap is the ALTERNATIVE annotate-in-place
+# representation the EAP model wants: it marks, on the PARENT stage's own spike
+# rows, which template classes each collision waveform contains and at what integer
+# offset -- without growing rows.  For each manifest row: eap[source_idx][col(k)] =
+# clamp(tau) for both constituents, mapping each unit k to a STABLE .tcl class
+# (reused by provenance, else allocated; pool grown on exhaustion).  Mirrors the
+# C++ neurosuite::decollide::applyDecompsToEap + process_decomposecollisions'
+# writer, so a .eap written here reads identically through neurofileio.  Amplitude
+# / fractional shift stay in the .decollide manifest; .eap is presence + int offset.
+
+def _eap_class_for_unit(entries, unit):
+    """Lowest-col active class whose provenance_clu == unit, or -1 (the reuse rule)."""
+    found = -1
+    for e in entries:
+        if e.get("status") == "active" and int(e.get("provenance_clu", -1)) == int(unit):
+            c = int(e.get("col", 0))
+            if found < 0 or c < found:
+                found = c
+    return found
+
+
+def _eap_clamp(tau):
+    """Clamp an int sample shift into int8, never the ABSENT sentinel (-128)."""
+    tau = int(tau)
+    if tau > 127:
+        tau = 127
+    if tau < -127:
+        tau = -127                    # -128 == EAP_ABSENT, never a real offset
+    return tau
+
+
+def _blank_tcl_entry(col):
+    return dict(col=int(col), status="free", label="", provenance_clu=-1,
+                provenance_stage="", created="", merged_into=-1)
+
+
+def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
+                         n_cells=128, created=None):
+    """Record the decollide `manifest` as .eap membership (+ .tcl classes) on the
+    PARENT stage (`parent_tag`).  Resolution: the parent stage's .eap; else a fresh
+    all-absent N × n_cells (process_initeap normally pre-builds it).  Each unit maps
+    to a stable .tcl class column (reuse by provenance, else allocate; grow when the
+    free pool is exhausted).  Returns {'eap':…, 'tcl':…, 'cells':N_written} or None
+    (nothing to write / an N mismatch that would corrupt the matrix)."""
+    if not manifest:
+        return None
+    if created is None:
+        import datetime
+        created = datetime.date.today().isoformat()
+    grow_by = int(n_cells) if (n_cells and int(n_cells) > 0) else 128
+
+    cur = nio.read_eap(base, elec, tag=parent_tag)
+    if cur["ok"]:
+        cells = np.array(cur["cells"], dtype=np.int8, copy=True)
+        N = int(cur["nSpikes"])
+    else:
+        N = int(n_spikes)
+        cells = np.full((N, grow_by), nio.EAP_ABSENT, dtype=np.int8)
+    if N != int(n_spikes):
+        return None                   # parent spike count disagrees -> refuse
+
+    reg = nio.read_tcl(base, elec)
+    entries = (reg["entries"] if reg["ok"]
+               else [_blank_tcl_entry(i) for i in range(cells.shape[1])])
+
+    # Reconcile widths: a class column must be valid in BOTH structures (a sibling
+    # stage may have grown the shared .tcl pool).
+    T = max(cells.shape[1], len(entries))
+    if cells.shape[1] < T:
+        cells = np.concatenate(
+            [cells, np.full((cells.shape[0], T - cells.shape[1]), nio.EAP_ABSENT, np.int8)], axis=1)
+    while len(entries) < T:
+        entries.append(_blank_tcl_entry(len(entries)))
+
+    def first_free():
+        for e in entries:
+            if e.get("status") == "free":
+                return int(e["col"])
+        return -1
+
+    def grow():
+        nonlocal cells
+        newT = cells.shape[1] + grow_by
+        cells = np.concatenate(
+            [cells, np.full((cells.shape[0], newT - cells.shape[1]), nio.EAP_ABSENT, np.int8)], axis=1)
+        while len(entries) < newT:
+            entries.append(_blank_tcl_entry(len(entries)))
+
+    def col_for_unit(unit):
+        c = _eap_class_for_unit(entries, unit)
+        if c >= 0:
+            return c
+        c = first_free()
+        if c < 0:
+            grow()
+            c = first_free()
+        e = entries[c]
+        e.update(status="active", provenance_clu=int(unit),
+                 provenance_stage=(parent_tag or ""), created=created, merged_into=-1)
+        return c
+
+    written = 0
+    for r in manifest:
+        i = int(r["source_idx"])
+        if i < 0 or i >= N:
+            continue
+        for uk, tk in ((int(r["k1"]), int(r["tau1"])), (int(r["k2"]), int(r["tau2"]))):
+            col = col_for_unit(uk)          # may grow() + rebind `cells`; resolve BEFORE
+            cells[i, col] = _eap_clamp(tk)  # indexing, so the store targets the grown array
+            written += 1
+
+    eap_path = nio.write_eap(base, elec, cells, group=int(elec), tag=(parent_tag or ""))
+    tcl_path = nio.write_tcl(base, elec, entries, n_classes=cells.shape[1])
+    return dict(eap=eap_path, tcl=tcl_path, cells=written)
+
+
 def decollide_from_decomposition(base, elec, *, nsamp, nch, sel, decomp, tag,
                                  clu_variant, res_variant="stderiv",
-                                 spk_variant="standard", parent_tag="", min_tmpl=40):
+                                 spk_variant="standard", parent_tag="", min_tmpl=40,
+                                 eap=True, n_cells=128):
     """Write the .decollided stage from a decomposition produced elsewhere.
     Loads the parent res/clu + RAW .spk through the method-pinned readers -- the
     parent's res and clu carry DIFFERENT variants (detection vs feature), which a
@@ -212,9 +331,17 @@ def decollide_from_decomposition(base, elec, *, nsamp, nch, sel, decomp, tag,
              for k in np.unique(clu_ids[clu_ids >= 0])
              if np.count_nonzero(clu_ids == k) >= min_tmpl}
     nt, nc, nw, manifest = decollide_spikes(raw, res_times, clu_ids, sel, decomp, raw_T)
-    return write_decollided_stage(base, elec, nt, nc, nw, manifest, tag=tag,
-                                  res_variant=res_variant, clu_variant=clu_variant,
-                                  spk_variant=spk_variant)
+    paths = write_decollided_stage(base, elec, nt, nc, nw, manifest, tag=tag,
+                                   res_variant=res_variant, clu_variant=clu_variant,
+                                   spk_variant=spk_variant)
+    if eap:
+        em = write_eap_membership(base, elec, parent_tag=parent_tag,
+                                  n_spikes=int(res_times.size), manifest=manifest,
+                                  n_cells=n_cells)
+        if em:
+            paths["eap"] = em["eap"]
+            paths["tcl"] = em["tcl"]
+    return paths
 
 
 # ── new units in EVERY variant (.spk + .fet) ─────────────────────────────────
@@ -262,7 +389,8 @@ def write_variant_spk_fet(base, elec, waves, *, variant, tag, write_fet=True, re
 
 def decollide_all_variants(base, elec, *, nsamp, nch, sel, decomp, tag, clu_variant,
                            res_variant="stderiv", spk_variants=("standard",),
-                           parent_tag="", min_tmpl=40, write_fet=True, realign=True):
+                           parent_tag="", min_tmpl=40, write_fet=True, realign=True,
+                           eap=True, n_cells=128):
     """De-collide and write the stage with new units' .spk AND .fet in EVERY
     variant in @p spk_variants.  The mutual subtraction is run once per variant
     (that variant's .spk + templates, the SAME decomposition), so each new
@@ -290,6 +418,13 @@ def decollide_all_variants(base, elec, *, nsamp, nch, sel, decomp, tag, clu_vari
     paths["clu"] = nio.write_clu(base, elec, nc, variant=clu_variant, tag=tag)
     man = nio.session_path(base, "decollide", elec, variant=clu_variant, tag=tag) + ".tsv"
     paths["manifest"] = write_manifest(man, manifest)
+    if eap:
+        em = write_eap_membership(base, elec, parent_tag=parent_tag,
+                                  n_spikes=int(res_times.size), manifest=manifest,
+                                  n_cells=n_cells)
+        if em:
+            paths["eap"] = em["eap"]
+            paths["tcl"] = em["tcl"]
     return paths
 
 
@@ -308,6 +443,10 @@ def main():
     ap.add_argument("--no-fet", action="store_true", help="with --spk-variants, skip the .fet projection")
     ap.add_argument("--tag", default="decollided", help="shared stage tag for the derived files")
     ap.add_argument("--parent-tag", default="", help="stage of the parent being de-collided ('' = base files)")
+    ap.add_argument("--no-eap", action="store_true",
+                    help="skip writing the .eap membership (+ .tcl) on the parent stage")
+    ap.add_argument("--n-cells", type=int, default=128,
+                    help="template-class columns (T) when a fresh .eap must be built (default 128)")
     ap.add_argument("--nsamp", type=int, required=True)
     ap.add_argument("--nch", type=int, required=True)
     ap.add_argument("--decomp", required=True,
@@ -320,12 +459,13 @@ def main():
         paths = decollide_all_variants(
             a.base, a.elec, nsamp=a.nsamp, nch=a.nch, sel=sel, decomp=decomp, tag=a.tag,
             clu_variant=a.clu_method, res_variant=a.res_method,
-            spk_variants=tuple(a.spk_variants), parent_tag=a.parent_tag, write_fet=not a.no_fet)
+            spk_variants=tuple(a.spk_variants), parent_tag=a.parent_tag, write_fet=not a.no_fet,
+            eap=not a.no_eap, n_cells=a.n_cells)
     else:
         paths = decollide_from_decomposition(
             a.base, a.elec, nsamp=a.nsamp, nch=a.nch, sel=sel, decomp=decomp, tag=a.tag,
             clu_variant=a.clu_method, res_variant=a.res_method, spk_variant=a.spk_variant,
-            parent_tag=a.parent_tag)
+            parent_tag=a.parent_tag, eap=not a.no_eap, n_cells=a.n_cells)
     for k, v in paths.items():
         print(f"[decollide] {k}: {v}")
 
