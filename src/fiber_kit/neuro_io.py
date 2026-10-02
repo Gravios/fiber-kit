@@ -54,6 +54,7 @@ __all__ = [
     "read_fet_file", "read_fet", "write_fet_file", "write_fet",
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
     "write_wtf", "read_wtf", "write_wti", "read_wti", "WTI_COLS",
+    "write_eap", "read_eap", "write_tcl", "read_tcl", "EAP_ABSENT",
     "open_signal",
     "fibers_path",
     "add_clu_args",
@@ -728,8 +729,11 @@ def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag="
         for i, rd in enumerate(rows):
             scv = str(rd.get("src_clu_variant", "")) or "-"
             sct = str(rd.get("src_clu_tag", "")) or "-"
+            # In EAP mode the id field is the stable template-class id; in the
+            # legacy clu-membership mode it is the cluster id.  Prefer `class`.
+            cid = rd.get("class", rd.get("unit", 0))
             f.write("row %d %s %s %s %s %s %s %s %s\n" % (
-                i, rd.get("unit", 0), rd.get("link", "drift"), rd.get("bin", 0),
+                i, cid, rd.get("link", "drift"), rd.get("bin", 0),
                 rd.get("lo", 0), rd.get("hi", 0), rd.get("nspk", 0), scv, sct))
     return path
 
@@ -769,6 +773,147 @@ def read_wti(base, elec, variant="", tag=""):
                     a=float(parts[5]), b=float(parts[6]), nSpikes=int(parts[7]),
                     src_clu_variant=("" if scv == "-" else scv),
                     src_clu_tag=("" if sct == "-" else sct)))
+    return out
+
+
+# ── .eap / .tcl — EAP membership matrix + template-class registry ────────────
+# The Python side of the shared contract defined in the C++ neurofileio
+# (claude/eap-template-class-design.md); byte-for-byte compatible so a file
+# written here is read there and vice versa.  .eap is an N×T int8 matrix (spike
+# × template-class) whose column index IS the stable class id; a cell is the
+# integer-sample offset of that class's EAP within the spike window relative to
+# .res, with EAP_ABSENT (-128) meaning "class not present in this spike".
+EAP_ABSENT = -128
+
+
+def write_eap(base, elec, cells, group=0, flags=0, tag=""):
+    """Write the method-less <base>.eap.<elec>[.<tag>]: 32B header (magic
+    'EAP'\\x01, nSpikes u32, nClasses u32, group u32, flags u32, pad[12]) + N×T
+    int8 row-major.  `cells` is an (N, T) array (EAP_ABSENT = absent).  Mirrors
+    neurofileio::writeEap."""
+    import struct
+    arr = np.ascontiguousarray(cells, dtype=np.int8)
+    n, t = (int(arr.shape[0]), int(arr.shape[1])) if arr.ndim == 2 else (0, 0)
+    path = session_path(base, "eap", elec, variant="", tag=tag)
+    with open(path, "wb") as f:
+        f.write(b"EAP\x01")
+        f.write(struct.pack("<IIII", n, t, int(group), int(flags)))
+        f.write(b"\x00" * 12)
+        f.write(arr.tobytes())
+    return path
+
+
+def read_eap(base, elec, tag=""):
+    """Read a .eap -> dict(nSpikes, nClasses, group, flags, cells=(N,T) int8, ok).
+    ok=False on a missing/short file or bad magic.  Mirrors neurofileio::readEap."""
+    import struct
+    out = dict(nSpikes=0, nClasses=0, group=0, flags=0,
+               cells=np.zeros((0, 0), np.int8), ok=False)
+    path = session_path(base, "eap", elec, variant="", tag=tag)
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(32)
+            if len(hdr) < 32 or hdr[:4] != b"EAP\x01":
+                return out
+            n, t, grp, flags = struct.unpack("<IIII", hdr[4:20])   # hdr[20:32] = pad[12]
+            body = np.frombuffer(f.read(int(n) * int(t)), dtype=np.int8)
+        if body.size != int(n) * int(t):
+            return out
+        out.update(nSpikes=int(n), nClasses=int(t), group=int(grp), flags=int(flags),
+                   cells=body.reshape(int(n), int(t)).copy(), ok=True)
+    except OSError:
+        return out
+    return out
+
+
+def write_tcl(base, elec, entries, n_classes=None):
+    """Write the stage-independent <base>.tcl.<elec> template-class registry.
+    `entries` is a list of dicts {col, status(free|active|tomb|merged), label,
+    provenance_clu, provenance_stage, created, merged_into}.  TAB-separated rows
+    (labels may contain spaces); empty field -> '-'.  Mirrors neurofileio::writeTcl."""
+    path = session_path(base, "tcl", elec, variant="", tag="")
+    if n_classes is None:
+        n_classes = len(entries)
+    def dash(x):
+        return "-" if (x is None or x == "") else str(x)
+    with open(path, "w") as f:
+        f.write("tcl 1\n")
+        f.write("nClasses %d\n" % int(n_classes))
+        f.write("# col\tstatus\tlabel\tprovenance_clu\tprovenance_stage\tcreated\n")
+        for e in entries:
+            st = e.get("status", "free")
+            if st == "merged":
+                st = "merged:%d" % int(e.get("merged_into", -1))
+            clu = e.get("provenance_clu", -1)
+            f.write("%d\t%s\t%s\t%s\t%s\t%s\n" % (
+                int(e.get("col", 0)), st, dash(e.get("label", "")),
+                "-" if (clu is None or int(clu) < 0) else str(int(clu)),
+                dash(e.get("provenance_stage", "")), dash(e.get("created", ""))))
+    return path
+
+
+def read_tcl(base, elec):
+    """Read <base>.tcl.<elec> -> dict(version, nClasses, entries=[...], ok).  Each
+    entry: {col, status, label, provenance_clu, provenance_stage, created,
+    merged_into}.  Mirrors neurofileio::readTcl."""
+    path = session_path(base, "tcl", elec, variant="", tag="")
+    empty = dict(version=0, nClasses=0, entries=[], ok=False)
+    out = dict(version=0, nClasses=0, entries=[], ok=False)
+    have = False
+    declared = -1
+    try:
+        with open(path) as f:
+            for line in f:
+                s = line.strip()
+                if not s or s.startswith("#"):
+                    continue
+                if not have:
+                    p = s.split()
+                    if len(p) < 2 or p[0] != "tcl" or p[1] != "1":
+                        return dict(empty)
+                    out["version"] = 1
+                    have = True
+                    continue
+                if s.startswith("nClasses"):
+                    try:
+                        declared = int(s.split()[1])
+                    except (ValueError, IndexError):
+                        pass
+                    continue
+                parts = line.rstrip("\n").split("\t")
+                if len(parts) < 2:
+                    continue
+                try:
+                    col = int(parts[0])
+                except ValueError:
+                    continue
+                st = parts[1]
+                merged_into = -1
+                if st.startswith("merged:"):
+                    try:
+                        merged_into = int(st[7:])
+                    except ValueError:
+                        merged_into = -1
+                    st = "merged"
+                def und(x):
+                    return "" if x == "-" else x
+                label = und(parts[2]) if len(parts) > 2 else ""
+                clu_s = parts[3] if len(parts) > 3 else "-"
+                try:
+                    clu = -1 if clu_s == "-" else int(clu_s)
+                except ValueError:
+                    clu = -1
+                stage = und(parts[4]) if len(parts) > 4 else ""
+                created = und(parts[5]) if len(parts) > 5 else ""
+                out["entries"].append(dict(col=col, status=st, label=label,
+                                           provenance_clu=clu, provenance_stage=stage,
+                                           created=created, merged_into=merged_into))
+        if not have:
+            return dict(empty)
+        out["nClasses"] = declared if declared >= 0 else len(out["entries"])
+        out["ok"] = True
+    except OSError:
+        return dict(empty)
     return out
 
 

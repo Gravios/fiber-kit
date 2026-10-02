@@ -109,6 +109,90 @@ def test_drift_and_adapt_series():
         assert os.path.exists(paths["info"])
 
 
+def test_align_to_res():
+    nsamp, nchan = 20, 2
+    w = np.zeros((1, nsamp, nchan), np.float32); w[0, 10, 0] = 5.0   # peak at sample 10
+    # aligned[t] = w[t + offset]: a +3 offset moves the peak 10 -> 7, a -3 moves it -> 13.
+    assert np.argmax(ft._align_to_res(w, np.array([3]), nsamp)[0, :, 0]) == 7
+    assert np.argmax(ft._align_to_res(w, np.array([-3]), nsamp)[0, :, 0]) == 13
+    assert np.array_equal(ft._align_to_res(w, np.array([0]), nsamp), w)   # offset 0 == identity
+    # samples rolled in from outside the window are zero-filled
+    assert ft._align_to_res(w, np.array([3]), nsamp)[0, 18, 0] == 0.0
+
+
+def test_eap_tcl_io_roundtrip():
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "s")
+        N, T = 5, 4
+        cells = np.full((N, T), nio.EAP_ABSENT, np.int8)
+        cells[0, 1] = 0            # offset 0 is PRESENT (not the -128 sentinel)
+        cells[1, 0] = -5; cells[1, 2] = 7   # spike 1 is a collision (classes 0 and 2)
+        cells[3, 2] = -127
+        nio.write_eap(b, 6, cells, group=6, tag="st")
+        e = nio.read_eap(b, 6, tag="st")
+        assert e["ok"] and e["nSpikes"] == N and e["nClasses"] == T and e["group"] == 6
+        assert np.array_equal(e["cells"], cells)
+        row1 = list(np.flatnonzero(e["cells"][1] != nio.EAP_ABSENT))
+        assert row1 == [0, 2] and e["cells"][1, 0] == -5 and e["cells"][1, 2] == 7
+        assert not nio.read_eap(b, 6, tag="nope")["ok"]
+
+        entries = [dict(col=0, status="active", label="CA1 pyr a", provenance_clu=23,
+                        provenance_stage="gt", created="2026-10-02"),
+                   dict(col=1, status="merged", merged_into=0),
+                   dict(col=2, status="tomb", provenance_clu=41),
+                   dict(col=3, status="free")]
+        nio.write_tcl(b, 6, entries, n_classes=4)
+        r = nio.read_tcl(b, 6)
+        assert r["ok"] and r["nClasses"] == 4 and len(r["entries"]) == 4
+        assert (r["entries"][0]["status"] == "active" and r["entries"][0]["label"] == "CA1 pyr a"
+                and r["entries"][0]["provenance_clu"] == 23 and r["entries"][0]["provenance_stage"] == "gt")
+        assert r["entries"][1]["status"] == "merged" and r["entries"][1]["merged_into"] == 0
+        assert r["entries"][2]["status"] == "tomb" and r["entries"][2]["provenance_clu"] == 41
+        assert r["entries"][3]["status"] == "free" and r["entries"][3]["label"] == ""
+
+
+def test_eap_mode_matches_clu_on_clean_members():
+    """EAP-mode templating selects members from .eap columns and stamps the class
+    id into .wti; with all-offset-0 (clean) membership mapped from the clu, each
+    class's template is byte-identical to the clu-mode template of its source unit
+    — proving membership-from-eap + class-id stamping + offset-0 == raw."""
+    with tempfile.TemporaryDirectory() as d:
+        b = _make_session(d)
+        _, clu = nio.read_clu_at(b, 6, variant="stderiv_C5_D34", tag="lab_units")
+        N, T = clu.size, 8
+        colmap = {2: 5, 3: 6}                    # class id (column) != clu id, deliberately
+        cells = np.full((N, T), nio.EAP_ABSENT, np.int8)
+        for i in range(N):
+            c = colmap.get(int(clu[i]))
+            if c is not None:
+                cells[i, c] = 0                  # clean: offset 0
+        nio.write_eap(b, 6, cells, group=6, tag="lab_units")     # tag == clu_tag/stage
+        nio.write_tcl(b, 6, [dict(col=j, status=("active" if j in (5, 6) else "free"),
+                                  label={5: "u2", 6: "u3"}.get(j, ""),
+                                  provenance_clu={5: 2, 6: 3}.get(j, -1)) for j in range(T)],
+                      n_classes=T)
+
+        vs = ["standard", "stderiv_C5_D34"]
+        rows_e, _ = ft.generate(b, 6, nsamp=NS, nchan=NCH, sr=SR, variants=vs,
+                                clu_variant="stderiv_C5_D34", clu_tag="lab_units",
+                                out_tag="eapstage", links=("drift",), n_chunks=2, eap=True)
+        # units defaulted from the .tcl active set -> classes 5 and 6, stamped as `class`.
+        assert sorted({r["class"] for r in rows_e}) == [5, 6]
+
+        rows_c, _ = ft.generate(b, 6, nsamp=NS, nchan=NCH, sr=SR, variants=vs,
+                                clu_variant="stderiv_C5_D34", clu_tag="lab_units",
+                                out_tag="clustage", links=("drift",), n_chunks=2,
+                                eap=False, units=[2, 3])
+
+        Te = nio.read_wtf(b, 6, NS, NCH, variant="standard", tag="eapstage")
+        Tc = nio.read_wtf(b, 6, NS, NCH, variant="standard", tag="clustage")
+        ie = {(r["unit"], r["link"], r["bin"]): k for k, r in enumerate(nio.read_wti(b, 6, tag="eapstage")["rows"])}
+        ic = {(r["unit"], r["link"], r["bin"]): k for k, r in enumerate(nio.read_wti(b, 6, tag="clustage")["rows"])}
+        # class 5 (eap) == clu unit 2; class 6 == clu unit 3. Same members, offset 0 -> identical median.
+        assert np.array_equal(Te[ie[(5, "drift", 0)]], Tc[ic[(2, "drift", 0)]])
+        assert np.array_equal(Te[ie[(6, "drift", 0)]], Tc[ic[(3, "drift", 0)]])
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
