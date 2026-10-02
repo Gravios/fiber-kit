@@ -53,7 +53,7 @@ __all__ = [
     "read_cluster_res",
     "read_fet_file", "read_fet", "write_fet_file", "write_fet",
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
-    "write_wtf", "read_wtf", "write_wtf_info", "read_wtf_info", "WTF_INFO_COLS",
+    "write_wtf", "read_wtf", "write_wti", "read_wti", "WTI_COLS",
     "open_signal",
     "fibers_path",
     "add_clu_args",
@@ -675,20 +675,28 @@ def write_spk(base, elec, waves, variant="", tag=""):
 # ── .wtf.N — waveform template file (linked per-unit medians, .spk-style) ─────
 # A .wtf is BYTE-IDENTICAL to a .spk slice: int16, sample-major, no header, one
 # median waveform per ROW.  Each row is a (unit, link, bin) median, named by the
-# companion index (write_wtf_info): a unit's templates are LINKED along an axis --
+# companion index (write_wti): a unit's templates are LINKED along an axis --
 # "drift" (per time CHUNK, like a fiber's per-chunk `template`) or "adapt" (per
 # ENERGY bin).  One .wtf per variant (method) and tag (stage), the same axes as
 # .spk, so any .spk reader reads a .wtf and every variant row-aligns to one index.
-WTF_INFO_COLS = ["row", "unit", "link", "bin", "lo", "hi", "nspk", "src_clu_variant", "src_clu_tag"]
-# `link` is the axis the templates of a unit are linked along:
-#   "drift" -> bin = time CHUNK index, [lo,hi] = chunk time range (s)   -- tracks drift
-#   "adapt" -> bin = ENERGY bin index, [lo,hi] = spike-energy range     -- tracks adaptation
-# Each (unit, link) is a linked SERIES of per-bin median templates.
+#
+# The companion index is the CANONICAL .wti (defined in the shared C++ library
+# neurofileio; this is the fiber-kit writer/reader for the same contract).  It is
+# version-tagged text: a `wti 1` line, a geometry header, then one `row` line per
+# .wtf ROW with the columns below.  `link` is the axis a unit's templates are
+# linked along:
+#   "drift" -> bin = time CHUNK index, [a,b] = chunk time range (s)  -- tracks drift
+#   "adapt" -> bin = ENERGY bin index, [a,b] = spike-energy range    -- tracks adaptation
+# Each (unit, link) is a linked SERIES of per-bin median templates.  The .wti is
+# SHARED across variants (the rows align), so callers pass variant="" and it lands
+# at a method-less path <base>.wti.<elec>[.<tag>].  The two src_clu_* columns are
+# trailing provenance the C++ reader ignores (it reads the first seven fields).
+WTI_COLS = ["row", "unit", "link", "bin", "a", "b", "nSpikes", "src_clu_variant", "src_clu_tag"]
 
 
 def write_wtf(base, elec, templates, variant="", tag=""):
     """Write <base>.wtf[.<variant>].<elec>[.<tag>] -- int16 sample-major (R, nsamp,
-    nchan), one median waveform per (chunk,unit) row.  Pair with write_wtf_info."""
+    nchan), one median waveform per (chunk,unit) row.  Pair with write_wti."""
     return write_spk_file(session_path(base, "wtf", elec, variant=variant, tag=tag), templates)
 
 
@@ -700,36 +708,67 @@ def read_wtf(base, elec, nsamp, nchan, variant="", tag=""):
     return raw[: r * nsamp * nchan].reshape(r, nsamp, nchan).astype(float)
 
 
-def write_wtf_info(base, elec, rows, variant="", tag=""):
-    """Write the template index <base>.wtfinfo[.<variant>].<elec>[.<tag>] (TSV, one
-    line per .wtf ROW, columns WTF_INFO_COLS).  Shared across variants (the rows
-    align), so callers normally pass variant="".  `rows` is a list of dicts; the
-    'row' column is filled from the row position."""
-    path = session_path(base, "wtfinfo", elec, variant=variant, tag=tag)
+def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag=""):
+    """Write the CANONICAL template index <base>.wti[.<variant>].<elec>[.<tag>]:
+    a version-tagged text file read by read_wti AND by the shared C++ reader
+    (neurofileio::readWti).  Shared across variants (callers pass variant=""), one
+    `row` line per .wtf ROW; the per-variant .wtf row-aligns to it.  `rows` is a
+    list of dicts carrying unit/link/bin/lo/hi/nspk (+ optional src_clu_variant/
+    src_clu_tag); lo/hi are the bin's two coordinates (written as columns a/b).
+    Geometry (nsamp/nchan/peak/sr) goes in the header; peak=-1 / sr=0 mean unknown."""
+    path = session_path(base, "wti", elec, variant=variant, tag=tag)
     with open(path, "w") as f:
-        f.write("\t".join(WTF_INFO_COLS) + "\n")
+        f.write("wti 1\n")
+        f.write("nSamples %d\n" % int(nsamp))
+        f.write("nChannels %d\n" % int(nchan))
+        f.write("peakSample %d\n" % int(peak))
+        f.write("sr %s\n" % repr(float(sr)))
+        f.write("nRows %d\n" % len(rows))
+        f.write("# row unit link bin a b nSpikes src_clu_variant src_clu_tag\n")
         for i, rd in enumerate(rows):
-            vals = [i if c == "row" else rd.get(c, "") for c in WTF_INFO_COLS]
-            f.write("\t".join(str(v) for v in vals) + "\n")
+            scv = str(rd.get("src_clu_variant", "")) or "-"
+            sct = str(rd.get("src_clu_tag", "")) or "-"
+            f.write("row %d %s %s %s %s %s %s %s %s\n" % (
+                i, rd.get("unit", 0), rd.get("link", "drift"), rd.get("bin", 0),
+                rd.get("lo", 0), rd.get("hi", 0), rd.get("nspk", 0), scv, sct))
     return path
 
 
-def read_wtf_info(base, elec, variant="", tag=""):
-    """Read the .wtfinfo index -> list of dicts (int for row/unit/chunk/nspk, float
-    for tmin/tmax, str otherwise)."""
-    path = session_path(base, "wtfinfo", elec, variant=variant, tag=tag)
-    ints, floats = {"row", "unit", "bin", "nspk"}, {"lo", "hi"}
-    out = []
+def read_wti(base, elec, variant="", tag=""):
+    """Read a canonical .wti -> dict(version, nSamples, nChannels, peakSample, sr,
+    rows=[dict(row, unit, link, bin, a, b, nSpikes, src_clu_variant, src_clu_tag)]).
+    Mirrors neurofileio::WtiIndex: tolerant of comment/blank lines and unknown
+    header keys, rejects a missing `wti 1` header ({} rows) and reads '-' back as
+    '' in a src field."""
+    path = session_path(base, "wti", elec, variant=variant, tag=tag)
+    out = dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
+    have_header = False
     with open(path) as f:
-        hdr = f.readline().rstrip("\n").split("\t")
         for line in f:
-            if not line.strip():
+            s = line.strip()
+            if not s or s.startswith("#"):
                 continue
-            parts = line.rstrip("\n").split("\t")
-            d = {}
-            for c, v in zip(hdr, parts):
-                d[c] = int(v) if c in ints and v != "" else float(v) if c in floats and v != "" else v
-            out.append(d)
+            parts = s.split()
+            key = parts[0]
+            if not have_header:
+                if key != "wti" or len(parts) < 2 or parts[1] != "1":
+                    return dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
+                out["version"] = 1
+                have_header = True
+                continue
+            if key == "nSamples" and len(parts) > 1:        out["nSamples"] = int(parts[1])
+            elif key == "nChannels" and len(parts) > 1:     out["nChannels"] = int(parts[1])
+            elif key == "peakSample" and len(parts) > 1:    out["peakSample"] = int(parts[1])
+            elif key == "sr" and len(parts) > 1:            out["sr"] = float(parts[1])
+            elif key == "nRows":                            pass
+            elif key == "row" and len(parts) >= 8:
+                scv = parts[8] if len(parts) > 8 else ""
+                sct = parts[9] if len(parts) > 9 else ""
+                out["rows"].append(dict(
+                    row=int(parts[1]), unit=int(parts[2]), link=parts[3], bin=int(parts[4]),
+                    a=float(parts[5]), b=float(parts[6]), nSpikes=int(parts[7]),
+                    src_clu_variant=("" if scv == "-" else scv),
+                    src_clu_tag=("" if sct == "-" else sct)))
     return out
 
 
