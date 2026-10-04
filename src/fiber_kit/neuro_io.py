@@ -714,36 +714,56 @@ def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag="
     a version-tagged text file read by read_wti AND by the shared C++ reader
     (neurofileio::readWti).  Shared across variants (callers pass variant=""), one
     `row` line per .wtf ROW; the per-variant .wtf row-aligns to it.  `rows` is a
-    list of dicts carrying unit/link/bin/lo/hi/nspk (+ optional src_clu_variant/
-    src_clu_tag); lo/hi are the bin's two coordinates (written as columns a/b).
-    Geometry (nsamp/nchan/peak/sr) goes in the header; peak=-1 / sr=0 mean unknown."""
+    list of dicts carrying unit/link/bin/lo/hi/nspk (+ optional parent and
+    src_clu_variant/src_clu_tag); lo/hi (or a/b) are the bin's two coordinates
+    (written as columns a/b).  Geometry (nsamp/nchan/peak/sr) goes in the header;
+    peak=-1 / sr=0 mean unknown.
+
+    A row may carry an optional `parent` — the .wti row index of its manual-lineage
+    parent (-1 = tree root).  When any row sets parent >= 0 the file is written as
+    VERSION 2, with a `parent` column inserted before the src_clu_* columns, exactly
+    as neurofileio's v2; otherwise version 1, byte-identical to before.  `collision`
+    is just another `link` value and needs no version."""
+    any_parent = any(int(rd.get("parent", -1)) >= 0 for rd in rows)
+    ver = 2 if any_parent else 1
     path = session_path(base, "wti", elec, variant=variant, tag=tag)
     with open(path, "w") as f:
-        f.write("wti 1\n")
+        f.write("wti %d\n" % ver)
         f.write("nSamples %d\n" % int(nsamp))
         f.write("nChannels %d\n" % int(nchan))
         f.write("peakSample %d\n" % int(peak))
         f.write("sr %s\n" % repr(float(sr)))
         f.write("nRows %d\n" % len(rows))
-        f.write("# row unit link bin a b nSpikes src_clu_variant src_clu_tag\n")
+        if ver >= 2:
+            f.write("# row unit link bin a b nSpikes parent src_clu_variant src_clu_tag\n")
+        else:
+            f.write("# row unit link bin a b nSpikes src_clu_variant src_clu_tag\n")
         for i, rd in enumerate(rows):
             scv = str(rd.get("src_clu_variant", "")) or "-"
             sct = str(rd.get("src_clu_tag", "")) or "-"
             # In EAP mode the id field is the stable template-class id; in the
             # legacy clu-membership mode it is the cluster id.  Prefer `class`.
             cid = rd.get("class", rd.get("unit", 0))
-            f.write("row %d %s %s %s %s %s %s %s %s\n" % (
-                i, cid, rd.get("link", "drift"), rd.get("bin", 0),
-                rd.get("lo", 0), rd.get("hi", 0), rd.get("nspk", 0), scv, sct))
+            lo = rd.get("lo", rd.get("a", 0))          # accept read_wti's a/b keys too
+            hi = rd.get("hi", rd.get("b", 0))
+            if ver >= 2:
+                f.write("row %d %s %s %s %s %s %s %d %s %s\n" % (
+                    i, cid, rd.get("link", "drift"), rd.get("bin", 0),
+                    lo, hi, rd.get("nspk", 0), int(rd.get("parent", -1)), scv, sct))
+            else:
+                f.write("row %d %s %s %s %s %s %s %s %s\n" % (
+                    i, cid, rd.get("link", "drift"), rd.get("bin", 0),
+                    lo, hi, rd.get("nspk", 0), scv, sct))
     return path
 
 
 def read_wti(base, elec, variant="", tag=""):
     """Read a canonical .wti -> dict(version, nSamples, nChannels, peakSample, sr,
-    rows=[dict(row, unit, link, bin, a, b, nSpikes, src_clu_variant, src_clu_tag)]).
-    Mirrors neurofileio::WtiIndex: tolerant of comment/blank lines and unknown
-    header keys, rejects a missing `wti 1` header ({} rows) and reads '-' back as
-    '' in a src field."""
+    rows=[dict(row, unit, link, bin, a, b, nSpikes, parent, src_clu_variant,
+    src_clu_tag)]).  Mirrors neurofileio::WtiIndex: tolerant of comment/blank lines
+    and unknown header keys, rejects a missing `wti 1|2` header ({} rows), reads '-'
+    back as '' in a src field.  Accepts VERSION 1 or 2 — v2 has a `parent` column
+    before the src_clu_* columns; a v1 row reads back with parent = -1."""
     path = session_path(base, "wti", elec, variant=variant, tag=tag)
     out = dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
     have_header = False
@@ -755,9 +775,9 @@ def read_wti(base, elec, variant="", tag=""):
             parts = s.split()
             key = parts[0]
             if not have_header:
-                if key != "wti" or len(parts) < 2 or parts[1] != "1":
+                if key != "wti" or len(parts) < 2 or parts[1] not in ("1", "2"):
                     return dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
-                out["version"] = 1
+                out["version"] = int(parts[1])
                 have_header = True
                 continue
             if key == "nSamples" and len(parts) > 1:        out["nSamples"] = int(parts[1])
@@ -766,11 +786,18 @@ def read_wti(base, elec, variant="", tag=""):
             elif key == "sr" and len(parts) > 1:            out["sr"] = float(parts[1])
             elif key == "nRows":                            pass
             elif key == "row" and len(parts) >= 8:
-                scv = parts[8] if len(parts) > 8 else ""
-                sct = parts[9] if len(parts) > 9 else ""
+                # v2 inserts `parent` at column 8, pushing src_clu_* to 9/10.
+                if out["version"] >= 2:
+                    parent = int(parts[8]) if len(parts) > 8 else -1
+                    scv = parts[9] if len(parts) > 9 else ""
+                    sct = parts[10] if len(parts) > 10 else ""
+                else:
+                    parent = -1
+                    scv = parts[8] if len(parts) > 8 else ""
+                    sct = parts[9] if len(parts) > 9 else ""
                 out["rows"].append(dict(
                     row=int(parts[1]), unit=int(parts[2]), link=parts[3], bin=int(parts[4]),
-                    a=float(parts[5]), b=float(parts[6]), nSpikes=int(parts[7]),
+                    a=float(parts[5]), b=float(parts[6]), nSpikes=int(parts[7]), parent=parent,
                     src_clu_variant=("" if scv == "-" else scv),
                     src_clu_tag=("" if sct == "-" else sct)))
     return out
