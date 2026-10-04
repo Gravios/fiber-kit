@@ -776,6 +776,93 @@ def read_wti(base, elec, variant="", tag=""):
     return out
 
 
+# ── .wtl — manual template-linkage sidecar (claude/template-curation-plan.md) ─
+# The curator's hand-built template lineage: where .wti/.wtf are the RENDERED
+# library (one median per row), the .wtl is the per-class TREE the generator
+# re-medians as the refinement.  One entry per NODE, carrying its class (.eap
+# column), its kind (drift-root | adapt-leaf | collision-leaf, verbatim +
+# extensible), its parent node (-1 for a tree root), the bin window, and — the
+# source of truth — the explicit SPIKE INDICES medianed to build it.  Per-group
+# and per-stage, method-less: <base>.wtl.<elec>[.<tag>].
+#
+# Byte/field-compatible with the shared C++ reader/writer (neurofileio readWtl/
+# writeWtl); version-tagged text, one `node` line per node, the spike indices the
+# remainder of the line:
+#
+#     wtl 1
+#     nNodes 3
+#     # node class kind parent a b nSpikes spikes...
+#     node 0 31 drift-root -1 0.000 120.000 540 12 37 59 ...
+WTL_COLS = ["node", "class", "kind", "parent", "a", "b", "nSpikes", "spikes..."]
+
+
+def write_wtl(base, elec, nodes, tag=""):
+    """Write the manual template-linkage sidecar <base>.wtl.<elec>[.<tag>].
+    `nodes` is a list of dicts {node, class, kind, parent, a, b, spikes}; `spikes`
+    is the index list medianed to build the node (the generator re-medians exactly
+    these).  Mirrors neurofileio::writeWtl; pair with read_wtl."""
+    path = session_path(base, "wtl", elec, variant="", tag=tag)
+    with open(path, "w") as f:
+        f.write("wtl 1\n")
+        f.write("nNodes %d\n" % len(nodes))
+        f.write("# node class kind parent a b nSpikes spikes...\n")
+        for nd in nodes:
+            spikes = [int(s) for s in nd.get("spikes", [])]
+            cid = int(nd.get("class", nd.get("classId", 0)))
+            f.write("node %d %d %s %d %s %s %d%s\n" % (
+                int(nd.get("node", 0)), cid, nd.get("kind", "drift-root"),
+                int(nd.get("parent", -1)),
+                nd.get("a", nd.get("lo", 0)), nd.get("b", nd.get("hi", 0)),
+                len(spikes), "".join(" %d" % s for s in spikes)))
+    return path
+
+
+def read_wtl(base, elec, tag=""):
+    """Read a .wtl -> dict(version, nodes=[dict(node, class, kind, parent, a, b,
+    spikes)]).  Mirrors neurofileio::readWtl: rejects a missing file or a bad
+    'wtl 1' header ({} nodes); a node line whose index count disagrees with its
+    nSpikes is skipped (a long tail is truncated to nSpikes); a declared nNodes is
+    checked against the nodes actually parsed."""
+    path = session_path(base, "wtl", elec, variant="", tag=tag)
+    out = dict(version=0, nodes=[])
+    have_header = False
+    declared = None
+    try:
+        f = open(path)
+    except OSError:
+        return out
+    with f:
+        for line in f:
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.split()
+            key = parts[0]
+            if not have_header:
+                if key != "wtl" or len(parts) < 2 or parts[1] != "1":
+                    return dict(version=0, nodes=[])
+                out["version"] = 1
+                have_header = True
+                continue
+            if key == "nNodes" and len(parts) > 1:
+                declared = int(parts[1])
+            elif key == "node" and len(parts) >= 8:
+                # node <node> <class> <kind> <parent> <a> <b> <nSpikes> <spikes...>
+                nsp = int(parts[7])
+                spikes = parts[8:8 + nsp]
+                if len(spikes) != nsp:                  # short tail -> skip the node
+                    continue
+                out["nodes"].append({
+                    "node": int(parts[1]), "class": int(parts[2]), "kind": parts[3],
+                    "parent": int(parts[4]), "a": float(parts[5]), "b": float(parts[6]),
+                    "spikes": [int(x) for x in spikes]})
+    if not have_header:
+        return dict(version=0, nodes=[])
+    if declared is not None and declared != len(out["nodes"]):
+        return dict(version=0, nodes=[])
+    return out
+
+
 # ── .eap / .tcl — EAP membership matrix + template-class registry ────────────
 # The Python side of the shared contract defined in the C++ neurofileio
 # (claude/eap-template-class-design.md); byte-for-byte compatible so a file
