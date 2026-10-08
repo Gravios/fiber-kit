@@ -60,6 +60,19 @@ resolve	spk.stderiv.7	spk	7	stderiv	sess.spk.stderiv.7	1
 resolve	res.5	res	5	stderiv	sess.res.5	1
 resolve		clu	9	stderiv	sess.clu.stderiv.9	0
 resolve		spk	3	stderiv	sess.spk.stderiv.3	0
+# _D<lag><dims> names a FEATURE space over the waveforms of the token without it, so a
+# Shared .spk/.res for a lag token falls back to that waveform token before standard.
+# Exact files still win; MethodSpecific types stay strict; an opaque token is not stripped.
+# When nothing exists the path offered for writing is the WAVEFORM token's, so a writer
+# (Klusters Save As) never creates a second, _D-named copy of the waveforms.
+resolve	spk.stderiv_C5.5,spk.standard.5	spk	5	stderiv_C5_D34	sess.spk.stderiv_C5.5	1
+resolve	spk.stderiv_C5_D34.5,spk.stderiv_C5.5	spk	5	stderiv_C5_D34	sess.spk.stderiv_C5_D34.5	1
+resolve	spk.standard.5	spk	5	stderiv_C5_D34	sess.spk.standard.5	1
+resolve	res.stderiv_C5.5	res	5	stderiv_C5_D34	sess.res.stderiv_C5.5	1
+resolve	spk.stderiv.5	spk	5	stderiv_D34	sess.spk.stderiv.5	1
+resolve	fet.stderiv_C5.5	fet	5	stderiv_C5_D34	sess.fet.stderiv_C5_D34.5	0
+resolve		spk	5	stderiv_C5_D34	sess.spk.stderiv_C5.5	0
+resolve	spk.stderiv.5	spk	5	stderiv_D345	sess.spk.stderiv_D345.5	0
 
 # -- method tokens: <family>[_<kind><order>], e.g. stderiv_C4 -----------------
 method_token	stderiv	stderiv		
