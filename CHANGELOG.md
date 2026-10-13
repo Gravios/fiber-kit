@@ -4,6 +4,11 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.2] — fiber-kit-exp.yaml: realign threshold 0.10 (the curator's Klusters setting)
+- `FK_REALIGN_MIN_SCORE: 0.10`; parity with the compiled Klusters code re-checked at 0.10 on the g6
+  sort (every spike, both `.spk` variants); template correlation 0.618 / 0.707 vs 0.592 / 0.652 at
+  0.70.  Golden 0.10 shifts added to test_realign_parity.  The code default stays Klusters' 0.70.
+
 ## [0.38.1] — fiber-realign: exact parity with Klusters' realign, RMS mode
 - `klusters_offsets` follows `KlustersDoc::realignSpikes` step for step: int16-truncated mean template,
   circular pre-roll to `peakSampleIndex - 1` for every variant, float32 scores, cumulative per-pass lag

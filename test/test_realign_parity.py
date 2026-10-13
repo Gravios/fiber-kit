@@ -37,6 +37,7 @@ def golden_cluster():
 PEAK0, MAX_SHIFT = 18, 4
 K_DEFAULT = [0, 0, 0, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1]
 K_RMS_RMIN_02 = [-2, -2, -2, -2, 1, -2, 2, -2, 2, -2, -2, -2, -2, -1, -2, 0, -2, 1, -2, 2, -2, 2, -2, -2, -2, -2, -1, -2, 0, -2, 1, -2, 2, -2, 2, -2, -2, -2, -2, -1]          # group recenter applied (R = 0.32 >= 0.2)
+K_RMS_THR_010 = [-2, -2, -2, -2, 1, -2, 2, -2, 2, -1, 2, 0, -2, -1, -2, 0, -2, 1, -2, 2, -2, 2, -1, 2, 0, -2, -1, -2, 0, -2, 1, -2, 2, -2, 2, -1, 2, 0, -2, -1]          # threshold 0.10 (the curator's Klusters setting), rmin 0.2
 K_RMS_RMIN_04 = [0, 0, 0, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0, 4, 0, 4, 0, 0, 0, 0, 1]          # skipped: R = 0.32 < 0.4 -> same as default
 
 
@@ -56,6 +57,13 @@ def test_rms_mode_matches_klusters():
     _, b = fr.klusters_offsets(W, _lab(len(W)), PEAK0, max_shift=MAX_SHIFT, min_n=1, recenter=True, rmin=0.4)
     assert a.tolist() == K_RMS_RMIN_02 and b.tolist() == K_RMS_RMIN_04
     assert set((np.array(K_RMS_RMIN_02) - np.array(K_DEFAULT)).tolist()) == {-2}
+
+
+def test_threshold_010_matches_klusters():
+    W = golden_cluster()
+    _, a = fr.klusters_offsets(W, _lab(len(W)), PEAK0, max_shift=MAX_SHIFT, min_n=1, min_score=0.10,
+                               recenter=True, rmin=0.2)
+    assert a.tolist() == K_RMS_THR_010
 
 
 def test_defaults_are_klusters():

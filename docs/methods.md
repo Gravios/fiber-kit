@@ -599,6 +599,7 @@ the standard and the stderiv_C5_D34 `.spk`, in both modes.  Before 0.38.1 the pi
 iterations, max shift 8, an absolute rather than cumulative lag search, a zero-filled template pre-roll,
 and on the standard `.spk` the peak one sample late (21 instead of 20).  The old settings gave tighter
 units (mean template correlation 0.617 vs 0.592 on stderiv, 0.701 vs 0.652 on standard) because they
-also moved the low-correlation spikes Klusters leaves alone; `FK_REALIGN_MIN_SCORE: 0` and
-`FK_REALIGN_ITERS: 4` restore that behaviour.  `test/test_realign_parity.py` holds golden shifts from the
+also moved the low-correlation spikes Klusters leaves alone at its factory threshold.  The curator's
+Klusters runs use threshold 0.10, which fiber-kit-exp.yaml sets: parity holds there too (every spike), and
+it moves 30.6 % / 93.6 % of spikes (stderiv / standard) at template correlation 0.618 / 0.707.  `test/test_realign_parity.py` holds golden shifts from the
 compiled code.

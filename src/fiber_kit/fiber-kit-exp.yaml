@@ -301,9 +301,11 @@ FK_REALIGN_RECENTER_RMS: 1        # 1 | 0/1.  klusters algo: Klusters realign MO
                                   #   the compiled Klusters code: identical shift on every spike of the g6 36-47 min
                                   #   sort (19,543), standard and stderiv_C5_D34, in both modes.
 FK_REALIGN_RMIN:         0.4      # 0.4.  Klusters --rmin: minimum mean resultant length to trust the energy centroid.
-FK_REALIGN_MIN_SCORE:    0.70     # 0.70.  Klusters --threshold: a spike whose best normalised xcorr is below this is not
-                                  #   moved in that pass.  (0.0 = shift every spike: tighter clusters -- template
-                                  #   correlation 0.617 vs 0.592 on g6 stderiv -- but no longer what Klusters does.)
+FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the curator's Klusters setting, used here).
+                                  #   Klusters --threshold: a spike whose best normalised xcorr is below this is not moved
+                                  #   in that pass.  g6 36-47 min, RMS mode: 0.10 moves 30.6 % (stderiv) / 93.6 %
+                                  #   (standard) of spikes, mean template correlation 0.618 / 0.707; 0.70 moves 8.6 % /
+                                  #   63.4 % at 0.592 / 0.652.  Parity with the compiled Klusters code holds at both.
 FK_REALIGN_ITERS:        2        # 2.  Klusters --iterations: template / xcorr passes; shifts accumulate across passes.
 FK_REALIGN_MAX_SHIFT:    ""       # "" = Klusters' max(1, (peakSampleIndex-1) // 2) (10 on a 42-sample window) | N.
 FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike alignment algorithm (both the fiber-realign
