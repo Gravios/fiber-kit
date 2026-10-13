@@ -35,6 +35,23 @@ def _data():
     return _C["d"]
 
 
+def test_perimeter_rank_puts_outliers_on_the_rim():
+    """Pure function, no t-SNE: two Gaussian clouds, each with two points placed far out; those rank
+    ~1 within their own cloud in every run, the bulk averages ~0.5."""
+    rng = np.random.default_rng(0)
+    n = 400
+    lab = np.r_[np.zeros(n // 2, int), np.ones(n // 2, int)]
+    runs = []
+    for _ in range(5):
+        Y = rng.normal(0, 1, (n, 2)); Y[lab == 1] += 20
+        Y[[0, 1]] = [[8, 0], [0, -8]]; Y[[200, 201]] = [[28, 0], [20, 8]]
+        s = np.union1d(np.sort(rng.choice(n, 320, replace=False)), [0, 1, 200, 201])
+        runs.append((s, None, Y[s]))
+    per = fc.perimeter_rank(runs, lab, min_n=50)
+    assert np.all(per[[0, 1, 200, 201]] > 0.98), per[[0, 1, 200, 201]]
+    assert 0.4 < np.nanmedian(per) < 0.6
+
+
 def test_consensus_rejoins_fragments_and_quarantines_collisions():
     if not HAVE:
         print("skip: openTSNE/networkx not installed"); return

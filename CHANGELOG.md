@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.36.0] — fiber-consensus: perimeter rule, cell-relative envelope
+- `perimeter_rank`: a spike's average 2-D radial rank inside its cell.  On g6 the rim of a
+  contaminated cell holds its collisions (20-38 % vs 1-2 % in the core) and foreign spikes.
+- Quarantine now uses the envelope refitted ON THE CELLS and defaults to collision OR perimeter
+  (rank >= 0.8 and residual energy / bump score >= 2 robust z): 6.7-7.8 % of spikes at 0.40-0.85
+  precision, purity +0.02-0.05 on four neighbourhoods.  Cell switching is opt-in (`--rules`).
+- `Envelope.resid_energy` (per-spike residual energy after a T + b T'); `.qrn` gains perimeter,
+  residual / bump z.
+- docs/pipeline.md: where fiber-envelope and fiber-consensus sit (within-chunk, before linking).
+
 ## [0.35.0] — fiber-consensus: resampled t-SNE consensus + quarantine
 - New stage `fiber-consensus` (`fiber_consensus`): R subsampled t-SNE runs (openTSNE) of a
   neighbourhood of similar clusters in the `.fet` space, Louvain communities on the co-neighbour

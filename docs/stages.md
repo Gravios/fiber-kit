@@ -1129,7 +1129,7 @@ Positional: `base`, `elec`
 | `--eap` | flag (off) | write explained near collisions as .eap membership on the analysed --clu-stage (Klusters' collision ring) |
 ### `fiber-consensus`
 
-Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in the stage's `.fet` space, Louvain communities on the co-neighbour probability, communities joined into cells by the envelope merge, and a QUARANTINE cluster for spikes that switch cell across runs or carry a near collision, with a per-spike reason table (`.qrn`). Needs the `consensus` extra (openTSNE, networkx). See docs/methods.md, "Resampled t-SNE consensus and quarantine".
+Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in the stage's `.fet` space, Louvain communities on the co-neighbour probability, communities joined into cells by the envelope merge, and a QUARANTINE cluster for spikes that carry a near collision or sit on the rim of their cell's 2-D cloud with a deviant waveform (cell switching opt-in), with a per-spike reason table (`.qrn`). Needs the `consensus` extra (openTSNE, networkx). See docs/methods.md, "Resampled t-SNE consensus and quarantine".
 
 Positional: `base`, `elec`
 
@@ -1154,6 +1154,9 @@ Positional: `base`, `elec`
 | `--perplexity` | `30.0` |  |
 | `--theta-cell` | `7.0` | envelope d' cut joining communities into cells |
 | `--switch-thr` | `0.3` | cell-switch rate that quarantines a spike |
+| `--perim-thr` | `0.8` | average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule |
+| `--dev-z` | `2.0` | robust z of residual energy or bump score (within the cell) for the perimeter rule |
+| `--rules` | `collision,perimeter` | quarantine criteria, any of: switch, collision, perimeter (switch is off by default: 0.13-0.22 precision where a neighbourhood's cells are close) |
 | `--sr` | — |  |
 | `--jobs` | `1` | openTSNE threads |
 | `--out-tag` | — | stage tag of the output .clu (default: <clu-stage>.consensus) |

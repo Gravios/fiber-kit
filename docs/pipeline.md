@@ -41,6 +41,24 @@ selects its input with `--clu-method <variant> --clu-stage <stage>` (or `--in-cl
 `fiber-realign` and `fiber-cpos` are run again after `fiber-intrachunk` in the full plans (positions
 must follow the merged labels).
 
+### Where `fiber-envelope` and `fiber-consensus` fit
+
+Both are **within-chunk** refinement steps.  They sit where the curator's t-SNE pass sits: after the
+chunk-local sort (`fiber-session`, or its `refine` / `intrachunk` consolidation) and **before**
+cross-chunk linking.  They are not the end of the pipeline.
+
+| step | stage | role |
+|---|---|---|
+| after 1-6 | `fiber-envelope --merge 7` | collision-robust envelopes; re-join a chunk's fragments on envelope d' with the inflation cannot-link |
+| then | `fiber-consensus` | per neighbourhood of similar clusters: resampled t-SNE -> cells, plus a QUARANTINE cluster (collision / rim-deviant spikes) for review |
+| then | `fiber-realign`, `fiber-cpos` | follow the new labels |
+| then | `fiber-link` / `fiber-backbone-link` | cross-chunk drift linking -- still required |
+| last | Klusters | review the quarantine clusters (`.qrn` reasons, `.eap` collision partners) and the merges |
+
+Measured so far on g6's 36-48 min chunk, starting from `fiber_session`.  They have not yet been
+benchmarked against or combined with `fiber-refine` / `fiber-peel` / `fiber-intrachunk`, so whether
+they replace or follow those steps is open; treat the table as the intended order, not a result.
+
 ## Alternative linkers
 
 Instead of `intrachunk → link`, you can link the over-split `fiber_session` output directly:

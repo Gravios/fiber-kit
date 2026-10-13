@@ -221,6 +221,7 @@ class Envelope:
     drift: np.ndarray = None          # (L, C) D: template change per second within the window
     var_pred: np.ndarray = None       # (L, C) variance of the cell model's deterministic part (clean spikes)
     adapt: dict = None                # adaptation law a ~ b0 + b1*EWMA(tau): tau, b0, b1, r2, corr
+    resid_energy: np.ndarray = None   # (n,) per-spike residual energy after a_i T + b_i T', per (t,c), /noise
     meta: dict = field(default_factory=dict)
 
     def amp_model(self):
@@ -356,6 +357,7 @@ def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width
     Xc = take_lagged(X, lag, core)
     T = np.median(Xc[keep], 0); dT = np.gradient(T, axis=0)
     a, b, R = fit_amp_jitter(Xc, T, dT, w)
+    resid_energy = (R * R * w[None, None, :]).mean((1, 2))
     var_a = float(_mad_var(a[keep])); var_b = float(_mad_var(b[keep]))
     excess = np.maximum(_mad_var(R[keep], axis=0) - var_noise[None, :], 0.0)
     sigma = np.sqrt(var_noise[None, :] + var_a * T ** 2 + var_b * dT ** 2 + excess)
@@ -381,7 +383,7 @@ def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width
                     excess=excess, sigma=sigma, sigma_naive=naive, n=n, n_clean=int(keep.sum()),
                     flagged=~keep, score=score, bump_pos=pos, a=a, b=b, lag=lag, threshold=thr,
                     template_ext=Text, var_clean=var_clean, var_all=var_all, shape_amp=Sdir,
-                    drift=Ddir, var_pred=var_pred, adapt=adapt)
+                    drift=Ddir, var_pred=var_pred, adapt=adapt, resid_energy=resid_energy)
 
 
 def robust_dispersion_profile(waves, var_noise=None, noise_windows=None, maxlag=3, **kw):
@@ -544,6 +546,7 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
             a, b, R = fit_amp_jitter(take_lagged(X, lag, core), env.template, env.dtemplate, w)
             sc, pos = bump_scores(R, np.maximum(env.excess + env.var_noise[None], env.var_noise[None]), width)
             env.lag, env.a, env.b, env.score, env.bump_pos = lag, a, b, sc, pos
+            env.resid_energy = (R * R * w[None, None, :]).mean((1, 2))
             env.flagged = sc > env.threshold
         env.meta["idx"] = idx
         if sr is not None:

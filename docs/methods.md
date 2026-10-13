@@ -376,9 +376,12 @@ subsets, fresh random initialisation, per-column z-scored `.fet`), and from the 
   because t-SNE cuts one cell's noise ball into several stable-looking islands;
 * `switch_rate` -- per spike, the fraction of its runs in which the majority of its 2-D neighbours
   belongs to another CELL;
-* the quarantine -- switch rate >= 0.3, or the envelope's near-collision flag.  Quarantined spikes
-  go to one cluster per neighbourhood; `<base>.qrn.<elec>.<tag>` lists each with its cell, switch
-  rate, collision flag and the explaining partner / shift, for review.
+* the quarantine (0.36) -- with the envelope refitted on the cells: the near-collision flag, or the
+  PERIMETER rule (`perimeter_rank` >= 0.8, the spike's average 2-D radial rank inside its cell, AND its
+  residual energy or bump score >= 2 robust z above the cell's).  Cell switching (rate >= 0.3) is
+  opt-in.  Quarantined spikes go to one cluster per neighbourhood; `<base>.qrn.<elec>.<tag>` lists
+  each with its cell, switch rate, perimeter rank, residual / bump z, collision flag and the
+  explaining partner / shift, for review.
 
 Four g6 neighbourhoods (36-47 min; average linkage on envelope d' < 15 or < 10; GT = exp_final;
 "misassigned" = a spike whose GT cell is not its cell's majority, or GT noise):
@@ -402,3 +405,34 @@ noise ball every neighbour is as good as any other, so core spikes are the unsta
 outliers, collisions included, form small islands that are stable from run to run.  Against
 misassigned spikes it ran at AUC 0.25-0.55 (0.39-0.52 even ranked within each cell); against
 collision flags 0.35-0.60.
+
+### Where deviant spikes sit in the 2-D map (0.36)
+
+Averaged over 10 runs, a spike's radial rank inside its cell's 2-D cloud (0 centre, 1 rim) follows its
+deviation from the cell (8 cells, 312-1562 spikes; Spearman rho): full-dimensional distance from the
+cell centre 0.51-0.76, residual energy after a T + b T' 0.04-0.53, bump score -0.07-0.47, amplitude
+deviation 0.15-0.31; timing jitter -0.32-0.14 (slightly larger in the core of pure cells -- the D34
+lag features absorb a shift).  The outer 20 % against the inner 50 %:
+
+| cell (GT purity) | collision-flagged, outer / inner | misassigned, outer / inner |
+|---|---|---|
+| 18:2 (0.64) | 24 % / 1.1 % | 78 % / 21 % |
+| 7:3 (0.83) | 38 % / 2.0 % | 47 % / 9.6 % |
+| 9:3 (0.83) | 34 % / 2.4 % | 39 % / 11 % |
+| 8:2 (0.92) | 20 % / 1.2 % | 28 % / 3.0 % |
+| 7:2, 9:2, 7:4 (0.97-0.99) | 4.4-6.9 % / 1.8-2.3 % | 2.0-5.6 % / 0.6-2.6 % |
+
+So the rim of a contaminated cell is where its collisions and foreign spikes are; the rim of a pure
+cell is mostly its legitimate amplitude extremes -- hence the waveform condition in the rule.
+
+Quarantine rules on the four neighbourhoods (precision against the misassigned base rate):
+
+| rule | quarantined | precision | recall | purity gain |
+|---|---|---|---|---|
+| collision | 4.6-5.6 % | 0.48-0.84 | 0.11-0.30 | +0.017-0.032 |
+| perimeter (0.8, z 2) | 3.9-5.2 % | 0.44-0.90 | 0.11-0.30 | +0.015-0.036 |
+| collision OR perimeter (default) | 6.7-7.8 % | 0.40-0.85 | 0.16-0.41 | +0.021-0.045 |
+| switch (opt-in) | 0.4-8.6 % | 0.13-0.86 | 0.03-0.14 | +0.003-0.010 |
+
+(base rates 0.077, 0.113, 0.107, 0.418 for neighbourhoods 7, 8, 9, 18).  The perimeter rule adds 24-47
+spikes per neighbourhood that the collision flag misses, at 0.23-0.88 precision.

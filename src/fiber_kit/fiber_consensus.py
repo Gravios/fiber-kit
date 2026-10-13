@@ -15,19 +15,24 @@ drawn on one map is partly a boundary of that map.  This stage repeats the embed
   4. CELLS           communities are joined into cells by the envelope merge (fiber_envelope:
                      d' with merge inflation as a cannot-link) -- a single cell's spike cloud is a
                      noise ball that t-SNE cuts into several stable-looking islands.
-  5. QUARANTINE      a spike is quarantined when
-                       * it switches cell: in >= `switch_thr` of the runs containing it, the majority
-                         of its 2-D neighbours belongs to ANOTHER cell, or
-                       * the envelope flags it as a near collision (time-localised residual bump).
+  5. QUARANTINE      with the envelope refitted ON THE CELLS, a spike is quarantined when
+                       * collision: the envelope flags a near collision (time-localised residual
+                         bump), or
+                       * perimeter: its average 2-D radial rank inside its cell is >= 0.8 AND its
+                         residual energy or bump score is >= 2 robust z above the cell's -- the rim
+                         of a cell's cloud is where its collisions and foreign spikes sit, but also
+                         its legitimate amplitude extremes, hence the waveform condition;
+                       * (optional) switch: in >= 30 % of its runs the majority of its 2-D
+                         neighbours belongs to another cell.
                      Quarantined spikes go to their own cluster, with a per-spike table of reasons
-                     (switch rate, collision flag, explaining partner/shift) for review.
+                     for review.
 
-What was measured and NOT used, on four g6 neighbourhoods (36-47 min, GT = exp_final): the
-across-run variance of 2-D distances to a spike's full-dimensional neighbours.  It is mostly a
-density measure -- inside a single cell's noise ball every neighbour is as good as any other, so
-core spikes are the UNSTABLE ones and outliers form small stable islands -- and it ran at AUC
-0.25-0.57 against misassigned spikes.  The two criteria above ran at 51-79 % (collision flag) and
-20-86 % (cell switching) precision against base rates of 8-42 %.
+Measured on four g6 neighbourhoods (36-47 min, GT = exp_final), against base rates of 8-42 %
+misassigned: collision | perimeter quarantines 6.7-7.8 % of spikes at 0.40-0.85 precision and lifts
+cell purity by 0.02-0.05; the perimeter rule adds 24-47 spikes per neighbourhood the collision flag
+misses.  Cell switching runs at 0.13-0.22 precision where cells are close, so it is opt-in.  NOT
+used: the across-run VARIANCE of 2-D distances -- a density measure (inside one cell's noise ball
+every neighbour is as good as any other, so core spikes are the unstable ones), AUC 0.25-0.57.
 """
 import argparse
 import sys
@@ -52,7 +57,7 @@ def _need(mod):
 
 def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None):
     """R subsampled t-SNE embeddings of X (n, d).  Returns a list of (subset indices (m,),
-    2-D kNN of each subset spike as GLOBAL indices (m, k))."""
+    2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2))."""
     _need("openTSNE")
     from openTSNE import TSNE
     from sklearn.neighbors import NearestNeighbors
@@ -65,7 +70,7 @@ def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log
                             random_state=seed * 1000 + r, initialization="random",
                             verbose=False).fit(X[s]))
         _, ii = NearestNeighbors(n_neighbors=k + 1).fit(Y).kneighbors(Y)
-        out.append((s, s[ii[:, 1:]]))
+        out.append((s, s[ii[:, 1:]], Y.astype(np.float32)))
         if log and (r + 1) % 10 == 0:
             log(f"  t-SNE run {r + 1}/{runs}")
     return out
@@ -77,7 +82,7 @@ def coneighbour_communities(runs, n, p_min=0.1, resolution=1.0, seed=0):
     nx = _need("networkx")
     C = defaultdict(int)
     inc = np.zeros((len(runs), n), bool)
-    for r, (s, gl) in enumerate(runs):
+    for r, (s, gl, *_) in enumerate(runs):
         inc[r, s] = True
         for a, row in zip(s, gl):
             for b in row:
@@ -104,11 +109,34 @@ def switch_rate(runs, labels):
     labels = np.asarray(labels)
     off = labels.min()
     sw = np.zeros(len(labels)); cnt = np.zeros(len(labels))
-    for s, gl in runs:
+    for s, gl, *_ in runs:
         nb = labels[gl] - off
         maj = np.array([np.bincount(row).argmax() for row in nb]) + off
         sw[s] += maj != labels[s]; cnt[s] += 1
     return sw / np.maximum(cnt, 1)
+
+
+def perimeter_rank(runs, labels, min_n=50):
+    """Per spike: its radial rank inside its own label's 2-D cloud (distance from the cloud's median,
+    0 = centre, 1 = outermost), averaged over the runs that contained it.  Labels with fewer than
+    `min_n` spikes in a run are skipped (NaN if never ranked).  Unlike the run-to-run VARIANCE of
+    2-D distances (a density measure), the average position is reproducible, and on g6 the outer
+    ring of a cell is where its collisions and foreign spikes sit."""
+    labels = np.asarray(labels)
+    acc = np.zeros(len(labels)); cnt = np.zeros(len(labels))
+    for s, _, Y in runs:
+        ls = labels[s]
+        for c in np.unique(ls):
+            m = np.flatnonzero(ls == c)
+            if m.size < min_n:
+                continue
+            d = np.linalg.norm(Y[m] - np.median(Y[m], 0), axis=1)
+            acc[s[m]] += (np.argsort(np.argsort(d)) + 0.5) / m.size
+            cnt[s[m]] += 1
+    out = np.full(len(labels), np.nan)
+    ok = cnt > 0
+    out[ok] = acc[ok] / cnt[ok]
+    return out
 
 
 def neighbourhoods(envs, theta=12.0, min_units=2):
@@ -129,15 +157,36 @@ def neighbourhoods(envs, theta=12.0, min_units=2):
     return [m for m in groups.values() if len(m) >= min_units]
 
 
+def _robust_z(v, groups):
+    v = np.asarray(v, float); z = np.full(v.size, np.nan)
+    for g in np.unique(groups):
+        m = groups == g
+        med = np.nanmedian(v[m]); mad = 1.4826 * np.nanmedian(np.abs(v[m] - med))
+        z[m] = (v[m] - med) / max(mad, 1e-12)
+    return z
+
+
+QUARANTINE_RULES = ("switch", "collision", "perimeter")
+
+
 def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None, sr=32552.0,
                             pre=21, post=21, margin=32, maxlag=4, runs=40, frac=0.7, k=15,
-                            perplexity=30.0, theta_cell=7.0, switch_thr=0.3, seed=0, n_jobs=1,
-                            log=print):
+                            perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
+                            dev_z=2.0, rules=("collision", "perimeter"), seed=0, n_jobs=1, log=print):
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
-    z-scored per column.  Returns dict(idx, community, cell (unit-like labels), switch, flagged,
-    explained, partner, shift, quarantine (bool), reason (list of str))."""
+    z-scored per column.  After the cells are formed the envelope is refitted ON THE CELLS, so the
+    collision flag, bump score and residual energy are relative to the cell a spike ends up in.
+
+    Quarantine criteria (`rules`, any of):
+      switch     cell-switch rate >= switch_thr
+      collision  the envelope's near-collision flag
+      perimeter  average 2-D radial rank >= perim_thr AND the spike's residual energy or bump score
+                 is >= dev_z robust z above its cell's (the outer ring alone also holds a cell's
+                 legitimate amplitude extremes)
+    Returns dict(idx, community, cell, switch, perimeter, resid_z, bump_z, flagged, explained, partner,
+    shift, quarantine (bool), reason (list of str))."""
     clu = np.asarray(clu)
     idx = np.flatnonzero(np.isin(clu, list(units)))
     X = np.asarray(features, float)[idx]
@@ -145,35 +194,53 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log)
     com = coneighbour_communities(rr, idx.size, seed=seed)
     lab = np.zeros(len(clu), int); lab[idx] = com + 2
-    envs, table, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
-                                transform=transform, min_n=20, sr=sr, log=lambda s: None)
+    envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
+                            transform=transform, min_n=20, sr=sr, partners=False, log=lambda s: None)
     new, _ = fe.merge_units(trace, res, lab, envs, noise, theta=theta_cell, pre=pre, post=post,
                             margin=margin, maxlag=maxlag, transform=transform, sr=sr, log=lambda s: None)
     cell = new[idx]
+    # the envelope on the CELLS: collision flags, bump scores and residual energy relative to them
+    lab_c = np.zeros(len(clu), int); lab_c[idx] = cell
+    cenvs, table, _ = fe.run(trace, res, lab_c, pre=pre, post=post, margin=margin, maxlag=maxlag,
+                             transform=transform, min_n=20, sr=sr, log=lambda s: None)
+    resid = np.full(idx.size, np.nan); bump = np.full(idx.size, np.nan)
+    where = {int(i): j for j, i in enumerate(idx)}
+    for e in cenvs.values():
+        jj = np.array([where[int(i)] for i in e.meta["idx"]])
+        resid[jj] = e.resid_energy; bump[jj] = e.score
+    resid_z = _robust_z(resid, cell); bump_z = _robust_z(bump, cell)
     sw = switch_rate(rr, cell)
+    per = perimeter_rank(rr, cell)
     pos = {int(i): j for j, i in enumerate(table["idx"])}
     take = lambda key, default: np.array([table[key][pos[i]] if i in pos else default for i in idx])  # noqa: E731
     flagged = take("flagged", 0).astype(bool); explained = take("explained", 0).astype(bool)
     partner = take("partner", -1).astype(int); shift = take("shift", 0).astype(int)
-    q = (sw >= switch_thr) | flagged
-    reason = [",".join(r for r, v in (("switch", s_ >= switch_thr), ("collision", f_)) if v)
-              for s_, f_ in zip(sw, flagged)]
+    crit = dict(switch=sw >= switch_thr, collision=flagged,
+                perimeter=(np.nan_to_num(per) >= perim_thr)
+                & ((np.nan_to_num(resid_z) >= dev_z) | (np.nan_to_num(bump_z) >= dev_z)))
+    q = np.zeros(idx.size, bool)
+    for r_ in rules:
+        q |= crit[r_]
+    reason = [",".join(r_ for r_ in rules if crit[r_][j]) for j in range(idx.size)]
     log(f"neighbourhood {sorted(units)}: {idx.size} spikes -> {np.unique(com).size} communities -> "
-        f"{np.unique(cell).size} cells; quarantined {q.sum()} ({q.mean():.1%}: {(sw >= switch_thr).sum()} "
-        f"switching, {flagged.sum()} collision-flagged)")
-    return dict(idx=idx, community=com, cell=cell, switch=sw, flagged=flagged, explained=explained,
-                partner=partner, shift=shift, quarantine=q, reason=reason)
+        f"{np.unique(cell).size} cells; quarantined {q.sum()} ({q.mean():.1%}: "
+        + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
+    return dict(idx=idx, community=com, cell=cell, switch=sw, perimeter=per, resid_z=resid_z, bump_z=bump_z,
+                flagged=flagged, explained=explained, partner=partner, shift=shift, quarantine=q,
+                reason=reason, criteria=crit)
 
 
 def write_quarantine_table(path, results, res_abs, clu, out_labels):
     with open(path, "w") as f:
-        f.write("spike\ttime\tunit\tcell\tout\tswitch\tcollision\texplained\tpartner\tshift\treason\n")
+        f.write("spike\ttime\tunit\tcell\tout\tswitch\tperimeter\tresid_z\tbump_z\tcollision\texplained\t"
+                "partner\tshift\treason\n")
         for r in results:
             for j, i in enumerate(r["idx"]):
                 if not r["quarantine"][j]:
                     continue
                 f.write(f"{i}\t{int(res_abs[i])}\t{int(clu[i])}\t{int(r['cell'][j])}\t{int(out_labels[i])}\t"
-                        f"{r['switch'][j]:.3f}\t{int(r['flagged'][j])}\t{int(r['explained'][j])}\t"
+                        f"{r['switch'][j]:.3f}\t{r['perimeter'][j]:.3f}\t{r['resid_z'][j]:.2f}\t{r['bump_z'][j]:.2f}\t"
+                        f"{int(r['flagged'][j])}\t{int(r['explained'][j])}\t"
                         f"{int(r['partner'][j])}\t{int(r['shift'][j])}\t{r['reason'][j]}\n")
     return path
 
@@ -201,6 +268,13 @@ def main(argv=None):
     ap.add_argument("--perplexity", type=float, default=30.0)
     ap.add_argument("--theta-cell", type=float, default=7.0, help="envelope d' cut joining communities into cells")
     ap.add_argument("--switch-thr", type=float, default=0.3, help="cell-switch rate that quarantines a spike")
+    ap.add_argument("--perim-thr", type=float, default=0.8,
+                    help="average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule")
+    ap.add_argument("--dev-z", type=float, default=2.0,
+                    help="robust z of residual energy or bump score (within the cell) for the perimeter rule")
+    ap.add_argument("--rules", default="collision,perimeter",
+                    help="quarantine criteria, any of: switch, collision, perimeter (switch is off by default: "
+                         "0.13-0.22 precision where a neighbourhood's cells are close)")
     ap.add_argument("--sr", type=float, default=None)
     ap.add_argument("--jobs", type=int, default=1, help="openTSNE threads")
     ap.add_argument("--out-tag", default=None, help="stage tag of the output .clu (default: <clu-stage>.consensus)")
@@ -250,7 +324,9 @@ def main(argv=None):
     for units in groups:
         r = consensus_neighbourhood(view, rel0, lab, units, fet.values, transform=transform, sr=sr,
                                     runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
-                                    theta_cell=a.theta_cell, switch_thr=a.switch_thr, n_jobs=a.jobs, log=log)
+                                    theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
+                                    dev_z=a.dev_z, rules=tuple(x.strip() for x in a.rules.split(",") if x.strip()),
+                                    n_jobs=a.jobs, log=log)
         cmap = {}
         for c in np.unique(r["cell"]):
             cmap[int(c)] = nxt; nxt += 1
