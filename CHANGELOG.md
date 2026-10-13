@@ -4,6 +4,12 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.37.2] — fiber-consensus: parallel t-SNE runs
+- `--workers` / `FK_CONSENSUS_WORKERS` (default 0 = every core): the independent t-SNE runs and
+  watershed maps -- ~93 % of a neighbourhood's time -- run in parallel processes (spawn; BLAS/OMP
+  threads pinned to 1 per worker).  Subsets and seeds are drawn up front, so results are identical
+  for any worker count (tested).  A 1.5 k-spike neighbourhood takes ~3.5 min serially.
+
 ## [0.37.1] — fiber-consensus: neighbourhood cap, lone-cell crash
 - `--max-spikes` / `FK_CONSENSUS_MAX_SPIKES` (default 4000): a neighbourhood holding more spikes is
   re-cut on its own linkage at theta*0.8, *0.64, ... until every piece fits.  Average linkage at

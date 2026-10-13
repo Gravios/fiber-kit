@@ -482,6 +482,8 @@ giant group (g6 36-48 min: 11.7 k of 19 k spikes), so a group over `--max-spikes
 on its own linkage at theta*0.8, *0.64, ... until every piece fits (g6: largest piece 2.8 k).  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
 unit holding most of its kept spikes, unless a larger cell took it; split-off cells get fresh ids.  So
 it can run on a chunk-local sort before linking or on a linked sort after it without breaking the
-links.  Knobs are `FK_CONSENSUS_*` (CLI > env > `$FK_CONFIG` > default; section [C] of
+links.  The t-SNE runs and watershed maps (~93 % of the time; ~4 s per run on 1 k points) run in
+parallel processes (`--workers`, default every core) with results independent of the worker count.
+Knobs are `FK_CONSENSUS_*` (CLI > env > `$FK_CONFIG` > default; section [C] of
 fiber-kit-exp.yaml); in a plan it is the stage `fiber-consensus` (`fiber-pipeline <elec> fiber-consensus`
 reads `.exp_final` and `<sess>.fil` by default).

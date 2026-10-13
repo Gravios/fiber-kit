@@ -150,6 +150,21 @@ def test_find_partners_with_no_other_unit():
     assert atoms.shape == (0, Lx, C) and keys == []
 
 
+def test_parallel_runs_identical_to_serial():
+    """workers only changes speed: subsets and seeds are drawn up front."""
+    if not HAVE:
+        print("skip: openTSNE/networkx not installed"); return
+    X = np.random.default_rng(0).normal(size=(300, 8)); X[:150] += 3
+    a = fc.tsne_runs(X, runs=3, workers=1)
+    b = fc.tsne_runs(X, runs=3, workers=2)
+    for x, y in zip(a, b):
+        assert all(np.array_equal(p, q) for p, q in zip(x, y))
+    q = np.arange(300) % 13 == 0; cell = (np.arange(300) < 150).astype(int)
+    w1 = fc.watershed_categories(X, cell, q, runs=2, workers=1)
+    w2 = fc.watershed_categories(X, cell, q, runs=2, workers=2)
+    assert (w1["category"] == w2["category"]).all() and (w1["dest"] == w2["dest"]).all()
+
+
 def test_knobs_env_over_global_yaml_over_default():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "fk.yaml")

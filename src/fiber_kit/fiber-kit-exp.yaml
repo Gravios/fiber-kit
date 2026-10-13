@@ -1062,7 +1062,12 @@ FK_CONSENSUS_WS_RUNS:    5        # 5 | 0, 3-9.  Full t-SNE maps voting each qua
 FK_CONSENSUS_WS_GRID:    256      # 256 | 128-512.  KDE grid side for the basins (kernel sigma = grid/100).
 FK_CONSENSUS_WS_ISLAND:  0.5      # 0.5 | 0.3-0.7.  A basin with at least this quarantined fraction (or no kept
                                   #   spikes) is an ISLAND.  Lower = more islands.
-FK_CONSENSUS_JOBS:       1        # openTSNE threads per run.
+FK_CONSENSUS_WORKERS:    0        # 0 = every core | 1 = serial | N.  Parallel processes for the independent t-SNE runs
+                                  #   and watershed maps (~93 % of a neighbourhood's time).  Subsets and seeds are
+                                  #   drawn up front, so the result is identical for any worker count.  On ~1 k
+                                  #   points openTSNE's own threads scale poorly (2 threads: 1.5x); processes
+                                  #   scale with cores.  Lower it when other stages share the machine.
+FK_CONSENSUS_JOBS:       1        # 1.  openTSNE threads INSIDE each run; keep 1 when WORKERS > 1 (workers x jobs threads).
 FK_CONSENSUS_SEED:       0        # subsampling, initialisation and Louvain seed (watershed maps use seed+500+r).
 
 # ============================================================================

@@ -73,24 +73,61 @@ def _need(mod):
         raise SystemExit(f"fiber-consensus needs '{mod}' (pip install fiber-kit[consensus])") from e
 
 
-def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None):
-    """R subsampled t-SNE embeddings of X (n, d).  Returns a list of (subset indices (m,),
-    2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2))."""
-    _need("openTSNE")
+def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None):
     from openTSNE import TSNE
+    kw = {} if exaggeration is None else dict(exaggeration=exaggeration)
+    return np.asarray(TSNE(perplexity=min(perplexity, (len(X) - 1) / 3.0), n_jobs=n_jobs, random_state=seed,
+                           initialization="random", verbose=False, **kw).fit(X))
+
+
+def _one_run(X, s, perplexity, seed, k, n_jobs):
+    """One subsampled run (a top-level function so a worker process can run it)."""
     from sklearn.neighbors import NearestNeighbors
+    Y = _tsne_fit(X[s], perplexity, seed, n_jobs)
+    _, ii = NearestNeighbors(n_neighbors=k + 1).fit(Y).kneighbors(Y)
+    return s, s[ii[:, 1:]], Y.astype(np.float32)
+
+
+def _pool(workers):
+    """Process pool for independent t-SNE fits, or None for serial.  workers: 1 = serial, 0 = every
+    core.  spawn, not fork: openTSNE / BLAS threads in the parent make a forked child unsafe."""
+    import multiprocessing as mp
+    import os as _os
+    from concurrent.futures import ProcessPoolExecutor
+    w = (_os.cpu_count() or 1) if not workers else int(workers)
+    if w <= 1:
+        return None
+    for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
+        _os.environ.setdefault(v, "1")             # inherited by the spawned workers: no oversubscription
+    return ProcessPoolExecutor(w, mp_context=mp.get_context("spawn"))
+
+
+def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None, workers=1):
+    """R subsampled t-SNE embeddings of X (n, d).  Returns a list of (subset indices (m,),
+    2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2)).
+    workers > 1 (0 = every core) runs the embeddings in parallel processes; the subsets and seeds are
+    drawn up front, so the result does not depend on the worker count."""
+    _need("openTSNE")
     X = np.asarray(X, float)
-    n = len(X); rng = np.random.default_rng(seed); out = []
+    n = len(X); rng = np.random.default_rng(seed)
     m = max(k + 2, int(round(frac * n)))
-    for r in range(int(runs)):
-        s = np.sort(rng.choice(n, min(m, n), replace=False))
-        Y = np.asarray(TSNE(perplexity=min(perplexity, (len(s) - 1) / 3.0), n_jobs=n_jobs,
-                            random_state=seed * 1000 + r, initialization="random",
-                            verbose=False).fit(X[s]))
-        _, ii = NearestNeighbors(n_neighbors=k + 1).fit(Y).kneighbors(Y)
-        out.append((s, s[ii[:, 1:]], Y.astype(np.float32)))
-        if log and (r + 1) % 10 == 0:
-            log(f"  t-SNE run {r + 1}/{runs}")
+    subsets = [np.sort(rng.choice(n, min(m, n), replace=False)) for _ in range(int(runs))]
+    args = [(X, s, perplexity, seed * 1000 + r, k, n_jobs) for r, s in enumerate(subsets)]
+    pool = _pool(workers)
+    if pool is None:
+        out = []
+        for r, a_ in enumerate(args):
+            out.append(_one_run(*a_))
+            if log and (r + 1) % 10 == 0:
+                log(f"  t-SNE run {r + 1}/{runs}")
+        return out
+    with pool:
+        futs = [pool.submit(_one_run, *a_) for a_ in args]
+        out = []
+        for r, f in enumerate(futs):
+            out.append(f.result())
+            if log and (r + 1) % 10 == 0:
+                log(f"  t-SNE run {r + 1}/{runs}")
     return out
 
 
@@ -249,7 +286,7 @@ def categorise_basins(basin, cell, quarantine, island_frac=0.5):
 
 
 def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0.5, perplexity=30.0,
-                         seed=0, n_jobs=1, maps=None, log=None):
+                         seed=0, n_jobs=1, maps=None, log=None, workers=1):
     """Watershed category of every quarantined spike, voted over `runs` full t-SNE maps of X (or the
     given `maps`, a list of (n, 2) arrays).  Returns dict(category: (n,) str, '' where not quarantined;
     dest: (n,) destination cell (own cell for own-rim, the basin owner for other-cell, -1 otherwise);
@@ -257,13 +294,16 @@ def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0
     cell = np.asarray(cell); q = np.asarray(quarantine, bool); n = cell.size
     if maps is None:
         _need("openTSNE")
-        from openTSNE import TSNE
-        maps = []
-        for r in range(runs):
-            maps.append(np.asarray(TSNE(perplexity=perplexity, n_jobs=n_jobs, random_state=seed + 500 + r,
-                                        initialization="random", verbose=False).fit(np.asarray(X, float))))
-            if log:
-                log(f"  watershed map {r + 1}/{runs}")
+        X = np.asarray(X, float)
+        pool = _pool(workers)
+        if pool is None:
+            maps = [_tsne_fit(X, perplexity, seed + 500 + r, n_jobs) for r in range(runs)]
+        else:
+            with pool:
+                maps = list(pool.map(_tsne_fit, *zip(*[(X, perplexity, seed + 500 + r, n_jobs)
+                                                       for r in range(runs)])))
+        if log:
+            log(f"  {runs} watershed maps")
     qi = np.flatnonzero(q)
     codes = np.empty((len(maps), qi.size), int); dests = np.empty((len(maps), qi.size), int)
     for r, Y in enumerate(maps):
@@ -283,7 +323,7 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
                             pre=21, post=21, margin=32, maxlag=4, runs=40, frac=0.7, k=15,
                             perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
                             dev_z=2.0, rules=("collision", "perimeter"), ws_runs=5, ws_grid=256,
-                            ws_island=0.5, seed=0, n_jobs=1, log=print):
+                            ws_island=0.5, seed=0, n_jobs=1, workers=1, log=print):
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
@@ -304,7 +344,8 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     idx = np.flatnonzero(np.isin(clu, list(units)))
     X = np.asarray(features, float)[idx]
     X = (X - X.mean(0)) / X.std(0).clip(1e-9)
-    rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log)
+    rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log,
+                   workers=workers)
     com = coneighbour_communities(rr, idx.size, seed=seed)
     lab = np.zeros(len(clu), int); lab[idx] = com + 2
     envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
@@ -340,7 +381,7 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
         + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
     if ws_runs > 0 and q.any():
         ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
-                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs)
+                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs, workers=workers)
         cat = ws["category"]
         log("  categories: " + ", ".join(f"{(cat == c).sum()} {c}" for c in WS_CATEGORIES)
             + f"; median vote agreement {np.nanmedian(ws['agree']):.2f}")
@@ -436,7 +477,10 @@ _KNOBS = {
     "FK_CONSENSUS_MIN_SPIKES": ("min_spikes", int, 300,
                                 "skip a neighbourhood with fewer spikes in the chunk (t-SNE at perplexity 30 needs "
                                 "a few hundred)"),
-    "FK_CONSENSUS_JOBS": ("jobs", int, 1, "openTSNE threads"),
+    "FK_CONSENSUS_WORKERS": ("workers", int, 0,
+                             "parallel processes for the independent t-SNE runs and watershed maps (0 = every "
+                             "core, 1 = serial); results do not depend on it"),
+    "FK_CONSENSUS_JOBS": ("jobs", int, 1, "openTSNE threads inside each run (keep 1 when workers > 1)"),
     "FK_CONSENSUS_SEED": ("seed", int, 0, "seed for subsampling, initialisation and Louvain"),
 }
 
@@ -550,7 +594,8 @@ def main(argv=None):
                                         runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
                                         theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
                                         dev_z=a.dev_z, rules=rules, ws_runs=a.ws_runs, ws_grid=a.ws_grid,
-                                        ws_island=a.ws_island, seed=a.seed, n_jobs=a.jobs, log=log)
+                                        ws_island=a.ws_island, seed=a.seed, n_jobs=a.jobs, workers=a.workers,
+                                        log=log)
             cmap, nxt = cell_ids(r["cell"], clu[r["idx"]], r["quarantine"], nxt, keep=bool(a.keep_ids))
             out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
             q = r["quarantine"]; isl = q & (r["category"] == "island")

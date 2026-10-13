@@ -1166,7 +1166,8 @@ Positional: `base`, `elec`
 | `--chunk-min` | — | process the sort chunk by chunk, this many minutes each (unset = FK_SESSION_CHUNK_MIN or 12, fiber-session's chunking; 0 = the whole window at once) [FK_CONSENSUS_CHUNK_MIN; default None] |
 | `--keep-ids` | `1` | 1 = a cell keeps the id of the input unit holding most of its kept spikes (so a linked sort stays linked); 0 = every cell gets a fresh id [FK_CONSENSUS_KEEP_IDS; default 1] |
 | `--min-spikes` | `300` | skip a neighbourhood with fewer spikes in the chunk (t-SNE at perplexity 30 needs a few hundred) [FK_CONSENSUS_MIN_SPIKES; default 300] |
-| `--jobs` | `1` | openTSNE threads [FK_CONSENSUS_JOBS; default 1] |
+| `--workers` | `0` | parallel processes for the independent t-SNE runs and watershed maps (0 = every core, 1 = serial); results do not depend on it [FK_CONSENSUS_WORKERS; default 0] |
+| `--jobs` | `1` | openTSNE threads inside each run (keep 1 when workers > 1) [FK_CONSENSUS_JOBS; default 1] |
 | `--seed` | `0` | seed for subsampling, initialisation and Louvain [FK_CONSENSUS_SEED; default 0] |
 | `--out-tag` | — | stage tag of the output .clu (default: <clu-stage>.consensus) |
 ### `fiber-calibrate`
