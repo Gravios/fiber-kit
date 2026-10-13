@@ -1056,6 +1056,13 @@ FK_CONSENSUS_PERIM_THR:  0.8      # 0.8 | 0.7-0.9.  Perimeter rule: average 2-D 
                                   #   (0 centre, 1 rim).  The rim alone also holds legitimate amplitude extremes.
 FK_CONSENSUS_DEV_Z:      2.0      # 2.0 | 1.5-3.0.  Perimeter rule: residual energy or bump score >= this robust z
                                   #   above the cell's.  Lower quarantines more at lower precision.
+FK_CONSENSUS_REFRAC_MS:  1.5      # 1.5 | 0 = off, 1.0-2.0 (ms).  Refractory cannot-link in the cell merge: two communities
+                                  #   whose trains coincide within (0.6, REFRAC] ms at chance level are two neurons
+                                  #   (fiber_ccg.refractory_gate; the 0.6 ms floor is the detector dead time).  g6
+                                  #   11.7 k-spike group: violating pairs 38/69 -> 13/20 (0.6-1.0/1.0-1.5 ms), the 8.5 k
+                                  #   cell split, 13 of 14 powered pairs vetoed.  1.0 ms had no power at MIN_EXP 3.
+FK_CONSENSUS_REFRAC_MIN_EXP: 3.0  # 3 | 1-5.  Coincidences that must be EXPECTED before the test may veto (power-aware:
+                                  #   it abstains below this; 1 also works at 1.0 ms but vetoes on thinner evidence).
 FK_CONSENSUS_SWITCH_THR: 0.3      # 0.3 | 0.2-0.5.  switch rule only: fraction of runs whose 2-D majority is another cell.
 FK_CONSENSUS_WS_RUNS:    5        # 5 | 0, 3-9.  Full t-SNE maps voting each quarantined spike's watershed category
                                   #   (median vote agreement 0.8-1.0 at 5).  0 = no categories: one quarantine

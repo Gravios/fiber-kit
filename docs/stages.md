@@ -1125,6 +1125,8 @@ Positional: `base`, `elec`
 | `--merge` | — | also merge units: average linkage on envelope d' cut at THETA (7 on g6), with merge inflation as a cannot-link; writes a new .clu stage + .envmerge table |
 | `--infl-thr` | `0.1` | merge inflation above which a pair cannot be merged (default 0.1) |
 | `--type-veto` | flag (off) | never merge a narrow- with a broad-spiking unit (off by default: on g6 fiber_session fragments the per-fragment width is too noisy and the veto cost 0.11 ARI) |
+| `--refrac-ms` | `1.5` | refractory cannot-link for --merge: two units whose trains coincide within (0.6, REFRAC] ms at chance are two neurons (power-aware; 0 = off; default 1.5) |
+| `--refrac-min-exp` | `3.0` | coincidences that must be expected before the refractory test may veto (default 3) |
 | `--merge-tag` | — | stage tag of the merged .clu (default: <clu-stage>.envmerge) |
 | `--eap` | flag (off) | write explained near collisions as .eap membership on the analysed --clu-stage (Klusters' collision ring) |
 ### `fiber-consensus`
@@ -1155,6 +1157,8 @@ Positional: `base`, `elec`
 | `--k` | `15` | 2-D neighbours per spike [FK_CONSENSUS_K; default 15] |
 | `--perplexity` | `30.0` | t-SNE perplexity (runs and watershed maps) [FK_CONSENSUS_PERPLEXITY; default 30.0] |
 | `--theta-cell` | `7.0` | envelope d' cut joining communities into cells [FK_CONSENSUS_THETA_CELL; default 7.0] |
+| `--refrac-ms` | `1.5` | refractory cannot-link in the cell merge: communities whose trains coincide within (0.6, REFRAC] ms at chance are two neurons (power-aware; 0 = off) [FK_CONSENSUS_REFRAC_MS; default 1.5] |
+| `--refrac-min-exp` | `3.0` | coincidences that must be expected before the refractory test may veto [FK_CONSENSUS_REFRAC_MIN_EXP; default 3.0] |
 | `--switch-thr` | `0.3` | cell-switch rate that quarantines a spike [FK_CONSENSUS_SWITCH_THR; default 0.3] |
 | `--perim-thr` | `0.8` | average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule [FK_CONSENSUS_PERIM_THR; default 0.8] |
 | `--dev-z` | `2.0` | robust z of residual energy or bump score (within the cell) for the perimeter rule [FK_CONSENSUS_DEV_Z; default 2.0] |

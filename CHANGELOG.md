@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.37.4] — refractory cannot-link in the envelope / consensus merge
+- `fiber_envelope.refractory_cannot_link` (fiber_ccg.refractory_gate, power-aware, (0.6, 1.5] ms by
+  default) and `any_cannot_link`; on by default in `fiber-consensus` (`FK_CONSENSUS_REFRAC_MS`,
+  `FK_CONSENSUS_REFRAC_MIN_EXP`) and in `fiber-envelope --merge` (`--refrac-ms`, `--refrac-min-exp`).
+  Judged without ground truth on the g6 11.7 k-spike neighbourhood: the merge without it built an
+  8.5 k-spike cell and raised violating pairs from 2 / 2 (fragments) to 38 / 69 (0.6-1.0 / 1.0-1.5
+  ms); with it 13 / 20, the largest cell 3.2 k, 13 of 14 powered pairs vetoed.
+- docs/methods.md: GT-free evidence -- the round-1 quarantine is refractory-enriched 3.8x; exp_final
+  cell 21 (7.2 k spikes) has no refractory gap (autocorrelogram at chance from 1 ms) and small
+  amplitude: multi-unit background, not a fast-spiking interneuron; a region-local Legendre
+  oblique-axis library finds no axis that splits it into refractory halves.
+
 ## [0.37.3] — fiber-consensus: neighbourhood cap off by default; findings
 - `FK_CONSENSUS_MAX_SPIKES` default 4000 -> 0 (off).  On g6 the 11.7 k-spike group d' 12 forms
   holds 9 GT cells that are genuinely confusable; consensus on the whole group gives 7 cells at

@@ -165,6 +165,28 @@ def test_parallel_runs_identical_to_serial():
     assert (w1["category"] == w2["category"]).all() and (w1["dest"] == w2["dest"]).all()
 
 
+def test_refractory_cannot_link():
+    """Two independent 20 Hz trains coincide at chance -> veto; one refractory train cut in two keeps
+    its dip -> no veto; a sparse pair has no power -> no veto."""
+    rng = np.random.default_rng(0); sr = 32552.0; T = int(600 * sr)
+
+    def train(rate, refr_ms=2.0):
+        t = np.cumsum(rng.exponential(sr / rate, int(rate * 700)) + refr_ms * sr / 1000).astype(np.int64)
+        return t[t < T]
+    a, b = train(20), train(20)
+    one = train(40); half = rng.random(one.size) < 0.5
+    sparse_a, sparse_b = train(0.5), train(0.5)
+    res = np.concatenate([a, b, one, sparse_a, sparse_b])
+    clu = np.concatenate([np.full(a.size, 2), np.full(b.size, 3), np.where(half, 4, 5),
+                          np.full(sparse_a.size, 6), np.full(sparse_b.size, 7)])
+    f, gates = fc.fe.refractory_cannot_link(res, clu, [2, 3, 4, 5, 6, 7], sr=sr)
+    assert f(2, 3) is not None and gates[(2, 3)]["verdict"] == "veto"
+    assert f(4, 5) is None and gates[(4, 5)]["verdict"] == "allow"
+    assert f(6, 7) is None and gates[(6, 7)]["verdict"] == "abstain"
+    both = fc.fe.any_cannot_link(None, lambda x, y: "first", f)
+    assert both(4, 5) == "first" and fc.fe.any_cannot_link(None) is None
+
+
 def test_knobs_env_over_global_yaml_over_default():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "fk.yaml")

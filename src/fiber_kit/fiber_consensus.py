@@ -323,7 +323,8 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
                             pre=21, post=21, margin=32, maxlag=4, runs=40, frac=0.7, k=15,
                             perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
                             dev_z=2.0, rules=("collision", "perimeter"), ws_runs=5, ws_grid=256,
-                            ws_island=0.5, seed=0, n_jobs=1, workers=1, log=print):
+                            ws_island=0.5, refrac_ms=1.5, refrac_min_exp=3.0, seed=0, n_jobs=1, workers=1,
+                            log=print):
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
@@ -350,8 +351,12 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     lab = np.zeros(len(clu), int); lab[idx] = com + 2
     envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
                             transform=transform, min_n=20, sr=sr, partners=False, log=lambda s: None)
-    new, _ = fe.merge_units(trace, res, lab, envs, noise, theta=theta_cell, pre=pre, post=post,
-                            margin=margin, maxlag=maxlag, transform=transform, sr=sr, log=lambda s: None)
+    cl = (fe.refractory_cannot_link(res, lab, sorted(envs), sr=sr, refrac_ms=refrac_ms,
+                                    min_exp=refrac_min_exp)[0] if refrac_ms > 0 else None)
+    new, mrows = fe.merge_units(trace, res, lab, envs, noise, theta=theta_cell, pre=pre, post=post,
+                                margin=margin, maxlag=maxlag, transform=transform, sr=sr, cannot_link=cl,
+                                log=lambda s: None)
+    nref = sum(1 for r_ in mrows if str(r_.get("reason", "")).startswith("refractory"))
     cell = new[idx]
     # the envelope on the CELLS: collision flags, bump scores and residual energy relative to them
     lab_c = np.zeros(len(clu), int); lab_c[idx] = cell
@@ -377,7 +382,7 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
         q |= crit[r_]
     reason = [",".join(r_ for r_ in rules if crit[r_][j]) for j in range(idx.size)]
     log(f"neighbourhood {sorted(units)}: {idx.size} spikes -> {np.unique(com).size} communities -> "
-        f"{np.unique(cell).size} cells; quarantined {q.sum()} ({q.mean():.1%}: "
+        f"{np.unique(cell).size} cells ({nref} refractory vetoes); quarantined {q.sum()} ({q.mean():.1%}: "
         + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
     if ws_runs > 0 and q.any():
         ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
@@ -454,6 +459,11 @@ _KNOBS = {
     "FK_CONSENSUS_K": ("k", int, 15, "2-D neighbours per spike"),
     "FK_CONSENSUS_PERPLEXITY": ("perplexity", float, 30.0, "t-SNE perplexity (runs and watershed maps)"),
     "FK_CONSENSUS_THETA_CELL": ("theta_cell", float, 7.0, "envelope d' cut joining communities into cells"),
+    "FK_CONSENSUS_REFRAC_MS": ("refrac_ms", float, 1.5,
+                               "refractory cannot-link in the cell merge: communities whose trains coincide "
+                               "within (0.6, REFRAC] ms at chance are two neurons (power-aware; 0 = off)"),
+    "FK_CONSENSUS_REFRAC_MIN_EXP": ("refrac_min_exp", float, 3.0,
+                                    "coincidences that must be expected before the refractory test may veto"),
     "FK_CONSENSUS_SWITCH_THR": ("switch_thr", float, 0.3, "cell-switch rate that quarantines a spike"),
     "FK_CONSENSUS_PERIM_THR": ("perim_thr", float, 0.8,
                                "average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule"),
@@ -595,7 +605,8 @@ def main(argv=None):
                                         runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
                                         theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
                                         dev_z=a.dev_z, rules=rules, ws_runs=a.ws_runs, ws_grid=a.ws_grid,
-                                        ws_island=a.ws_island, seed=a.seed, n_jobs=a.jobs, workers=a.workers,
+                                        ws_island=a.ws_island, refrac_ms=a.refrac_ms,
+                                        refrac_min_exp=a.refrac_min_exp, seed=a.seed, n_jobs=a.jobs, workers=a.workers,
                                         log=log)
             cmap, nxt = cell_ids(r["cell"], clu[r["idx"]], r["quarantine"], nxt, keep=bool(a.keep_ids))
             out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]

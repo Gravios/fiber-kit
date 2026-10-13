@@ -532,3 +532,38 @@ Measured and not adopted:
   -> 1.5 s across modes with feature norm 0.89 -> 1.17) and drift, 0-6 % foreign; collision-flag
   rates per mode equal the cell's.  A mode's median-waveform residual exceeds the noise null 1.5-3x
   in pure modes too (legitimate shape change), so as a collision test it is not specific.
+
+### Judging without the ground truth (0.37.4)
+
+exp_final was curated with earlier fiber-kit tools, so it carries their merges: agreement with it
+cannot tell a cleaner sort from one that repeats its errors.  The evidence below uses spike timing,
+which no waveform method shares.
+
+* **The quarantine is real contamination.**  Within the cell it sat in, a round-1 quarantined spike
+  is in a refractory-violating pair (another spike 0.6-1.5 ms away) 3.8x as often as random spikes
+  of the same cells (p < 0.005); removing the quarantine removes 8 of 25 violating pairs, a matched
+  random removal 2.5.  (Round 2's new quarantine shows no excess, 1.07x -- but only 17 pairs were
+  left to find.)
+* **The envelope merge joins different neurons; a refractory cannot-link stops most of it.**  On the
+  11.7 k-spike neighbourhood (merge at d' < 7):
+
+| | cells | violating pairs 0.6-1.0 / 1.0-1.5 ms | Hill contamination | largest cell |
+|---|---|---|---|---|
+| fiber-session fragments | 53 | 2 / 2 | 0.03 | 543 |
+| Louvain communities | 14 | 6 / 9 | 0.25 | 1,852 |
+| merge, no veto | 6 | 38 / 69 | 0.43 | 8,482 |
+| merge + refractory veto, 1.5 ms (default) | 8 | 13 / 20 | 0.34 | 3,157 |
+
+  `refractory_cannot_link` uses fiber_ccg.refractory_gate: a pair whose trains coincide within
+  (0.6, 1.5] ms at chance level is two neurons; it abstains when fewer than 3 coincidences are
+  expected (at 1.0 ms nothing had that power).  The exp_final score does not move (0.84 -> 0.83):
+  exp_final made the same merges.
+* **exp_final cell 21 is multi-unit background.**  7,186 spikes at 10.9 Hz, median p2p 1,880 (all
+  spikes 2,560; pyramidal cells 3,800-7,400); its autocorrelogram sits at 1.2-2x chance from 1 to
+  10 ms with no refractory gap, where the pyramidal cells (10, 12, 15, 17) are empty at 1-2 ms and
+  peak at 30-130x chance at 3-5 ms.  Its narrow average waveform is an average of small spikes, not
+  a fast-spiking interneuron.  A region-local oblique library -- degree-2 Legendre fits in 8-sample
+  regions (step 4) per channel and across channels, the top 3 principal axes of each, 243 axes --
+  finds no axis that splits it into halves with a refractory gap (no bimodality, dip p >= 0.98; best
+  excess straddle of the violating pairs p = 0.003 against a Bonferroni 2e-4; each half still
+  coincides with itself at 0.6-0.8 of chance).

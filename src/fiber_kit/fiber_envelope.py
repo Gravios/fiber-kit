@@ -669,6 +669,47 @@ def merge_evidence(XA, tA, XB, tB, core, noise, envA, envB, maxlag=4):
     return dict(inflation=infl, adapt_joint=aj, adapt_sep=asep, shape_gain=U.shape_gain())
 
 
+def refractory_cannot_link(res, clu, units, *, sr=32552.0, refrac_ms=1.5, censor_ms=0.6, min_exp=3.0,
+                           thr=0.3):
+    """cannot_link callable for merge_units: two units whose spike trains coincide within
+    (censor_ms, refrac_ms] at chance level are two neurons (fiber_ccg.refractory_gate, power-aware: it
+    abstains when too few coincidences are expected).  censor_ms covers the detector dead time.  res,
+    clu: per-spike times (samples) and labels.  Returns (callable, gates) -- gates fills with the
+    gate dict of every pair asked."""
+    try:
+        from . import fiber_ccg as cg
+    except ImportError:
+        import fiber_ccg as cg
+    res = np.asarray(res, np.int64); clu = np.asarray(clu)
+    t = {u: np.sort(res[clu == u]) for u in units}
+    allt = np.concatenate([t[u] for u in units]) if units else np.zeros(0, np.int64)
+    dur = float(allt.max() - allt.min()) if allt.size else 0.0
+    refr = cg.refrac_samples(refrac_ms, sr); cens = cg.refrac_samples(censor_ms, sr)
+    gates = {}
+
+    def f(ua, ub):
+        g = cg.refractory_gate(t[ua], t[ub], dur, refr, thr=thr, min_exp=min_exp, censor=cens)
+        gates[(ua, ub)] = g
+        return (f"refractory: {g['c_obs']} coincidences in ({censor_ms:g}, {refrac_ms:g}] ms vs "
+                f"{g['c_exp']:.1f} expected") if g["verdict"] == "veto" else None
+    return f, gates
+
+
+def any_cannot_link(*fs):
+    """Combine cannot_link callables: the first non-empty reason wins (None entries are skipped)."""
+    fs = [f for f in fs if f is not None]
+    if not fs:
+        return None
+
+    def f(ua, ub):
+        for g in fs:
+            why = g(ua, ub)
+            if why:
+                return why
+        return None
+    return f
+
+
 def merge_units(trace, res, clu, envs, noise, *, theta=7.0, pre=21, post=21, margin=32, maxlag=4,
                 transform=None, sr=32552.0, knn=8, dmax=15.0, infl_thr=0.1, cannot_link=None,
                 log=print):
@@ -825,6 +866,11 @@ def main(argv=None):
     ap.add_argument("--type-veto", action="store_true",
                     help="never merge a narrow- with a broad-spiking unit (off by default: on g6 fiber_session "
                          "fragments the per-fragment width is too noisy and the veto cost 0.11 ARI)")
+    ap.add_argument("--refrac-ms", type=float, default=1.5,
+                    help="refractory cannot-link for --merge: two units whose trains coincide within (0.6, "
+                         "REFRAC] ms at chance are two neurons (power-aware; 0 = off; default 1.5)")
+    ap.add_argument("--refrac-min-exp", type=float, default=3.0,
+                    help="coincidences that must be expected before the refractory test may veto (default 3)")
     ap.add_argument("--merge-tag", default=None,
                     help="stage tag of the merged .clu (default: <clu-stage>.envmerge)")
     ap.add_argument("--eap", action="store_true",
@@ -878,7 +924,11 @@ def main(argv=None):
         types = {u: e.meta["type"] for u, e in envs.items() if e.meta.get("type")}
         new, rows = merge_units(view, rel0, lab, envs, noise, theta=a.merge, pre=a.pre, post=a.post,
                                 margin=a.margin, transform=transform, sr=sr, infl_thr=a.infl_thr,
-                                cannot_link=cell_type_conflict(types) if a.type_veto else None, log=log)
+                                cannot_link=any_cannot_link(
+                                    cell_type_conflict(types) if a.type_veto else None,
+                                    refractory_cannot_link(rel0, lab, sorted(envs), sr=sr, refrac_ms=a.refrac_ms,
+                                                           min_exp=a.refrac_min_exp)[0] if a.refrac_ms > 0 else None),
+                                log=log)
         out = np.where(inwin, new, clu)
         tag = a.merge_tag or (f"{a.clu_stage}.envmerge" if a.clu_stage else "envmerge")
         p_clu = nio.write_clu(a.base, a.elec, out, variant=a.clu_method, tag=tag)
