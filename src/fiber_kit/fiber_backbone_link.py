@@ -216,6 +216,8 @@ def main():
             print(f"[backbone-link] --drift ignored: needs standard .spk (drift basis is raw), got {a.spk_variant}")
         else:
             fibp = a.drift_fibers or nio.fibers_path(base, a.clu_method, elec)
+            if not os.path.exists(fibp) and os.path.exists(fibp + ".npz"):
+                fibp += ".npz"          # written by fiber-xcorr-merge before 0.38.5 (np.savez appended it)
             try:
                 dz = np.load(fibp)
                 pairs = dz["drift_anchor_pairs"] if "drift_anchor_pairs" in dz.files else np.zeros((0, 3), int)

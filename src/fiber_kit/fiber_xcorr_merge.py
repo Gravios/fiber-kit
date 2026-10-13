@@ -311,10 +311,14 @@ def main():
                 pos = {k: (v - mu) @ basis.T for k, v in rt.items()}
                 R, t, resid, na = flc.fit_drift_transforms(pos, anchor_links, K)
                 dpath = nio.fibers_path(base, a.clu_method, elec, stage=a.out_tag)
-                np.savez(dpath, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
-                         drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
-                         drift_resid=resid.astype(np.float32), drift_nanchor=na,
-                         meta_drift_k=np.array(K), meta_chunk_min=np.array(float(a.drift_chunk_min)))
+                # Through a file handle, as fiber-session writes its .fibers: np.savez(<path>) appends
+                # '.npz', so the table landed at <path>.npz while fiber-pipeline hands backbone-link
+                # the canonical <path> -- and the drift step was silently skipped.
+                with open(dpath, "wb") as _fh:
+                    np.savez(_fh, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
+                             drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
+                             drift_resid=resid.astype(np.float32), drift_nanchor=na,
+                             meta_drift_k=np.array(K), meta_chunk_min=np.array(float(a.drift_chunk_min)))
                 _med = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
                 print(f"{_LP} · drift fit from {npair} cross-chunk merges: {int(np.sum(na > 0))}/{max(nP, 1)} "
                       f"chunk-pairs fit, median residual {_med:.2f}, anchors/pair median "

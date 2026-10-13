@@ -4,6 +4,13 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.5] — xcorr-merge's drift table lands where backbone-link looks for it
+- fiber-xcorr-merge wrote its drift transform with `np.savez(<path>)`, which appends `.npz`, while
+  fiber-pipeline passes backbone-link the canonical `<base>.fibers.<method>.<group>.<stage>`: the
+  `drift: exp_xcm` step printed "--drift ignored: ... not found" and ran without drift.  The table is
+  now written through a file handle (as fiber-session writes its .fibers), and backbone-link also
+  accepts a `<path>.npz` left by earlier runs.  Verified on the g6 run: drift ON from the canonical path.
+
 ## [0.38.4] — fiber-anchor-link holds the reserve bins (0, 1) out of the link
 - The quarantine re-entered the merge at the linker.  fiber-consensus (quarantine-only) parks its
   quarantine in cluster 1 and intrachunk keeps it there, but fiber-anchor-link took every `clu > 0`
