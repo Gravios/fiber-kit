@@ -61,18 +61,48 @@ except ImportError:
 
 
 # ── probe geometry ───────────────────────────────────────────────────────────
-def load_geometry(probe_paths, channels):
+def flip_probes_from_env():
+    """Probe indices whose shanks are mirrored top-to-bottom, from FIBER_PROBE_FLIP_Y ("0", "0,2", "")."""
+    import os
+    v = os.environ.get("FIBER_PROBE_FLIP_Y", "").strip()
+    return {int(t) for t in v.replace(";", ",").split(",") if t.strip()}
+
+
+def mirror_shanks_y(g, per_shank):
+    """Mirror every shank of a (nsite, 2) geometry top-to-bottom: y -> ymin + ymax - y within each
+    block of `per_shank` consecutive sites (the .probe convention lists sites shank by shank).  x is
+    unchanged, so each site keeps its lateral stagger and only its depth is inverted -- the fix for a
+    probe file whose octrode site order runs base-to-tip instead of tip-to-base."""
+    g = np.asarray(g, float).copy()
+    k = int(per_shank)
+    if k <= 0 or len(g) % k:
+        raise SystemExit(f"[localize] cannot mirror: {len(g)} sites is not a multiple of {k} per shank")
+    for s in range(0, len(g), k):
+        y = g[s:s + k, 1]
+        g[s:s + k, 1] = y.min() + y.max() - y
+    return g
+
+
+def load_geometry(probe_paths, channels, flip_y=None):
     """Read one or more NeuroSuite .probe YAML files, concatenate their
     sites.geometry [x,y] lists in order into a global table, and index it by the
-    (global) channel ids of a spike group.  Returns xy (nchan, 2) in µm."""
+    (global) channel ids of a spike group.  Returns xy (nchan, 2) in µm.
+
+    flip_y: probe indices (position in `probe_paths`) whose shanks are mirrored top-to-bottom
+    (mirror_shanks_y) -- for a probe file with the site order reversed.  None reads
+    FIBER_PROBE_FLIP_Y (comma-separated indices, e.g. "0"), so every consumer of this reader --
+    localisation, linking, the forward model -- applies the same correction."""
+    flips = flip_probes_from_env() if flip_y is None else {int(i) for i in flip_y}
     geo = []
-    for p in (probe_paths if isinstance(probe_paths, (list, tuple)) else [probe_paths]):
+    for k, p in enumerate(probe_paths if isinstance(probe_paths, (list, tuple)) else [probe_paths]):
         with open(p) as fh:
             doc = yaml.safe_load(fh)
         sites = (doc.get("probeFile", {}) or {}).get("sites", {}) or {}
         g = sites.get("geometry")
         if g is None:
             raise SystemExit(f"[localize] {p}: no probeFile.sites.geometry")
+        if k in flips:
+            g = mirror_shanks_y(g, sites.get("count_per_shank") or len(g)).tolist()
         geo.extend(g)
     geo = np.asarray(geo, float)
     ch = np.asarray(channels, int)

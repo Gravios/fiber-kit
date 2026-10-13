@@ -1986,3 +1986,35 @@ deviate at all. These are inputs to a decision, not one.
   cylinder tree has none of the branch-point clutter that shapes a real
   dendrite's extracellular signature; never report an archetype as a morphology
   result.
+
+
+## Probe orientation from real reconstructions (g6, 2026-10)
+
+The Buzsaki64L `.probe.0.probe` lists each octrode's sites in the reverse vertical order.
+`fiber_localize.load_geometry(..., flip_y=[0])` -- or `FIBER_PROBE_FLIP_Y=0` for every consumer,
+including `morpho_eap.group_geometry` -- mirrors each shank top to bottom (x and so the stagger are
+kept).  The recording can test it: `orient()` puts the somato-apical axis along +y, the depth axis,
+so with the right geometry a CA1 pyramidal reconstruction should fit in that canonical orientation.
+
+71 Mellor-lab rat dorsal CA1 pyramidal reconstructions (no axon in the files: a 25 um AIS + 200 um
+axon stub is attached at the soma, pointing away from the apical tree) and 84 CA1 interneurons with
+axons (basket, CCK, OLM, bistratified, axo-axonic).  Position tables on group 6 (channels 40-47),
+cell axis along +y or -y in FILE coordinates, fitted to the raw `.spk.standard` profiles of the
+exp_final cells:
+
+| units | pyramidal reconstructions, axis +y | axis -y | units preferring -y |
+|---|---|---|---|
+| broad, bursting (n = 10) | 0.123 | **0.079** | 8 / 10 |
+| broad, non-bursting (n = 10) | 0.124 | **0.068** | 10 / 10 |
+
+In file coordinates the apical tree points to -y, i.e. towards channel 40; mirrored, it points to +y
+-- the model's canonical orientation, with the apical (radiatum) side the DEEPER side.  The data
+agree with the reversal.  Two cheaper tests could not tell the orientations apart: the point-source
+fit (monopole + axial dipole is symmetric under a mirror) and the archetype cable cells (50/50).
+
+**Footprint class is not a type label.**  The best-fitting class for most units, bursting
+pyramidal cells included, is a basket or CCK reconstruction, and the pyramidal reconstructions fit
+worse in absolute RMSE (median 0.068-0.079 at best).  The narrow units do pick basket tables (21, 22, 23), but
+that is shape agreeing with width, not independent evidence -- as the matched-amplitude overlap
+above predicts.  Simulation notes: five of six bistratified and two of six OLM reconstructions did not
+spike under the somatic pulse with the Bezaire presets.

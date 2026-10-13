@@ -279,17 +279,17 @@ def stderiv(x, sets, drop_last=False):
     return out[..., :-1] if drop_last else out
 
 
-def group_geometry(probe_path, channels):
+def group_geometry(probe_path, channels, flip_y=None):
     """Site xy (nchan, 2) in um for a spike group, straight from a .probe file.
 
     Also returns nothing else on purpose: the caller supplies the group's global
     channel ids from the session yaml, because inferring them from index
     arithmetic is the specific mistake the probe files exist to prevent.
+    Reads through fiber_localize.load_geometry, so the FIBER_PROBE_FLIP_Y / flip_y
+    top-to-bottom correction applies here exactly as it does to the recorded side.
     """
-    import yaml
-    g = yaml.safe_load(open(probe_path))["probeFile"]["sites"]["geometry"]
-    g = np.asarray(g, float)
-    ch = np.asarray(channels, int)
-    if ch.max() >= len(g):
-        raise ValueError(f"channel {ch.max()} beyond probe with {len(g)} sites")
-    return g[ch]
+    try:
+        from . import fiber_localize as floc
+    except ImportError:
+        import fiber_localize as floc
+    return floc.load_geometry(probe_path, channels, flip_y=flip_y)

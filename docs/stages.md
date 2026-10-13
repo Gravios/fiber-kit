@@ -1098,7 +1098,7 @@ Positional: `session`, `group`
 | `--max-split` | `6` | max sub-clusters a single flagged cluster may be split into (default 6) |
 ### `fiber-envelope`
 
-Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table, the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. See docs/methods.md, "Collision-robust envelope".
+Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table (with the cell layer: amplitude-dependent shape, adaptation law, spike width / burst / rate), the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. `--merge THETA` also merges units on envelope d' with merge inflation as a cannot-link and writes a `.envmerge` clu stage plus the per-pair evidence. See docs/methods.md, "Collision-robust envelope" and "Cell layer".
 
 Positional: `base`, `elec`
 
@@ -1121,6 +1121,11 @@ Positional: `base`, `elec`
 | `--max-per` | `3000` | spikes per unit used to FIT the envelope (all spikes are scored) |
 | `--q` | `0.99` | null quantile of the bump threshold (off-spike noise windows) |
 | `--out-tag` | `""` | tag for the .env/.nco tables |
+| `--sr` | — | sampling rate (default: session yaml, else 32552) |
+| `--merge` | — | also merge units: average linkage on envelope d' cut at THETA (7 on g6), with merge inflation as a cannot-link; writes a new .clu stage + .envmerge table |
+| `--infl-thr` | `0.1` | merge inflation above which a pair cannot be merged (default 0.1) |
+| `--type-veto` | flag (off) | never merge a narrow- with a broad-spiking unit (off by default: on g6 fiber_session fragments the per-fragment width is too noisy and the veto cost 0.11 ARI) |
+| `--merge-tag` | — | stage tag of the merged .clu (default: <clu-stage>.envmerge) |
 | `--eap` | flag (off) | write explained near collisions as .eap membership on the analysed --clu-stage (Klusters' collision ring) |
 ### `fiber-calibrate`
 

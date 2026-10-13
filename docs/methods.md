@@ -296,3 +296,70 @@ stages on the same spikes (ARI / purity / completeness, GM = reference cell > 1)
   the bump test flags only 5-26 % of the foreign spikes (most in stderiv_C5) -- the difference is
   spread over the template, not localised.  Detecting it needs a direction (bimodality along the
   template-difference / residual principal axis), not a variance.
+
+## Cell layer, cell-aware merging and cell type (`fiber_envelope`, 0.34)
+
+### The cell layer: `fit_envelope(..., times=...)`
+
+With spike times the envelope also fits what ONE cell does from spike to spike, on the clean spikes:
+
+    x_i = a_i T + b_i T' + (a_i - <a>) S + (t_i - <t>) D + noise
+
+* `S` (`Envelope.shape_amp`, `shape_gain()` = |S|/|T|) -- shape change per unit of amplitude: a
+  burst's later, smaller spikes are also differently shaped (the fiber premise; docs/morphology.md
+  puts 77 % of physiological modulation along such a curve).
+* `D` (`Envelope.drift`) -- template change per second within the window.
+* `adapt` -- the spike-frequency-adaptation law of `fiber_adapt` fitted to the unit's own train:
+  a_i ~ b0 + b1 EWMA_tau(prior spikes), best tau by R^2 (`adaptation_law`).
+
+`amp_model()` then becomes noise + the spike-to-spike variance of that whole prediction, so
+`channel_ratio()` measures spread beyond what one cell does.  On g6 exp_final cells the single-cell
+ratio drops from 1.28 to 1.23 (stderiv_C5, session .fil), 1.27 to 1.20 (stderiv_C5, Butterworth) and
+1.48 to 1.33 (standard); most for bursting cells (stderiv_C5, session .fil: cell 28 2.12 -> 1.45,
+cell 12 1.46 -> 1.27).
+The clearly adapting cells fit tau 0.25-0.47 s (fiber_adapt's prior: 270-620 ms) with R^2
+0.24-0.78; the narrow-spiking interneurons fit R^2 ~0.
+
+### `merge_units(...)` / `fiber-envelope --merge THETA`
+
+Average linkage on envelope d' (`separation`), cut at THETA, with **merge inflation** as a
+cannot-link: for each unit's 8 nearest neighbours (d' < 15) the union is fitted with the cell layer,
+and a pair whose union's amplitude-scaled spread exceeds the larger part's by more than 0.1 can never
+end up in one cluster.  Writes `<base>.clu.<method>.<elec>.<stage>.envmerge` and the per-pair evidence
+table `<base>.envmerge.<elec>[.<tag>]` (d', inflation, adaptation coupling, shape gain, veto reason).
+
+fiber_session of the 36-48 min chunk, GT2 ARI / purity / completeness:
+
+| | d' only | d' + inflation cannot-link |
+|---|---|---|
+| stderiv_C5, Butterworth 36-47, theta 7 | 0.699 / 0.836 / 0.769 | 0.699 / 0.836 / 0.770 |
+| same, theta 8 | 0.660 / 0.830 / 0.798 | **0.698** / 0.832 / 0.774 |
+| same, theta 10 | 0.658 / 0.808 / 0.833 | **0.682** / 0.815 / 0.798 |
+| stderiv_C5, session .fil 36-41, theta 8 | 0.572 / 0.822 / 0.750 | **0.633** / 0.828 / 0.749 |
+| same, theta 10 | 0.588 / 0.813 / 0.791 | **0.633** / 0.818 / 0.770 |
+
+The cannot-link does not raise the peak; it makes the result insensitive to the threshold (the
+plateau extends from 6-7 to 6-10).  It is precise: 31 of the 32 pairs it vetoed (Butterworth run)
+were different GT cells.
+
+**Tested and not adopted** (each measured on the same chunk; all would have been plausible):
+
+| evidence | precision as a veto | effect on ARI |
+|---|---|---|
+| adaptation coupling (one law over the merged train loses > 0.3 R^2) | 81 % | -0.01 |
+| point-source position > 3x split-half floor (corrected geometry) | 57 % | -0.02 to -0.34 |
+| narrow vs broad spike width (0.35 ms) per fragment | -- | -0.11 |
+| split on bimodality of the cell-model residual (11 splits) | -- | -0.017 (purity +0.004) |
+
+The adaptation coupling and type features stay in the outputs as evidence (`.envmerge`, `.env`).
+
+### Cell type: `type_features`, `cell_type_conflict`
+
+Per unit: trough-to-peak width of the UNTRANSFORMED mean waveform, burst index (ISI < 10 ms), rate;
+written to `.env`.  On g6, cells 21, 23 and 26 are narrow (0.15-0.25 ms, 21 at 10.9 Hz) and do not
+adapt; cells 3, 10, 12, 15, 18, 28, 29 are broad, bursting and adapting.  Type matters for absolute
+thresholds -- the cell-model ratio of the narrow cells is 1.33-1.55 against a median 1.18 for the
+broad ones, so a split threshold must be per type -- and the merge's remaining errors concentrate in the narrow
+and the broad non-bursting cells (22, 23, 25, 30, 33, 19 end up in groups of < 0.35 purity; the
+bursting pyramidal cells in groups of 0.90-1.00).  As a cannot-link on fiber_session FRAGMENTS the
+width is too noisy (`--type-veto`, off by default).

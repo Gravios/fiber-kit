@@ -48,9 +48,11 @@ from dataclasses import dataclass, field
 import numpy as np
 
 try:
+    from . import fiber_adapt as fad
     from . import fiber_stderiv as fst
     from . import neuro_io as nio
 except ImportError:                       # script use
+    import fiber_adapt as fad
     import fiber_stderiv as fst
     import neuro_io as nio
 
@@ -214,13 +216,31 @@ class Envelope:
     var_clean: np.ndarray = None      # (L, C) PLAIN variance of the aligned clean spikes
     var_all: np.ndarray = None        # (L, C) PLAIN variance of ALL aligned spikes
     var_kept: np.ndarray = None       # (L, C) ... of all spikes except EXPLAINED near collisions (run())
+    # ── cell layer (fit_envelope(times=...)) ──
+    shape_amp: np.ndarray = None      # (L, C) S: shape change per unit of amplitude scale (beyond scaling)
+    drift: np.ndarray = None          # (L, C) D: template change per second within the window
+    var_pred: np.ndarray = None       # (L, C) variance of the cell model's deterministic part (clean spikes)
+    adapt: dict = None                # adaptation law a ~ b0 + b1*EWMA(tau): tau, b0, b1, r2, corr
     meta: dict = field(default_factory=dict)
 
     def amp_model(self):
-        """Amplitude-scaled expected variance (L, C): noise_c + var_a T^2 + var_b T'^2, with the SAME
-        var_a / var_b on every channel.  A closer unit (larger T) gets a proportionally wider band, a
-        distant one is noise-dominated -- the envelope a single source can produce on each channel."""
+        """Amplitude-scaled expected variance (L, C) of ONE source, with the same per-spike factors on
+        every channel, so a closer unit (larger T) gets a proportionally wider band and a distant one
+        stays noise-dominated.  Without the cell layer: noise_c + var_a T^2 + var_b T'^2.  With it
+        (fit_envelope(times=...)): noise_c + the spike-to-spike variance of
+        a_i T + b_i T' + (a_i - <a>) S + (t_i - <t>) D -- amplitude-dependent shape (a burst's later,
+        smaller spikes are also differently SHAPED) and within-window drift are then part of what one
+        cell is allowed."""
+        if self.var_pred is not None:
+            return self.var_noise[None, :] + self.var_pred
         return self.var_noise[None, :] + self.var_a * self.template ** 2 + self.var_b * self.dtemplate ** 2
+
+    def shape_gain(self):
+        """|S| / |T|: how strongly the shape (not just the size) changes with amplitude.  None without
+        the cell layer."""
+        if self.shape_amp is None:
+            return None
+        return float(np.linalg.norm(self.shape_amp) / max(np.linalg.norm(self.template), 1e-12))
 
     def channel_ratio(self, which="kept"):
         """Per-channel observed / amplitude-predicted variance, energy-weighted over the window:
@@ -256,8 +276,35 @@ def null_threshold(noise_windows, T, dT, var_noise, width=8, q=0.99):
     return float(np.quantile(s, q)), s
 
 
+ADAPT_TAUS = np.logspace(np.log10(0.02), np.log10(2.0), 16)
+
+
+def adaptation_law(times, amp, keep=None, taus=ADAPT_TAUS):
+    """Fit the spike-frequency-adaptation law of fiber_adapt to a unit's own train: amplitude
+    a_i ~ b0 + b1 * EWMA_tau(prior spikes), best tau by R^2 over `taus`.  times in seconds.
+    Returns dict(tau, b0, b1, r2, corr) (r2 = 0 when no tau helps)."""
+    t = np.asarray(times, float); y = np.asarray(amp, float)
+    keep = np.ones(t.size, bool) if keep is None else np.asarray(keep, bool)
+    o = np.argsort(t, kind="stable")
+    A = fad.ewma_multi(t[o], taus)
+    best = dict(tau=float("nan"), b0=float(y[keep].mean()) if keep.any() else 0.0, b1=0.0, r2=0.0, corr=0.0)
+    yk = y[o][keep[o]]; tot = ((yk - yk.mean()) ** 2).sum()
+    if yk.size < 10 or tot <= 0:
+        return best
+    for i, tau in enumerate(taus):
+        s = A[i][keep[o]]
+        if s.std() < 1e-9:
+            continue
+        M = np.c_[np.ones(s.size), s]; bb = np.linalg.lstsq(M, yk, rcond=None)[0]
+        r2 = 1 - ((yk - M @ bb) ** 2).sum() / tot
+        if r2 > best["r2"]:
+            best = dict(tau=float(tau), b0=float(bb[0]), b1=float(bb[1]), r2=float(r2),
+                        corr=float(np.corrcoef(s, yk)[0, 1]))
+    return best
+
+
 def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width=8, q=0.99,
-                 iters=3, k_mad=4.0, ext=None):
+                 iters=3, k_mad=4.0, ext=None, times=None):
     """Robust envelope of ONE unit.
 
     X           (n, Lx, C) snippets extracted with margin around the core window.
@@ -267,6 +314,10 @@ def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width
                 None -> median+k*MAD rule.
     ext         slice of the extended window (relative to X) for the extended template (partner
                 search); must leave >= maxlag on both sides.  None -> no extended template.
+    times       (n,) spike times in seconds -> also fit the CELL layer on the clean spikes:
+                amplitude-dependent shape S, within-window drift D (both unit-level (L, C)
+                directions regressed from the residual), and the adaptation law of the unit's train.
+                amp_model() / channel_ratio() then measure spread beyond what one cell does.
     """
     X = np.asarray(X, np.float64)
     n, Lx, C = X.shape
@@ -314,10 +365,23 @@ def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width
     Text = None
     if ext is not None:
         Text = np.median(take_lagged(X, lag, ext)[keep], 0)
+    Sdir = Ddir = var_pred = adapt = None
+    if times is not None:
+        t = np.asarray(times, float)
+        P = a[:, None, None] * T[None] + b[:, None, None] * dT[None]
+        da = a - a[keep].mean()
+        Sdir = (da[keep, None, None] * (Xc - P)[keep]).sum(0) / max(float((da[keep] ** 2).sum()), 1e-12)
+        P = P + da[:, None, None] * Sdir[None]
+        dt = t - t[keep].mean()
+        Ddir = (dt[keep, None, None] * (Xc - P)[keep]).sum(0) / max(float((dt[keep] ** 2).sum()), 1e-12)
+        P = P + dt[:, None, None] * Ddir[None]
+        var_pred = P[keep].var(0)
+        adapt = adaptation_law(t, a, keep)
     return Envelope(template=T, dtemplate=dT, var_noise=var_noise, var_a=var_a, var_b=var_b,
                     excess=excess, sigma=sigma, sigma_naive=naive, n=n, n_clean=int(keep.sum()),
                     flagged=~keep, score=score, bump_pos=pos, a=a, b=b, lag=lag, threshold=thr,
-                    template_ext=Text, var_clean=var_clean, var_all=var_all)
+                    template_ext=Text, var_clean=var_clean, var_all=var_all, shape_amp=Sdir,
+                    drift=Ddir, var_pred=var_pred, adapt=adapt)
 
 
 def robust_dispersion_profile(waves, var_noise=None, noise_windows=None, maxlag=3, **kw):
@@ -448,9 +512,10 @@ def separation(ea, eb, maxlag=3, sigma="robust"):
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_n=50,
-        max_per=3000, width=8, q=0.99, seed=0, partners=True, log=print):
+        max_per=3000, width=8, q=0.99, seed=0, partners=True, sr=None, log=print):
     """Envelopes for every unit with >= min_n spikes + partner search for its flagged spikes.
     res: spike times relative to `trace` start; clu: labels (<= 1 = noise, skipped).
+    sr: sampling rate -> the cell layer (amplitude-dependent shape, drift, adaptation law) is fit too.
     Returns ({unit: Envelope}, per-spike table dict, noise)."""
     lo, hi = -pre - margin - maxlag, post + margin + maxlag
     core = slice(margin + maxlag, margin + maxlag + pre + post)
@@ -470,7 +535,8 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
             continue
         fit_idx = np.sort(rng.choice(idx, max_per, replace=False)) if idx.size > max_per else idx
         X = extract(trace, res[fit_idx], lo, hi, transform)
-        env = fit_envelope(X, core, noise.var, noise.windows, maxlag=maxlag, width=width, q=q, ext=ext)
+        env = fit_envelope(X, core, noise.var, noise.windows, maxlag=maxlag, width=width, q=q, ext=ext,
+                           times=None if sr is None else res[fit_idx] / float(sr))
         if fit_idx.size != idx.size:            # score every spike against the converged envelope
             X = extract(trace, res[idx], lo, hi, transform)
             w = 1.0 / env.var_noise
@@ -480,6 +546,9 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
             env.lag, env.a, env.b, env.score, env.bump_pos = lag, a, b, sc, pos
             env.flagged = sc > env.threshold
         env.meta["idx"] = idx
+        if sr is not None:
+            raw = extract(trace, res[idx[:: max(1, idx.size // 500)]], -pre, post, None).mean(0)
+            env.meta["type"] = type_features(raw, res[idx] / float(sr), sr)
         envs[int(u)] = env
         rows[int(u)] = X if partners else None
         log(f"unit {int(u):4d}: n={idx.size:6d} flagged={env.flagged.mean():.3f} "
@@ -517,6 +586,164 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
     return envs, {k: v[o] for k, v in table.items()}, noise
 
 
+# ── 8. cell type ───────────────────────────────────────────────────────────────
+
+def type_features(raw_template, times, sr=32552.0, duration=None):
+    """Cell-type evidence for one unit: trough-to-peak width (ms) of the UNTRANSFORMED (filtered) mean
+    waveform on its largest channel, burst index (fraction of ISIs < 10 ms) and rate (Hz).  On g6 the
+    narrow units (width < 0.35 ms) are the high-rate, non-adapting interneurons; the broad, bursting,
+    adapting units are pyramidal cells.  Width needs the raw window -- the stderiv transform's temporal
+    difference shifts and narrows the extremum (docs/morphology.md, "Peak indices")."""
+    W = np.asarray(raw_template, float)
+    pc = int(np.argmax(np.ptp(W, 0))); x = W[:, pc]
+    tr = int(np.argmin(x)); width = int(np.argmax(x[tr:])) / float(sr) * 1e3
+    t = np.sort(np.asarray(times, float))
+    isi = np.diff(t)
+    dur = float(duration) if duration else max(float(t[-1] - t[0]), 1e-9) if t.size > 1 else 1.0
+    return dict(width_ms=float(width), burst=float((isi < 0.010).mean()) if isi.size else 0.0,
+                rate_hz=float(t.size / dur), narrow=bool(width < 0.35))
+
+
+def cell_type_conflict(types, narrow_ms=0.35):
+    """cannot_link for merge_units: a narrow-spiking unit never merges with a broad-spiking one."""
+    def f(ua, ub):
+        a, b = types.get(ua), types.get(ub)
+        if not a or not b:
+            return None
+        if (a["width_ms"] < narrow_ms) != (b["width_ms"] < narrow_ms):
+            return f"width {a['width_ms']:.2f}/{b['width_ms']:.2f} ms"
+        return None
+    return f
+
+
+# ── 9. cell-aware merging ──────────────────────────────────────────────────────
+
+def adaptation_coupling(tA, aA, tB, aB, taus=ADAPT_TAUS):
+    """Does ONE adaptation law over the MERGED train explain both fragments' amplitudes as well as each
+    fragment's own law (with its own mean) does?  Amplitudes must be on a common scale (e.g. from a
+    fit of the union).  Fragments of one adapting cell split by energy band keep r2_joint close to
+    r2_sep -- the joint state predicts which spikes are the small, late-in-burst ones; two cells do
+    not.  Returns (r2_joint, r2_sep)."""
+    t = np.r_[np.asarray(tA, float), np.asarray(tB, float)]
+    y = np.r_[np.asarray(aA, float), np.asarray(aB, float)]
+    src = np.r_[np.zeros(len(tA)), np.ones(len(tB))]
+    o = np.argsort(t, kind="stable"); t, y, src = t[o], y[o], src[o]
+    tot = float(((y - y.mean()) ** 2).sum())
+    if tot <= 0 or y.size < 10:
+        return 0.0, 0.0
+    best = 0.0
+    for s_ in fad.ewma_multi(t, taus):
+        M = np.c_[np.ones(s_.size), s_]; bb = np.linalg.lstsq(M, y, rcond=None)[0]
+        best = max(best, 1 - float(((y - M @ bb) ** 2).sum()) / tot)
+    rs = 0.0
+    for g in (0, 1):
+        m = src == g; tt, yy = t[m], y[m]
+        r_ = float(((yy - yy.mean()) ** 2).sum())
+        for s_ in fad.ewma_multi(tt, taus):
+            M = np.c_[np.ones(s_.size), s_]; bb = np.linalg.lstsq(M, yy, rcond=None)[0]
+            r_ = min(r_, float(((yy - M @ bb) ** 2).sum()))
+        rs += r_
+    return float(best), float(1 - rs / tot)
+
+
+def merge_evidence(XA, tA, XB, tB, core, noise, envA, envB, maxlag=4):
+    """Evidence that two units are one cell, beyond template separation:
+      inflation   amplitude-scaled spread of the UNION (cell model, clean spikes) minus the larger of
+                  the two parts' -- ~<= 0 for fragments of one cell (a fragment is a compact piece of
+                  the cell's spread), > 0 when a second source is added.  On g6 fiber_session pairs, a
+                  0.1 cut vetoed 32 pairs of which 31 were different GT cells.
+      adapt_joint / adapt_sep   adaptation_coupling on the union's common amplitude scale."""
+    U = fit_envelope(np.concatenate([XA, XB]), core, noise.var, noise.windows, maxlag=maxlag,
+                     times=np.r_[tA, tB])
+    infl = float(U.channel_ratio("clean").max()
+                 - max(envA.channel_ratio("clean").max(), envB.channel_ratio("clean").max()))
+    na = len(XA)
+    aj, asep = adaptation_coupling(tA, U.a[:na], tB, U.a[na:])
+    return dict(inflation=infl, adapt_joint=aj, adapt_sep=asep, shape_gain=U.shape_gain())
+
+
+def merge_units(trace, res, clu, envs, noise, *, theta=7.0, pre=21, post=21, margin=32, maxlag=4,
+                transform=None, sr=32552.0, knn=8, dmax=15.0, infl_thr=0.1, cannot_link=None,
+                log=print):
+    """Average-linkage merge of units on envelope d' (`separation`), with merge inflation as a
+    cannot-link: pairs among each unit's `knn` nearest (d' < dmax) get merge_evidence, and a pair whose
+    union inflates the amplitude-scaled spread by more than `infl_thr` cannot end up in one cluster.
+    Every unit needs the cell layer (run(..., sr=...)).  cannot_link: optional callable (ua, ub) ->
+    reason string or None, applied to every pair (e.g. cell_type_conflict) -- a further cannot-link.
+    Returns (new labels, pair rows); a merged group takes the smallest member id, units not in `envs`
+    keep theirs."""
+    from scipy.cluster.hierarchy import fcluster, linkage
+    from scipy.spatial.distance import squareform
+    units = sorted(envs); n = len(units)
+    lo, hi = -pre - margin - maxlag, post + margin + maxlag
+    core = slice(margin + maxlag, margin + maxlag + pre + post)
+    D = np.zeros((n, n))
+    for i in range(n):
+        for j in range(i + 1, n):
+            D[i, j] = D[j, i] = separation(envs[units[i]], envs[units[j]])[0]
+    cand = sorted({tuple(sorted((i, int(j)))) for i in range(n) for j in np.argsort(D[i])[1:knn + 1]
+                   if D[i, j] < dmax}) if n > 1 else []
+    cache = {}
+    def data(u):
+        if u not in cache:
+            idx = envs[u].meta["idx"]
+            cache[u] = (extract(trace, res[idx], lo, hi, transform), res[idx] / float(sr))
+        return cache[u]
+    rows = []
+    for i, j in cand:
+        ua, ub = units[i], units[j]
+        (XA, tA), (XB, tB) = data(ua), data(ub)
+        ev = merge_evidence(XA, tA, XB, tB, core, noise, envs[ua], envs[ub], maxlag=maxlag)
+        veto = ev["inflation"] > infl_thr
+        rows.append(dict(ua=ua, ub=ub, dprime=float(D[i, j]), vetoed=bool(veto),
+                         reason=f"inflation {ev['inflation']:.3f}" if veto else "", **ev))
+        if veto:
+            D[i, j] = D[j, i] = D[i, j] + 1e6
+    if cannot_link is not None:
+        for i in range(n):
+            for j in range(i + 1, n):
+                why = cannot_link(units[i], units[j])
+                if why:
+                    D[i, j] = D[j, i] = D[i, j] + 1e6
+                    rows.append(dict(ua=units[i], ub=units[j], dprime=float(D[i, j] - 1e6), vetoed=True,
+                                     inflation=None, adapt_joint=None, adapt_sep=None, shape_gain=None,
+                                     reason=str(why)))
+    new = np.asarray(clu).copy()
+    if n > 1:
+        cl = fcluster(linkage(squareform(D, checks=False), "average"), float(theta), "distance")
+        groups = {}
+        for u, c in zip(units, cl):
+            groups.setdefault(int(c), []).append(u)
+        for mem in groups.values():
+            tgt = min(mem)
+            for u in mem:
+                new[np.asarray(clu) == u] = tgt
+        gid = {u: min(groups[int(c)]) for u, c in zip(units, cl)}
+        for r in rows:
+            r["merged"] = gid[r["ua"]] == gid[r["ub"]]
+        log(f"merge: {n} units -> {len(groups)} at d' < {theta}; {sum(r['vetoed'] for r in rows)} "
+            f"of {len(rows)} candidate pairs vetoed by inflation > {infl_thr}")
+    return new, rows
+
+
+def write_merge_table(path, rows):
+    cols = ("ua", "ub", "dprime", "inflation", "adapt_joint", "adapt_sep", "shape_gain", "vetoed", "merged",
+            "reason")
+    def fmt(c, v):
+        if v is None or v == "":
+            return "-"
+        if c == "reason":
+            return str(v)
+        if isinstance(v, (bool, np.bool_)) or c in ("ua", "ub"):
+            return str(int(v))
+        return f"{v:.4f}"
+    with open(path, "w") as f:
+        f.write("\t".join(cols) + "\n")
+        for r in rows:
+            f.write("\t".join(fmt(c, r.get(c)) for c in cols) + "\n")
+    return path
+
+
 def write_tables(base, elec, tag, envs, table, res_abs):
     """<base>.env.<elec>[.<tag>]  one row per unit;  <base>.nco.<elec>[.<tag>]  one row per scored
     spike (near-collision table).  Both TAB-separated with a header."""
@@ -525,12 +752,16 @@ def write_tables(base, elec, tag, envs, table, res_abs):
     with open(p_env, "w") as f:
         nc = next(iter(envs.values())).sigma.shape[1]
         f.write("unit\tn\tn_clean\tflag_frac\tthreshold\tsd_amp\tsd_deriv\tnaive_over_robust\t"
-                "chan_ratio_max\t" + "\t".join(f"excess_c{c}" for c in range(nc)) + "\t"
+                "chan_ratio_max\tshape_gain\tadapt_tau\tadapt_r2\twidth_ms\tburst\trate_hz\t" + "\t".join(f"excess_c{c}" for c in range(nc)) + "\t"
                 + "\t".join(f"chan_ratio_c{c}" for c in range(nc)) + "\n")
         for u, e in sorted(envs.items()):
             f.write(f"{u}\t{e.n}\t{e.n_clean}\t{e.flagged.mean():.4f}\t{e.threshold:.2f}\t"
                     f"{np.sqrt(e.var_a):.4f}\t{np.sqrt(e.var_b):.4f}\t"
                     f"{np.median(e.sigma_naive / e.sigma):.3f}\t{e.channel_ratio().max():.3f}\t"
+                    + (f"{e.shape_gain():.3f}\t{e.adapt['tau']:.3f}\t{e.adapt['r2']:.3f}\t" if e.adapt
+                       else "-\t-\t-\t")
+                    + (f"{e.meta['type']['width_ms']:.3f}\t{e.meta['type']['burst']:.3f}\t{e.meta['type']['rate_hz']:.2f}\t"
+                       if e.meta.get("type") else "-\t-\t-\t")
                     + "\t".join(f"{x:.3f}" for x in e.excess_ratio()) + "\t"
                     + "\t".join(f"{x:.3f}" for x in e.channel_ratio()) + "\n")
     p_nco = f"{base}.nco{sfx}"
@@ -578,6 +809,17 @@ def main(argv=None):
                     help="spikes per unit used to FIT the envelope (all spikes are scored)")
     ap.add_argument("--q", type=float, default=0.99, help="null quantile of the bump threshold (off-spike noise windows)")
     ap.add_argument("--out-tag", default="", help="tag for the .env/.nco tables")
+    ap.add_argument("--sr", type=float, default=None, help="sampling rate (default: session yaml, else 32552)")
+    ap.add_argument("--merge", type=float, default=None, metavar="THETA",
+                    help="also merge units: average linkage on envelope d' cut at THETA (7 on g6), with "
+                         "merge inflation as a cannot-link; writes a new .clu stage + .envmerge table")
+    ap.add_argument("--infl-thr", type=float, default=0.1,
+                    help="merge inflation above which a pair cannot be merged (default 0.1)")
+    ap.add_argument("--type-veto", action="store_true",
+                    help="never merge a narrow- with a broad-spiking unit (off by default: on g6 fiber_session "
+                         "fragments the per-fragment width is too noisy and the veto cost 0.11 ARI)")
+    ap.add_argument("--merge-tag", default=None,
+                    help="stage tag of the merged .clu (default: <clu-stage>.envmerge)")
     ap.add_argument("--eap", action="store_true",
                     help="write explained near collisions as .eap membership on the analysed --clu-stage "
                          "(Klusters' collision ring)")
@@ -615,14 +857,27 @@ def main(argv=None):
     rel = res_abs - a.signal_start
     inwin = (rel >= 0) & (rel < sig.shape[0])
     lab = np.where(inwin, clu, 0)
-    envs, table, _ = run(_View(), np.where(inwin, rel, 0), lab, pre=a.pre, post=a.post,
-                         margin=a.margin, transform=transform,
-                         min_n=a.min_n, max_per=a.max_per, q=a.q,
-                         log=lambda s: print(s, file=sys.stderr, flush=True))
+    sr = a.sr or info.get("sr") or 32552.0
+    view = _View(); rel0 = np.where(inwin, rel, 0)
+    log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
+    envs, table, noise = run(view, rel0, lab, pre=a.pre, post=a.post, margin=a.margin,
+                             transform=transform, min_n=a.min_n, max_per=a.max_per, q=a.q, sr=sr,
+                             log=log)
     p_env, p_nco = write_tables(a.base, a.elec, a.out_tag, envs, table, res_abs)
     print(f"wrote {p_env} and {p_nco}")
     nflag = int(table["flagged"].sum()); nexp = int(table["explained"].sum())
     print(f"{table['idx'].size} spikes scored, {nflag} flagged, {nexp} explained by a partner")
+    if a.merge is not None:
+        types = {u: e.meta["type"] for u, e in envs.items() if e.meta.get("type")}
+        new, rows = merge_units(view, rel0, lab, envs, noise, theta=a.merge, pre=a.pre, post=a.post,
+                                margin=a.margin, transform=transform, sr=sr, infl_thr=a.infl_thr,
+                                cannot_link=cell_type_conflict(types) if a.type_veto else None, log=log)
+        out = np.where(inwin, new, clu)
+        tag = a.merge_tag or (f"{a.clu_stage}.envmerge" if a.clu_stage else "envmerge")
+        p_clu = nio.write_clu(a.base, a.elec, out, variant=a.clu_method, tag=tag)
+        p_tab = write_merge_table(f"{a.base}.envmerge.{a.elec}" + (f".{a.out_tag}" if a.out_tag else ""), rows)
+        print(f"merged: {np.unique(clu[inwin & (clu > 1)]).size} -> {np.unique(out[inwin & (out > 1)]).size} units "
+              f"in the window; wrote {p_clu} and {p_tab}")
     if a.eap:
         try:
             from . import fiber_decollide as fd

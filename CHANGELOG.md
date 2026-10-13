@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.34.0] — fiber-envelope: cell layer, cell-aware merging, cell type; probe top-to-bottom fix
+- Cell layer (`fit_envelope(times=...)`, `run(sr=...)`): amplitude-dependent shape S, within-window
+  drift D and the fiber_adapt adaptation law per unit; `amp_model()` / `channel_ratio()` measure spread
+  beyond what one cell does (single-cell ratio 1.28 -> 1.23 in stderiv_C5; bursting cell 28 2.12 -> 1.45).
+- `merge_units` / `fiber-envelope --merge THETA`: average linkage on envelope d' with merge inflation
+  as a cannot-link (31/32 vetoed g6 pairs were different cells); keeps GT2 ARI at 0.68-0.70 for
+  THETA 7-10 where d' alone falls to 0.66.  Writes a `.envmerge` clu stage + per-pair evidence.
+- `type_features` (raw width, burst index, rate) in `.env`; `cell_type_conflict` behind
+  `--type-veto` (off: it cost 0.11 ARI on fragments).  Adaptation-coupling and position vetoes and a
+  residual-bimodality split were measured and NOT adopted (docs/methods.md).
+- `fiber_localize.load_geometry(flip_y=...)` / `FIBER_PROBE_FLIP_Y`: mirror each shank of a .probe
+  top to bottom; `morpho_eap.group_geometry` now reads through it.  On g6, 71 CA1 pyramidal
+  reconstructions fit the recorded footprints in their canonical orientation only with the mirrored
+  geometry (docs/morphology.md).
+- test_envelope: 12 checks (adapting synthetic cell, energy-band fragment re-joining, probe mirror,
+  type features, CLI merge).
+
 ## [0.33.0] — fiber-envelope: amplitude-scaled channel check
 - `Envelope.amp_model()`: noise_c + var_a T^2 + var_b T'^2 with one var_a / var_b for every channel,
   so the expected spread widens with each channel's amplitude (a near unit's big channels may vary
