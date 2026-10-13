@@ -256,6 +256,8 @@ def dispersion_profile(waves, sigma=DEFAULT_SMOOTH_SIGMA, aligned=False):
     otherwise read a wide band purely from small n).  Where the band is WIDE is where the
     cluster's spikes disagree: amplitude variability (bursting -> wide at the peak/trough),
     temporal jitter (-> wide at the edges), or -- on peripheral channels -- background noise.
+    The plain std is biased UP by near collisions (a second spike inside the window); the
+    collision-robust counterpart is fiber_envelope.fit_envelope / robust_dispersion_profile.
     Returns None for < 2 spikes."""
     w = np.asarray(waves, float)
     if len(w) < 2:

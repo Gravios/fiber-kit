@@ -42,6 +42,9 @@ cluster's spikes disagree: amplitude variability (bursting -> wide at the peak/t
 temporal jitter (-> wide at the edges), or -- on peripheral channels -- background noise.
 Returns None for < 2 spikes.
 
+The plain std is biased UP by near collisions (a second spike inside the window); see
+[Collision-robust envelope](#collision-robust-envelope-fiber_envelope) for the robust counterpart.
+
 ### `mutual_center_spikes(waveforms, ref_sample=16)`
 
 mutual_center applied to a (nspk, nsamp, nchan) stack: shift every spike by
@@ -151,3 +154,94 @@ refrac and censor are all in samples.  Returns the refractory_gate dict plus ov_
 
 *(no docstring)*
 
+## Collision-robust envelope (`fiber_envelope`)
+
+The per-unit band a single cell should stay inside, estimated so that near collisions -- a second
+spike from another unit inside the window but not coincident with the detected one -- cannot
+inflate it.  Stage: [`fiber-envelope`](stages.md).  Model, per unit, channel c and sample t:
+
+    sigma^2(t,c) = var_noise(c) + var_a * T(t,c)^2 + var_b * T'(t,c)^2 + excess(t,c)
+
+* `var_noise` -- from OFF-SPIKE windows of the continuous trace (no detection within the guard),
+  never from cluster members.  Undetected sub-threshold spikes stay in those windows: they are
+  the background every spike rides on, so they belong to the floor.
+* `var_a`, `var_b` -- robust (MAD) spreads of the per-spike least-squares fit
+  `x_i ~ a_i T + b_i T'` (amplitude scale and first-order jitter, `b = -a*delta`).
+* `excess` -- robust residual variance above the floor on the CLEAN spikes: the unit's own shape
+  variability.  `Envelope.excess_ratio()` (per channel, mean over the window) is ~1 for a
+  well-modelled unit.
+
+### `fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width=8, q=0.99, iters=3, k_mad=4.0, ext=None)`
+
+Iterates: integer-align each spike to the median (the extraction margin means no wrap-around) ->
+fit a, b -> residual -> BUMP score = max over a `width`-sample sliding window of the
+channel-summed residual energy normalised by noise + excess -> drop spikes above the threshold
+-> re-estimate.  The threshold is the `q` quantile of the same statistic on the off-spike noise
+windows (or a median + `k_mad`*MAD rule on the cluster's own scores when no windows are given).
+A near collision is time-LOCALISED; a merged second cell's difference is spread over the whole
+template, so it is (correctly) NOT flagged as a collision -- see Limits.
+
+### `find_partners(Xext, own, env, others, var_noise, *, core_in_ext, width=8, smax=None, min_shift=2, amp=(0.4, 2.5), gain_thr=0.0)`
+
+Explains a flagged spike's bump by another unit's EXTENDED template at every shift up to `smax`,
+zero-padded rather than rolled (np.roll would wrap the partner's tail back into the window).
+Accepted when the post-subtraction bump score is below the unit's threshold, the amplitude
+coefficient is within `amp`, and the explained energy beats `gain_thr` = `partner_gain_null`,
+the q-quantile of the best dictionary fit to pure noise (without it, low-amplitude templates
+"explain" any bump).  Explained partners map onto `.eap` membership (`eap_manifest` ->
+`fiber_decollide.write_eap_membership`), i.e. Klusters' amber collision ring.
+
+### `separation(ea, eb, maxlag=3, sigma="robust")`
+
+Merge-gate d' between two units: sqrt(sum D^2/s^2 - L*C*(1/na + 1/nb)), D the template difference
+at the best lag and s^2 the mean of the two envelopes.  The subtracted term is the expectation for
+two estimates of one template, so a same-cell pair sits near 0.  Also returns the worst single
+channel's d'.
+
+### Validation
+
+Synthetic (test/test_envelope.py; known templates, amplitude/jitter spreads, a 20-sample detector
+dead time and an unsorted background unit):
+* plain-std variance is 10-17 % high on average (95th percentile +38-67 %) and the robust envelope
+  is within 3-4.5 % of the truth (3 seeds x 3 units);
+* 68-73 % of near collisions with a sorted partner are flagged, with no flags on spikes that have
+  no second event;
+* explained partners carry the right identity and offset (+-1 sample) in 98-100 % of cases,
+  including the hidden ones inside the dead time.
+
+Real g6 (sirotaA-jg-000005-20120316, exp_final cells).  Four spaces: the session's own `.fil`
+(36-41 min -- the filter `.spk.standard` was cut from) as-is (`standard`) and through the session's
+order-5 sdiffPairs pattern (`stderiv_C5`, the fiber feature space; `space_transform` reproduces the
+on-disk `.spk.stderiv_C5_D34` exactly for the spikes fiber-realign did not sub-sample-shift); and a
+Butterworth 800 Hz trace of 36-47 min, all-pairs stderiv and `stderiv_C5`:
+
+| space | window | plain/robust variance, mean (worst unit) | 95th pct (median unit) | flagged | dead-time hole -> recovered (pair r) |
+|---|---|---|---|---|---|
+| standard | .fil 36-41 | 1.22 (1.49) | 1.77 | 4.2 % | 133 -> 99 (0.50) |
+| stderiv_C5 | .fil 36-41 | 1.05 (1.10) | 1.35 | 4.1 % | 133 -> 118 (0.79) |
+| stderiv (all-pairs) | BW 36-47 | 1.10 (1.21) | 1.38 | 4.3 % | 318 -> 289 (0.53) |
+| stderiv_C5 | BW 36-47 | 1.08 (1.17) | 1.35 | 4.3 % | 318 -> 294 (0.69) |
+
+* The bias is largest in the untransformed space and roughly a quarter of that in the stderiv
+  spaces: the spatial + temporal derivative suppresses a partner's slow rebound tail and shared
+  footprint (on the synthetic recording the plain std is not inflated at all in stderiv_C5).
+* The recovered HIDDEN partners (|shift| <= 20 samples, no .res row possible) fill the detector's
+  dead-time hole: the CCG flank (32-95 samples, per unordered cell pair) predicts the hole, and
+  74-92 % of it is recovered.  Attribution per pair is best in stderiv_C5 (r = 0.69-0.79); in the
+  untransformed space small partners under large spikes are missed and look-alikes get swapped.
+* Partners at |shift| > 21 that should have their own .res row: 19-33 % do, 0 % at the mirrored
+  shift (n = 11-30; small).
+
+### Limits
+
+* The bias does not change merge decisions on these fragments in any space: same vs different
+  fiber_session fragment pairs (GT2-labelled, >= 80 % pure, 5 nearest by cosine) give d' AUC
+  0.989-1.000 with the plain std and the same to the third decimal with the envelope; band_overlap
+  likewise.  Same-cell d' is ~3-5, different-cell ~19-25.  In the stderiv_C5 space the amplitude-
+  preserving cosine is already 0.993-1.000, so d' adds nothing there; it only helps in the
+  untransformed Butterworth space (look-alike pairs, cos >= 0.9: 0.994 vs 0.865).
+* A 10 % admixture of the most similar cell inside ONE cluster is not detected by either variance
+  statistic (the robust excess ignores a minority by construction; the plain std moves < 2 %), and
+  the bump test flags only 5-26 % of the foreign spikes (most in stderiv_C5) -- the difference is
+  spread over the template, not localised.  Detecting it needs a direction (bimodality along the
+  template-difference / residual principal axis), not a variance.

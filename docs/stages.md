@@ -1096,6 +1096,32 @@ Positional: `session`, `group`
 | `--out` | — | write the ranked table to this TSV path |
 | `--split` | flag (off) | write a new staged .clu (tag '<variant>.csplit') with each flagged two-cell cluster recursively QC-split into sub-ids on its bimodal axis |
 | `--max-split` | `6` | max sub-clusters a single flagged cluster may be split into (default 6) |
+### `fiber-envelope`
+
+Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table, the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. See docs/methods.md, "Collision-robust envelope".
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--signal` | — | continuous filtered int16 file to read windows from (e.g. BASE.fil) |
+| `--total-channels` | — | channels in the signal file (default: from the session yaml) |
+| `--channels` | — | group channels, e.g. 40-47 or 40,41,... (default: session yaml) |
+| `--signal-start` | `0` | absolute sample of the signal file's first row (for chunks) |
+| `--space` | — | waveform space: standard \| stderiv \| stderiv_C<order> (default: the --clu-method token without its _D suffix, i.e. the clu's own space) |
+| `--sdiff-pairs` | — | sdiffPairs pattern for a _C space (default: the session yaml's group entry) |
+| `--res-variant` | `stderiv` | variant of the spike-time .res |
+| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--pre` | `21` | core window samples before the detected trough |
+| `--post` | `21` | core window samples from the trough on |
+| `--margin` | `32` | extended-window margin for partners |
+| `--min-n` | `50` | skip units with fewer spikes |
+| `--max-per` | `3000` | spikes per unit used to FIT the envelope (all spikes are scored) |
+| `--q` | `0.99` | null quantile of the bump threshold (off-spike noise windows) |
+| `--out-tag` | `""` | tag for the .env/.nco tables |
+| `--eap` | flag (off) | write explained near collisions as .eap membership on the analysed --clu-stage (Klusters' collision ring) |
 ### `fiber-calibrate`
 
 Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`.

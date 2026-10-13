@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.32.0] — fiber-envelope: collision-robust variance envelope + near-collision partners
+The per-unit spread used by band_overlap / dispersion_profile is a plain std over cluster
+members, which near collisions (a second spike inside the window, often hidden by the detector's
+dead time) inflate.  New module + stage `fiber_envelope` / `fiber-envelope`:
+- noise floor from off-spike windows of the continuous trace; per-spike amplitude/jitter fit
+  against [T, T']; a time-localised bump score with an empirical noise null; iterative exclusion,
+  so the envelope sigma^2 = noise + var_a T^2 + var_b T'^2 + robust excess is not contaminated.
+- near-collision partners: extended templates matched at non-circular shifts, gated by the
+  bump test and a noise-calibrated gain threshold; written as `.nco` (per spike) and `.env`
+  (per unit) tables and, with `--eap`, as `.eap` membership on the analysed stage.
+- `separation()` -- envelope-normalised d' merge statistic with the estimation-noise term removed.
+- test/test_envelope.py: synthetic recording with known truth (5 checks incl. the CLI).
+- `space_transform()`: standard | stderiv | stderiv_C<order> (the session's sdiffPairs, read
+  from the yaml), via fiber_stderiv.apply_stderiv_transform -- the .spk's own math.  The CLI's
+  space defaults to the --clu-method token (stderiv_C5_D34 -> stderiv_C5).
+- Real g6, exp_final cells: the plain std overstates the variance by ~22 % in the standard space
+  and ~5-10 % in the stderiv spaces; recovered hidden partners fill 74-92 % of the CCG-predicted
+  dead-time hole.  The bias does not change fragment merge decisions in any space (d' AUC equal to
+  the third decimal), so no existing gate's default is switched.  Details: docs/methods.md.
+
 ## [0.31.0] — reduce global-basis features to the caller's dims before the CEM
 Fixes the dimensionality mismatch introduced in 0.29/0.30: the channel-major basis
 projection is nCh*nComp wide (14 at nFeatures=2, 28 at nFeatures=4), but it was fed
