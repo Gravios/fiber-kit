@@ -187,6 +187,34 @@ def test_refractory_cannot_link():
     assert both(4, 5) == "first" and fc.fe.any_cannot_link(None) is None
 
 
+def test_carry_quarantine_hierarchy():
+    """quarantine-only output: quarantined spikes -> noise through ONE new atom whose parent is 1, every
+    other atom / parent unchanged, and the triple rebuilds to the written .clu.  A hierarchy that
+    disagrees with its .clu is not carried (the .clu alone is written)."""
+    from fiber_kit.fiber_refiberize import FiberHierarchy
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "s")
+        child = np.array([1, 1, 2, 2, 3, 3, 3, 4, 0, 4])
+        parent = {1: 5, 2: 5, 3: 6, 4: 7}
+        FiberHierarchy(child, parent).save(b, 6, variant="stderiv_C5_D34", tag="fiber_session",
+                                           renumber=False, backup=False)
+        clu = np.array([5, 5, 5, 5, 6, 6, 6, 7, 0, 7])
+        q = np.zeros(10, bool); q[[1, 5]] = True
+        fc.carry_quarantine(b, 6, "stderiv_C5_D34", "fiber_session", "fs_clean", clu, q, log=lambda s: None)
+        h = FiberHierarchy.load(b, 6, variant="stderiv_C5_D34", tag="fs_clean")
+        out = nio.read_clu_file(nio.session_path(b, "clu", 6, variant="stderiv_C5_D34", tag="fs_clean"))[1]
+        assert list(out) == [5, 1, 5, 5, 6, 1, 6, 7, 0, 7]
+        assert np.array_equal(h.refiberize(renumber=False)[0], out)
+        assert h.child[1] == h.child[5] == 5 and h.parent[5] == 1
+        assert all(h.parent[c] == p for c, p in parent.items())
+        bad = clu.copy(); bad[0] = 9                          # .clu disagrees with its hierarchy
+        msgs = []
+        fc.carry_quarantine(b, 6, "stderiv_C5_D34", "fiber_session", "fs_bad", bad, q, log=msgs.append)
+        assert any("not" in m and "carried" in m for m in msgs), msgs
+        assert not os.path.exists(nio.session_path(b, "clc", 6, variant="stderiv_C5_D34", tag="fs_bad"))
+        assert os.path.exists(nio.session_path(b, "clu", 6, variant="stderiv_C5_D34", tag="fs_bad"))
+
+
 def test_knobs_env_over_global_yaml_over_default():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "fk.yaml")

@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.0] — fiber-consensus cleans before merging: quarantine-only mode, plan placement
+- `--quarantine-only` / `FK_CONSENSUS_QUARANTINE_ONLY`: kept spikes keep their input labels,
+  quarantined spikes go to noise (1); the `.clc/.clp` hierarchy is carried (one new atom -> parent 1;
+  the rebuilt `.clu` must match or the triple is not written); island / rim clusters go to a
+  `<out>_qreview` stage.  `carry_quarantine` + test.
+- fiber-kit-exp.yaml: plan runs fiber-consensus (quarantine-only) right after fiber-session's
+  realign, so intrachunk and the linkers merge cleaned fragments (`fiber_session -> fs_clean ->
+  exp_chunk ...`); `FK_REALIGN_VARIANT: stderiv_C5_D34` and `FK_CONSENSUS_RES_VARIANT: stderiv_S3`
+  for the reference session.
+- `.res`: fiber-consensus and fiber-envelope resolve the shared `.res` like every other stage unless
+  `--res-variant` / `FK_CONSENSUS_RES_VARIANT` pins one (was a hard-coded `stderiv`).
+- docs/pipeline.md: the plan order and the order of operations inside fiber-consensus.
+- Not yet measured: whether intrachunk / the linkers produce cleaner units from `fs_clean`.
+
 ## [0.37.4] — refractory cannot-link in the envelope / consensus merge
 - `fiber_envelope.refractory_cannot_link` (fiber_ccg.refractory_gate, power-aware, (0.6, 1.5] ms by
   default) and `any_cannot_link`; on by default in `fiber-consensus` (`FK_CONSENSUS_REFRAC_MS`,

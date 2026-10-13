@@ -1110,7 +1110,7 @@ Positional: `base`, `elec`
 | `--signal-start` | `0` | absolute sample of the signal file's first row (for chunks) |
 | `--space` | — | waveform space: standard \| stderiv \| stderiv_C<order> (default: the --clu-method token without its _D suffix, i.e. the clu's own space) |
 | `--sdiff-pairs` | — | sdiffPairs pattern for a _C space (default: the session yaml's group entry) |
-| `--res-variant` | `stderiv` | variant of the spike-time .res |
+| `--res-variant` | `""` | pin the .res variant (e.g. stderiv_S3); default: resolve the shared .res like the other stages |
 | `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
 | `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
@@ -1143,13 +1143,14 @@ Positional: `base`, `elec`
 | `--signal-start` | `0` | absolute sample of the signal's first row |
 | `--space` | — | waveform space for the envelope (default: --clu-method's) |
 | `--sdiff-pairs` | — | sdiffPairs for a _C space (default: session yaml) |
-| `--res-variant` | `stderiv` | variant of the spike-time .res |
 | `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
 | `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--fet-variant` | — | variant of the .fet to embed (default: --clu-method) |
 | `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
 | `--sr` | — |  |
+| `--quarantine-only` | `0` | 1 = clean, do not merge: kept spikes keep their input labels, quarantined spikes go to noise (1); the .clc/.clp hierarchy is carried; island / rim clusters are written to a <tag>_qreview stage for review. For use right after fiber-session, before intrachunk and the linkers [FK_CONSENSUS_QUARANTINE_ONLY; default 0] |
+| `--res-variant` | `""` | pin the .res variant (e.g. stderiv_S3); '' = resolve the shared .res the way fiber-session and the other stages do [FK_CONSENSUS_RES_VARIANT; default ] |
 | `--neighbourhood-theta` | `12.0` | envelope d' cut for automatic neighbourhoods (ignored with --units) [FK_CONSENSUS_NEIGHBOURHOOD_THETA; default 12.0] |
 | `--max-spikes` | `0` | re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap; a cap costs completeness: it splits confusable cells apart) [FK_CONSENSUS_MAX_SPIKES; default 0] |
 | `--runs` | `40` | resampled t-SNE runs [FK_CONSENSUS_RUNS; default 40] |

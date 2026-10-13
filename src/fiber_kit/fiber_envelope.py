@@ -846,7 +846,9 @@ def main(argv=None):
                          "--clu-method token without its _D suffix, i.e. the clu's own space)")
     ap.add_argument("--sdiff-pairs", default=None,
                     help="sdiffPairs pattern for a _C space (default: the session yaml's group entry)")
-    ap.add_argument("--res-variant", default="stderiv", help="variant of the spike-time .res")
+    ap.add_argument("--res-variant", default="",
+                    help="pin the .res variant (e.g. stderiv_S3); default: resolve the shared .res like the "
+                         "other stages")
     nio.add_clu_args(ap, method_default="stderiv_C5_D34", stage_default="",
                      stage_dest="clu_stage", stage_alias=None)
     ap.add_argument("--pre", type=int, default=21, help="core window samples before the detected trough")
@@ -905,7 +907,8 @@ def main(argv=None):
         shape = (sig.shape[0], len(chans))
         def __getitem__(self, rows):
             return np.asarray(sig[rows][:, chans], np.float32)
-    res_abs = nio.read_res_at(a.base, a.elec, variant=a.res_variant)
+    res_abs = (nio.read_res_at(a.base, a.elec, variant=a.res_variant) if a.res_variant
+               else nio.read_res(a.base, a.elec))
     _, clu = nio.resolve_clu(a, a.base, a.elec, n_spikes=res_abs.size, stage_dest="clu_stage")
     rel = res_abs - a.signal_start
     inwin = (rel >= 0) & (rel < sig.shape[0])

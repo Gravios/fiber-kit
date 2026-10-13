@@ -446,9 +446,54 @@ def write_quarantine_table(path, results, res_abs, clu, out_labels, cell_ids=Non
     return path
 
 
+def carry_quarantine(base, elec, method, in_stage, out_stage, clu, quarantined, log=print):
+    """Write the quarantine-only output: the input labels with the quarantined spikes moved to noise
+    (1), as a .clu/.clc/.clp triple when the input stage has one.  The quarantined spikes get one new
+    child (atom) id whose parent is 1, so every other atom and its parent are unchanged; the rebuilt
+    .clu must reproduce the intended labels exactly or the hierarchy is NOT written (the .clu alone
+    is, with a warning) -- a triple that loads but disagrees with its .clu is worse than none.
+    Returns the .clu path."""
+    try:
+        from .fiber_refiberize import FiberHierarchy
+    except ImportError:
+        from fiber_refiberize import FiberHierarchy
+    out = np.asarray(clu).copy(); q = np.asarray(quarantined, bool)
+    out[q] = 1
+    try:
+        h = FiberHierarchy.load(base, elec, variant=method, tag=in_stage)
+    except (FileNotFoundError, OSError):
+        log(f"no .clc/.clp at .{in_stage}: writing the .clu only")
+        return nio.write_clu(base, elec, out, variant=method, tag=out_stage)
+    child = h.child.copy()
+    if child.size != out.size:
+        log(f"WARNING .clc has {child.size} rows, .clu {out.size}: hierarchy not carried")
+        return nio.write_clu(base, elec, out, variant=method, tag=out_stage)
+    cq = int(child.max()) + 1
+    child[q] = cq
+    parent = dict(h.parent); parent[cq] = 1
+    h2 = FiberHierarchy(child, parent)
+    rebuilt, _, _ = h2.refiberize(renumber=False)
+    if not np.array_equal(rebuilt, out):
+        bad = int((rebuilt != out).sum())
+        log(f"WARNING the .clc/.clp of .{in_stage} disagrees with its .clu on {bad} spikes: hierarchy not "
+            f"carried, .clu only")
+        return nio.write_clu(base, elec, out, variant=method, tag=out_stage)
+    paths = h2.save(base, elec, variant=method, tag=out_stage, renumber=False, backup=False)
+    log(f"hierarchy carried: quarantined spikes -> child {cq} -> noise; {len(parent)} children")
+    return paths["clu"]
+
+
 # ── knob resolution: CLI > FK_CONSENSUS_* env > global fiber-kit.yaml ($FK_CONFIG) > default ──
 # (FK_CONSENSUS_*, not FK_CONS_*: that prefix belongs to fiber-consolidate.)
 _KNOBS = {
+    "FK_CONSENSUS_QUARANTINE_ONLY": ("quarantine_only", int, 0,
+                                     "1 = clean, do not merge: kept spikes keep their input labels, quarantined "
+                                     "spikes go to noise (1); the .clc/.clp hierarchy is carried; island / rim "
+                                     "clusters are written to a <tag>_qreview stage for review.  For use right "
+                                     "after fiber-session, before intrachunk and the linkers"),
+    "FK_CONSENSUS_RES_VARIANT": ("res_variant", str, "",
+                                 "pin the .res variant (e.g. stderiv_S3); '' = resolve the shared .res the "
+                                 "way fiber-session and the other stages do"),
     "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
                                          "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
     "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 0,
@@ -517,7 +562,6 @@ def main(argv=None):
     ap.add_argument("--signal-start", type=int, default=0, help="absolute sample of the signal's first row")
     ap.add_argument("--space", default=None, help="waveform space for the envelope (default: --clu-method's)")
     ap.add_argument("--sdiff-pairs", default=None, help="sdiffPairs for a _C space (default: session yaml)")
-    ap.add_argument("--res-variant", default="stderiv", help="variant of the spike-time .res")
     nio.add_clu_args(ap, method_default="stderiv_C5_D34", stage_default="",
                      stage_dest="clu_stage", stage_alias=None)
     ap.add_argument("--fet-variant", default=None, help="variant of the .fet to embed (default: --clu-method)")
@@ -558,7 +602,8 @@ def main(argv=None):
             return np.asarray(sig[rows][:, chans], np.float32)
     view = _View()
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
-    res_abs = nio.read_res_at(a.base, a.elec, variant=a.res_variant)
+    res_abs = (nio.read_res_at(a.base, a.elec, variant=a.res_variant) if a.res_variant
+               else nio.read_res(a.base, a.elec))
     _, clu = nio.resolve_clu(a, a.base, a.elec, n_spikes=res_abs.size, stage_dest="clu_stage")
     fet = nio.read_fet_at(a.base, a.elec, variant=a.fet_variant or a.clu_method)
     if fet.values.shape[0] != res_abs.size:
@@ -584,7 +629,8 @@ def main(argv=None):
         f"ws-grid={a.ws_grid} ws-island={a.ws_island} window={a.window or 'all'} "
         f"chunk-min={chunk_min:g} keep-ids={a.keep_ids}")
     given = ([[int(x) for x in g.split(",") if x.strip()] for g in a.units.split(";")] if a.units else None)
-    out = clu.copy(); nxt = int(clu.max()) + 1; results = []; cmaps = []; qclu = []; ngroups = 0
+    out = clu.copy(); review = clu.copy(); nxt = int(clu.max()) + 1
+    results = []; cmaps = []; qclu = []; ngroups = 0
     for ch in np.unique(chunk_of[inwin]):
         lab = np.where(inwin & (chunk_of == ch), clu, 0)
         if given is not None:
@@ -609,18 +655,32 @@ def main(argv=None):
                                         refrac_min_exp=a.refrac_min_exp, seed=a.seed, n_jobs=a.jobs, workers=a.workers,
                                         log=log)
             cmap, nxt = cell_ids(r["cell"], clu[r["idx"]], r["quarantine"], nxt, keep=bool(a.keep_ids))
-            out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
+            if not a.quarantine_only:                 # merge mode: the cells become the output units
+                out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
             q = r["quarantine"]; isl = q & (r["category"] == "island")
             # quarantine clusters per neighbourhood: island (collision / noise groups) and rim (own-rim +
-            # other-cell: extremes of a cell, or reassignment candidates) -- or one cluster without categories
+            # other-cell: extremes of a cell, or reassignment candidates) -- or one cluster without categories.
+            # quarantine-only: they go to noise in the output and to these clusters in the review stage.
             for part, name in ((isl, "island"), (q & ~isl, "rim" if a.ws_runs > 0 else "quarantine")):
                 if part.any():
-                    out[r["idx"][part]] = nxt; qclu.append(f"{nxt}={name}:{int(part.sum())}"); nxt += 1
+                    review[r["idx"][part]] = nxt
+                    out[r["idx"][part]] = 1 if a.quarantine_only else nxt
+                    qclu.append(f"{nxt}={name}:{int(part.sum())}"); nxt += 1
             results.append(r); cmaps.append(cmap); ngroups += 1
     tag = a.out_tag or (f"{a.clu_stage}.consensus" if a.clu_stage else "consensus")
+    nq = int(sum(r["quarantine"].sum() for r in results))
+    if a.quarantine_only:
+        Q = np.zeros(clu.size, bool)
+        for r in results:
+            Q[r["idx"][r["quarantine"]]] = True
+        p_clu = carry_quarantine(a.base, a.elec, a.clu_method, a.clu_stage, tag, clu, Q, log=log)
+        p_rev = nio.write_clu(a.base, a.elec, review, variant=a.clu_method, tag=f"{tag}_qreview")
+        p_q = write_quarantine_table(f"{a.base}.qrn.{a.elec}.{tag}", results, res_abs, clu, review, cell_ids=cmaps)
+        print(f"{ngroups} neighbourhood(s); {nq} spikes quarantined to noise (review clusters "
+              f"{' '.join(qclu) or 'none'}); wrote {p_clu}, {p_rev} and {p_q}")
+        return
     p_clu = nio.write_clu(a.base, a.elec, out, variant=a.clu_method, tag=tag)
     p_q = write_quarantine_table(f"{a.base}.qrn.{a.elec}.{tag}", results, res_abs, clu, out, cell_ids=cmaps)
-    nq = int(sum(r["quarantine"].sum() for r in results))
     print(f"{ngroups} neighbourhood(s); {nq} spikes quarantined (clusters {' '.join(qclu) or 'none'}); "
           f"wrote {p_clu} and {p_q}")
 

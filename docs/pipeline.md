@@ -41,31 +41,60 @@ selects its input with `--clu-method <variant> --clu-stage <stage>` (or `--in-cl
 `fiber-realign` and `fiber-cpos` are run again after `fiber-intrachunk` in the full plans (positions
 must follow the merged labels).
 
-### Where `fiber-envelope` and `fiber-consensus` fit
+### Where `fiber-consensus` fits: clean before merging
 
-Both are **within-chunk** refinement steps.  They sit where the curator's t-SNE pass sits: after the
-chunk-local sort (`fiber-session`, or its `refine` / `intrachunk` consolidation) and **before**
-cross-chunk linking.  They are not the end of the pipeline.
+Consensus cleans out contaminants, so it runs on the chunk-local fragments **before any merge**: every
+later merge decision (intrachunk's shape / warp gates, the linkers' templates and bands) is made on
+templates and spreads the contaminants would distort.  In that position it runs with
+`--quarantine-only 1`: it still builds its consensus cells internally -- they define what "perimeter"
+and "collision relative to the cell" mean -- but it does **not** merge: kept spikes keep their
+fiber-session fragment labels, quarantined spikes go to noise (cluster 1), and the `.clc/.clp`
+hierarchy is carried (fiber-intrachunk and the linkers consume the triple).  The island / rim
+clusters are written to a separate `<out>_qreview` stage for review in Klusters, and the per-spike
+record to `<sess>.qrn.<elec>.<out>`.
 
-| step | stage | role |
-|---|---|---|
-| after 1-6 | `fiber-envelope --merge 7` | collision-robust envelopes; re-join a chunk's fragments on envelope d' with the inflation cannot-link |
-| then | `fiber-consensus` | per chunk and neighbourhood of similar clusters: resampled t-SNE -> cells (keeping input ids), plus two QUARANTINE clusters -- island (collision / noise groups) and rim (cell extremes, reassignment candidates) -- for review |
-| then | `fiber-realign`, `fiber-cpos` | follow the new labels |
-| then | `fiber-link` / `fiber-backbone-link` | cross-chunk drift linking -- still required |
-| last | Klusters | review the quarantine clusters (`.qrn` reasons, `.eap` collision partners) and the merges |
+The embedded plan of `fiber-kit-exp.yaml`, in order:
 
-Measured so far on g6's 36-48 min chunk, starting from `fiber_session`.  They have not yet been
-benchmarked against or combined with `fiber-refine` / `fiber-peel` / `fiber-intrachunk`, so whether
-they replace or follow those steps is open; treat the table as the intended order, not a result.
+| # | stage | in -> out | what |
+|---|---|---|---|
+| 1 | fiber-session | -> fiber_session | per-chunk over-clustering (12-min chunks, 4-min overlap) |
+| 2 | fiber-realign | fiber_session (in place) | per-spike align; re-extracts and re-featurizes the .spk / .fet |
+| 3 | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
+| 4 | fiber-cpos | fs_clean | positions / templates from .spk.standard |
+| 5 | fiber-intrachunk | fs_clean -> exp_chunk | within-chunk merge |
+| 6 | fiber-realign | exp_chunk (in place) | |
+| 7 | fiber-cpos | exp_chunk | |
+| 8 | fiber-anchor-link (`frag-layer: units`) | exp_chunk -> exp_linked | cross-chunk link |
+| 9 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
+| 10 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
+| 11 | fiber-realign | exp_final (in place) | final re-extraction for curation |
 
-`fiber-consensus` is a plannable stage (not in `all`): `fiber-pipeline <elec> fiber-consensus` runs it
-on `.exp_final` with the `FK_CONSENSUS_*` knobs of `$FK_CONFIG` (fiber-kit-exp.yaml section [C]); a
-plan step `{stage: fiber-consensus, in: exp_chunk, out: exp_cons}` puts it before the linker instead.
-Because cells keep their input unit's id, either placement leaves the rest of the sort's labels alone.
-Before the linker, the quarantine clusters enter linking as ordinary units; the `.qrn` table keeps the
-per-spike record either way.
-Needs `pip install fiber-kit[consensus]`.
+Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
+(`FK_REALIGN_VARIANT: stderiv_C5_D34`, the reference session's lag feature space -- inference never
+picks a `_D` alias) and the consensus `.res` (`FK_CONSENSUS_RES_VARIANT: stderiv_S3`; the other stages
+resolve the one shared `.res`, so that must be the only copy).  Needs `pip install fiber-kit[consensus]`.
+
+Inside fiber-consensus, per chunk (`--chunk-min`, default the session's 12 min):
+
+1. envelope per input unit (collision-robust, spike-free noise floor) -> envelope d' -> neighbourhoods
+   by average linkage at d' < 12 (no size cap by default; neighbourhoods under 300 spikes skipped);
+2. per neighbourhood: 40 t-SNE runs of a random 70 % of its z-scored `.fet` rows (parallel workers)
+   -> 15 nearest 2-D neighbours per run -> co-neighbour graph (P >= 0.1) -> Louvain communities;
+3. envelope per community -> merge into cells at envelope d' < 7 with two cannot-links: merge
+   inflation > 0.1, and refractory (trains coincide within (0.6, 1.5] ms at chance, >= 3 expected);
+4. envelope refitted on the cells, with partners: collision flag, bump score, residual energy;
+   within-cell robust z; perimeter rank over the runs; switch rate;
+5. quarantine = collision OR (perimeter rank >= 0.8 AND residual or bump z >= 2) (switch opt-in);
+6. watershed categories of the quarantine on 5 full maps: island / own-rim / other-cell;
+7. output: quarantine-only -> input labels, quarantine to noise, review stage; merge mode -> each cell
+   keeps the input id holding most of its kept spikes, island and rim clusters per neighbourhood.
+
+**Merge mode** (`quarantine-only: 0`, the stage default) stays available for a late review pass on
+`.exp_final` (`fiber-pipeline <elec> fiber-consensus`): its cells become the units and both quarantine
+clusters are kept in the `.clu`.
+
+`fiber-envelope --merge 7` (envelope d' merge with the inflation and refractory cannot-links) is a
+standalone alternative to intrachunk's merge; it is not in the plan.
 
 ## Alternative linkers
 

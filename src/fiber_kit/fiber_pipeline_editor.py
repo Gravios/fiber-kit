@@ -119,7 +119,9 @@ CATALOG = {
         _p("refrac-thr", "float", 0.3, "CCG obs/exp ratio above which a merge is vetoed"),
         _p("min-n", "int", 40, "min spikes for a cluster to participate"),
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
-    "fiber-consensus": dict(input=True, tags=["in", "out"], params=[  # post-sort review; not in `all`
+    "fiber-consensus": dict(input=True, tags=["in", "out"], params=[  # clean before merging; not in `all`
+        _p("quarantine-only", "int", 0, "1 = clean only: quarantine -> noise, labels + hierarchy kept (use after fiber-session)"),
+        _p("res-variant", "str", "", "pin the .res variant (e.g. stderiv_S3); empty = shared resolve"),
         _p("window", "str", "", "START,END minutes to process ('' = whole .fil; t-SNE cost grows with spikes)"),
         _p("runs", "int", 40, "resampled t-SNE runs (20-60)"),
         _p("theta-cell", "float", 7.0, "envelope d' joining communities into cells (5-10)"),
