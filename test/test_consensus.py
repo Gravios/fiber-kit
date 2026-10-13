@@ -1,7 +1,7 @@
 """fiber_consensus on the synthetic recording of test_envelope: fragments of one unit are re-joined
 into one cell through the resampled-t-SNE consensus + envelope merge, two units stay apart, and the
 quarantine is enriched for spikes that carry a near collision.  Skips when openTSNE / networkx are
-not installed (they are the optional `consensus` extra)."""
+not installed (they are the optional `consensus` extra, with scikit-image for the watershed)."""
 import os
 import sys
 import tempfile
@@ -13,7 +13,8 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 import importlib.util  # noqa: E402
 
-HAVE = all(importlib.util.find_spec(m) is not None for m in ("networkx", "openTSNE"))
+HAVE = all(importlib.util.find_spec(m) is not None for m in ("networkx", "openTSNE", "skimage"))
+HAVE_WS = importlib.util.find_spec("skimage") is not None
 import test_envelope as te                    # noqa: E402  (the synthetic recording)
 from fiber_kit import fiber_consensus as fc   # noqa: E402
 from fiber_kit import fiber_envelope as fe    # noqa: E402
@@ -52,6 +53,91 @@ def test_perimeter_rank_puts_outliers_on_the_rim():
     assert 0.4 < np.nanmedian(per) < 0.6
 
 
+def test_categorise_basins_island_own_rim_other_cell():
+    """Pure function on given basin labels: basin 1 owned by cell 0, basin 2 by cell 1, basin 3 mostly
+    quarantined (an island), label 0 outside every basin (also an island)."""
+    basin = np.r_[[1] * 10, [2] * 10, [3] * 4, 0]
+    cell = np.r_[[0] * 10, [1] * 10, [0, 0, 1, 1], 0]
+    q = np.zeros(basin.size, bool)
+    q[[0, 1]] = True          # cell 0 in its own basin            -> own-rim
+    q[12] = True; cell[12] = 0  # cell 0 in cell 1's basin          -> other-cell, destination 1
+    q[[20, 21, 22]] = True    # 3 of 4 of basin 3                  -> island
+    q[24] = True              # outside every basin                -> island
+    code, dest = fc.categorise_basins(basin, cell, q)
+    cats = [fc.WS_CATEGORIES[c] for c in code]
+    assert cats == ["own-rim", "own-rim", "other-cell", "island", "island", "island", "island"], cats
+    assert list(dest) == [0, 0, 1, -1, -1, -1, -1]
+
+
+def test_watershed_categories_vote_over_given_maps():
+    """Two Gaussian cells and a separate blob of quarantined spikes, on three given 2-D maps (no t-SNE):
+    the blob is an island, a quarantined spike inside its own cell is own-rim, and one labelled cell 0
+    sitting in cell 1's cloud is other-cell with destination 1."""
+    if not HAVE_WS:
+        print("skip: scikit-image not installed"); return
+    rng = np.random.default_rng(1)
+    n = 300
+    cell = np.r_[np.zeros(n, int), np.ones(n, int), np.zeros(40, int)]
+    q = np.zeros(cell.size, bool); q[2 * n:] = True; q[5] = True; q[n + 7] = True; cell[n + 7] = 0
+    maps = []
+    for _ in range(3):
+        Y = np.r_[rng.normal(0, 1, (n, 2)), rng.normal(0, 1, (n, 2)) + [12, 0], rng.normal(0, 0.5, (40, 2)) + [6, 10]]
+        maps.append(Y)
+    ws = fc.watershed_categories(None, cell, q, maps=maps, grid=128)
+    assert set(ws["category"][2 * n:]) == {"island"}
+    assert ws["category"][5] == "own-rim" and ws["dest"][5] == 0
+    assert ws["category"][n + 7] == "other-cell" and ws["dest"][n + 7] == 1
+    assert ws["category"][0] == "" and np.isnan(ws["agree"][0])
+    assert np.all(ws["agree"][q] == 1.0)
+
+
+def test_cell_ids_keep_input_ids():
+    """The largest cell takes its majority unit; a second cell whose majority unit is taken is new; a
+    cell made of noise-labelled (<= 1) spikes is new; keep=False gives every cell a fresh id."""
+    cell = np.r_[[0] * 50, [1] * 20, [2] * 10]
+    unit = np.r_[[7] * 40, [9] * 10, [7] * 20, [1] * 10]
+    q = np.zeros(cell.size, bool)
+    cmap, nxt = fc.cell_ids(cell, unit, q, 100)
+    assert cmap == {0: 7, 1: 100, 2: 101} and nxt == 102
+    cmap, nxt = fc.cell_ids(cell, unit, q, 100, keep=False)
+    assert sorted(cmap.values()) == [100, 101, 102]
+
+
+def test_exp_yaml_wires_every_consensus_knob():
+    """fiber-kit-exp.yaml section [C] and the stage's FK_CONSENSUS_* knobs name the same set (SIGNAL is
+    read by fiber-pipeline, not the stage)."""
+    import yaml
+    with open(os.path.join(HERE, "..", "src", "fiber_kit", "fiber-kit-exp.yaml")) as fh:
+        d = yaml.safe_load(fh)
+    keys = {k for k in d if k.startswith("FK_CONSENSUS_")}
+    assert keys - {"FK_CONSENSUS_SIGNAL"} == set(fc._KNOBS), keys ^ set(fc._KNOBS)
+    for k, (_, typ, _fb, _) in fc._KNOBS.items():         # the yaml value parses as the knob's type
+        if d[k] not in (None, ""):
+            typ(d[k])
+
+
+def test_knobs_env_over_global_yaml_over_default():
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "fk.yaml")
+        with open(p, "w") as fh:
+            fh.write("FK_CONSENSUS_RUNS: 12\nFK_CONSENSUS_RULES: collision\n")
+        old = {k: os.environ.get(k) for k in ("FK_CONFIG", "FK_CONSENSUS_RUNS", "FK_CONSENSUS_RULES")}
+        try:
+            os.environ["FK_CONFIG"] = p
+            os.environ.pop("FK_CONSENSUS_RULES", None); os.environ["FK_CONSENSUS_RUNS"] = "9"
+            from fiber_kit import config as cfgmod
+            g = cfgmod.load_global_config()
+            assert fc._knob_default("FK_CONSENSUS_RUNS", int, 40, g) == 9            # env beats the yaml
+            assert fc._knob_default("FK_CONSENSUS_RULES", str, "x", g) == "collision"  # yaml beats default
+            assert fc._knob_default("FK_CONSENSUS_WS_RUNS", int, 5, g) == 5           # default
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+
 def test_consensus_rejoins_fragments_and_quarantines_collisions():
     if not HAVE:
         print("skip: openTSNE/networkx not installed"); return
@@ -82,14 +168,28 @@ def test_cli_writes_stage_and_quarantine_table():
         sigp = b + ".fil"
         np.clip(np.rint(sig), -32768, 32767).astype("<i2").tofile(sigp)
         fc.main([b, "6", "--signal", sigp, "--total-channels", str(te.C), "--channels", "0-7",
-                 "--space", "fil", "--units", "2,12,22,3", "--runs", "6"])
+                 "--space", "fil", "--units", "2,12,22,3", "--runs", "6", "--ws-runs", "2"])
         _, out = nio.read_clu_at(b, 6, variant="stderiv_C5_D34", tag="consensus")
         assert out.size == res.size
-        assert not np.isin(out[np.isin(lab, [2, 12, 22, 3])], [2, 12, 22, 3]).any()   # relabelled
+        # --keep-ids (default): the cell that IS unit 3 keeps id 3; unit 2's fragments join one cell that
+        # keeps one of their ids
+        def major(m):
+            v, n = np.unique(out[m], return_counts=True); return v[n.argmax()]
+        assert major(clu == 3) == 3
+        assert major(clu == 2) in (2, 12, 22)
         assert np.array_equal(out[lab == 4], lab[lab == 4])                            # untouched
         with open(b + ".qrn.6.consensus") as fh:
             rows = fh.read().splitlines()
         assert rows[0].startswith("spike\ttime") and len(rows) > 1
+        hdr = rows[0].split("\t"); col = {h: i for i, h in enumerate(hdr)}
+        recs = [r.split("\t") for r in rows[1:]]
+        assert hdr[-3:] == ["category", "ws_agree", "ws_dest"]
+        assert {r[col["category"]] for r in recs} <= set(fc.WS_CATEGORIES)
+        # islands and rim go to separate clusters: no output cluster holds both
+        by_out = {}
+        for r in recs:
+            by_out.setdefault(r[col["out"]], set()).add(r[col["category"]] == "island")
+        assert all(len(v) == 1 for v in by_out.values()), by_out
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@
 #    [A] ALTERNATE LINKER: fiber-link (production A/B)
 #    [B] STAGES NOT IN THE PLAN: refine / peel / xcorr-merge / backbone-link /
 #        stochastic / flag-artifacts  (kept for direct CLI runs)
+#    [C] POST-SORT REVIEW: fiber-consensus  (after the plan's final stage; plannable, not in `all`)
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -102,6 +103,9 @@ pipeline:
   - {stage: fiber-xcorr-merge, in: exp_linked, out: exp_xcm}
   - {stage: fiber-backbone-link, in: exp_xcm, out: exp_final, drift: exp_xcm}
   - {stage: fiber-realign,    in: exp_final}
+  # post-sort review (section [C]); opt-in -- needs `pip install fiber-kit[consensus]` and costs
+  # ~R t-SNE runs per neighbourhood.  Or run it on its own: fiber-pipeline <elec> fiber-consensus
+  # - {stage: fiber-consensus,  in: exp_final, out: consensus, params: {window: "36,48"}}
 
 
 
@@ -993,6 +997,68 @@ FK_SESSION_EXCLUDE:      0        # 0 | 0/1.  1 = fiber-session passes --exclude
 FK_ALINK_ARTIFACT:       0        # 0 | 0/1.  1 = fiber-anchor-link passes --artifact-clu <mask>, withholding the
                                   #   masked spikes from --promote-noise so a promoted cell is the genuine
                                   #   unassigned population only.  Set together with FK_SESSION_EXCLUDE.
+
+# ============================================================================
+#  [C] POST-SORT REVIEW: FIBER-CONSENSUS  (after the plan's final stage: .exp_final -> .consensus)
+# ============================================================================
+# The algorithmic counterpart of the curator's t-SNE lasso.  Per NEIGHBOURHOOD of similar units (envelope
+# d' average linkage, or --units): R resampled t-SNE runs -> co-neighbour Louvain communities -> joined into
+# cells by the fiber-envelope merge -> envelope refitted ON THE CELLS -> QUARANTINE of the spikes that do
+# not hold up (near collision, or perimeter + waveform deviation) -> each quarantined spike CATEGORISED by
+# t-SNE watershed basins (island / own-rim / other-cell).  Output: .clu.<method>.<elec>.<out> with fresh
+# cell ids, TWO quarantine clusters per neighbourhood (island; rim = own-rim + other-cell), and the review
+# table <sess>.qrn.<elec>.<out> (criteria, reason, category, vote agreement, destination cell).
+# Measured on g6 (36-47 min, GT = exp_final, four neighbourhoods): quarantine 6.7-7.8 % of the
+# neighbourhood's spikes (2.5 % of the chunk) at 0.40-0.85 precision vs 0.08-0.42 base rates, cell purity
+# +0.02-0.05.  Islands are 20-38 % of the quarantine and 66-98 % foreign/noise; own-rim in a clean cell is
+# mostly the cell's own spikes.  A second round (quarantine held out, re-run) gained -0.002..+0.004 purity.
+# Run: fiber-pipeline <elec> fiber-consensus     (or the commented plan step above)
+#  or: FK_CONFIG=fiber-kit-exp.yaml fiber-consensus <sess> <elec> --signal <sess>.fil --clu-stage exp_final
+# Needs the optional extra:  pip install fiber-kit[consensus]   (openTSNE, networkx, scikit-image)
+FK_CONSENSUS_SIGNAL:     ""       # "" = <sess>.fil | path.  Continuous filtered int16 trace the envelope is fit on
+                                  #   (fiber-pipeline only; a direct call takes --signal).  Must match the
+                                  #   filter the .spk came from; a window file needs --signal-start in params.
+FK_CONSENSUS_WINDOW:     ""       # "" = whole signal | "START,END" minutes of the signal.  Restrict the run to a
+                                  #   stretch (e.g. a quick look at one chunk); spikes outside keep their labels.
+FK_CONSENSUS_CHUNK_MIN:  ""       # "" = FK_SESSION_CHUNK_MIN (or 12) | 0 = no chunking.  Neighbourhoods are found and
+                                  #   embedded PER CHUNK -- the scale it was validated at (1-3k spikes per
+                                  #   neighbourhood); whole-session neighbourhoods would cost R t-SNE runs of tens of
+                                  #   thousands of spikes and mix drift into the cells.
+FK_CONSENSUS_KEEP_IDS:   1        # 1 | 0/1.  1 = each cell (largest first) keeps the id of the input unit holding most
+                                  #   of its kept spikes, unless a larger cell took it; split-off cells are new.  So a
+                                  #   LINKED sort (exp_final) stays linked and a chunk-local one keeps its fragment
+                                  #   ids.  0 = fresh ids for every cell.
+FK_CONSENSUS_MIN_SPIKES: 300      # 300 | 200-500.  Skip a neighbourhood with fewer spikes in the chunk: t-SNE at
+                                  #   perplexity 30 and Louvain on k=15 need a few hundred points to mean anything.
+FK_CONSENSUS_NEIGHBOURHOOD_THETA: 12.0  # 12 | 8-16 (envelope d').  Average-linkage cut that groups units into
+                                  #   neighbourhoods studied together.  Lower = smaller, tighter groups (faster,
+                                  #   but a contaminating neighbour may fall outside); ignored with --units.
+FK_CONSENSUS_RUNS:       40       # 40 | 20-60.  Resampled t-SNE runs.  The co-neighbour probability needs ~20+
+                                  #   runs per pair to settle; 40 at frac 0.7 gives each pair ~20 joint runs.
+FK_CONSENSUS_FRAC:       0.7      # 0.7 | 0.5-0.8.  Fraction of the neighbourhood's spikes in each run.  Lower
+                                  #   decorrelates the runs more but thins joint-run counts per pair.
+FK_CONSENSUS_K:          15       # 15 | 10-30.  2-D neighbours per spike in each run (co-neighbour graph degree).
+FK_CONSENSUS_PERPLEXITY: 30.0     # 30 | 20-50.  t-SNE perplexity, runs AND watershed maps.
+FK_CONSENSUS_THETA_CELL: 7.0      # 7 | 5-10 (envelope d').  Merge cut joining Louvain communities into cells, with
+                                  #   merge-inflation > 0.1 as a cannot-link.  One cell's noise ball is cut by t-SNE
+                                  #   into stable-looking islands; this re-joins them.  Lower = more cells.
+FK_CONSENSUS_RULES:      collision,perimeter  # any of switch, collision, perimeter.  collision = the envelope's
+                                  #   near-collision flag; perimeter = rim of the cell's cloud AND a waveform
+                                  #   deviation (below).  switch (cell-switch rate) ran at 0.13-0.22 precision where
+                                  #   cells are close -- opt-in.
+FK_CONSENSUS_PERIM_THR:  0.8      # 0.8 | 0.7-0.9.  Perimeter rule: average 2-D radial rank within the cell
+                                  #   (0 centre, 1 rim).  The rim alone also holds legitimate amplitude extremes.
+FK_CONSENSUS_DEV_Z:      2.0      # 2.0 | 1.5-3.0.  Perimeter rule: residual energy or bump score >= this robust z
+                                  #   above the cell's.  Lower quarantines more at lower precision.
+FK_CONSENSUS_SWITCH_THR: 0.3      # 0.3 | 0.2-0.5.  switch rule only: fraction of runs whose 2-D majority is another cell.
+FK_CONSENSUS_WS_RUNS:    5        # 5 | 0, 3-9.  Full t-SNE maps voting each quarantined spike's watershed category
+                                  #   (median vote agreement 0.8-1.0 at 5).  0 = no categories: one quarantine
+                                  #   cluster per neighbourhood, category '-' in the .qrn.
+FK_CONSENSUS_WS_GRID:    256      # 256 | 128-512.  KDE grid side for the basins (kernel sigma = grid/100).
+FK_CONSENSUS_WS_ISLAND:  0.5      # 0.5 | 0.3-0.7.  A basin with at least this quarantined fraction (or no kept
+                                  #   spikes) is an ISLAND.  Lower = more islands.
+FK_CONSENSUS_JOBS:       1        # openTSNE threads per run.
+FK_CONSENSUS_SEED:       0        # subsampling, initialisation and Louvain seed (watershed maps use seed+500+r).
 
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by

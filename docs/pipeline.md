@@ -50,7 +50,7 @@ cross-chunk linking.  They are not the end of the pipeline.
 | step | stage | role |
 |---|---|---|
 | after 1-6 | `fiber-envelope --merge 7` | collision-robust envelopes; re-join a chunk's fragments on envelope d' with the inflation cannot-link |
-| then | `fiber-consensus` | per neighbourhood of similar clusters: resampled t-SNE -> cells, plus a QUARANTINE cluster (collision / rim-deviant spikes) for review |
+| then | `fiber-consensus` | per chunk and neighbourhood of similar clusters: resampled t-SNE -> cells (keeping input ids), plus two QUARANTINE clusters -- island (collision / noise groups) and rim (cell extremes, reassignment candidates) -- for review |
 | then | `fiber-realign`, `fiber-cpos` | follow the new labels |
 | then | `fiber-link` / `fiber-backbone-link` | cross-chunk drift linking -- still required |
 | last | Klusters | review the quarantine clusters (`.qrn` reasons, `.eap` collision partners) and the merges |
@@ -58,6 +58,14 @@ cross-chunk linking.  They are not the end of the pipeline.
 Measured so far on g6's 36-48 min chunk, starting from `fiber_session`.  They have not yet been
 benchmarked against or combined with `fiber-refine` / `fiber-peel` / `fiber-intrachunk`, so whether
 they replace or follow those steps is open; treat the table as the intended order, not a result.
+
+`fiber-consensus` is a plannable stage (not in `all`): `fiber-pipeline <elec> fiber-consensus` runs it
+on `.exp_final` with the `FK_CONSENSUS_*` knobs of `$FK_CONFIG` (fiber-kit-exp.yaml section [C]); a
+plan step `{stage: fiber-consensus, in: exp_chunk, out: exp_cons}` puts it before the linker instead.
+Because cells keep their input unit's id, either placement leaves the rest of the sort's labels alone.
+Before the linker, the quarantine clusters enter linking as ordinary units; the `.qrn` table keeps the
+per-spike record either way.
+Needs `pip install fiber-kit[consensus]`.
 
 ## Alternative linkers
 

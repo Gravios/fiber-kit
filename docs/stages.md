@@ -1147,18 +1147,26 @@ Positional: `base`, `elec`
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--fet-variant` | — | variant of the .fet to embed (default: --clu-method) |
 | `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
-| `--neighbourhood-theta` | `12.0` | d' cut for automatic neighbourhoods |
-| `--runs` | `40` |  |
-| `--frac` | `0.7` |  |
-| `--k` | `15` | 2-D neighbours per spike |
-| `--perplexity` | `30.0` |  |
-| `--theta-cell` | `7.0` | envelope d' cut joining communities into cells |
-| `--switch-thr` | `0.3` | cell-switch rate that quarantines a spike |
-| `--perim-thr` | `0.8` | average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule |
-| `--dev-z` | `2.0` | robust z of residual energy or bump score (within the cell) for the perimeter rule |
-| `--rules` | `collision,perimeter` | quarantine criteria, any of: switch, collision, perimeter (switch is off by default: 0.13-0.22 precision where a neighbourhood's cells are close) |
 | `--sr` | — |  |
-| `--jobs` | `1` | openTSNE threads |
+| `--neighbourhood-theta` | `12.0` | envelope d' cut for automatic neighbourhoods (ignored with --units) [FK_CONSENSUS_NEIGHBOURHOOD_THETA; default 12.0] |
+| `--runs` | `40` | resampled t-SNE runs [FK_CONSENSUS_RUNS; default 40] |
+| `--frac` | `0.7` | fraction of the neighbourhood's spikes in each run [FK_CONSENSUS_FRAC; default 0.7] |
+| `--k` | `15` | 2-D neighbours per spike [FK_CONSENSUS_K; default 15] |
+| `--perplexity` | `30.0` | t-SNE perplexity (runs and watershed maps) [FK_CONSENSUS_PERPLEXITY; default 30.0] |
+| `--theta-cell` | `7.0` | envelope d' cut joining communities into cells [FK_CONSENSUS_THETA_CELL; default 7.0] |
+| `--switch-thr` | `0.3` | cell-switch rate that quarantines a spike [FK_CONSENSUS_SWITCH_THR; default 0.3] |
+| `--perim-thr` | `0.8` | average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule [FK_CONSENSUS_PERIM_THR; default 0.8] |
+| `--dev-z` | `2.0` | robust z of residual energy or bump score (within the cell) for the perimeter rule [FK_CONSENSUS_DEV_Z; default 2.0] |
+| `--rules` | `collision,perimeter` | quarantine criteria, any of: switch, collision, perimeter (switch is off by default: 0.13-0.22 precision where a neighbourhood's cells are close) [FK_CONSENSUS_RULES; default collision,perimeter] |
+| `--ws-runs` | `5` | full t-SNE maps voting the watershed category; 0 = no categories, one quarantine cluster per neighbourhood [FK_CONSENSUS_WS_RUNS; default 5] |
+| `--ws-grid` | `256` | KDE grid side for the watershed basins [FK_CONSENSUS_WS_GRID; default 256] |
+| `--ws-island` | `0.5` | quarantined fraction that makes a basin an island [FK_CONSENSUS_WS_ISLAND; default 0.5] |
+| `--window` | `""` | restrict to spikes in START,END minutes of the signal ('' = the whole signal) [FK_CONSENSUS_WINDOW; default ] |
+| `--chunk-min` | — | process the sort chunk by chunk, this many minutes each (unset = FK_SESSION_CHUNK_MIN or 12, fiber-session's chunking; 0 = the whole window at once) [FK_CONSENSUS_CHUNK_MIN; default None] |
+| `--keep-ids` | `1` | 1 = a cell keeps the id of the input unit holding most of its kept spikes (so a linked sort stays linked); 0 = every cell gets a fresh id [FK_CONSENSUS_KEEP_IDS; default 1] |
+| `--min-spikes` | `300` | skip a neighbourhood with fewer spikes in the chunk (t-SNE at perplexity 30 needs a few hundred) [FK_CONSENSUS_MIN_SPIKES; default 300] |
+| `--jobs` | `1` | openTSNE threads [FK_CONSENSUS_JOBS; default 1] |
+| `--seed` | `0` | seed for subsampling, initialisation and Louvain [FK_CONSENSUS_SEED; default 0] |
 | `--out-tag` | — | stage tag of the output .clu (default: <clu-stage>.consensus) |
 ### `fiber-calibrate`
 

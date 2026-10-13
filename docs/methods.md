@@ -436,3 +436,50 @@ Quarantine rules on the four neighbourhoods (precision against the misassigned b
 
 (base rates 0.077, 0.113, 0.107, 0.418 for neighbourhoods 7, 8, 9, 18).  The perimeter rule adds 24-47
 spikes per neighbourhood that the collision flag misses, at 0.23-0.88 precision.
+
+### Categorising the quarantine by t-SNE watershed (0.37)
+
+A quarantined spike is a candidate, not a verdict: a collision group, a cell's own extreme and a
+spike that belongs to a neighbour all land there.  `watershed_categories` sorts them.  On each of
+`--ws-runs` fresh t-SNE maps of the whole neighbourhood (5 by default), a Gaussian KDE on a 256 x 256
+grid (sigma = grid/100) is cut into watershed basins from its density maxima.  A basin's OWNER is the
+cell holding most of its kept (non-quarantined) spikes.  Every quarantined spike is
+
+| category | basin | meaning |
+|---|---|---|
+| island | >= 50 % quarantined (or no kept spikes, or outside every basin) | a collision / noise group of its own |
+| own-rim | owned by the spike's own cell | an extreme of that cell |
+| other-cell | owned by another cell | a reassignment candidate; the destination is recorded, not applied |
+
+and the category is the vote over the maps.  On the four g6 neighbourhoods (GT = exp_final), share
+of the quarantine / fraction whose GT is in fact the spike's own cell:
+
+| neighbourhood | own-rim | island | other-cell | median vote agreement |
+|---|---|---|---|---|
+| 7 | 78 % / 73 % own | 20 % / 10 % own | 2 % | 1.0 |
+| 8 | 61 % / 60 % | 37 % / 34 % | 2 % | 0.8 |
+| 9 | 65 % / 52 % | 28 % / 18 % | 8 % (78 % GT = destination) | 0.8 |
+| 18 | 60 % / 21 % (41 % GT noise) | 38 % / 2 % (20 % GT noise) | 2 % | 1.0 |
+
+Islands are 66-98 % foreign or noise; own-rim spikes of a clean cell are mostly the cell's own
+(neighbourhood 18's base cell is itself 0.64 pure, so its rim is not).  `fiber-consensus` therefore
+writes TWO quarantine clusters per neighbourhood -- island, and rim (own-rim + other-cell) -- and the
+`.qrn` table carries `category`, `ws_agree` and `ws_dest`.  Review the island cluster as collisions /
+noise and the rim cluster as cell extremes; `--ws-runs 0` writes one quarantine cluster as before.
+Other-cell is rare (2-8 %) and only neighbourhood 9's are mostly right about the destination, so
+they are not reassigned automatically.
+
+A SECOND ROUND -- hold the quarantine out, rebuild the cells, quarantine again -- quarantines 1-2 %
+more of the neighbourhood at 0.25-0.65 precision (base 0.06-0.38) and moves kept-spike purity by
+-0.002..+0.004 (completeness +0.12..-0.22, mixed).  Diminishing returns; not implemented.
+
+### Running it (0.37)
+
+The stage works chunk by chunk (`--chunk-min`, default fiber-session's `FK_SESSION_CHUNK_MIN` or 12):
+neighbourhoods are found and embedded within one chunk, the scale it was measured at (1-3 k spikes per
+neighbourhood).  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
+unit holding most of its kept spikes, unless a larger cell took it; split-off cells get fresh ids.  So
+it can run on a chunk-local sort before linking or on a linked sort after it without breaking the
+links.  Knobs are `FK_CONSENSUS_*` (CLI > env > `$FK_CONFIG` > default; section [C] of
+fiber-kit-exp.yaml); in a plan it is the stage `fiber-consensus` (`fiber-pipeline <elec> fiber-consensus`
+reads `.exp_final` and `<sess>.fil` by default).

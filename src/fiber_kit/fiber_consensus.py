@@ -24,19 +24,33 @@ drawn on one map is partly a boundary of that map.  This stage repeats the embed
                          its legitimate amplitude extremes, hence the waveform condition;
                        * (optional) switch: in >= 30 % of its runs the majority of its 2-D
                          neighbours belongs to another cell.
-                     Quarantined spikes go to their own cluster, with a per-spike table of reasons
-                     for review.
+  6. CATEGORIES      the quarantine is sorted by t-SNE watershed basins: a few fresh embeddings of
+                     the whole neighbourhood, a KDE on a grid, watershed basins from the density
+                     maxima, a vote over the runs.  A quarantined spike is
+                       * island      in a basin made mostly (>= 50 %) of quarantined spikes -- a
+                                     collision / noise group of its own;
+                       * own-rim     in a basin owned by its own cell (majority of the basin's kept
+                                     spikes) -- an extreme of that cell;
+                       * other-cell  in a basin owned by another cell -- a reassignment candidate
+                                     (the destination is recorded, not applied).
+                     Quarantined spikes go to TWO clusters per neighbourhood (island; own-rim +
+                     other-cell), with a per-spike table of reasons and categories for review.
+                     --ws-runs 0 skips the categories and writes one quarantine cluster.
 
 Measured on four g6 neighbourhoods (36-47 min, GT = exp_final), against base rates of 8-42 %
 misassigned: collision | perimeter quarantines 6.7-7.8 % of spikes at 0.40-0.85 precision and lifts
 cell purity by 0.02-0.05; the perimeter rule adds 24-47 spikes per neighbourhood the collision flag
-misses.  Cell switching runs at 0.13-0.22 precision where cells are close, so it is opt-in.  NOT
+misses.  Cell switching runs at 0.13-0.22 precision where cells are close, so it is opt-in.  Of the
+quarantine, 20-38 % falls in islands and 66-98 % of island spikes are foreign or noise; own-rim
+spikes in a clean cell are mostly the cell's own (52-73 %).  A second round (quarantine held out,
+cells rebuilt, quarantined again) moved kept-spike purity by -0.002..+0.004 -- not worth it.  NOT
 used: the across-run VARIANCE of 2-D distances -- a density measure (inside one cell's noise ball
 every neighbour is as good as any other, so core spikes are the unstable ones), AUC 0.25-0.57.
 """
 import argparse
+import os
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 
@@ -46,6 +60,10 @@ try:
 except ImportError:                       # script use
     import fiber_envelope as fe
     import neuro_io as nio
+try:
+    from . import config as cfgmod
+except ImportError:                       # script use
+    import config as cfgmod
 
 
 def _need(mod):
@@ -166,13 +184,88 @@ def _robust_z(v, groups):
     return z
 
 
+WS_CATEGORIES = ("own-rim", "other-cell", "island")
+
+
+def basin_labels(Y, grid=256):
+    """Watershed basin of every 2-D point: histogram on a grid x grid lattice, Gaussian KDE
+    (sigma = grid/100), markers at the density maxima (min distance grid/40, >= 2 % of the peak),
+    watershed of -density inside density > 0.2 % of the peak.  0 = outside every basin."""
+    from scipy.ndimage import gaussian_filter
+    _need("skimage")
+    from skimage.feature import peak_local_max
+    from skimage.segmentation import watershed
+    Y = np.asarray(Y, float)
+    lo = Y.min(0); hi = Y.max(0)
+    ij = np.clip(((Y - lo) / (hi - lo + 1e-9) * (grid - 1)).astype(int), 0, grid - 1)
+    H = np.zeros((grid, grid)); np.add.at(H, (ij[:, 0], ij[:, 1]), 1)
+    dens = gaussian_filter(H, sigma=grid / 100)
+    pk = peak_local_max(dens, min_distance=max(grid // 40, 1), threshold_rel=0.02)
+    mk = np.zeros(dens.shape, int); mk[tuple(pk.T)] = np.arange(1, len(pk) + 1)
+    floor = dens.max() * 0.002
+    B = watershed(-dens, mk, mask=dens > floor)
+    return B[ij[:, 0], ij[:, 1]]
+
+
+def categorise_basins(basin, cell, quarantine, island_frac=0.5):
+    """One map's verdict for every quarantined spike: (code, destination) with code an index into
+    WS_CATEGORIES.  A basin's owner is the cell holding most of its NON-quarantined spikes; a basin
+    with >= island_frac quarantined spikes, no kept spikes, or label 0 is an island."""
+    basin = np.asarray(basin); cell = np.asarray(cell); q = np.asarray(quarantine, bool)
+    owner = {}; qfrac = {}
+    for b in np.unique(basin):
+        m = basin == b; kept = cell[m & ~q]
+        qfrac[b] = q[m].mean()
+        owner[b] = Counter(kept.tolist()).most_common(1)[0][0] if kept.size else None
+    qi = np.flatnonzero(q)
+    code = np.empty(qi.size, int); dest = np.full(qi.size, -1, int)
+    for k, i in enumerate(qi):
+        b = basin[i]
+        if b == 0 or qfrac[b] >= island_frac or owner[b] is None:
+            code[k] = 2
+        elif owner[b] == cell[i]:
+            code[k] = 0; dest[k] = cell[i]
+        else:
+            code[k] = 1; dest[k] = owner[b]
+    return code, dest
+
+
+def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0.5, perplexity=30.0,
+                         seed=0, n_jobs=1, maps=None, log=None):
+    """Watershed category of every quarantined spike, voted over `runs` full t-SNE maps of X (or the
+    given `maps`, a list of (n, 2) arrays).  Returns dict(category: (n,) str, '' where not quarantined;
+    dest: (n,) destination cell (own cell for own-rim, the basin owner for other-cell, -1 otherwise);
+    agree: (n,) fraction of runs voting for the winning category, nan where not quarantined)."""
+    cell = np.asarray(cell); q = np.asarray(quarantine, bool); n = cell.size
+    if maps is None:
+        _need("openTSNE")
+        from openTSNE import TSNE
+        maps = []
+        for r in range(runs):
+            maps.append(np.asarray(TSNE(perplexity=perplexity, n_jobs=n_jobs, random_state=seed + 500 + r,
+                                        initialization="random", verbose=False).fit(np.asarray(X, float))))
+            if log:
+                log(f"  watershed map {r + 1}/{runs}")
+    qi = np.flatnonzero(q)
+    codes = np.empty((len(maps), qi.size), int); dests = np.empty((len(maps), qi.size), int)
+    for r, Y in enumerate(maps):
+        codes[r], dests[r] = categorise_basins(basin_labels(Y, grid), cell, q, island_frac)
+    category = np.full(n, "", dtype=object); dest = np.full(n, -1, int); agree = np.full(n, np.nan)
+    for k, i in enumerate(qi):
+        c, cnt = Counter(codes[:, k].tolist()).most_common(1)[0]
+        category[i] = WS_CATEGORIES[c]; agree[i] = cnt / len(maps)
+        dest[i] = Counter(dests[codes[:, k] == c, k].tolist()).most_common(1)[0][0]
+    return dict(category=category, dest=dest, agree=agree)
+
+
 QUARANTINE_RULES = ("switch", "collision", "perimeter")
 
 
 def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None, sr=32552.0,
                             pre=21, post=21, margin=32, maxlag=4, runs=40, frac=0.7, k=15,
                             perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
-                            dev_z=2.0, rules=("collision", "perimeter"), seed=0, n_jobs=1, log=print):
+                            dev_z=2.0, rules=("collision", "perimeter"), ws_runs=5, ws_grid=256,
+                            ws_island=0.5, seed=0, n_jobs=1, log=print):
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
@@ -185,8 +278,10 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
       perimeter  average 2-D radial rank >= perim_thr AND the spike's residual energy or bump score
                  is >= dev_z robust z above its cell's (the outer ring alone also holds a cell's
                  legitimate amplitude extremes)
+    With ws_runs > 0 the quarantine is then categorised by watershed_categories (island / own-rim /
+    other-cell) on ws_runs fresh full-neighbourhood maps.
     Returns dict(idx, community, cell, switch, perimeter, resid_z, bump_z, flagged, explained, partner,
-    shift, quarantine (bool), reason (list of str))."""
+    shift, quarantine (bool), reason (list of str), criteria, category, ws_dest, ws_agree)."""
     clu = np.asarray(clu)
     idx = np.flatnonzero(np.isin(clu, list(units)))
     X = np.asarray(features, float)[idx]
@@ -225,27 +320,119 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     log(f"neighbourhood {sorted(units)}: {idx.size} spikes -> {np.unique(com).size} communities -> "
         f"{np.unique(cell).size} cells; quarantined {q.sum()} ({q.mean():.1%}: "
         + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
+    if ws_runs > 0 and q.any():
+        ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
+                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs)
+        cat = ws["category"]
+        log("  categories: " + ", ".join(f"{(cat == c).sum()} {c}" for c in WS_CATEGORIES)
+            + f"; median vote agreement {np.nanmedian(ws['agree']):.2f}")
+    else:
+        ws = dict(category=np.full(idx.size, "", dtype=object), dest=np.full(idx.size, -1, int),
+                  agree=np.full(idx.size, np.nan))
     return dict(idx=idx, community=com, cell=cell, switch=sw, perimeter=per, resid_z=resid_z, bump_z=bump_z,
                 flagged=flagged, explained=explained, partner=partner, shift=shift, quarantine=q,
-                reason=reason, criteria=crit)
+                reason=reason, criteria=crit, category=ws["category"], ws_dest=ws["dest"], ws_agree=ws["agree"])
 
 
-def write_quarantine_table(path, results, res_abs, clu, out_labels):
+def cell_ids(cell, unit, quarantine, nxt, keep=True):
+    """Output id of every consensus cell.  keep: largest cell first, each takes the input unit holding
+    most of its non-quarantined spikes unless a larger cell already took it; the rest get fresh ids from
+    `nxt`.  So a cell that IS an input unit keeps its id (and its cross-chunk link), fragments a cell
+    absorbed hand it their ids' spikes, and a split-off cell is new.  Returns ({cell: id}, next free id)."""
+    cell = np.asarray(cell); unit = np.asarray(unit); q = np.asarray(quarantine, bool)
+    cs, n = np.unique(cell, return_counts=True)
+    cmap = {}; taken = set()
+    for c in cs[np.argsort(-n, kind="stable")]:
+        u = None
+        if keep:
+            m = (cell == c) & ~q
+            for v, _ in Counter(unit[m].tolist()).most_common():
+                if v > 1 and v not in taken:
+                    u = int(v); break
+                if v > 1:
+                    break                          # its majority unit is taken -> a new cell
+        if u is None:
+            u = nxt; nxt += 1
+        cmap[int(c)] = u; taken.add(u)
+    return cmap, nxt
+
+
+def write_quarantine_table(path, results, res_abs, clu, out_labels, cell_ids=None):
+    """Per quarantined spike: index, absolute time, input unit, consensus cell, output cluster,
+    criteria values, reason, and the watershed category ('-' when not run), its vote agreement and
+    destination.  `cell_ids` (one {cell: output id} map per result) translates cell and ws_dest to
+    the output .clu ids; without it they are the neighbourhood-local cell labels."""
     with open(path, "w") as f:
         f.write("spike\ttime\tunit\tcell\tout\tswitch\tperimeter\tresid_z\tbump_z\tcollision\texplained\t"
-                "partner\tshift\treason\n")
-        for r in results:
+                "partner\tshift\treason\tcategory\tws_agree\tws_dest\n")
+        for n_, r in enumerate(results):
+            cm = cell_ids[n_] if cell_ids is not None else {}
+            cat = r.get("category"); dst = r.get("ws_dest"); agr = r.get("ws_agree")
             for j, i in enumerate(r["idx"]):
                 if not r["quarantine"][j]:
                     continue
-                f.write(f"{i}\t{int(res_abs[i])}\t{int(clu[i])}\t{int(r['cell'][j])}\t{int(out_labels[i])}\t"
+                c = int(r["cell"][j]); d = int(dst[j]) if dst is not None else -1
+                f.write(f"{i}\t{int(res_abs[i])}\t{int(clu[i])}\t{cm.get(c, c)}\t{int(out_labels[i])}\t"
                         f"{r['switch'][j]:.3f}\t{r['perimeter'][j]:.3f}\t{r['resid_z'][j]:.2f}\t{r['bump_z'][j]:.2f}\t"
                         f"{int(r['flagged'][j])}\t{int(r['explained'][j])}\t"
-                        f"{int(r['partner'][j])}\t{int(r['shift'][j])}\t{r['reason'][j]}\n")
+                        f"{int(r['partner'][j])}\t{int(r['shift'][j])}\t{r['reason'][j]}\t"
+                        f"{(cat[j] if cat is not None and cat[j] else '-')}\t"
+                        f"{(agr[j] if agr is not None and np.isfinite(agr[j]) else float('nan')):.2f}\t"
+                        f"{cm.get(d, d) if d >= 0 else -1}\n")
     return path
 
 
+# ── knob resolution: CLI > FK_CONSENSUS_* env > global fiber-kit.yaml ($FK_CONFIG) > default ──
+# (FK_CONSENSUS_*, not FK_CONS_*: that prefix belongs to fiber-consolidate.)
+_KNOBS = {
+    "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
+                                         "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
+    "FK_CONSENSUS_RUNS": ("runs", int, 40, "resampled t-SNE runs"),
+    "FK_CONSENSUS_FRAC": ("frac", float, 0.7, "fraction of the neighbourhood's spikes in each run"),
+    "FK_CONSENSUS_K": ("k", int, 15, "2-D neighbours per spike"),
+    "FK_CONSENSUS_PERPLEXITY": ("perplexity", float, 30.0, "t-SNE perplexity (runs and watershed maps)"),
+    "FK_CONSENSUS_THETA_CELL": ("theta_cell", float, 7.0, "envelope d' cut joining communities into cells"),
+    "FK_CONSENSUS_SWITCH_THR": ("switch_thr", float, 0.3, "cell-switch rate that quarantines a spike"),
+    "FK_CONSENSUS_PERIM_THR": ("perim_thr", float, 0.8,
+                               "average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule"),
+    "FK_CONSENSUS_DEV_Z": ("dev_z", float, 2.0,
+                           "robust z of residual energy or bump score (within the cell) for the perimeter rule"),
+    "FK_CONSENSUS_RULES": ("rules", str, "collision,perimeter",
+                           "quarantine criteria, any of: switch, collision, perimeter (switch is off by default: "
+                           "0.13-0.22 precision where a neighbourhood's cells are close)"),
+    "FK_CONSENSUS_WS_RUNS": ("ws_runs", int, 5,
+                             "full t-SNE maps voting the watershed category; 0 = no categories, one quarantine "
+                             "cluster per neighbourhood"),
+    "FK_CONSENSUS_WS_GRID": ("ws_grid", int, 256, "KDE grid side for the watershed basins"),
+    "FK_CONSENSUS_WS_ISLAND": ("ws_island", float, 0.5, "quarantined fraction that makes a basin an island"),
+    "FK_CONSENSUS_WINDOW": ("window", str, "",
+                            "restrict to spikes in START,END minutes of the signal ('' = the whole signal)"),
+    "FK_CONSENSUS_CHUNK_MIN": ("chunk_min", float, None,
+                               "process the sort chunk by chunk, this many minutes each (unset = FK_SESSION_CHUNK_MIN "
+                               "or 12, fiber-session's chunking; 0 = the whole window at once)"),
+    "FK_CONSENSUS_KEEP_IDS": ("keep_ids", int, 1,
+                              "1 = a cell keeps the id of the input unit holding most of its kept spikes (so a "
+                              "linked sort stays linked); 0 = every cell gets a fresh id"),
+    "FK_CONSENSUS_MIN_SPIKES": ("min_spikes", int, 300,
+                                "skip a neighbourhood with fewer spikes in the chunk (t-SNE at perplexity 30 needs "
+                                "a few hundred)"),
+    "FK_CONSENSUS_JOBS": ("jobs", int, 1, "openTSNE threads"),
+    "FK_CONSENSUS_SEED": ("seed", int, 0, "seed for subsampling, initialisation and Louvain"),
+}
+
+
+def _knob_default(name, typ, fallback, gcfg):
+    """FK_CONSENSUS_* env if set, else the global fiber-kit.yaml, else the built-in default."""
+    v = os.environ.get(name, "")
+    if v in (None, ""):
+        v = gcfg.get(name)
+    if v in (None, ""):
+        return fallback
+    return typ(v)
+
+
 def main(argv=None):
+    gcfg = cfgmod.load_global_config()
     ap = argparse.ArgumentParser(
         description="Resampled-t-SNE consensus over similar clusters + quarantine of unstable / colliding spikes.")
     ap.add_argument("base"); ap.add_argument("elec", type=int)
@@ -262,21 +449,11 @@ def main(argv=None):
     ap.add_argument("--units", default=None,
                     help="comma-separated units to study together (repeat with ';' for several groups); "
                          "default: every envelope d' neighbourhood")
-    ap.add_argument("--neighbourhood-theta", type=float, default=12.0, help="d' cut for automatic neighbourhoods")
-    ap.add_argument("--runs", type=int, default=40); ap.add_argument("--frac", type=float, default=0.7)
-    ap.add_argument("--k", type=int, default=15, help="2-D neighbours per spike")
-    ap.add_argument("--perplexity", type=float, default=30.0)
-    ap.add_argument("--theta-cell", type=float, default=7.0, help="envelope d' cut joining communities into cells")
-    ap.add_argument("--switch-thr", type=float, default=0.3, help="cell-switch rate that quarantines a spike")
-    ap.add_argument("--perim-thr", type=float, default=0.8,
-                    help="average 2-D radial rank within the cell (0 centre, 1 rim) for the perimeter rule")
-    ap.add_argument("--dev-z", type=float, default=2.0,
-                    help="robust z of residual energy or bump score (within the cell) for the perimeter rule")
-    ap.add_argument("--rules", default="collision,perimeter",
-                    help="quarantine criteria, any of: switch, collision, perimeter (switch is off by default: "
-                         "0.13-0.22 precision where a neighbourhood's cells are close)")
     ap.add_argument("--sr", type=float, default=None)
-    ap.add_argument("--jobs", type=int, default=1, help="openTSNE threads")
+    for name, (dest, typ, fb, hlp) in _KNOBS.items():
+        d = _knob_default(name, typ, fb, gcfg)
+        ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
+                        help=f"{hlp} [{name}; default {d}]")
     ap.add_argument("--out-tag", default=None, help="stage tag of the output .clu (default: <clu-stage>.consensus)")
     a = ap.parse_args(argv)
     try:
@@ -313,32 +490,62 @@ def main(argv=None):
         raise SystemExit(f".fet has {fet.values.shape[0]} rows, .res {res_abs.size}")
     rel = res_abs - a.signal_start
     inwin = (rel >= 0) & (rel < sig.shape[0])
-    lab = np.where(inwin, clu, 0); rel0 = np.where(inwin, rel, 0)
-    if a.units:
-        groups = [[int(x) for x in g.split(",") if x.strip()] for g in a.units.split(";")]
-    else:
-        envs, _, _ = fe.run(view, rel0, lab, transform=transform, pre=21, post=21, min_n=30, sr=sr,
-                            partners=False, log=lambda s: None)
-        groups = neighbourhoods(envs, a.neighbourhood_theta)
-    out = clu.copy(); nxt = int(clu.max()) + 1; results = []
-    for units in groups:
-        r = consensus_neighbourhood(view, rel0, lab, units, fet.values, transform=transform, sr=sr,
-                                    runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
-                                    theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
-                                    dev_z=a.dev_z, rules=tuple(x.strip() for x in a.rules.split(",") if x.strip()),
-                                    n_jobs=a.jobs, log=log)
-        cmap = {}
-        for c in np.unique(r["cell"]):
-            cmap[int(c)] = nxt; nxt += 1
-        out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
-        if r["quarantine"].any():                 # one quarantine cluster per neighbourhood
-            out[r["idx"][r["quarantine"]]] = nxt; nxt += 1
-        results.append(r)
+    if a.window:
+        w0, w1 = (float(x) * 60 * sr for x in a.window.split(","))
+        inwin &= (rel >= w0) & (rel < w1)
+    rel0 = np.where(inwin, rel, 0)
+    rules = tuple(x.strip() for x in a.rules.split(",") if x.strip())
+    bad = [x for x in rules if x not in QUARANTINE_RULES]
+    if bad:
+        ap.error(f"unknown --rules {bad}; choose from {QUARANTINE_RULES}")
+    chunk_min = a.chunk_min
+    if chunk_min is None:                     # the session's chunking, as fiber-session / backbone-link read it
+        chunk_min = float(os.environ.get("FK_SESSION_CHUNK_MIN") or gcfg.get("FK_SESSION_CHUNK_MIN") or 12.0)
+    L = int(round(chunk_min * 60 * sr)) if chunk_min > 0 else 0
+    chunk_of = res_abs // L if L else np.zeros(res_abs.size, np.int64)
+    log(f"[consensus] knobs (CLI > FK_CONSENSUS_* env > $FK_CONFIG > default): runs={a.runs} frac={a.frac} "
+        f"k={a.k} perplexity={a.perplexity} theta-cell={a.theta_cell} rules={','.join(rules)} "
+        f"perim-thr={a.perim_thr} dev-z={a.dev_z} switch-thr={a.switch_thr} ws-runs={a.ws_runs} "
+        f"ws-grid={a.ws_grid} ws-island={a.ws_island} window={a.window or 'all'} "
+        f"chunk-min={chunk_min:g} keep-ids={a.keep_ids}")
+    given = ([[int(x) for x in g.split(",") if x.strip()] for g in a.units.split(";")] if a.units else None)
+    out = clu.copy(); nxt = int(clu.max()) + 1; results = []; cmaps = []; qclu = []; ngroups = 0
+    for ch in np.unique(chunk_of[inwin]):
+        lab = np.where(inwin & (chunk_of == ch), clu, 0)
+        if given is not None:
+            groups = given
+        else:
+            envs, _, _ = fe.run(view, rel0, lab, transform=transform, pre=21, post=21, min_n=30, sr=sr,
+                                partners=False, log=lambda s: None)
+            groups = neighbourhoods(envs, a.neighbourhood_theta)
+        if L:
+            log(f"chunk {int(ch)} ({int(ch) * chunk_min:g}-{(int(ch) + 1) * chunk_min:g} min): "
+                f"{len(groups)} neighbourhood(s)")
+        for units in groups:
+            n_in = int(np.isin(lab, list(units)).sum())
+            if n_in < a.min_spikes:
+                log(f"  skip {sorted(units)}: {n_in} spikes < --min-spikes {a.min_spikes}")
+                continue
+            r = consensus_neighbourhood(view, rel0, lab, units, fet.values, transform=transform, sr=sr,
+                                        runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
+                                        theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
+                                        dev_z=a.dev_z, rules=rules, ws_runs=a.ws_runs, ws_grid=a.ws_grid,
+                                        ws_island=a.ws_island, seed=a.seed, n_jobs=a.jobs, log=log)
+            cmap, nxt = cell_ids(r["cell"], clu[r["idx"]], r["quarantine"], nxt, keep=bool(a.keep_ids))
+            out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
+            q = r["quarantine"]; isl = q & (r["category"] == "island")
+            # quarantine clusters per neighbourhood: island (collision / noise groups) and rim (own-rim +
+            # other-cell: extremes of a cell, or reassignment candidates) -- or one cluster without categories
+            for part, name in ((isl, "island"), (q & ~isl, "rim" if a.ws_runs > 0 else "quarantine")):
+                if part.any():
+                    out[r["idx"][part]] = nxt; qclu.append(f"{nxt}={name}:{int(part.sum())}"); nxt += 1
+            results.append(r); cmaps.append(cmap); ngroups += 1
     tag = a.out_tag or (f"{a.clu_stage}.consensus" if a.clu_stage else "consensus")
     p_clu = nio.write_clu(a.base, a.elec, out, variant=a.clu_method, tag=tag)
-    p_q = write_quarantine_table(f"{a.base}.qrn.{a.elec}.{tag}", results, res_abs, clu, out)
+    p_q = write_quarantine_table(f"{a.base}.qrn.{a.elec}.{tag}", results, res_abs, clu, out, cell_ids=cmaps)
     nq = int(sum(r["quarantine"].sum() for r in results))
-    print(f"{len(groups)} neighbourhood(s); {nq} spikes quarantined; wrote {p_clu} and {p_q}")
+    print(f"{ngroups} neighbourhood(s); {nq} spikes quarantined (clusters {' '.join(qclu) or 'none'}); "
+          f"wrote {p_clu} and {p_q}")
 
 
 if __name__ == "__main__":

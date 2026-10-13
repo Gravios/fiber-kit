@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.36.0"
+version = "0.37.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,7 +30,7 @@ viz = ["matplotlib>=3.5", "pyqtgraph>=0.13", "PySide6>=6.4"]  # fiber-view (figu
 qc = ["holoviews>=1.18", "bokeh>=3.3"]  # fiber-qc interactive report
 editor = ["PySide6>=6.8", "pyyaml"]  # fiber-plan-edit (node-graph pipeline plan editor; needs Qt >= 6.8)
 gpu = ["cupy-cuda12x>=12.0"]      # optional GPU acceleration of realign/whiten kernels
-consensus = ["openTSNE>=1.0", "networkx>=2.8"]  # fiber-consensus (resampled t-SNE + Louvain)
+consensus = ["openTSNE>=1.0", "networkx>=2.8", "scikit-image>=0.19"]  # fiber-consensus (resampled t-SNE + Louvain + watershed)
 
 [project.scripts]
 fiber-session = "fiber_kit.fiber_session:main"

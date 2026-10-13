@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.37.0] — fiber-consensus: watershed categories, FK_CONSENSUS_* knobs, plannable stage
+- `watershed_categories`: each quarantined spike is sorted by t-SNE watershed basins voted over
+  `--ws-runs` maps into island / own-rim / other-cell.  On g6, islands (20-38 % of the quarantine) are
+  66-98 % foreign or noise; own-rim in a clean cell is mostly the cell's own.  Two quarantine clusters
+  per neighbourhood (island, rim); `.qrn` gains `category`, `ws_agree`, `ws_dest` (output ids).
+- Chunked processing (`--chunk-min`, default the session chunk) and `--keep-ids` (cells keep the
+  majority input unit's id), so the stage runs on a chunk-local or a linked sort; `--window`,
+  `--min-spikes`, `--seed`.
+- Knobs resolve CLI > `FK_CONSENSUS_*` env > `$FK_CONFIG` > default; documented section [C] in
+  fiber-kit-exp.yaml.  `fiber-consensus` is a plannable fiber-pipeline stage and a plan-editor node.
+- A second quarantine round was measured (purity -0.002..+0.004) and not implemented.
+- `scikit-image` joins the `consensus` extra.  fiber-pipeline `-l` no longer fails on the missing
+  fiber-stochastic summary line.
+
 ## [0.36.0] — fiber-consensus: perimeter rule, cell-relative envelope
 - `perimeter_rank`: a spike's average 2-D radial rank inside its cell.  On g6 the rim of a
   contaminated cell holds its collisions (20-38 % vs 1-2 % in the core) and foreign spikes.

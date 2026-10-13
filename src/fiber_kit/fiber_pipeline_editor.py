@@ -119,6 +119,15 @@ CATALOG = {
         _p("refrac-thr", "float", 0.3, "CCG obs/exp ratio above which a merge is vetoed"),
         _p("min-n", "int", 40, "min spikes for a cluster to participate"),
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
+    "fiber-consensus": dict(input=True, tags=["in", "out"], params=[  # post-sort review; not in `all`
+        _p("window", "str", "", "START,END minutes to process ('' = whole .fil; t-SNE cost grows with spikes)"),
+        _p("runs", "int", 40, "resampled t-SNE runs (20-60)"),
+        _p("theta-cell", "float", 7.0, "envelope d' joining communities into cells (5-10)"),
+        _p("rules", "str", "collision,perimeter", "quarantine criteria: collision, perimeter, switch"),
+        _p("perim-thr", "float", 0.8, "perimeter rule: radial rank within the cell (0.7-0.9)"),
+        _p("dev-z", "float", 2.0, "perimeter rule: robust z of residual energy / bump (1.5-3)"),
+        _p("ws-runs", "int", 5, "watershed category maps (0 = one quarantine cluster, no categories)"),
+        _p("jobs", "int", 1, "openTSNE threads")]),
 }
 STAGES = list(CATALOG)
 
@@ -135,6 +144,7 @@ STAGE_MODULES = {
     "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
     "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
+    "fiber-consensus": "fiber_kit.fiber_consensus",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
