@@ -510,10 +510,13 @@ fiber_realign() {     # 2. Klusters-style per-spike align, in-place commit (re-e
     echo "== fiber-realign  (in-place on $(clu_path "${STEP_IN:-fiber_session}")) =="
     local -a rv_args=()
     [ -n "$REALIGN_VARIANT" ] && rv_args=(--variant "$REALIGN_VARIANT")
+    # --no-emit-clu: the --clu is stage-tagged while the commit is canonical (no --out-tag), so
+    # re-emitting would overwrite the BASE .clu.<method>.<elec> with this stage's labels (the
+    # post-step re-rolls already pass it).  The stage .clu is unchanged by a realign.
     _run fiber-realign "$SESS" "$ELEC" \
         --clu "$(clu_path "${STEP_IN:-fiber_session}")" \
-        --align-algo "$REALIGN_ALGO" --reextract --refeaturize \
-        --variants standard,"$(clu_variant)" \
+        --align-algo "$REALIGN_ALGO" --reextract --refeaturize --no-emit-clu \
+        --variants all \
         "${rv_args[@]+"${rv_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -539,7 +542,7 @@ realign_after() {     # post-step Klusters re-roll: align each just-updated grou
         --clu "$(clu_path "$tag")" \
         --align-algo "$REALIGN_ALGO" "${mode_args[@]}" \
         --no-emit-clu \
-        --variants standard,"$(clu_variant)"
+        --variants all
 }
 
 fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall/gate) -> .refine

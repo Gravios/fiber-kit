@@ -81,6 +81,60 @@ def test_rms_recenter_shift():
     assert fr.rms_recenter_shift(np.ones(32), 18)[3] is False      # flat: R = 0 -> skipped
 
 
+def test_waveforms_of_a_lag_token():
+    """custody contract: a _D feature-space token's .spk is its WAVEFORM token's (no _D waveform set);
+    an exact _D .spk still wins; RAW waveforms are never aligned in place of a stderiv request."""
+    import tempfile
+    from fiber_kit import neuro_io as nio
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "s")
+        w = np.zeros((3, 4, 2), np.int16)
+        nio.write_spk(b, 6, w, variant="stderiv_C5")
+        nio.write_spk(b, 6, w + 1, variant="standard")
+        _, r = fr.open_waveforms(b, 6, 4, 2, "stderiv_C5_D34")
+        assert os.path.basename(r.path) == "s.spk.stderiv_C5.6"
+        assert fr._resolve_variant_token(b, 6, "stderiv_C5_D34") == "stderiv_C5"
+        nio.write_spk(b, 6, w + 2, variant="stderiv_C5_D34")
+        assert os.path.basename(fr.open_waveforms(b, 6, 4, 2, "stderiv_C5_D34")[1].path) == "s.spk.stderiv_C5_D34.6"
+    with tempfile.TemporaryDirectory() as d:
+        b = os.path.join(d, "s")
+        nio.write_spk(b, 6, np.zeros((3, 4, 2), np.int16), variant="standard")
+        try:
+            fr.open_waveforms(b, 6, 4, 2, "stderiv_C5_D34")
+            raise AssertionError("raw waveforms were accepted for a stderiv token")
+        except FileNotFoundError as e:
+            assert "refusing" in str(e)
+
+
+def test_plain_orders_match_computeSDiff():
+    """_S1/_S2/_S3 re-extraction == the extractor's computeSDiff (FIRST / LAPLACIAN / ALLPAIRS), ported
+    literally per channel, then round-half-away, int16 clamp, temporal first-difference, clamp."""
+    from fiber_kit import fiber_stderiv as fst
+    rng = np.random.default_rng(3)
+    raw = rng.integers(-9000, 9000, (5, 13, 8)).astype(np.float64)   # large enough to hit the clamp
+
+    def compute_sdiff(x, idx, n, order):
+        v = x[idx]
+        if order == 1:
+            return v - x[idx + 1] if idx < n - 1 else v - x[idx - 1]
+        if order == 2:
+            if idx == 0:
+                return v - x[1]
+            if idx == n - 1:
+                return v - x[n - 2]
+            return v - 0.5 * (x[idx - 1] + x[idx + 1])
+        return n * v - x.sum()
+
+    for order in (1, 2, 3):
+        sd = np.array([[[compute_sdiff(raw[k, t], i, 8, order) for i in range(8)] for t in range(13)]
+                       for k in range(5)])
+        sd = np.clip(np.sign(sd) * np.floor(np.abs(sd) + 0.5), -32768, 32767)
+        want = np.clip(sd[:, 1:] - sd[:, :-1], -32768, 32767).astype(np.int16)
+        partner, sets = fst.plain_order_spec(order, 8)
+        got = fst.apply_stderiv_transform(raw, partner=partner, sets=sets)
+        assert np.array_equal(got, want), order
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

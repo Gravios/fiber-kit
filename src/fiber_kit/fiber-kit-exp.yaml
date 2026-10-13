@@ -274,9 +274,11 @@ FK_REALIGN_AFTER:        "fiber-intrachunk fiber-anchor-link fiber-link"  # stag
                                   #   drift leaves a group's troughs spread; a per-unit realign re-tightens them.  Set ""
                                   #   to disable.  CANONICAL (stage-list) mode only: the embedded plan above carries its
                                   #   own explicit fiber-realign steps.  (fiber-session is followed by one either way.)
-FK_REALIGN_AFTER_MODE:   shift-spk  # shift-spk | reextract.  shift-spk circular-rolls the existing .spk (no .fil, fast,
-                                  #   validated trough-std 2.00->1.05); reextract re-reads the .fil (recovers samples that
-                                  #   drifted out of the extraction window, at the cost of .fil I/O each step).
+FK_REALIGN_AFTER_MODE:   reextract  # reextract | shift-spk.  Every realign changes ONLY the .res times; each waveform
+                                  #   variant (--variants all: every .spk on disk) is then re-extracted from the .fil at
+                                  #   the corrected times and its .fet regenerated from its .pca (_D aliases re-projected
+                                  #   from their waveform token).  shift-spk circular-rolls the existing .spk instead (no
+                                  #   .fil read, faster, exact only up to the filtered window edges).
 FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the artefacts that go to curation): reextract
                                   #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).

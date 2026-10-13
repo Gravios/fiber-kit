@@ -110,6 +110,25 @@ def sdiff_spec_uses_sets(spec):
     return "+" in str(spec or "")
 
 
+def plain_order_spec(order, n_chan):
+    """(partner, sets) reproducing neurosuite-3's plain spatial-derivative orders (computeSDiff in
+    process_extractspikes_stderiv) through apply_stderiv_transform's partner / sets forms:
+      1 SDIFF_FIRST      x[i] - x[i+1]; the last channel x[n-1] - x[n-2]       -> partner map
+      2 SDIFF_LAPLACIAN  x[i] - (x[i-1] + x[i+1]) / 2; the ends minus their one neighbour -> sets
+      3 SDIFF_ALLPAIRS   n x[i] - Sum_j x[j]                                      -> (None, None)
+    Group-local 0-based channel positions.  ValueError for any other order."""
+    n = int(n_chan)
+    if order == 3:
+        return None, None
+    if n < 2:
+        raise ValueError("a spatial derivative needs at least two channels")
+    if order == 1:
+        return [i + 1 for i in range(n - 1)] + [n - 2], None
+    if order == 2:
+        return None, [[1]] + [[i - 1, i + 1] for i in range(1, n - 1)] + [[n - 2]]
+    raise ValueError(f"plain spatial-derivative order {order} does not exist (1-3)")
+
+
 def apply_stderiv_transform(raw_ext, partner=None, sets=None):
     """ns3 stderiv transform, unified over the in-use orders (allpairs / custom / custom-CAR).
 

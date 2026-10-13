@@ -298,6 +298,40 @@ def _refresh_lag_alias_fets(base, group, refreshed, res_corr, out_tag=""):
         _det("fet", f"{fet_out}   (alias of {base_tok}; {fet.shape[1]} features incl. time)")
 
 
+def open_waveforms(base, group, nsamp, nch, token):
+    """The .spk a realign aligns / commits for `token`, by the custody contract (neurosuite-3
+    doc/ndmanager-plugins/formats/naming.md): .spk is Shared -- the exact token, then its WAVEFORM
+    token for a _D feature-space token (stderiv_C5_D34 -> .spk.stderiv_C5; no _D waveform set exists),
+    then standard, then the untagged name.  The contract allows the standard fallback, but realigning
+    RAW waveforms for a stderiv request would align and commit the wrong domain, so that case is
+    refused here (the contract's own advice: check the resolved method).  Returns (memmap,
+    ResolvedInput)."""
+    r = nio.resolve(base, "spk", group, token)
+    if not r.found:
+        raise FileNotFoundError(f"no waveform file for token '{token}': {r.path} (and the standard / "
+                                f"untagged fallbacks) not found")
+    if nio.is_stderiv_variant(token) and not nio.is_stderiv_variant(r.variant):
+        raise FileNotFoundError(f"token '{token}' is a stderiv space but the only waveforms found are "
+                                f"{os.path.basename(r.path)}; refusing to realign raw waveforms in its place")
+    return nio.open_spk_file(r.path, nsamp, nch), r
+
+
+def _variants_on_disk(base, group):
+    """Every waveform variant with a .spk for the group: standard first, then each method-tagged
+    <base>.spk.<token>.<group> (no stage tag, not a _D feature-space alias -- those own no waveforms).
+    The `--variants all` set: a realign re-extracts EVERY waveform space from the .fil, so none is
+    left stale against the corrected .res."""
+    g = str(group)
+    stem, tail = f"{base}.spk.", f".{g}"
+    toks = []
+    for pth in sorted(glob.glob(f"{stem}*{tail}")):
+        tok = pth[len(stem):-len(tail)]
+        if not tok or "." in tok or nio.parse_variant_token(tok).lag:
+            continue
+        toks.append(tok)
+    return ["standard"] + [t for t in toks if t != "standard"]
+
+
 def _resolve_variant_token(base, group, variant):
     """The method token actually on disk for a requested one, or the request itself.
 
@@ -306,6 +340,12 @@ def _resolve_variant_token(base, group, variant):
     custom-pattern session.  But the caller then needs to know WHICH token it got,
     because the transform to apply and the token to write both depend on it.
     """
+    try:                                   # exact / _D -> waveform token, by the custody contract
+        r = nio.resolve(base, "spk", group, variant)
+        if r.found and r.variant and nio.variant_family(r.variant) == nio.variant_family(variant):
+            return r.variant
+    except Exception:
+        pass
     try:
         r = nio.resolve_input(base, "spk", group, [variant])
         if r.found and r.variant:
@@ -346,7 +386,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     # the clu names the variant exactly (.clu.stderiv.N -> .spk.stderiv.N); load THAT file, not a
     # preference search.  prefer must be a list of variant tokens (a bare string would be walked
     # character-by-character).  There is no canonical .spk -- only .spk.<variant>.N.
-    spk, r = nio.open_spk(base, elec, nsamp, nch, prefer=[variant or "standard"])
+    spk, r = open_waveforms(base, elec, nsamp, nch, variant or "standard")
     spk_path = r.path
     res = nio.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
@@ -452,7 +492,8 @@ def main():
                          "--reextract, or --shift-spk when that is set)")
     ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
     ap.add_argument("--variants", default=None,
-                    help="comma list of feature spaces to refresh from .fil (default: standard + "
+                    help="'all' = every waveform variant with a .spk for the group (+ the --variant's "
+                         "waveform token); or a comma list of feature spaces to refresh from .fil (default: standard + "
                          "stderiv if present).  Each is re-derived from the re-extracted raw window: "
                          "standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the "
                          "session's own spikeDetection.channelGroups[N].sdiffPairs pattern "
@@ -530,14 +571,17 @@ def main():
         if a.reextract:
             raise SystemExit("[realign] --shift-spk and --reextract are mutually exclusive (one reads the "
                              ".fil, the other rolls the existing .spk)")
-        if a.variants:
+        if a.variants and a.variants.strip() == "all":
+            want = _variants_on_disk(base, group) + [out_variant]
+        elif a.variants:
             want = [v.strip() for v in a.variants.split(",") if v.strip()]
         else:
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
         refreshed = {}                                     # resolved token -> committed waveform
+        want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
         for v in want:
             try:
-                spk_v, _r = nio.open_spk(base, group, nsamp, nch, prefer=[v])
+                spk_v, _r = open_waveforms(base, group, nsamp, nch, v)
             except Exception:
                 _log(f"variant '{v}': no .spk, skipping"); continue
             # Write under the token that was actually RESOLVED, not the one asked
@@ -570,7 +614,9 @@ def main():
         # at t=0 uses the true previous .fil sample; standard = raw_ext[:, 1:, :]
         raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, cfg["peak"] + 1)
         # which feature spaces to refresh: standard always; stderiv (+any listed) when present
-        if a.variants:
+        if a.variants and a.variants.strip() == "all":
+            want = _variants_on_disk(base, group) + [out_variant]
+        elif a.variants:
             want = [v.strip() for v in a.variants.split(",") if v.strip()]
         else:
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
@@ -580,7 +626,7 @@ def main():
         # waveforms were built from a custom sdiffPairs pattern -- then write the
         # result under a token claiming otherwise.  Deciding on the resolved token is
         # what makes the refusal below reachable at all.
-        want = [_resolve_variant_token(base, group, v) for v in want]
+        want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
         refreshed = {}                                     # resolved token -> committed waveform
         for v in want:
             spec = nio.parse_variant_token(v)
@@ -623,13 +669,16 @@ def main():
                     continue
                 _det("sdiff", f"{v}: order {pat_order} from session sdiffPairs {pat!r}")
             elif spec.family == "stderiv" and spec.kind == "S":
-                # Orders 1-3 are plain spatial derivatives, but both neurosuite-3
-                # aligners refuse _S tokens outright -- they are not implemented there
-                # either, so producing one here would be the only writer of that space
-                # and nothing downstream could reproduce it.
-                _log(f"variant '{v}': _S{spec.order} spatial-derivative order is not implemented "
-                     f"(the neurosuite-3 aligners refuse it too); skipping")
-                continue
+                # _S<order>: the extractor's plain spatial derivative (process_extractspikes_stderiv
+                # computeSDiff: 1 nearest-neighbour, 2 Laplacian, 3 all-pairs), then the temporal
+                # first-difference -- the same rounding / clamping as the other orders.
+                try:
+                    partner, sets = fst.plain_order_spec(spec.order, raw_ext.shape[2])
+                except ValueError as e:
+                    _log(f"variant '{v}': {e}; skipping. NOTE this .spk is STALE against the realigned .res.")
+                    continue
+                wav = fst.apply_stderiv_transform(raw_ext, partner=partner, sets=sets)
+                _det("sdiff", f"{v}: plain spatial-derivative order {spec.order}")
             else:
                 _log(f"variant '{v}': no known waveform transform, skipping"); continue
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)

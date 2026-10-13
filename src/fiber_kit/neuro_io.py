@@ -328,6 +328,68 @@ def read_clu(base, elec, n_spikes=None, prefer=None):
 
 
 
+# ── custody contract: classes + resolve() (neurosuite-3 doc/ndmanager-plugins/formats/naming.md) ──
+# Mirror of custody.hpp::resolve / ndm_resolve_io.resolve; test/custody_vectors.tsv ("classify" and
+# "resolve" rows) is run against it by test_custody_token_conformance.
+_SHARED_TYPES = {"res", "spk"}
+_METHOD_SPECIFIC_TYPES = {"clu", "clc", "fet", "pca", "col", "model", "klg"}
+_SESSION_WIDE_TYPES = {"fil", "dat", "xml", "yaml", "nrs", "par", "eeg", "lfp"}
+
+
+def classify_type(type_):
+    """'Shared' (res, spk: one physical copy across methods), 'MethodSpecific' (clu, clc, fet, pca,
+    col, model, klg: strict, no fallback) or 'SessionWide' (fil, dat, ...: no method, no group)."""
+    if type_ in _SHARED_TYPES:
+        return "Shared"
+    if type_ in _SESSION_WIDE_TYPES:
+        return "SessionWide"
+    return "MethodSpecific"
+
+
+def waveform_token(method):
+    """Waveform token of a feature-space token: stderiv_C5_D34 -> stderiv_C5, stderiv_D34 -> stderiv.
+    A _D<lag><dims> token names a FEATURE space over the waveforms of the token without it -- there is
+    no separate _D waveform set.  Unchanged when the token carries no well-formed single-digit lag, so
+    an opaque token is never rewritten.  Mirrors custody::waveformToken / ndm_waveform_token."""
+    s = parse_variant_token(method)
+    if not (1 <= int(s.lag or 0) <= 9):
+        return method
+    return s.family + (f"_{s.kind}{s.order}" if s.kind else "")
+
+
+def resolve(base, type_, group, method):
+    """The custody contract's resolve():
+      SessionWide     <base>.<type>
+      MethodSpecific  <base>.<type>.<method>.<group>, strict (no fallback)
+      Shared          first existing of <method>, its waveform token (only for a _D token), standard
+                      (only if method != standard), the untagged legacy name; when none exists, the
+                      WAVEFORM token's path -- so a writer never makes a _D-named copy of the waveforms.
+    A Shared request can fall back to RAW (standard) waveforms; a caller needing a domain must check the
+    resolved method (ResolvedInput.variant).  Returns ResolvedInput(path, variant, dotted, found)."""
+    k = classify_type(type_)
+    if k == "SessionWide":
+        path = f"{base}.{type_}"
+        return ResolvedInput(path, "", False, os.path.exists(path))
+    g = str(group)
+    if k == "MethodSpecific":
+        path = f"{base}.{type_}.{method}.{g}"
+        return ResolvedInput(path, method, True, os.path.exists(path))
+    wave = waveform_token(method)
+    cands = [method]
+    if wave != method and wave != "standard":
+        cands.append(wave)
+    if method != "standard":
+        cands.append("standard")
+    for m in cands:
+        path = f"{base}.{type_}.{m}.{g}"
+        if os.path.exists(path):
+            return ResolvedInput(path, m, True, True)
+    legacy = f"{base}.{type_}.{g}"
+    if os.path.exists(legacy):
+        return ResolvedInput(legacy, "", False, True)
+    return ResolvedInput(f"{base}.{type_}.{wave}.{g}", wave, True, False)
+
+
 def resolve_any(base, type_, group, preferred=""):
     """Find the ONE physical copy of a Shared artifact (.res, .spk), whatever
     method token it happens to carry.
@@ -571,7 +633,8 @@ def open_spk(base, elec, nsamp, nchan, prefer=None, mode="r"):
     Returns (memmap (n,nsamp,nchan), ResolvedInput)."""
     r = resolve_input(base, "spk", elec, prefer or prefer_derived())
     if not r.found:
-        raise FileNotFoundError(f"no .spkD/.spk for {base} elec {elec}")
+        tried = ", ".join(f".spk.{v}.{elec}" if v else f".spk.{elec}" for v in (prefer or prefer_derived()))
+        raise FileNotFoundError(f"no waveform file for {base} group {elec} (tried {tried})")
     return open_spk_file(r.path, nsamp, nchan, mode=mode), r
 
 
@@ -612,6 +675,12 @@ def open_spkD(base, elec, nsamp, nch, mode="r", prefer=None):
         prefer = os.environ.get("FK_SPK_VARIANT") or None
     toks = ([prefer] if isinstance(prefer, str) else list(prefer)) if prefer else []
     toks = [t for t in toks if t]
+    # the custody contract's Shared step 2: a _D feature-space token reads its WAVEFORM token's .spk
+    # (stderiv_C5_D34 -> stderiv_C5) before any family walk -- there is no _D waveform set.
+    exp = []
+    for t in toks:
+        exp += [t] + ([waveform_token(t)] if waveform_token(t) != t else [])
+    toks = list(dict.fromkeys(exp))
     want = toks + [w for w in prefer_derived() if w not in toks]
     mm, r = open_spk(base, elec, nsamp, nch, prefer=want, mode=mode)
     return mm, r.path

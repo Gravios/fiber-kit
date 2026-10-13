@@ -592,6 +592,14 @@ Defaults are Klusters': threshold 0.70, 2 iterations, max shift `max(1, (peakSam
 0.4; knobs `FK_REALIGN_MIN_SCORE`, `FK_REALIGN_ITERS`, `FK_REALIGN_MAX_SHIFT`, `FK_REALIGN_RECENTER_RMS`,
 `FK_REALIGN_RMIN` (fiber-kit-exp.yaml sets the RMS mode).
 
+What a realign commits: only the `.res` times change.  Every waveform variant (`--variants all`: each
+`.spk.<token>.<group>` on disk) is then re-extracted from the `.fil` at the corrected times -- raw for
+`standard`, the extractor's transform for a stderiv token (`_S1/_S2/_S3` plain spatial derivatives, `_C4`
+partner map, `_C5` reference sets, each followed by the temporal first-difference) -- and its `.fet`
+regenerated from its `.pca`; a `_D<lag><dims>` alias owns no waveforms, so its `.fet` is re-projected
+from its waveform token's fresh `.spk`.  The `.spk` a `_D` token aligns is its waveform token's
+(`stderiv_C5_D34` -> `.spk.stderiv_C5`), by the neurosuite-3 custody contract.
+
 Checked against the compiled Klusters code (origin/main, driven by a verbatim port of the GUI loop) on
 the g6 36-47 min fiber-session sort, 115 units / 19,543 spikes: identical shift on every spike, on both
 the standard and the stderiv_C5_D34 `.spk`, in both modes.  Before 0.38.1 the pipeline's call agreed on

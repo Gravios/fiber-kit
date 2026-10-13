@@ -10,11 +10,11 @@
 # grammar there would have gone unnoticed here, and resolve_input would quietly stop
 # matching the tokens neurosuite-3 writes.
 #
-# fiber-kit mirrors only the token-grammar kinds. The other kinds in the table
-# (classify / method_of / parse_anchor / resolve) describe naming policy fiber-kit
-# does not implement — it has session_path, not a path classifier — so they are
-# skipped, and the skipped kinds are REPORTED rather than silently ignored, so a kind
-# added upstream shows up here as something to look at.
+# fiber-kit mirrors the token grammar and the class-aware resolution (classify /
+# resolve / resolve_any).  method_of and parse_anchor describe a path classifier fiber-kit
+# does not implement -- it composes paths with session_path -- so they are skipped, and the
+# skipped kinds are REPORTED rather than silently ignored, so a kind added upstream shows up
+# here as something to look at.
 import os
 import tempfile
 import sys
@@ -80,6 +80,23 @@ with open(VECTORS) as fh:
                           f[1], f[2], f[3], f[4], f[5], f[6],
                           os.path.basename(r.path), int(r.found)))
 
+        elif kind == "resolve":
+            # The contract's class-aware resolve(): Shared falls back method -> waveform token
+            # (for a _D token) -> standard -> untagged; MethodSpecific is strict.
+            existing = [x for x in f[1].split(",") if x]
+            with tempfile.TemporaryDirectory() as d:
+                base = os.path.join(d, "sess")
+                for suf in existing:
+                    open(base + "." + suf, "w").close()
+                r = nio.resolve(base, f[2], int(f[3]), f[4])
+                check(os.path.basename(r.path) == f[5] and r.found == (f[6] == "1"),
+                      "resolve [{}] {}/{}/'{}' -> {} found={} (got {} found={})".format(
+                          f[1], f[2], f[3], f[4], f[5], f[6],
+                          os.path.basename(r.path), int(r.found)))
+
+        elif kind == "classify":
+            check(nio.classify_type(f[1]) == f[2], f"classify_type({f[1]!r}) == {f[2]!r}")
+
         elif kind == "is_stderiv":
             token, want = f[1], (f[2] == "1")
             got = nio.is_stderiv_variant(token)
@@ -92,8 +109,7 @@ print(f"custody token conformance (fiber-kit): {ran} checks, {fails} failed")
 if skipped:
     detail = ", ".join(f"{k}×{n}" for k, n in sorted(skipped.items()))
     print(f"  not mirrored by fiber-kit, skipped: {detail}")
-    unexpected = sorted(set(skipped) - {"classify", "method_of",
-                                        "parse_anchor", "resolve"})
+    unexpected = sorted(set(skipped) - {"method_of", "parse_anchor"})
     if unexpected:
         print(f"  NOTE: unrecognised vector kind(s) {unexpected} — the canonical "
               f"table gained something; check whether fiber-kit should mirror it")

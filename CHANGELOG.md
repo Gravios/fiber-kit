@@ -4,6 +4,29 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.3] — realign = new .res times + every variant re-extracted from the .fil; custody .spk resolution
+- A realign changes ONLY the `.res` times; every waveform variant is then re-extracted from the `.fil`
+  at the corrected times and its `.fet` regenerated (`_D` alias `.fet` re-projected from its waveform
+  token).  `fiber-realign --variants all` = every `.spk.<token>.<group>` on disk (+ the `--variant`'s
+  waveform token); fiber-pipeline passes it for the plan's realign and the post-step re-rolls, and
+  fiber-kit-exp.yaml sets `FK_REALIGN_AFTER_MODE: reextract`.
+- `_S1/_S2/_S3` (the extractor's plain spatial derivatives: nearest-neighbour / Laplacian / all-pairs)
+  are re-derived (`fiber_stderiv.plain_order_spec`; tested against a literal port of computeSDiff)
+  instead of skipped -- `stderiv_S3` waveforms were left stale against the realigned `.res`.
+- `neuro_io.resolve` / `classify_type` / `waveform_token`: the neurosuite-3 custody contract
+  (doc/ndmanager-plugins/formats/naming.md).  `.spk`/`.res` are Shared: exact token -> its WAVEFORM
+  token for a `_D<lag><dims>` token (`stderiv_C5_D34` -> `.spk.stderiv_C5`) -> standard -> untagged;
+  `.clu/.clc/.fet/.pca/...` strict.  test_custody_token_conformance runs the shared table's `classify`
+  and `resolve` rows too (87 checks).  fiber-realign resolves its waveforms through it and refuses raw
+  waveforms for a stderiv token; `open_spkD` tries the waveform token before the family walk.  With
+  `FK_REALIGN_VARIANT: stderiv_C5_D34` and no `_D34` `.spk` the plan's realign failed ("no .spkD/.spk");
+  the misleading "spkD" wording is gone from the error.
+- fiber-pipeline: the plan's realign step passes `--no-emit-clu` (it re-emitted a stage-tagged `.clu`
+  over the base `.clu.<method>.<elec>`).
+- Checked on a copy of the g6 mini-session laid out like the reference session: `.res` moved for 6,040
+  spikes; standard / stderiv_C5 / stderiv_S3 `.spk` re-extracted (300/300 sampled spikes equal the `.fil`
+  window, resp. its transform, at the new time); `.clu/.clc/.clp/.pca/.yaml` untouched; no `_D` `.spk`.
+
 ## [0.38.2] — fiber-kit-exp.yaml: realign threshold 0.10 (the curator's Klusters setting)
 - `FK_REALIGN_MIN_SCORE: 0.10`; parity with the compiled Klusters code re-checked at 0.10 on the g6
   sort (every spike, both `.spk` variants); template correlation 0.618 / 0.707 vs 0.592 / 0.652 at
