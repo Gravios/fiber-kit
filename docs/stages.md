@@ -1127,6 +1127,36 @@ Positional: `base`, `elec`
 | `--type-veto` | flag (off) | never merge a narrow- with a broad-spiking unit (off by default: on g6 fiber_session fragments the per-fragment width is too noisy and the veto cost 0.11 ARI) |
 | `--merge-tag` | — | stage tag of the merged .clu (default: <clu-stage>.envmerge) |
 | `--eap` | flag (off) | write explained near collisions as .eap membership on the analysed --clu-stage (Klusters' collision ring) |
+### `fiber-consensus`
+
+Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in the stage's `.fet` space, Louvain communities on the co-neighbour probability, communities joined into cells by the envelope merge, and a QUARANTINE cluster for spikes that switch cell across runs or carry a near collision, with a per-spike reason table (`.qrn`). Needs the `consensus` extra (openTSNE, networkx). See docs/methods.md, "Resampled t-SNE consensus and quarantine".
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--signal` | — | continuous filtered int16 file (e.g. BASE.fil) |
+| `--total-channels` | — | channels in the signal file (default: session yaml) |
+| `--channels` | — | group channels, e.g. 40-47 (default: session yaml) |
+| `--signal-start` | `0` | absolute sample of the signal's first row |
+| `--space` | — | waveform space for the envelope (default: --clu-method's) |
+| `--sdiff-pairs` | — | sdiffPairs for a _C space (default: session yaml) |
+| `--res-variant` | `stderiv` | variant of the spike-time .res |
+| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--fet-variant` | — | variant of the .fet to embed (default: --clu-method) |
+| `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
+| `--neighbourhood-theta` | `12.0` | d' cut for automatic neighbourhoods |
+| `--runs` | `40` |  |
+| `--frac` | `0.7` |  |
+| `--k` | `15` | 2-D neighbours per spike |
+| `--perplexity` | `30.0` |  |
+| `--theta-cell` | `7.0` | envelope d' cut joining communities into cells |
+| `--switch-thr` | `0.3` | cell-switch rate that quarantines a spike |
+| `--sr` | — |  |
+| `--jobs` | `1` | openTSNE threads |
+| `--out-tag` | — | stage tag of the output .clu (default: <clu-stage>.consensus) |
 ### `fiber-calibrate`
 
 Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`.

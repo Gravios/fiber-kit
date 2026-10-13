@@ -363,3 +363,42 @@ broad ones, so a split threshold must be per type -- and the merge's remaining e
 and the broad non-bursting cells (22, 23, 25, 30, 33, 19 end up in groups of < 0.35 purity; the
 bursting pyramidal cells in groups of 0.90-1.00).  As a cannot-link on fiber_session FRAGMENTS the
 width is too noisy (`--type-veto`, off by default).
+
+## Resampled t-SNE consensus and quarantine (`fiber_consensus`, 0.35)
+
+The curator's t-SNE lasso works on one embedding, and one embedding is one random draw.
+`fiber-consensus` embeds a neighbourhood of similar clusters R times (default 40; random 70 %
+subsets, fresh random initialisation, per-column z-scored `.fet`), and from the runs builds:
+
+* `coneighbour_communities` -- Louvain on P_ij = (runs with j among i's 15 nearest 2-D neighbours) /
+  (runs containing both), edges with P >= 0.1;
+* cells -- communities joined by `fiber_envelope.merge_units` (d' < 7, inflation cannot-link),
+  because t-SNE cuts one cell's noise ball into several stable-looking islands;
+* `switch_rate` -- per spike, the fraction of its runs in which the majority of its 2-D neighbours
+  belongs to another CELL;
+* the quarantine -- switch rate >= 0.3, or the envelope's near-collision flag.  Quarantined spikes
+  go to one cluster per neighbourhood; `<base>.qrn.<elec>.<tag>` lists each with its cell, switch
+  rate, collision flag and the explaining partner / shift, for review.
+
+Four g6 neighbourhoods (36-47 min; average linkage on envelope d' < 15 or < 10; GT = exp_final;
+"misassigned" = a spike whose GT cell is not its cell's majority, or GT noise):
+
+| neighbourhood | spikes | fiber_session purity / completeness | cells purity / completeness | quarantined | precision (base rate) | purity after |
+|---|---|---|---|---|---|---|
+| 7 (10 fragments) | 2153 | 0.904 / 0.791 | 0.931 / 0.732 | 8.6 % | 0.34 (0.08) | 0.953 |
+| 8 (12 fragments, one cell) | 1458 | 0.906 / 0.513 | 0.910 / 0.979 | 4.7 % | 0.66 (0.11) | 0.932 |
+| 18 (11 fragments) | 1953 | 0.768 / 0.355 | 0.807 / 0.901 | 5.9 % | 0.83 (0.42) | 0.832 |
+| 9 (8 fragments) | 1520 | 0.870 / 0.719 | 0.900 / 0.593 | 10.2 % | 0.39 (0.11) | 0.929 |
+
+Of the two criteria the collision flag is the more reliable (precision 0.51-0.79 at 3.6-4.9 % of
+spikes); cell switching runs 0.20-0.86, best where the neighbourhood holds clearly different cells.
+Completeness of the cells beats the fragments where a cell was over-split (8, 18) and loses where
+the envelope merge stops short (7, 9) -- the cells are a starting point for the curator, not a
+verdict.
+
+**Distance variance is not a suspicion marker.**  The first idea -- spikes whose 2-D distances to
+their full-dimensional neighbours vary most across runs -- measures density: inside one cell's
+noise ball every neighbour is as good as any other, so core spikes are the unstable ones, and
+outliers, collisions included, form small islands that are stable from run to run.  Against
+misassigned spikes it ran at AUC 0.25-0.55 (0.39-0.52 even ranked within each cell); against
+collision flags 0.35-0.60.

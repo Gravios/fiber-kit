@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.35.0] — fiber-consensus: resampled t-SNE consensus + quarantine
+- New stage `fiber-consensus` (`fiber_consensus`): R subsampled t-SNE runs (openTSNE) of a
+  neighbourhood of similar clusters in the `.fet` space, Louvain communities on the co-neighbour
+  probability, communities joined into cells by the envelope merge, and a quarantine cluster for
+  spikes that switch cell across runs or carry a near collision, with a `.qrn` reason table.
+- On four g6 neighbourhoods the quarantine takes 4.7-10.2 % of spikes at 0.34-0.83 precision
+  against base rates of 0.08-0.42, and lifts cell purity by 0.02-0.03.  Across-run distance variance
+  was measured and rejected (a density measure; AUC 0.25-0.55).
+- Optional extra `consensus = [openTSNE, networkx]`; test_consensus (slow, ~3 min).
+
 ## [0.34.0] — fiber-envelope: cell layer, cell-aware merging, cell type; probe top-to-bottom fix
 - Cell layer (`fit_envelope(times=...)`, `run(sr=...)`): amplitude-dependent shape S, within-window
   drift D and the fiber_adapt adaptation law per unit; `amp_model()` / `channel_ratio()` measure spread
