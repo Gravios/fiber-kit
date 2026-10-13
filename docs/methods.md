@@ -198,6 +198,17 @@ at the best lag and s^2 the mean of the two envelopes.  The subtracted term is t
 two estimates of one template, so a same-cell pair sits near 0.  Also returns the worst single
 channel's d'.
 
+### `Envelope.channel_ratio(which="kept")` -- the amplitude-scaled variance check
+
+Per channel, observed / predicted variance summed over the window, with the prediction
+`amp_model() = noise_c + var_a T^2 + var_b T'^2` using ONE var_a / var_b for every channel.  The
+band therefore widens with the channel's amplitude: a near unit is allowed a large spread on its
+big channels, a distant one stays noise-dominated, and the check reads ~1 for a single source at
+any distance.  A merged second unit shows up as > 1 on the channels where the two differ.
+`which`: `kept` (default: all spikes except near collisions a partner explained), `clean` (bump-test
+survivors only -- blind to a strongly different minority, which the bump test flags), `all`
+(inflated by near collisions).  The noise-relative `excess_ratio()` is kept for comparison.
+
 ### Validation
 
 Synthetic (test/test_envelope.py; known templates, amplitude/jitter spreads, a 20-sample detector
@@ -231,6 +242,46 @@ Butterworth 800 Hz trace of 36-47 min, all-pairs stderiv and `stderiv_C5`:
   untransformed space small partners under large spikes are missed and look-alikes get swapped.
 * Partners at |shift| > 21 that should have their own .res row: 19-33 % do, 0 % at the mirrored
   shift (n = 11-30; small).
+
+Amplitude-scaled check on real g6 cells (exp_final, >= 150 spikes; .fil 36-41):
+
+| statistic | Spearman vs unit SNR (C5 / standard) | AUC, 10 % of the most similar cell merged in | 20 % |
+|---|---|---|---|
+| channel_ratio kept | +0.08 / -0.09 | 0.75 / 0.75 | 0.81 / 0.82 |
+| channel_ratio clean | -0.42 / -0.20 | 0.66 / 0.68 | 0.74 / 0.83 |
+| channel_ratio all | +0.11 / +0.11 | 0.74 / 0.68 | 0.80 / 0.74 |
+| excess_ratio (noise-relative) | +0.48 / +0.50 | 0.55 / 0.53 | 0.59 / 0.63 |
+
+The noise-relative check grows with SNR (near units fail it for being near); the amplitude-scaled
+one does not, and it is the better merge detector.  Real single cells still read ~1.3-1.5 (shape
+variability the scale + jitter model does not capture), which is what limits a 10 % admixture to
+AUC 0.75.  On fiber_session units it flags those < 90 % pure against GT2 at AUC 0.81-0.83, but does
+not predict which units the curator split in the t-SNE pass (AUC 0.52-0.53).
+
+### Expected effect on fiber_session output
+
+fiber_session units of the 36-48 min chunk, refined automatically and scored against the curated
+stages on the same spikes (ARI / purity / completeness, GM = reference cell > 1):
+
+| | GT2 ARI | GT2 purity | GT2 completeness |
+|---|---|---|---|
+| fiber_session as is | 0.10-0.12 | 0.84-0.85 | 0.31 |
+| near collisions -> noise | -0.005 to -0.007 | +0.006 to +0.010 | -0.008 to -0.011 |
+| exp_chunk (the t-SNE pass) | 0.22-0.27 | 0.90 | 0.46-0.47 |
+| exp_linked (pipeline final) | 0.61 | 0.86 | 0.68-0.70 |
+| average-linkage merge on envelope d' < 7 | 0.61-0.70 | 0.83-0.84 | 0.71-0.77 |
+
+* The robust envelope itself (vs the plain std in the same d') changes the best achievable result
+  by <= 0.004 ARI (0.695 vs 0.699, 0.610 vs 0.612, 0.604 vs 0.607) and anything on the 6-8 plateau
+  by <= 0.007; off the plateau the two shift the threshold slightly (differences up to +-0.1 in
+  either direction).  The merge gain is the d' statistic (envelope-normalised template
+  difference), not the collision-robust noise estimate.  d' beats amplitude-preserving cosine
+  merging (best 0.39-0.59 ARI, at equal or lower purity).
+* The threshold 7 was read off GT2; the plateau (6-8) holds in all three spaces (stderiv_C5 and
+  standard on the session .fil 36-41, stderiv_C5 on a Butterworth trace 36-47), but it is one chunk
+  of one session, and the merge does not cross chunk boundaries (exp_linked's drift linking does).
+* The curator did treat flagged spikes differently (sent to noise 7-9 % vs 3 %; moved 63-70 % vs
+  52-54 %), but they are 3.4-4 % of spikes, so automating that is worth ~0.01 purity.
 
 ### Limits
 

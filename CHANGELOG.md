@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.33.0] — fiber-envelope: amplitude-scaled channel check
+- `Envelope.amp_model()`: noise_c + var_a T^2 + var_b T'^2 with one var_a / var_b for every channel,
+  so the expected spread widens with each channel's amplitude (a near unit's big channels may vary
+  more; a distant unit stays noise-dominated).
+- `Envelope.channel_ratio(which)`: observed / amplitude-predicted variance per channel; `kept`
+  (default) excludes only near collisions a partner explained, so a merged minority -- flagged by the
+  bump test but not explainable -- is still counted.  `.env` gains chan_ratio_max + per channel.
+- Real g6: independent of unit SNR (Spearman ~0, vs +0.5 for the noise-relative excess) and a
+  better merge detector (10 % look-alike admixture AUC 0.75 vs 0.53-0.55).  docs/methods.md also
+  records the expected effect on fiber_session output: the envelope d' merge lifts GT2 ARI
+  0.10 -> 0.61-0.70 within a chunk; the collision-robust noise estimate itself adds <= 0.004 at the
+  best threshold.
+- test_envelope: channel_ratio ~1 for single units of different amplitude, > 1.5 with 10 % merged.
+
 ## [0.32.0] — fiber-envelope: collision-robust variance envelope + near-collision partners
 The per-unit spread used by band_overlap / dispersion_profile is a plain std over cluster
 members, which near collisions (a second spike inside the window, often hidden by the detector's

@@ -211,7 +211,31 @@ class Envelope:
     lag: np.ndarray            # (n,) integer alignment lag
     threshold: float
     template_ext: np.ndarray = None   # (Lx, C) extended-window template (for partner search)
+    var_clean: np.ndarray = None      # (L, C) PLAIN variance of the aligned clean spikes
+    var_all: np.ndarray = None        # (L, C) PLAIN variance of ALL aligned spikes
+    var_kept: np.ndarray = None       # (L, C) ... of all spikes except EXPLAINED near collisions (run())
     meta: dict = field(default_factory=dict)
+
+    def amp_model(self):
+        """Amplitude-scaled expected variance (L, C): noise_c + var_a T^2 + var_b T'^2, with the SAME
+        var_a / var_b on every channel.  A closer unit (larger T) gets a proportionally wider band, a
+        distant one is noise-dominated -- the envelope a single source can produce on each channel."""
+        return self.var_noise[None, :] + self.var_a * self.template ** 2 + self.var_b * self.dtemplate ** 2
+
+    def channel_ratio(self, which="kept"):
+        """Per-channel observed / amplitude-predicted variance, energy-weighted over the window:
+        sum_t var / sum_t amp_model.  ~1 on every channel for one unit at ANY distance; a second
+        source shows up as > 1 on the channels where it differs from the first.
+
+        which: 'kept'  -- all spikes except the near collisions a partner EXPLAINED (default; falls
+                          back to 'all' before run() has searched partners).  A merged minority stays
+                          in: a foreign spike very unlike the template IS flagged by the bump test, but
+                          no shifted partner explains it, so it is counted here.
+               'clean' -- only spikes that passed the bump test (hides a strongly different minority)
+               'all'   -- every spike (near collisions inflate it)"""
+        v = {"kept": self.var_kept if self.var_kept is not None else self.var_all,
+             "clean": self.var_clean, "all": self.var_all}[which]
+        return v.sum(0) / self.amp_model().sum(0)
 
     def excess_ratio(self):
         """Per-channel mean (over the core window) of residual variance / noise variance on the
@@ -285,13 +309,15 @@ def fit_envelope(X, core, var_noise=None, noise_windows=None, *, maxlag=4, width
     excess = np.maximum(_mad_var(R[keep], axis=0) - var_noise[None, :], 0.0)
     sigma = np.sqrt(var_noise[None, :] + var_a * T ** 2 + var_b * dT ** 2 + excess)
     naive = Xc.std(0)
+    var_clean = Xc[keep].var(0)
+    var_all = Xc.var(0)
     Text = None
     if ext is not None:
         Text = np.median(take_lagged(X, lag, ext)[keep], 0)
     return Envelope(template=T, dtemplate=dT, var_noise=var_noise, var_a=var_a, var_b=var_b,
                     excess=excess, sigma=sigma, sigma_naive=naive, n=n, n_clean=int(keep.sum()),
                     flagged=~keep, score=score, bump_pos=pos, a=a, b=b, lag=lag, threshold=thr,
-                    template_ext=Text)
+                    template_ext=Text, var_clean=var_clean, var_all=var_all)
 
 
 def robust_dispersion_profile(waves, var_noise=None, noise_windows=None, maxlag=3, **kw):
@@ -457,7 +483,7 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
         envs[int(u)] = env
         rows[int(u)] = X if partners else None
         log(f"unit {int(u):4d}: n={idx.size:6d} flagged={env.flagged.mean():.3f} "
-            f"excess_max={env.excess_ratio().max():.2f} naive/robust={np.median(env.sigma_naive / env.sigma):.2f}")
+            f"chan_ratio_clean_max={env.channel_ratio('clean').max():.2f} naive/robust={np.median(env.sigma_naive / env.sigma):.2f}")
     table = dict(idx=[], unit=[], score=[], flagged=[], bump_pos=[], partner=[], shift=[], coef=[],
                  explained=[])
     gain_thr = 0.0
@@ -477,6 +503,9 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
                               gain_thr=gain_thr)
             for k in part:
                 part[k][f] = p[k]
+            keep_k = ~part["explained"]
+            Xc = take_lagged(X[keep_k], env.lag[keep_k], core)
+            env.var_kept = Xc.var(0)
         table["idx"].append(idx); table["unit"].append(np.full(idx.size, u))
         table["score"].append(env.score); table["flagged"].append(f)
         table["bump_pos"].append(env.bump_pos - pre); table["partner"].append(part["partner"])
@@ -494,14 +523,16 @@ def write_tables(base, elec, tag, envs, table, res_abs):
     sfx = f".{elec}" + (f".{tag}" if tag else "")
     p_env = f"{base}.env{sfx}"
     with open(p_env, "w") as f:
+        nc = next(iter(envs.values())).sigma.shape[1]
         f.write("unit\tn\tn_clean\tflag_frac\tthreshold\tsd_amp\tsd_deriv\tnaive_over_robust\t"
-                + "\t".join(f"excess_c{c}" for c in range(next(iter(envs.values())).sigma.shape[1]))
-                + "\n")
+                "chan_ratio_max\t" + "\t".join(f"excess_c{c}" for c in range(nc)) + "\t"
+                + "\t".join(f"chan_ratio_c{c}" for c in range(nc)) + "\n")
         for u, e in sorted(envs.items()):
             f.write(f"{u}\t{e.n}\t{e.n_clean}\t{e.flagged.mean():.4f}\t{e.threshold:.2f}\t"
                     f"{np.sqrt(e.var_a):.4f}\t{np.sqrt(e.var_b):.4f}\t"
-                    f"{np.median(e.sigma_naive / e.sigma):.3f}\t"
-                    + "\t".join(f"{x:.3f}" for x in e.excess_ratio()) + "\n")
+                    f"{np.median(e.sigma_naive / e.sigma):.3f}\t{e.channel_ratio().max():.3f}\t"
+                    + "\t".join(f"{x:.3f}" for x in e.excess_ratio()) + "\t"
+                    + "\t".join(f"{x:.3f}" for x in e.channel_ratio()) + "\n")
     p_nco = f"{base}.nco{sfx}"
     with open(p_nco, "w") as f:
         f.write("spike\ttime\tunit\tscore\tflagged\tbump_pos\tpartner\tshift\tcoef\texplained\n")

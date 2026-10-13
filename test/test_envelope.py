@@ -196,6 +196,23 @@ def test_custom_c5_space():
     assert e.sum() > 50 and ok[sp].mean() > 0.85, (e.sum(), ok[sp].mean())
 
 
+def test_channel_ratio_amplitude_scaled_and_merge_sensitive():
+    """channel_ratio: observed / (noise + var_a T^2 + var_b T'^2) per channel -- ~1 for a single unit
+    whatever its amplitude (the three units differ ~2x in peak), and well above 1 when 10 % of
+    another unit is merged in.  'kept' sees the merge; 'clean' is blind to it (the foreign spikes
+    fail the bump test and are excluded); 'all' is inflated by near collisions even when single."""
+    sig, res, clu, ev, envs, table, noise = _run()
+    single = {u: e.channel_ratio().max() for u, e in envs.items()}
+    assert all(0.9 < x < 1.2 for x in single.values()), single
+    assert all(e.channel_ratio("all").max() > max(single.values()) + 0.1 for e in envs.values())
+    rng = np.random.default_rng(1)
+    c = clu.copy(); iu = np.flatnonzero(clu == 2); iv = np.flatnonzero(clu == 3)
+    c[rng.choice(iv, int(0.1 / 0.9 * iu.size), replace=False)] = 2
+    E, _, _ = fe.run(sig, res, c, pre=PRE, post=POST, margin=MARGIN, maxlag=MAXLAG, log=lambda s: None)
+    assert E[2].channel_ratio().max() > 1.5, E[2].channel_ratio().max()
+    assert E[2].channel_ratio("clean").max() < 1.2
+
+
 def test_cli_end_to_end():
     sig, res, clu, ev, envs, table, noise = _run()
     with tempfile.TemporaryDirectory() as d:
