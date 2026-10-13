@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.4] — fiber-anchor-link holds the reserve bins (0, 1) out of the link
+- The quarantine re-entered the merge at the linker.  fiber-consensus (quarantine-only) parks its
+  quarantine in cluster 1 and intrachunk keeps it there, but fiber-anchor-link took every `clu > 0`
+  as an atom: cluster 1 spans the session, so it (a) fused all chunk intervals into one and forced
+  the fixed-bin chunk fallback, (b) was chained onto real cells -- on the g6 reference run 14,190
+  quarantined spikes ended in exp_final cell 90 together with three real units (15,933 spikes) --
+  and (c) the linker numbered its largest chain 1, which xcorr-merge and backbone-link (units are
+  `clu > 1`) then treated as noise: a real 7,513-spike chain sat in cluster 1 through exp_final.
+- Now: reserve atoms are neither linked nor chunk-assigned, 0/1 pass through unchanged, cells are
+  numbered from 2 (`cells_from_links`), the per-spike consolidation excludes both, and on the atom
+  (.clc) layer children whose flat label is 1 are folded back into 1.  Re-run on the uploaded
+  exp_chunk: all 14,190 quarantined spikes stay in 1, the chunk partition recovers 9 chunks from
+  the atom spans, and the three units form their own cell.  test_anchor_link_reserve.
+
 ## [0.38.3] — realign = new .res times + every variant re-extracted from the .fil; custody .spk resolution
 - A realign changes ONLY the `.res` times; every waveform variant is then re-extracted from the `.fil`
   at the corrected times and its `.fet` regenerated (`_D` alias `.fet` re-projected from its waveform

@@ -142,6 +142,36 @@ def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng):
                 cx=fg.waveform_complexity(med))
 
 
+# Klusters' reserved labels: 0 = artifact, 1 = noise.  Every downstream merge stage
+# (xcorr-merge, backbone-link) reads units as `clu > 1`, and fiber-consensus parks its
+# quarantine in 1.  The linker must therefore neither LINK the reserve bins (cluster 1
+# spans the whole session, so treated as an atom it both collapses the chunk partition
+# and gets chained onto real cells) nor EMIT a cell under either id (a cell numbered 1
+# is silently dropped to noise by every stage after this one).
+RESERVE = (0, 1)
+
+
+def cells_from_links(groups, n_atoms):
+    """atom -> cell map.  `groups` holds the linked chains (lists of atom ids); atoms in
+    no chain keep a cell of their own.  Reserve atoms map to themselves and never enter a
+    chain; cells are numbered from max(RESERVE)+1, largest chain first.  Returns the
+    parent array indexed by atom-1."""
+    cell_of, nxt = {}, max(RESERVE) + 1
+    for ms in sorted(groups, key=lambda v: -len(v)):
+        ms = [at for at in ms if at not in RESERVE]
+        if not ms:
+            continue
+        for at in ms:
+            cell_of[at] = nxt
+        nxt += 1
+    for at in range(1, n_atoms + 1):
+        if at in RESERVE:
+            cell_of[at] = at
+        elif at not in cell_of:
+            cell_of[at] = nxt; nxt += 1
+    return np.array([cell_of[at] for at in range(1, n_atoms + 1)], np.int64)
+
+
 def atom_chunks_and_rates(clu, res, sr, chunk_min=None):
     """Per-atom chunk index and RELATIVE firing rate (share of its chunk's spike rate).
 
@@ -157,7 +187,7 @@ def atom_chunks_and_rates(clu, res, sr, chunk_min=None):
     `chunk_min` is only a FALLBACK, used when the intervals do not separate -- e.g. a
     source whose per-chunk labels genuinely overlap in time."""
     t = np.asarray(res, float) / float(sr) / 60.0
-    labs = np.unique(clu[clu > 0])
+    labs = np.unique(clu[clu > max(RESERVE)])     # reserve bins are not chunk-local atoms
     span = {}
     for a in labs:
         m = clu == a
@@ -402,6 +432,19 @@ def main():
                                                              tag=a.clu_stage), n_spikes=res.size)
             src = "clu (no .clc sibling -- anchors may not resolve)"
     frag_clu = np.asarray(frag_clu, np.int64)
+    # The atom layer (.clc) numbers the reserve's children like any other atom (fiber-
+    # consensus and intrachunk park the quarantine under many child ids whose PARENT is 1),
+    # so read the reserve off the stage's flat .clu and fold those children back into 1.
+    flat_p = nio.session_path(base, "clu", elec, variant=a.clu_method, tag=a.clu_stage)
+    if not a.in_clu and src != "clu (units layer, --frag-layer units)" and os.path.exists(flat_p):
+        _, _flat = nio.read_clu_file(flat_p, n_spikes=res.size)
+        _rz = (np.asarray(_flat) == 1) & (frag_clu > max(RESERVE))
+        if _rz.any():
+            frag_clu[_rz] = 1
+            print(f"[anchor-link] reserve: {int(_rz.sum())} spike(s) whose flat label is 1 folded "
+                  f"back into the noise bin (not linked)")
+    print(f"[anchor-link] reserve bins held out of linking: "
+          f"0 ({int((frag_clu == 0).sum())} spikes), 1 ({int((frag_clu == 1).sum())} spikes)")
     print(f"[anchor-link] fragment layer: {src}")
     spk = nio.open_spk_file(nio.session_path(base, "spk", elec, variant=a.spk_variant), NS, NC)
 
@@ -521,20 +564,12 @@ def main():
     groups = defaultdict(list)
     for i, l in enumerate(lab):
         groups[int(l)].append(keep[i])
-    cell_of, nxt = {}, 1
-    for ms in sorted(groups.values(), key=lambda v: -len(v)):
-        for at in ms:
-            cell_of[at] = nxt
-        nxt += 1
-    for at in range(1, n_atoms + 1):
-        if at not in cell_of:
-            cell_of[at] = nxt; nxt += 1
-    parent = np.array([cell_of[at] for at in range(1, n_atoms + 1)], np.int64)
+    parent = cells_from_links(list(groups.values()), n_atoms)
     new = np.zeros(child.size, np.int64)
     m = child > 0
     new[m] = parent[child[m] - 1]
 
-    ncells = nxt - 1
+    ncells = int(len(np.unique(new[new > max(RESERVE)])))
     if a.cons_mode != "off":
         # ── per-spike consolidation of the linked cells (fiber_consolidate) ──
         # The link moves whole atoms; a per-spike pass takes back what an atom
@@ -551,7 +586,7 @@ def main():
                 chunk_by_atom[at - 1] = ck
         chunk_sp = np.where(child > 0, chunk_by_atom[np.maximum(child, 1) - 1], -1)
         new2, _ = fcons.consolidate(lambda ix: np.asarray(spk[np.asarray(ix)], np.float32),
-                                    new, chunk_sp, mode=mode, exclude=(0,),
+                                    new, chunk_sp, mode=mode, exclude=RESERVE,
                                     strip_kw=strip_kw, knn_kw=knn_kw,
                                     log=lambda msg: print(f"[anchor-link] {msg}"),
                                     tag="anchor-link consolidate")
@@ -565,7 +600,7 @@ def main():
             print(f"[anchor-link] consolidation: {int(moved.sum())} spike(s) re-homed via "
                   f"{len(uk)} new child atom(s)")
         new = new2
-        ncells = int(new.max())
+        ncells = int(len(np.unique(new[new > max(RESERVE)])))
 
     outp = nio.session_path(base, "clu", elec, variant=a.clu_method, tag=a.out_tag)
     nio.write_clu_file(outp, new)
