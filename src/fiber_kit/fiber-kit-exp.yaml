@@ -294,6 +294,18 @@ FK_REALIGN_VARIANT:      stderiv_C5_D34  # "" | e.g. stderiv_C5.  SET for the g6
                                   #   .spk.stderiv_C5.N, which names it); it falls back to the literal 'stderiv' -- out
                                   #   loud -- only when that family is absent or ambiguous.  Set explicitly only to pin
                                   #   or override the inference.  The .res stays the one shared copy.
+FK_REALIGN_RECENTER_RMS: 1        # 1 | 0/1.  klusters algo: Klusters realign MODE 2 (--recenter-rms).  After the xcorr
+                                  #   passes each unit is shifted as a whole so the circular centroid of its channel-
+                                  #   summed energy lands on the peak sample (skipped when the profile's mean resultant
+                                  #   length < FK_REALIGN_RMIN).  0 = Klusters' default mode (xcorr only).  Parity with
+                                  #   the compiled Klusters code: identical shift on every spike of the g6 36-47 min
+                                  #   sort (19,543), standard and stderiv_C5_D34, in both modes.
+FK_REALIGN_RMIN:         0.4      # 0.4.  Klusters --rmin: minimum mean resultant length to trust the energy centroid.
+FK_REALIGN_MIN_SCORE:    0.70     # 0.70.  Klusters --threshold: a spike whose best normalised xcorr is below this is not
+                                  #   moved in that pass.  (0.0 = shift every spike: tighter clusters -- template
+                                  #   correlation 0.617 vs 0.592 on g6 stderiv -- but no longer what Klusters does.)
+FK_REALIGN_ITERS:        2        # 2.  Klusters --iterations: template / xcorr passes; shifts accumulate across passes.
+FK_REALIGN_MAX_SHIFT:    ""       # "" = Klusters' max(1, (peakSampleIndex-1) // 2) (10 on a 42-sample window) | N.
 FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike alignment algorithm (both the fiber-realign
                                   #   stage AND the post-step re-roll): klusters (default, iterative normalised-xcorr to
                                   #   the unit template), template (legacy median/un-normalised), centroid (reference-free

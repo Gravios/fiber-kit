@@ -567,3 +567,38 @@ which no waveform method shares.
   finds no axis that splits it into halves with a refractory gap (no bimodality, dip p >= 0.98; best
   excess straddle of the violating pairs p = 0.003 against a Bonferroni 2e-4; each half still
   coincides with itself at 0.6-0.8 of chance).
+
+## Per-spike realignment: parity with Klusters (`fiber_realign`, 0.38.1)
+
+`fiber-realign --align-algo klusters` follows `KlustersDoc::realignSpikes` (neurosuite-3
+`klustersdoc_realign.cpp`) around the libklustersshared kernel (`realign_xcorr_omp.cpp`) step for step.
+Per unit, up to `--iters` passes:
+
+1. template = mean of the currently aligned spikes (the int64 sum divided by n, truncated toward zero,
+   as Klusters' int16 template);
+2. the template is rolled **circularly** so its summed-|amplitude| peak lands on the peak sample, which
+   is `peakSampleIndex - 1` (Klusters' parameter is 1-based) for every `.spk` variant;
+3. each spike is scored by normalised cross-correlation over integer lags in +-`--max-shift`: full
+   window, circular lag, constant full-energy denominator, float32, first maximum;
+4. a spike whose best score is below `--min-score` is not moved in that pass; the others are rolled and
+   the lag added to their cumulative shift (so the total can exceed the search radius); stop when
+   nothing moves.
+
+`--recenter-rms 1` is Klusters' realign mode 2: afterwards the unit is shifted as a whole so the
+circular centroid of its channel-summed energy lands on the peak sample, unless the energy profile's
+mean resultant length is below `--rmin`.
+
+Defaults are Klusters': threshold 0.70, 2 iterations, max shift `max(1, (peakSampleIndex-1) // 2)`, rmin
+0.4; knobs `FK_REALIGN_MIN_SCORE`, `FK_REALIGN_ITERS`, `FK_REALIGN_MAX_SHIFT`, `FK_REALIGN_RECENTER_RMS`,
+`FK_REALIGN_RMIN` (fiber-kit-exp.yaml sets the RMS mode).
+
+Checked against the compiled Klusters code (origin/main, driven by a verbatim port of the GUI loop) on
+the g6 36-47 min fiber-session sort, 115 units / 19,543 spikes: identical shift on every spike, on both
+the standard and the stderiv_C5_D34 `.spk`, in both modes.  Before 0.38.1 the pipeline's call agreed on
+17.6 % (standard) and 51.6 % (stderiv_C5_D34) of spikes with mode 2: no RMS recenter, threshold 0.0, 4
+iterations, max shift 8, an absolute rather than cumulative lag search, a zero-filled template pre-roll,
+and on the standard `.spk` the peak one sample late (21 instead of 20).  The old settings gave tighter
+units (mean template correlation 0.617 vs 0.592 on stderiv, 0.701 vs 0.652 on standard) because they
+also moved the low-correlation spikes Klusters leaves alone; `FK_REALIGN_MIN_SCORE: 0` and
+`FK_REALIGN_ITERS: 4` restore that behaviour.  `test/test_realign_parity.py` holds golden shifts from the
+compiled code.

@@ -199,10 +199,12 @@ Positional: `session`, `group`
 | `--sr` | — | override: sampling rate |
 | `--clu` | — | cluster file (default <base>.clu.<group>; pass the refined/relinked one, e.g. <base>.clu.stderiv.<group>.refine) |
 | `--align-algo` (`--align-method`) | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed. (Named --align-method to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
-| `--max-shift` | `8` |  |
-| `--iters` | `4` |  |
+| `--max-shift` | — | klusters: lag search radius (default Klusters': max(1, (peak-1)//2)) [FK_REALIGN_MAX_SHIFT] |
+| `--iters` | `2` | klusters: template/xcorr passes (Klusters --iterations, default 2) [FK_REALIGN_ITERS] |
 | `--min-n` | `20` |  |
-| `--min-score` | `0.0` | klusters: leave a spike unshifted if its best cosine score is below this |
+| `--min-score` | `0.7` | klusters: leave a spike unshifted in a pass if its best normalised xcorr is below this (Klusters --threshold, default 0.70) [FK_REALIGN_MIN_SCORE] |
+| `--recenter-rms` | `0` | klusters: 1 = Klusters realign mode 2 (--recenter-rms): after the passes, shift each unit so its channel-summed energy centroid lands on the peak [FK_REALIGN_RECENTER_RMS] |
+| `--rmin` | `0.4` | klusters --recenter-rms: minimum mean resultant length of the energy profile; below it the recenter is skipped (Klusters --rmin, default 0.4) [FK_REALIGN_RMIN] |
 | `--upsample` | `1` | klusters: cubic-spline upsample factor for sub-sample matching (2 = half-sample lags); .res is rounded back to whole samples at save |
 | `--reextract` | flag (off) | re-extract each spike's window from .fil at the corrected timestamp -> new .spk |
 | `--shift-spk` | flag (off) | commit WITHOUT a .fil: circularly roll the existing .spk of each variant by the per-spike integer offset (valid for high-pass .spk; the stderiv transform commutes with a time shift). The no-.fil equivalent of --reextract; pair with --refeaturize to reproject the rolled windows onto .pca. Mutually exclusive with --reextract. |

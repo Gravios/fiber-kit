@@ -20,6 +20,7 @@
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
 import glob
+import os
 import numpy as np
 
 _LP = "\u25b8 fiber-realign"
@@ -42,6 +43,10 @@ try:
     from . import fiber_stderiv as fst
 except ImportError:
     import fiber_stderiv as fst
+try:
+    from . import config as cfgmod
+except ImportError:
+    import config as cfgmod
 try:
     from . import fiber_pca as fpca
 except ImportError:
@@ -82,94 +87,121 @@ def _upsample_spline(W, factor):
     return CubicSpline(t, np.asarray(W, np.float64), axis=1)(tu).astype(np.float32)
 
 
-def klusters_offsets(spk, labels, peak, max_shift=8, iters=4, min_n=20,
-                     min_score=0.0, upsample=1, noise_label=0):
-    """Klusters-faithful per-spike realignment -- a verbatim match to libklustersshared
-    realign_xcorr_omp.cpp (the kernel Klusters' Shift+P runs) plus spikerealign.cpp's template
-    build.  Per unit:
+def _lround(x):
+    """C lround: round half away from zero (Python's round() is banker's)."""
+    return int(np.sign(x) * np.floor(abs(x) + 0.5))
 
-      * build the cluster MEAN template, then PRE-ALIGN it so its summed-|amplitude| peak sample
-        (argmax_s Sigma_ch |tmpl[s,ch]|) lands on `peak` (non-circular zero-fill shift, exactly as
-        spikerealign.cpp does -- without this the xcorr pulls spikes off the true peak);
-      * score each spike by NORMALISED cross-correlation over INTEGER lags in [-max_shift,max_shift]
-        using a FULL-window CIRCULAR shift and a CONSTANT full-spike-energy denominator:
 
-            num(L)   = Sigma_ch Sigma_s  tmpl[s,ch] * spike[(s+L) % N, ch]
-            score(L) = num(L) / sqrt(tmplEnergy * spikeEnergy)      (spikeEnergy over ALL N samples)
+def rms_recenter_shift(energy, peak, rmin=0.4):
+    """Klusters' --recenter-rms group shift (libklustersshared realign_center::circularRecenterShift):
+    circular weighted mean of the per-sample energy profile; when its mean resultant length R >= rmin
+    the minimal signed circular shift (roll convention new[t] = old[(t+shift)%T]) that puts the centroid
+    on `peak`, else 0.  Returns (shift, centroid, R, applied)."""
+    e = np.asarray(energy, np.float64); T = e.size
+    th = 2.0 * np.pi * np.arange(T) / T
+    W = e.sum(); C = (e * np.cos(th)).sum(); S = (e * np.sin(th)).sum()
+    rlen = float(np.hypot(C, S) / W) if W > 0 else 0.0
+    if rlen < rmin:
+        return 0, 0.0, rlen, False
+    c = np.arctan2(S, C)
+    if c < 0:
+        c += 2.0 * np.pi
+    c *= T / (2.0 * np.pi)
+    d = np.fmod(c - peak, T)
+    if d > T / 2.0:
+        d -= T
+    if d < -T / 2.0:
+        d += T
+    return _lround(d), float(c), rlen, True
 
-        bestLag = argmax score; spikes scoring < min_score keep lag 0.
 
-    The full circular window with a constant (not per-lag) denominator is the crucial detail: a
-    trimmed core window with a per-lag segment norm -- which earlier versions of this function used --
-    inflates the score at large lags and leaves spikes essentially un-tightened (the realign_xcorr_omp
-    header calls this out explicitly).  That bug is why committed re-extractions stayed jittered while
-    Klusters' own Shift+P tightened the same data.
+def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
+                     min_score=0.70, upsample=1, noise_label=0, recenter=False, rmin=0.4):
+    """Klusters-faithful per-spike realignment: KlustersDoc::realignSpikes (klustersdoc_realign.cpp)
+    around the libklustersshared kernel (realign_xcorr_omp.cpp), step for step.  Per unit, up to
+    `iters` times:
 
-    The pass is repeated up to `iters` times, re-estimating the mean from the freshly-aligned spikes
-    (iters=1 reproduces a single Shift+P press; more iterations sharpen the template and converge).
+      * template = MEAN of the currently-aligned spikes, the int64 sum divided by n and truncated toward
+        zero (Klusters' int16 template);
+      * pre-roll it CIRCULARLY so its summed-|amplitude| peak sample (argmax_s Sigma_ch |tmpl[s,ch]|,
+        first maximum) lands on `peak` -- the 0-BASED peak, i.e. Klusters' peakSampleIndex - 1;
+      * score every currently-aligned spike over integer lags in [-max_shift, max_shift] by normalised
+        cross-correlation with a FULL-window CIRCULAR shift and a constant full-energy denominator,
 
-    With upsample>1 the waveforms are cubic-spline interpolated to that many sub-samples first so the
-    integer-lag search runs on a finer grid; the returned offset is in ORIGINAL samples (bestLag/f)
-    and ioff = round(offset) for the whole-sample .res commit.
+            score(L) = Sigma_ch Sigma_s tmpl[s,ch] * spike[(s+L) % T, ch] / sqrt(E_tmpl * E_spike)
 
-    Returns (off, ioff): off (N,) float32 sub-sample offset in original samples, ioff (N,) int32
-    rounded; res_corrected = res + ioff (Klusters' convention: newTs = ts + shift)."""
-    spk = np.asarray(spk, np.float32)
+        in float32, first maximum wins; a spike whose best score is below `min_score` is not moved this
+        pass;
+      * roll the moved spikes and add the lag to their CUMULATIVE shift (so the total can exceed
+        max_shift over the passes, as in Klusters); stop when nothing moves.
+
+    recenter=True adds Klusters' realign mode 2 (--recenter-rms): after the passes, the whole unit is
+    shifted so the circular centroid of its channel-summed energy lands on `peak`, unless the profile's
+    mean resultant length is below `rmin` (energy not single-lobed) -- rms_recenter_shift.
+
+    Defaults are Klusters' (threshold 0.70, 2 iterations, max_shift = max(1, peak // 2) clamped to
+    T - 1).  Units below `min_n` spikes and `noise_label` are left unshifted (Klusters realigns whatever
+    cluster is selected).  With upsample > 1 the windows are cubic-spline interpolated first (a fiber-kit
+    extension; the template is then a float mean) and the offsets returned in original samples.
+
+    Returns (off, ioff): off (N,) float32 offset in original samples, ioff (N,) int32 rounded;
+    res_corrected = res + ioff (Klusters' newTs = ts + shift)."""
+    spk = np.asarray(spk)
     f = max(1, int(upsample))
+    exact = f == 1 and np.issubdtype(spk.dtype, np.integer)
     if f > 1:
-        spk = _upsample_spline(spk, f)
+        spk = _upsample_spline(spk.astype(np.float32), f)
         peak = int(peak) * f
-        max_shift = int(max_shift) * f
     N, T, C = spk.shape
-    ms = int(max_shift)
     pk = int(peak)
+    ms = (max(1, pk // 2) if max_shift is None else int(max_shift) * f)
+    ms = int(min(max(ms, 1), T - 1))
     lags = np.arange(-ms, ms + 1)
     arT = np.arange(T)
-    spkE = (spk.astype(np.float64) ** 2).sum((1, 2))          # full per-spike energy (all samples)
-    sqrtSpkE = np.sqrt(spkE) + 1e-12                          # constant across lags (no large-lag bias)
+    W_all = spk.astype(np.int64) if exact else spk.astype(np.float64)
+    spkE = (W_all.astype(np.float64) ** 2).sum((1, 2))
+    sqrtSpkE = np.sqrt(spkE)
     by = {}
     for i, l in enumerate(labels):
         by.setdefault(int(l), []).append(i)
-    ioff_up = np.zeros(N, np.int32)
+    ioff_up = np.zeros(N, np.int64)
     for u, rows in by.items():
         if u == noise_label or len(rows) < min_n:
             continue
         idx = np.asarray(rows)
-        W = spk[idx]                                          # (n,T,C)
-        sqE = sqrtSpkE[idx]
-        cur = np.zeros(len(idx), int)
-        for _ in range(max(1, iters)):
-            # MEAN template from spikes circularly rolled by their current shift: aligned[s]=W[(s+cur)%T]
-            sidx = (arT[None, :] + cur[:, None]) % T
-            al = np.take_along_axis(W, sidx[:, :, None], axis=1).astype(np.float64)
-            templ = al.mean(0)                                # (T,C) MEAN (Klusters), not median
-            # pre-align: shift template so its summed-|amp| peak lands at `pk` (non-circular zero-fill)
+        W = W_all[idx]
+        n = len(idx)
+        cur = np.zeros(n, np.int64)
+        for _ in range(max(1, int(iters))):
+            al = np.take_along_axis(W, ((arT[None, :] + cur[:, None]) % T)[:, :, None], axis=1)
+            acc = al.sum(0)
+            templ = (np.sign(acc) * (np.abs(acc) // n)).astype(np.float64) if exact else acc / n
             tpk = int(np.argmax(np.abs(templ).sum(1)))
-            tshift = pk - tpk
-            if tshift:
-                z = np.zeros_like(templ)
-                if tshift > 0:
-                    z[tshift:] = templ[:T - tshift]
-                else:
-                    z[:T + tshift] = templ[-tshift:]
-                templ = z
-            tnorm = float(np.sqrt((templ * templ).sum())) + 1e-12
-            denom = tnorm * sqE                               # (n,) constant per spike across lags
-            best = np.full(len(idx), -np.inf)
-            blag = np.zeros(len(idx), int)
+            ts = pk - tpk
+            if ts:
+                templ = templ[(arT - ts) % T]                     # circular: src = (t - tShift) % T
+            tnorm = np.sqrt((templ * templ).sum())
+            denom = tnorm * sqrtSpkE[idx]
+            best = np.full(n, -np.inf, np.float32)
+            blag = np.zeros(n, np.int64)
+            alf = al.astype(np.float64)
             for L in lags:
-                seg = W[:, (arT + L) % T, :]                  # FULL-window CIRCULAR shift: spike[(s+L)%N]
-                num = np.einsum('ntc,tc->n', seg.astype(np.float64), templ)
-                score = num / denom
+                num = np.einsum("ntc,tc->n", alf[:, (arT + L) % T, :], templ)
+                score = np.where(denom > 1e-12, num / np.where(denom > 1e-12, denom, 1.0), 0.0).astype(np.float32)
                 upd = score > best
                 best[upd] = score[upd]; blag[upd] = L
-            new = np.where(best >= min_score, blag, cur)
-            if np.array_equal(new, cur):
+            sh = np.where(best >= np.float32(min_score), blag, 0)
+            if not sh.any():
                 break
-            cur = new
+            cur = cur + sh
+        if recenter:
+            al = np.take_along_axis(W, ((arT[None, :] + cur[:, None]) % T)[:, :, None], axis=1)
+            dg, _, _, applied = rms_recenter_shift((al.astype(np.float64) ** 2).sum((0, 2)), pk, rmin)
+            if applied and dg:
+                cur = cur + dg
         ioff_up[idx] = cur
-    off = ioff_up.astype(np.float32) / f                      # back to ORIGINAL samples (sub-sample if f>1)
-    ioff = np.rint(off).astype(np.int32)                      # rounded for the whole-sample .res commit
+    off = ioff_up.astype(np.float32) / f
+    ioff = np.rint(off).astype(np.int32)
     return off, ioff
 
 
@@ -295,9 +327,9 @@ def _variant_present(base, group, variant):
         return False
 
 
-def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
-            min_n=20, method="klusters", peak=None, min_score=0.0, upsample=1,
-            variant="standard", verbose=True):
+def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
+            min_n=20, method="klusters", peak=None, min_score=0.70, upsample=1,
+            variant="standard", verbose=True, recenter=False, rmin=0.4):
     """Read the .spk of the VARIANT the clu/res points to, .res, .clu; compute per-spike
     offsets and corrected .res.
 
@@ -324,7 +356,6 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
             _log(f"WARNING length mismatch: res={len(res):,} clu={len(labels):,} "
                  f"spk={spk.shape[0]:,} → using first {n:,}")
     res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
-    is_std = variant in ("standard", "", None)
     if method == "centroid":
         T = spk.shape[1]
         pos = np.asarray(fl._centroid_pos(spk.astype(float)))           # per-spike circular centroid
@@ -336,10 +367,13 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
         ioff = np.rint(off).astype(np.int32)
         align_peak = target
     elif method == "klusters":
-        align_peak = peak if is_std else int(np.abs(spk).sum(2).mean(0).argmax())
-        if align_peak is None:
+        # Klusters aligns to peakSampleIndex - 1 (its parameter is 1-based) whatever .spk variant is
+        # loaded; the .fil re-extraction keeps using the yaml value as the window geometry.
+        if peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
-        off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample)
+        align_peak = int(peak) - 1
+        off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample,
+                                     recenter=recenter, rmin=rmin)
     else:
         off, ioff = fl.template_offsets(spk, labels, max_shift, iters, min_n)
         align_peak = None
@@ -347,6 +381,9 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=5, iters=2,
     if verbose:
         nz = np.count_nonzero(ioff)
         up = f" upsample={upsample}x" if (method == "klusters" and upsample > 1) else ""
+        if method == "klusters":
+            up += (f" threshold={min_score:g} iters={iters} max_shift="
+                   f"{max_shift if max_shift is not None else 'peak//2'}" + (f" recenter-rms rmin={rmin:g}" if recenter else ""))
         pk = f" peak={align_peak:.2f}" if align_peak is not None else ""
         _log(f"realign {method}{up}  variant={variant or 'canonical'}{pk}")
         _det("input", f"{n:,} spikes · {nclu - 1:,} units · {spk_path}")
@@ -378,11 +415,28 @@ def main():
                          "centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), "
                          "no peak/template/labels needed.  (Named --align-method to avoid colliding with "
                          "the --method extraction-variant flag used by other tools.)")
-    ap.add_argument("--max-shift", type=int, default=8)
-    ap.add_argument("--iters", type=int, default=4)
+    _g = cfgmod.load_global_config()
+
+    def _kd(name, typ, fb):
+        v = os.environ.get(name, "")
+        if v in (None, ""):
+            v = _g.get(name)
+        return fb if v in (None, "") else typ(v)
+    ap.add_argument("--max-shift", type=int, default=_kd("FK_REALIGN_MAX_SHIFT", int, None),
+                    help="klusters: lag search radius (default Klusters': max(1, (peak-1)//2)) "
+                         "[FK_REALIGN_MAX_SHIFT]")
+    ap.add_argument("--iters", type=int, default=_kd("FK_REALIGN_ITERS", int, 2),
+                    help="klusters: template/xcorr passes (Klusters --iterations, default 2) [FK_REALIGN_ITERS]")
     ap.add_argument("--min-n", type=int, default=20)
-    ap.add_argument("--min-score", type=float, default=0.0,
-                    help="klusters: leave a spike unshifted if its best cosine score is below this")
+    ap.add_argument("--min-score", type=float, default=_kd("FK_REALIGN_MIN_SCORE", float, 0.70),
+                    help="klusters: leave a spike unshifted in a pass if its best normalised xcorr is below "
+                         "this (Klusters --threshold, default 0.70) [FK_REALIGN_MIN_SCORE]")
+    ap.add_argument("--recenter-rms", type=int, default=_kd("FK_REALIGN_RECENTER_RMS", int, 0),
+                    help="klusters: 1 = Klusters realign mode 2 (--recenter-rms): after the passes, shift each "
+                         "unit so its channel-summed energy centroid lands on the peak [FK_REALIGN_RECENTER_RMS]")
+    ap.add_argument("--rmin", type=float, default=_kd("FK_REALIGN_RMIN", float, 0.4),
+                    help="klusters --recenter-rms: minimum mean resultant length of the energy profile; below "
+                         "it the recenter is skipped (Klusters --rmin, default 0.4) [FK_REALIGN_RMIN]")
     ap.add_argument("--upsample", type=int, default=1,
                     help="klusters: cubic-spline upsample factor for sub-sample matching "
                          "(2 = half-sample lags); .res is rounded back to whole samples at save")
@@ -445,7 +499,7 @@ def main():
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
         method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample,
-        variant=out_variant)
+        variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin)
 
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
     # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose

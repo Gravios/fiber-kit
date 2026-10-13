@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.1] — fiber-realign: exact parity with Klusters' realign, RMS mode
+- `klusters_offsets` follows `KlustersDoc::realignSpikes` step for step: int16-truncated mean template,
+  circular pre-roll to `peakSampleIndex - 1` for every variant, float32 scores, cumulative per-pass lag
+  search, Klusters' defaults (threshold 0.70, 2 iterations, max shift `(peak-1)//2`).  New
+  `--recenter-rms` (Klusters realign mode 2) and `--rmin`; knobs `FK_REALIGN_MIN_SCORE / _ITERS /
+  _MAX_SHIFT / _RECENTER_RMS / _RMIN` (fiber-kit-exp.yaml: RMS mode on).
+- Against the compiled Klusters code on the g6 36-47 min sort (19,543 spikes): identical shift on every
+  spike, standard and stderiv_C5_D34, both modes.  Before: 17.6 % / 51.6 % agreement with mode 2.
+- Behaviour change: fewer spikes move (the 0.70 threshold), so units are slightly less tight than with
+  the old settings (template correlation 0.592 vs 0.617 on stderiv); set MIN_SCORE 0 / ITERS 4 for the
+  old behaviour.  `test/test_realign_parity.py`: golden shifts from the compiled code.
+
 ## [0.38.0] — fiber-consensus cleans before merging: quarantine-only mode, plan placement
 - `--quarantine-only` / `FK_CONSENSUS_QUARANTINE_ONLY`: kept spikes keep their input labels,
   quarantined spikes go to noise (1); the `.clc/.clp` hierarchy is carried (one new atom -> parent 1;
