@@ -477,7 +477,9 @@ more of the neighbourhood at 0.25-0.65 precision (base 0.06-0.38) and moves kept
 
 The stage works chunk by chunk (`--chunk-min`, default fiber-session's `FK_SESSION_CHUNK_MIN` or 12):
 neighbourhoods are found and embedded within one chunk, the scale it was measured at (1-3 k spikes per
-neighbourhood).  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
+neighbourhood).  Average linkage at a fixed d' chains a chunk's many low-SNR fragments into one
+giant group (g6 36-48 min: 11.7 k of 19 k spikes), so a group over `--max-spikes` (4000) is re-cut
+on its own linkage at theta*0.8, *0.64, ... until every piece fits (g6: largest piece 2.8 k).  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
 unit holding most of its kept spikes, unless a larger cell took it; split-off cells get fresh ids.  So
 it can run on a chunk-local sort before linking or on a linked sort after it without breaking the
 links.  Knobs are `FK_CONSENSUS_*` (CLI > env > `$FK_CONFIG` > default; section [C] of

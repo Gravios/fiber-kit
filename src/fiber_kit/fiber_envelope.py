@@ -415,6 +415,9 @@ def partner_dictionary(others, Lx, *, smax=None, min_shift=2, exclude=None):
     smax = (Lx // 2 - 4) if smax is None else int(smax)
     keys = [k for k in sorted(others) if k != exclude and others[k].template_ext is not None]
     shifts = [s for s in range(-smax, smax + 1) if abs(s) >= min_shift]
+    if not keys:                                   # a lone unit: nothing to explain a bump with
+        C = next((o.template_ext.shape[1] for o in others.values() if o.template_ext is not None), 0)
+        return np.zeros((0, Lx, C)), keys, shifts
     atoms = np.stack([_shift_atom(others[k].template_ext, s, Lx) for k in keys for s in shifts])
     return atoms, keys, shifts
 
@@ -449,14 +452,15 @@ def find_partners(Xext, own, env, others, var_noise, *, core_in_ext, width=8, sm
     Lx, C = env.template_ext.shape
     w = 1.0 / var_noise
     atoms, keys, shifts = partner_dictionary(others, Lx, smax=smax, min_shift=min_shift, exclude=own)
+    m = Xext.shape[0]
+    if m == 0 or not keys:
+        return dict(partner=np.full(m, -1), shift=np.zeros(m, int), coef=np.zeros(m), gain=np.zeros(m),
+                    score_after=np.full(m, np.inf), explained=np.zeros(m, bool))
     atoms_w = atoms * w[None, None, :]
     norms = (atoms * atoms_w).sum((1, 2)) + 1e-12
     A = atoms_w.reshape(len(atoms), -1)
-    m = Xext.shape[0]
     out = dict(partner=np.full(m, -1), shift=np.zeros(m, int), coef=np.zeros(m), gain=np.zeros(m),
                score_after=np.full(m, np.inf), explained=np.zeros(m, bool))
-    if m == 0 or not keys:
-        return out
     Tx = env.template_ext; dTx = np.gradient(Tx, axis=0)
     vres = np.maximum(env.excess + var_noise[None, :], var_noise[None, :])
     cs = core_in_ext
@@ -559,7 +563,7 @@ def run(trace, res, clu, *, pre, post, margin=32, maxlag=4, transform=None, min_
     table = dict(idx=[], unit=[], score=[], flagged=[], bump_pos=[], partner=[], shift=[], coef=[],
                  explained=[])
     gain_thr = 0.0
-    if partners and envs:
+    if partners and len(envs) > 1:
         Lx = pre + post + 2 * margin
         atoms, _, _ = partner_dictionary(envs, Lx)
         gain_thr = partner_gain_null(noise.windows, atoms, noise.var, q=q)

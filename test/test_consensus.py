@@ -116,6 +116,40 @@ def test_exp_yaml_wires_every_consensus_knob():
             typ(d[k])
 
 
+class _E:
+    def __init__(self, n, template_ext=None):
+        self.n = n; self.template_ext = template_ext
+
+
+def test_neighbourhoods_cap_recuts_a_chained_group():
+    """Six units in a d' chain (each 3 from the next, all < 12 apart on average linkage) form ONE group
+    uncapped; with a spike cap the group is re-cut at a lower d' into pieces that fit."""
+    units = {u: _E(1000) for u in range(2, 8)}
+    pos = {u: 3.0 * i for i, u in enumerate(units)}
+    real = fc.fe.separation
+    try:
+        fc.fe.separation = lambda a, b: (abs(pos[_id[id(a)]] - pos[_id[id(b)]]), 0.0)
+        _id = {id(e): u for u, e in units.items()}
+        one = fc.neighbourhoods(units, 12.0)
+        capped = fc.neighbourhoods(units, 12.0, max_spikes=2500)
+    finally:
+        fc.fe.separation = real
+    assert len(one) == 1 and len(one[0]) == 6, one
+    assert all(len(g) * 1000 <= 2500 for g in capped) and sum(map(len, capped)) == 6, capped
+
+
+def test_find_partners_with_no_other_unit():
+    """A neighbourhood that merges into ONE cell leaves the partner dictionary empty: no crash, no
+    partners (was: ValueError from np.stack)."""
+    Lx, C = 60, 8
+    T = np.random.default_rng(0).normal(0, 1, (Lx, C))
+    env = _E(100, T)
+    p = fc.fe.find_partners(np.zeros((3, Lx, C)), 2, env, {2: env}, np.ones(C), core_in_ext=slice(10, 50))
+    assert list(p["partner"]) == [-1, -1, -1] and not p["explained"].any()
+    atoms, keys, _ = fc.fe.partner_dictionary({2: env}, Lx, exclude=2)
+    assert atoms.shape == (0, Lx, C) and keys == []
+
+
 def test_knobs_env_over_global_yaml_over_default():
     with tempfile.TemporaryDirectory() as d:
         p = os.path.join(d, "fk.yaml")

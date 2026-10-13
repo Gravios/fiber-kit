@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.37.1] — fiber-consensus: neighbourhood cap, lone-cell crash
+- `--max-spikes` / `FK_CONSENSUS_MAX_SPIKES` (default 4000): a neighbourhood holding more spikes is
+  re-cut on its own linkage at theta*0.8, *0.64, ... until every piece fits.  Average linkage at
+  d' 12 chained a whole chunk's low-SNR fragments into one group (g6: 11.7 k spikes; a full chunk
+  elsewhere: 180 units / 33.5 k spikes merged into 8 cells), far beyond the 1-3 k spikes per
+  neighbourhood the consensus was measured on.
+- fiber_envelope: a neighbourhood whose communities merge into ONE cell no longer crashes
+  (`partner_dictionary` on an empty dictionary -> `ValueError: need at least one array to stack`);
+  a lone unit gets no partners.
+- fiber-pipeline banner notes that a `--clu-stage` / `--out-tag` override wins over the default tags.
+
 ## [0.37.0] — fiber-consensus: watershed categories, FK_CONSENSUS_* knobs, plannable stage
 - `watershed_categories`: each quarantined spike is sorted by t-SNE watershed basins voted over
   `--ws-runs` maps into island / own-rim / other-cell.  On g6, islands (20-38 % of the quarantine) are

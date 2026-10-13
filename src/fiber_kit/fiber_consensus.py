@@ -157,8 +157,14 @@ def perimeter_rank(runs, labels, min_n=50):
     return out
 
 
-def neighbourhoods(envs, theta=12.0, min_units=2):
-    """Average-linkage groups of enveloped units on d' < theta -> list of unit lists."""
+def neighbourhoods(envs, theta=12.0, min_units=2, max_spikes=None, step=0.8):
+    """Average-linkage groups of enveloped units on d' < theta -> list of unit lists.
+
+    max_spikes: a group holding more spikes is re-cut on its own linkage at theta*step, theta*step^2,
+    ... until every piece fits (a single unit larger than the cap stays a group of one and is
+    dropped by min_units).  Average linkage chains many low-SNR fragments into one group at a fixed
+    cut -- on a full chunk 180 fiber-session units / 33 k spikes -- far beyond the 1-3 k spikes per
+    neighbourhood the consensus was measured on."""
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
     units = sorted(envs); n = len(units)
@@ -168,11 +174,23 @@ def neighbourhoods(envs, theta=12.0, min_units=2):
     for i in range(n):
         for j in range(i + 1, n):
             D[i, j] = D[j, i] = fe.separation(envs[units[i]], envs[units[j]])[0]
-    g = fcluster(linkage(squareform(D, checks=False), "average"), float(theta), "distance")
-    groups = defaultdict(list)
-    for u, k in zip(units, g):
-        groups[int(k)].append(int(u))
-    return [m for m in groups.values() if len(m) >= min_units]
+    size = np.array([envs[u].n for u in units])
+
+    def cut(ii, th):
+        if ii.size < 2:
+            return [ii]
+        g = fcluster(linkage(squareform(D[np.ix_(ii, ii)], checks=False), "average"), float(th), "distance")
+        out = []
+        for k in np.unique(g):
+            jj = ii[g == k]
+            if max_spikes and size[jj].sum() > max_spikes and jj.size > 1 and th > 0.5:
+                out += cut(jj, th * step)
+            else:
+                out.append(jj)
+        return out
+
+    groups = cut(np.arange(n), theta)
+    return [[int(units[i]) for i in jj] for jj in groups if jj.size >= min_units]
 
 
 def _robust_z(v, groups):
@@ -387,6 +405,8 @@ def write_quarantine_table(path, results, res_abs, clu, out_labels, cell_ids=Non
 _KNOBS = {
     "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
                                          "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
+    "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 4000,
+                                "re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap)"),
     "FK_CONSENSUS_RUNS": ("runs", int, 40, "resampled t-SNE runs"),
     "FK_CONSENSUS_FRAC": ("frac", float, 0.7, "fraction of the neighbourhood's spikes in each run"),
     "FK_CONSENSUS_K": ("k", int, 15, "2-D neighbours per spike"),
@@ -517,7 +537,7 @@ def main(argv=None):
         else:
             envs, _, _ = fe.run(view, rel0, lab, transform=transform, pre=21, post=21, min_n=30, sr=sr,
                                 partners=False, log=lambda s: None)
-            groups = neighbourhoods(envs, a.neighbourhood_theta)
+            groups = neighbourhoods(envs, a.neighbourhood_theta, max_spikes=a.max_spikes)
         if L:
             log(f"chunk {int(ch)} ({int(ch) * chunk_min:g}-{(int(ch) + 1) * chunk_min:g} min): "
                 f"{len(groups)} neighbourhood(s)")

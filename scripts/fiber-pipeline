@@ -705,7 +705,7 @@ fiber_consensus() {   # post-sort review: resampled t-SNE consensus + quarantine
     # method for the embeddings, and the clu at STEP_IN.  FK_CONSENSUS_* knobs come from $FK_CONFIG /
     # the exported env; per-step plan `params:` (e.g. units, window, ws-runs) override last-wins.
     # Needs the optional extra: pip install fiber-kit[consensus].
-    echo "== fiber-consensus  (.${STEP_IN:-exp_final} -> .${STEP_OUT:-consensus} + $SESS.qrn.$ELEC.${STEP_OUT:-consensus}) =="
+    echo "== fiber-consensus  (.${STEP_IN:-exp_final} -> .${STEP_OUT:-consensus} + $SESS.qrn.$ELEC.${STEP_OUT:-consensus}; a --clu-stage / --out-tag override wins) =="
     _run fiber-consensus "$SESS" "$ELEC" \
         --signal "${FK_CONSENSUS_SIGNAL:-$SESS.fil}" \
         --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-exp_final}" \
