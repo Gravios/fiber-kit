@@ -477,9 +477,9 @@ more of the neighbourhood at 0.25-0.65 precision (base 0.06-0.38) and moves kept
 
 The stage works chunk by chunk (`--chunk-min`, default fiber-session's `FK_SESSION_CHUNK_MIN` or 12):
 neighbourhoods are found and embedded within one chunk, the scale it was measured at (1-3 k spikes per
-neighbourhood).  Average linkage at a fixed d' chains a chunk's many low-SNR fragments into one
-giant group (g6 36-48 min: 11.7 k of 19 k spikes), so a group over `--max-spikes` (4000) is re-cut
-on its own linkage at theta*0.8, *0.64, ... until every piece fits (g6: largest piece 2.8 k).  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
+neighbourhood).  At d' 12 a chunk's confusable fragments form one large group (g6 36-48 min:
+65 units, 11.7 k of 19 k spikes, 9 GT cells).  It is kept whole by default (see below);
+`--max-spikes N` re-cuts a group over N spikes at theta*0.8, *0.64, ... only to bound run time.  With `--keep-ids 1` (default) each cell, largest first, keeps the id of the input
 unit holding most of its kept spikes, unless a larger cell took it; split-off cells get fresh ids.  So
 it can run on a chunk-local sort before linking or on a linked sort after it without breaking the
 links.  The t-SNE runs and watershed maps (~93 % of the time; ~4 s per run on 1 k points) run in
@@ -487,3 +487,48 @@ parallel processes (`--workers`, default every core) with results independent of
 Knobs are `FK_CONSENSUS_*` (CLI > env > `$FK_CONFIG` > default; section [C] of
 fiber-kit-exp.yaml); in a plan it is the stage `fiber-consensus` (`fiber-pipeline <elec> fiber-consensus`
 reads `.exp_final` and `<sess>.fil` by default).
+
+### Neighbourhood size, and what did not help (0.37.3)
+
+Fresh fiber-session sort of the 36-47 min chunk (the exp config; 109 units with >= 30 spikes,
+19,395 spikes, 14 % misassigned against exp_final), scored against exp_final.
+
+**Keep the big neighbourhood whole.**  A neighbourhood can only fix contamination whose true cell is
+inside it.  With the 0.37.1 cap of 4000 spikes that holds for 38 % of misassigned spikes; uncapped,
+63 %.  Grouping units by their own GT cell (an oracle) reaches only 32 %: the contamination runs
+between different cells whose fragments look alike, which is why d' chains them.  On the 11.7 k-spike
+group, scored on spikes neither run quarantined:
+
+| | cells | purity | completeness | ARI | quarantine precision |
+|---|---|---|---|---|---|
+| fiber-session input | 65 | 0.846 | 0.439 | 0.023 | -- |
+| capped at 4000 (7 pieces) | 26 | 0.874 | 0.582 | 0.170 | 0.70 |
+| uncapped (one group) | 7 | 0.872 | 0.812 | 0.594 | 0.73 |
+
+Measured and not adopted:
+
+* **Fiber geometry for neighbourhoods.**  fiber-session's direction profile d(r) separates same-cell
+  from different-cell fragment pairs at AUC 0.371 (shared energy range) and 0.475 with each profile
+  continued by its Jacobian dd/dr; envelope d' does 0.985.  The code reproduces fiber-session's own
+  case (two halves of one fragment, AUC 0.979): direction identifies the same fragment, not the same
+  cell -- fiber-session split those fragments along direction (same-cell median 0.64, different-cell
+  0.44).
+* **Contamination orthogonal to the Jacobian.**  A spike's residual to its own fiber with the local
+  tangent J(r) removed, projected on the gap toward each of the 10 nearest fibers (t = 0 own fiber,
+  1 the other): misassigned spikes sit at median t = 0.22 toward their true cell, 9 % past halfway,
+  at every energy; as a flag AUC 0.515 (envelope bump 0.63).  Their true cell is among the 10
+  nearest fibers for 48 %.  Pair statistics on the candidate pairs: orthogonal d' 0.75, between-band
+  flux 0.81, envelope d' 0.955; neither improves the neighbourhoods.  Likely reason: a fiber is fitted
+  through its own contamination, so the foreign spikes are not orthogonal to it.
+* **Quarantine held out of a fiber-session rerun.**  fiber-session is deterministic (identical rerun
+  ARI 1.0) but its fragment boundaries move with any 5 % of the spikes: holding out the quarantine
+  gives ARI 0.30 to the original, holding out 1,080 random spikes (matched per unit) 0.28, and the
+  random holdout scores no worse.  Consensus on the rerun: purity 0.870 / completeness 0.571 / ARI
+  0.301 against 0.886 / 0.570 / 0.314 for one round, although its new quarantine (538 spikes, none
+  from round 1) runs at 0.65 precision.
+* **t-SNE stratification of dense cells** (perplexity 15-80 x exaggeration 1-3, scored by seed-to-seed
+  ARI x full-dimensional d' between modes).  Cells split stably only at exaggeration 3 (k = 3-8,
+  ARI 0.66-1.0).  In pure cells the modes are burst / adaptation states (median preceding ISI 28 ms
+  -> 1.5 s across modes with feature norm 0.89 -> 1.17) and drift, 0-6 % foreign; collision-flag
+  rates per mode equal the cell's.  A mode's median-waveform residual exceeds the noise null 1.5-3x
+  in pure modes too (legitimate shape change), so as a collision test it is not specific.

@@ -1033,11 +1033,12 @@ FK_CONSENSUS_MIN_SPIKES: 300      # 300 | 200-500.  Skip a neighbourhood with fe
 FK_CONSENSUS_NEIGHBOURHOOD_THETA: 12.0  # 12 | 8-16 (envelope d').  Average-linkage cut that groups units into
                                   #   neighbourhoods studied together.  Lower = smaller, tighter groups (faster,
                                   #   but a contaminating neighbour may fall outside); ignored with --units.
-FK_CONSENSUS_MAX_SPIKES: 4000     # 4000 | 2000-6000 (0 = no cap).  A neighbourhood holding more spikes is re-cut on its
-                                  #   own linkage at theta*0.8, *0.64, ... until every piece fits.  Average linkage
-                                  #   at a fixed d' chains a chunk's low-SNR fragments into one giant group (g6:
-                                  #   11.7 k spikes; a full chunk elsewhere: 180 units / 33.5 k spikes -> 8 cells).
-                                  #   Validated neighbourhoods held 1-3 k spikes.
+FK_CONSENSUS_MAX_SPIKES: 0        # 0 = no cap | N.  A neighbourhood holding more spikes is re-cut on its own linkage at
+                                  #   theta*0.8, *0.64, ... until every piece fits.  OFF: the big group d' 12 forms
+                                  #   (g6 36-48 min: 65 units / 11.7 k spikes / 9 GT cells) is one confusable set,
+                                  #   and consensus needs it whole -- uncapped 7 cells, purity 0.872, completeness
+                                  #   0.81, ARI 0.59; a 4000 cap gives 26 cells, 0.874 / 0.58 / 0.17.  Use a cap
+                                  #   only to bound run time (11.7 k spikes: ~19 min on 2 cores, R=40).
 FK_CONSENSUS_RUNS:       40       # 40 | 20-60.  Resampled t-SNE runs.  The co-neighbour probability needs ~20+
                                   #   runs per pair to settle; 40 at frac 0.7 gives each pair ~20 joint runs.
 FK_CONSENSUS_FRAC:       0.7      # 0.7 | 0.5-0.8.  Fraction of the neighbourhood's spikes in each run.  Lower

@@ -1149,7 +1149,7 @@ Positional: `base`, `elec`
 | `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
 | `--sr` | — |  |
 | `--neighbourhood-theta` | `12.0` | envelope d' cut for automatic neighbourhoods (ignored with --units) [FK_CONSENSUS_NEIGHBOURHOOD_THETA; default 12.0] |
-| `--max-spikes` | `4000` | re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap) [FK_CONSENSUS_MAX_SPIKES; default 4000] |
+| `--max-spikes` | `0` | re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap; a cap costs completeness: it splits confusable cells apart) [FK_CONSENSUS_MAX_SPIKES; default 0] |
 | `--runs` | `40` | resampled t-SNE runs [FK_CONSENSUS_RUNS; default 40] |
 | `--frac` | `0.7` | fraction of the neighbourhood's spikes in each run [FK_CONSENSUS_FRAC; default 0.7] |
 | `--k` | `15` | 2-D neighbours per spike [FK_CONSENSUS_K; default 15] |

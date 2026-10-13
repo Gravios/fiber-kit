@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.37.3] — fiber-consensus: neighbourhood cap off by default; findings
+- `FK_CONSENSUS_MAX_SPIKES` default 4000 -> 0 (off).  On g6 the 11.7 k-spike group d' 12 forms
+  holds 9 GT cells that are genuinely confusable; consensus on the whole group gives 7 cells at
+  purity 0.872 / completeness 0.81 / ARI 0.59 against 26 cells at 0.874 / 0.58 / 0.17 when the
+  0.37.1 cap splits it, with higher quarantine precision (0.73 vs 0.70).  The cap stays as a
+  run-time bound.  The lone-cell crash fix of 0.37.1 is unaffected.
+- docs/methods.md: measured and not adopted -- quarantine held out of a fiber-session rerun;
+  fiber direction-profile / Jacobian neighbourhoods; contamination orthogonal to the fiber
+  Jacobian; t-SNE stratification of dense cells with median-waveform collision tests.
+
 ## [0.37.2] — fiber-consensus: parallel t-SNE runs
 - `--workers` / `FK_CONSENSUS_WORKERS` (default 0 = every core): the independent t-SNE runs and
   watershed maps -- ~93 % of a neighbourhood's time -- run in parallel processes (spawn; BLAS/OMP

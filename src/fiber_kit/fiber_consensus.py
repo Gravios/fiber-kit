@@ -199,9 +199,9 @@ def neighbourhoods(envs, theta=12.0, min_units=2, max_spikes=None, step=0.8):
 
     max_spikes: a group holding more spikes is re-cut on its own linkage at theta*step, theta*step^2,
     ... until every piece fits (a single unit larger than the cap stays a group of one and is
-    dropped by min_units).  Average linkage chains many low-SNR fragments into one group at a fixed
-    cut -- on a full chunk 180 fiber-session units / 33 k spikes -- far beyond the 1-3 k spikes per
-    neighbourhood the consensus was measured on."""
+    dropped by min_units).  Off by default: the large group d' 12 forms is a set of genuinely
+    confusable cells, and splitting it costs completeness (g6, 11.7 k spikes: uncapped 0.81 vs 0.58
+    with a 4000 cap at equal purity).  Use it only to bound run time."""
     from scipy.cluster.hierarchy import fcluster, linkage
     from scipy.spatial.distance import squareform
     units = sorted(envs); n = len(units)
@@ -446,8 +446,9 @@ def write_quarantine_table(path, results, res_abs, clu, out_labels, cell_ids=Non
 _KNOBS = {
     "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
                                          "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
-    "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 4000,
-                                "re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap)"),
+    "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 0,
+                                "re-cut a neighbourhood holding more spikes at a lower d' until it fits (0 = no cap; "
+                                "a cap costs completeness: it splits confusable cells apart)"),
     "FK_CONSENSUS_RUNS": ("runs", int, 40, "resampled t-SNE runs"),
     "FK_CONSENSUS_FRAC": ("frac", float, 0.7, "fraction of the neighbourhood's spikes in each run"),
     "FK_CONSENSUS_K": ("k", int, 15, "2-D neighbours per spike"),
