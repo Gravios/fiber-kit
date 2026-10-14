@@ -476,6 +476,107 @@ def map_fields(Y, counts, run, t, a, rng):
     return out
 
 
+def knn_sets(X, k):
+    from sklearn.neighbors import NearestNeighbors
+    return NearestNeighbors(n_neighbors=k + 1).fit(X).kneighbors(X, return_distance=False)[:, 1:]
+
+
+def knn_overlap(A, B, k):
+    """mean fraction of each cycle's k nearest neighbours shared between two spaces (chance ~ k/n)."""
+    return float(np.mean([len(np.intersect1d(a, b, assume_unique=True)) for a, b in zip(A, B)]) / k)
+
+
+def analyze_per_bin(a, Z, idx, run, tt, hmm_info, rng):
+    """One latent map PER THETA PHASE BIN.  Each map is built from that bin's own channel pattern
+    (log mean-square per channel, level across channels removed), plus that bin's unit counts with
+    --features units/both; the unit fields on bin k's map use only the spikes fired in bin k.
+    Per bin: dimension, homology, continuity vs the feature-shift null, and phase-specific fields.
+    Across bins: how many of a cycle's nearest neighbours in bin k's space are also its neighbours
+    in bin l's space (same 'place' at both phases -> high; a phase-dependent code -> low but above
+    the null).  --smooth 1 is advisable: averaging cycles blurs a code that differs cycle to cycle."""
+    nb = Z["bg"].shape[1]; Uc = Z["units"]; names = Z["unit_names"]
+    bg = np.log(Z["bg"][idx].astype(np.float64) + 1e-9)            # cycles x bins x ch
+    res = dict(n_cycles=int(len(idx)), theta_state=a.theta_state, hmm=hmm_info, phase_bins=int(nb),
+               map_mode="per-bin", features=a.features, remove_level=bool(a.remove_level),
+               detrend_s=a.detrend_s, smooth=a.smooth, bins=[])
+    Xs, Xns, Ys, fields_all = [], [], [], []
+    minsh = max(1, int(np.searchsorted(tt - tt[0], 60.0)))
+    for k in range(nb):
+        blocks = []
+        if a.features in ("bg", "both"):
+            B = bg[:, k, :]
+            if a.remove_level:
+                B = B - B.mean(1, keepdims=True)
+            blocks.append(B)
+        if a.features in ("units", "both"):
+            if Uc.shape[2] == 0:
+                raise SystemExit("no unit counts in the npz (run extract with --clu-stage)")
+            blocks.append(np.log1p(Uc[idx, k, :].astype(np.float64)))
+        F = np.hstack(blocks)
+        F = smooth_runs(detrend_time(F, tt, a.detrend_s), run, a.smooth)
+        X, nk = pipeline(F, a, rng)
+        Fn = F.copy(); n = len(Fn)
+        for j in range(Fn.shape[1]):
+            Fn[:, j] = np.roll(Fn[:, j], int(rng.integers(minsh, max(minsh + 1, n - minsh))))
+        Xn, _ = pipeline(Fn, a, rng, nk=nk)
+        L = maxmin(X, a.landmarks, rng); Ln = maxmin(Xn, a.landmarks, rng)
+        h, hn = homology(X[L]), homology(Xn[Ln])
+        Y, Yr, how = latent_map(X, a, rng); Yn, _, _ = latent_map(Xn, a, rng)
+        b = dict(bin=k, phase_deg=[round(-180 + 360 * k / nb), round(-180 + 360 * (k + 1) / nb)], pca_dims=nk,
+                 twonn=dict(real=round(twonn(X, rng), 2), null=round(twonn(Xn, rng), 2)),
+                 homology_H1_top3=dict(real=(h or {}).get("H1", [])[:3], null=(hn or {}).get("H1", [])[:3]),
+                 continuity=dict(real=round(continuity(Y, run, rng), 3), null=round(continuity(Yn, run, rng), 3)))
+        flds = []
+        if Uc.shape[2]:
+            flds = map_fields(Yr, Uc[idx, k, :].astype(float), run, tt, a, rng)
+            zs = np.array([f["z"] for f in flds]); st = np.array([f["stab"] for f in flds])
+            b["latent_fields"] = dict(units=len(flds), n_z_gt3=int((zs > 3).sum()) if flds else 0,
+                                      n_z_gt3_and_stable=int(((zs > 3) & (st > 0.5)).sum()) if flds else 0,
+                                      top=[dict(unit=str(names[f["j"]]), si=round(f["si"], 3), z=round(f["z"], 1),
+                                                split_half_r=round(f["stab"], 2))
+                                           for f in sorted(flds, key=lambda f: -f["z"])[:5]])
+        res["bins"].append(b); Xs.append(X); Xns.append(Xn); Ys.append(Y); fields_all.append(flds)
+        _log(f"[analyze] bin {k} ({b['phase_deg'][0]}..{b['phase_deg'][1]} deg): dims {nk}, TwoNN "
+             f"{b['twonn']['real']} vs {b['twonn']['null']}, continuity {b['continuity']['real']} vs "
+             f"{b['continuity']['null']}" + (f", fields z>3 {b['latent_fields']['n_z_gt3']}" if Uc.shape[2] else ""))
+    # cross-bin neighbourhood agreement (on the PCA spaces), real vs the null of the second bin
+    K = a.k; nn = [knn_sets(X, K) for X in Xs]; nnn = [knn_sets(X, K) for X in Xns]
+    O = np.full((nb, nb), np.nan); On = np.full((nb, nb), np.nan)
+    for i in range(nb):
+        for j in range(nb):
+            if i != j:
+                O[i, j] = knn_overlap(nn[i], nn[j], K); On[i, j] = knn_overlap(nn[i], nnn[j], K)
+    res["cross_bin_knn_overlap"] = dict(k=K, chance=round(K / len(idx), 5), real=np.round(O, 3).tolist(),
+                                        null=np.round(On, 3).tolist())
+    out = a.out or os.path.splitext(a.npz)[0] + f"_perbin_{a.features}"
+    with open(out + ".json", "w") as fh:
+        json.dump(res, fh, indent=1)
+    np.savez_compressed(out + "_maps.npz", xy=np.stack(Ys), t=tt, cycle=idx)
+    try:
+        import matplotlib; matplotlib.use("Agg"); import matplotlib.pyplot as plt
+        fig, ax = plt.subplots(2, nb + 1, figsize=(3.6 * (nb + 1), 7), squeeze=False)
+        for k in range(nb):
+            Y = Ys[k]; b = res["bins"][k]
+            ax[0, k].scatter(Y[:, 0], Y[:, 1], c=tt / 60, s=1, cmap="viridis")
+            ax[0, k].set_title(f"bin {k} ({b['phase_deg'][0]}..{b['phase_deg'][1]} deg)\nTwoNN {b['twonn']['real']} "
+                               f"(null {b['twonn']['null']})", fontsize=8)
+            if fields_all[k]:
+                f = max(fields_all[k], key=lambda f: f["z"])
+                ax[1, k].imshow(f["rate"].T, origin="lower", cmap="magma")
+                ax[1, k].set_title(f"{names[f['j']]} in bin {k}: SI {f['si']:.2f} z {f['z']:.1f} r {f['stab']:.2f}", fontsize=8)
+        im = ax[0, nb].imshow(O, cmap="Greys", vmin=0, vmax=max(0.05, np.nanmax(O)))
+        ax[0, nb].set_title(f"k-NN overlap between bins (k={K})", fontsize=8); plt.colorbar(im, ax=ax[0, nb], fraction=0.04)
+        im = ax[1, nb].imshow(On, cmap="Greys", vmin=0, vmax=max(0.05, np.nanmax(O)))
+        ax[1, nb].set_title("same, second bin feature-shifted (null)", fontsize=8)
+        for x_ in ax.ravel():
+            x_.set_xticks([]); x_.set_yticks([])
+        fig.tight_layout(); fig.savefig(out + ".png", dpi=110)
+    except Exception as e:
+        _log(f"[analyze] no figure ({e})")
+    print(json.dumps(res, indent=1))
+    _log(f"[analyze] wrote {out}.json, {out}_maps.npz, {out}.png")
+
+
 def cmd_analyze(a):
     rng = np.random.default_rng(a.seed)
     Z = np.load(a.npz, allow_pickle=False)
@@ -529,6 +630,9 @@ def cmd_analyze(a):
     _log(f"[analyze] {sel.sum()} theta cycles ({a.theta_state}) of {len(t)}; {run.max() + 1} runs; "
          f"{(t[idx][-1] - t[idx][0]) / 60:.1f} min span; {nb} phase bins x {Z['bg'].shape[2]} ch")
     tt = t[idx]
+    if a.map_mode == "per-bin":
+        analyze_per_bin(a, Z, idx, run, tt, hmm_info, rng)
+        return
     F = features(Z, a.features, a.remove_level)[idx]
     F = detrend_time(F, tt, a.detrend_s)
     F = smooth_runs(F, run, a.smooth)
@@ -667,6 +771,9 @@ def main(argv=None):
     n.add_argument("--flat-guard-s", type=float, default=150.0,
                    help="drop cycles within this many s of a cycle with zero background (flat .fil); g6: the artefact islands reach ~2 min past a dropout")
     n.add_argument("--exclude-min", default="", help="time windows to drop, e.g. '69.5-71.5,78-81' (minutes)")
+    n.add_argument("--map-mode", choices=["concat", "per-bin"], default="concat",
+                   help="concat = one map of whole cycles (phase bins concatenated); per-bin = one map per theta "
+                        "phase bin, phase-specific unit fields, cross-bin neighbourhood agreement")
     n.add_argument("--detrend-s", type=float, default=60.0,
                    help="subtract each feature's running mean over this window (s); 0 = keep slow drift")
     n.add_argument("--map-k", type=int, default=30, help="neighbours for the 2-D latent map (UMAP / Isomap)")

@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.41.0] — theta_bg_topology: one latent map per theta phase bin
+- analyze `--map-mode per-bin`: a separate map for each phase bin from that bin's own channel pattern
+  (plus that bin's unit counts with --features units/both); per bin TwoNN, H1, continuity against the
+  feature-shift null, and PHASE-SPECIFIC unit fields (spikes fired in that bin on that bin's map).
+  Across bins: the fraction of a cycle's k nearest neighbours shared between two bins' spaces, real vs
+  the second bin feature-shifted -- a code that names the same place at every phase gives high
+  overlap, a phase-shifted code lower but above the null.  `--map-mode concat` (default) is the
+  previous whole-cycle map.  Writes <out>.json, <out>_maps.npz (one map per bin), <out>.png.
+- g6 full session, 3 bins, --smooth 1: per bin 6 PCA dims, TwoNN 8.1-8.2 vs null 8.1-8.3, H1 at the
+  null, continuity 0.84-0.90 vs 0.88-0.93; k-NN overlap between bins 0.001 (chance 0.0006, null 0.001);
+  the strongest fields are the same rate gradients in every bin (6:3, 6:90, 6:104).
+
 ## [0.40.6] — theta_bg_topology figure: the longest theta run is the longest
 - The trajectory panel took `run[argmax(bincount(run))]` -- the run id OF the cycle whose index equals
   the longest run's id -- so it drew an arbitrary run (10 cycles on the g6 3-bin session; the longest
