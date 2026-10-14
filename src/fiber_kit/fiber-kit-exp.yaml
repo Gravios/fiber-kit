@@ -34,6 +34,7 @@
 #        stochastic / flag-artifacts  (kept for direct CLI runs)
 #    [C] fiber-consensus: CLEANING right after fiber-session (quarantine-only, in the plan) or a late
 #        merge-mode review pass (not in `all`)
+#    [D] fiber-lowmix: post-sort split of low-amplitude MIXTURE units (opt-in plan step, not in `all`)
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -109,6 +110,8 @@ pipeline:
   - {stage: fiber-realign,    in: exp_final}
   # optional late review pass in merge mode (cells from the consensus, both quarantine clusters kept):
   # - {stage: fiber-consensus,  in: exp_final, out: consensus}
+  # optional low-amplitude mixture split (section [D]; opt-in -- GT-neutral on g6, see docs/methods.md):
+  # - {stage: fiber-lowmix,     in: exp_final, out: exp_lowmix}
 
 
 
@@ -1114,6 +1117,35 @@ FK_CONSENSUS_WORKERS:    0        # 0 = every core | 1 = serial | N.  Parallel p
                                   #   scale with cores.  Lower it when other stages share the machine.
 FK_CONSENSUS_JOBS:       1        # 1.  openTSNE threads INSIDE each run; keep 1 when WORKERS > 1 (workers x jobs threads).
 FK_CONSENSUS_SEED:       0        # subsampling, initialisation and Louvain seed (watershed maps use seed+500+r).
+
+# ============================================================================
+#  [D] FIBER-LOWMIX -- low-amplitude mixture split  (opt-in plan step after the linkers)
+#  A low-amplitude unit is mostly several differently shaped sources whose median cancels.  Spikes
+#  are whitened with the covariance of spike-free .fil snippets, split (GMM, gated by a null that keeps
+#  each spike's amplitude/jitter/position), and each group is matched to every unit's template:
+#  copies return to their unit only on a refractory ALLOW against the target's own ratio; the largest
+#  remaining group keeps the unit; others become new units or (novel) go to noise as .clc children.
+#  Measured on g6 fix_final: purity 0.805 -> 0.806, ARI 0.525 -> 0.532, 39 new units, 1/3 of shape
+#  copies pass the refractory test.  Table: <SESS>.lmx.<group>.<tag>.
+# ============================================================================
+FK_LOWMIX_AMP_QUANTILE:  0.3333   # 0.3333 | 0.2-1.  Units at/below this ptp quantile are examined (1 = all units).
+FK_LOWMIX_MIN_N:         150      # 150 | 100-300.  Spikes a unit needs to be examined.
+FK_LOWMIX_MIN_GROUP:     30       # 30.  Smaller groups stay with their unit.
+FK_LOWMIX_DEG:           20       # 20 | 16-24.  Per-channel Legendre degree (split-half optimum for 42 samples).
+FK_LOWMIX_K_MAX:         4        # 4.  Most groups per unit.
+FK_LOWMIX_NULL_MULT:     2.0      # 2.0.  Split only if BIC gain/spike > MULT x null gain + ADD.
+FK_LOWMIX_NULL_ADD:      0.02     # 0.02.
+FK_LOWMIX_NOISE_N:       20000    # 20000.  Spike-free .fil snippets for the whitening covariance.
+FK_LOWMIX_COPY_COS:      0.95     # 0.95 | 0.93-0.97.  Shape cosine (+-MAX_SHIFT) that makes a group a copy of a unit.
+FK_LOWMIX_NOVEL_COS:     0.90     # 0.90.  A non-core group below this matches no unit -> NOVEL.
+FK_LOWMIX_MAX_SHIFT:     6        # 6 (samples).
+FK_LOWMIX_TEMPLATE_MIN_N: 100     # 100.  Spikes a unit needs to serve as a match template.
+FK_LOWMIX_REFRAC_MS:     1.5      # 1.5 | 0 = off.  Copy returns only if coincidences with the target in (0.6, 1.5] ms
+                                  #   stay <= max(0.3, 1.5 x the target's own ratio), vs the LOCAL 3-6 ms rate.
+FK_LOWMIX_REFRAC_MIN_EXP: 3.0     # 3.0.  Expected coincidences needed for the test to have power.
+FK_LOWMIX_COPY_ON_ABSTAIN: 0      # 0 | 1.  1 = shape alone returns an underpowered copy (g6: half are not the same neuron).
+FK_LOWMIX_NOVEL:         noise    # noise | keep.  noise = novel groups to cluster 1, each a reviewable .clc child.
+FK_LOWMIX_SEED:          0
 
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by

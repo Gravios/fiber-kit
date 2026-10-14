@@ -611,3 +611,54 @@ also moved the low-correlation spikes Klusters leaves alone at its factory thres
 Klusters runs use threshold 0.10, which fiber-kit-exp.yaml sets: parity holds there too (every spike), and
 it moves 30.6 % / 93.6 % of spikes (stderiv / standard) at template correlation 0.618 / 0.707.  `test/test_realign_parity.py` holds golden shifts from the
 compiled code.
+
+## Low-amplitude mixtures (`fiber_lowmix`, 0.39)
+
+Measured on the g6 reference run (fix_final: the re-run from anchor-link with the reserve fix).
+Units = 93 with >= 150 spikes; "low-amplitude" = the bottom third by template peak-to-peak (32 units).
+
+### What a low-amplitude unit is
+
+* **Per-channel polynomials.**  Per 12-min bin, the median waveform is fitted per channel with
+  Legendre polynomials over the 42-sample window.  Split-half validation puts the optimum at degree
+  20 (held-out error 3045 vs 3166 for raw half-vs-half; degree 4 = 10829): the spike is local, so a
+  global polynomial needs high order.
+* **Oblique sources across units.**  A CP/PARAFAC model (each source = one waveform x one channel
+  footprint) of the low-amplitude bin medians matches PCA on held-out units at every K >= 3 with
+  ~1/7 of the parameters, and reaches the split-half noise floor at K = 8.  But the three dominant
+  sources are 9-27 deg apart and span the template and its time derivative (principal angles 4 and
+  22 deg): timing offsets between units and position shift, a nuisance basis rather than cells.
+* **Per spike, after amplitude + jitter (d/dt) + position (channel gradient)**, the structure common
+  to the low-amplitude residuals is the background: sources learned on them capture 44 % of held-out
+  low residual energy, 41 % of spike-free noise snippets and 42 % of high-amplitude residuals.
+* **What the groups are.**  After whitening with the noise covariance, 23 of 32 units have groups a
+  null cannot produce (the null keeps each spike's fitted amplitude/jitter/position and adds real
+  noise).  The groups differ in SHAPE (noise-corrected cosine median 0.63; no pair is one shape at
+  two magnitudes) and are larger than their unit's median (x1.25): averaging different sources
+  cancels.  Of 93 groups, 32 match another unit at cos >= 0.95 (amplitude ratio ~1), 36 at 0.90-0.95,
+  25 match none.
+
+### The stage
+
+`fiber-lowmix` (opt-in plan step after the linkers; section [D] of fiber-kit-exp.yaml) does the
+whitened split per low-amplitude unit and decides per group: **copy** (cos >= 0.95 AND a refractory
+ALLOW: coincidences with the target in (0.6, 1.5] ms below max(0.3, 1.5 x the target's own ratio),
+against the LOCAL 3-6 ms rate -- a uniform-rate expectation abstains on bursty CA1 trains), **keep**
+(the largest non-copy group keeps the unit's id), **new** (cos >= 0.90) or **novel** (< 0.90; to
+noise by default, each as its own .clc child so it stays reviewable).
+
+### Result on g6, and what it does not show
+
+| | units (>=100 spk) | purity | ARI | completeness | GT cells lost |
+|---|---|---|---|---|---|
+| fix_final | 429 (105) | 0.805 | 0.525 | 0.461 | 19 |
+| fix_lowmix | 466 (128) | 0.806 | 0.532 | 0.458 | 19 |
+
+* Shape-only copies (refractory not required) sit at 0.68 of the local rate against their target:
+  about half are not the same neuron.  With the refractory gate only 3 of 32 shape copies return; the
+  rest become new units -- the over-split direction.
+* The cores that keep the unit's id are not more refractory than the unit was (0.72 -> 0.77 of the
+  local rate): the low-amplitude units are multi-unit activity at this SNR, and splitting by shape
+  does not by itself isolate a neuron.  The GT does not arbitrate here (it is built from the same
+  limited tools); the stage's use is to expose the groups for review and to feed the novel groups
+  back to a second fiber-session round, not a verified gain.

@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.39.0] — fiber-lowmix: split low-amplitude mixture units after noise whitening
+- New stage `fiber-lowmix` (opt-in plan step, POST stage; knobs FK_LOWMIX_* in fiber-kit-exp.yaml [D]).
+  Per low-amplitude unit: standard .spk, per-channel Legendre smoothing (deg 20), whitening with the
+  covariance of spike-free .fil snippets, GMM split gated by a null that keeps each spike's fitted
+  amplitude/jitter/position.  Each group: copy of another unit (cos >= 0.95 and a local-rate refractory
+  ALLOW relative to the target's own ratio) -> returned; largest other group keeps the unit; others new
+  or novel (novel -> noise as reviewable .clc children).  Writes .clu/.clc/.clp + `<base>.lmx.<g>.<tag>`.
+- g6 (fix_final): purity 0.805 -> 0.806, ARI 0.525 -> 0.532, 429 -> 466 units; the cores are not more
+  refractory than before.  Measurements and the analysis behind it: docs/methods.md "Low-amplitude
+  mixtures".  test_lowmix (two-source split vs a one-source negative control, refractory one vs two
+  neurons, verdict rules, spike-free snippets).
+
 ## [0.38.6] — backbone-link writes the noise bin's children under parent 1
 - backbone-link's .clp mapped every child through the fragment->unit table, which has no entry for the
   reserve bin, so the children of cluster 1 got parent 0 and the .clc/.clp triple disagreed with the

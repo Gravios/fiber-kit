@@ -130,6 +130,14 @@ CATALOG = {
         _p("dev-z", "float", 2.0, "perimeter rule: robust z of residual energy / bump (1.5-3)"),
         _p("ws-runs", "int", 5, "watershed category maps (0 = one quarantine cluster, no categories)"),
         _p("jobs", "int", 1, "openTSNE threads")]),
+    "fiber-lowmix": dict(input=True, tags=["in", "out"], params=[  # post-sort; not in `all`
+        _p("amp-quantile", "float", 0.3333, "examine units at or below this amplitude quantile (1 = all)"),
+        _p("min-n", "int", 150, "spikes a unit needs to be examined"),
+        _p("copy-cos", "float", 0.95, "shape cosine that makes a group a copy of another unit"),
+        _p("novel-cos", "float", 0.90, "below this a non-core group is novel"),
+        _p("novel", "str", "noise", "noise = novel groups to noise (kept as .clc children); keep = own units"),
+        _p("copy-on-abstain", "int", 0, "1 = return a shape copy even when the refractory test has no power"),
+        _p("res-variant", "str", "", "pin the .res variant (e.g. stderiv_S3); empty = shared resolve")]),
 }
 STAGES = list(CATALOG)
 
@@ -147,6 +155,7 @@ STAGE_MODULES = {
     "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
     "fiber-consensus": "fiber_kit.fiber_consensus",
+    "fiber-lowmix": "fiber_kit.fiber_lowmix",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning

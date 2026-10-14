@@ -68,6 +68,7 @@ The embedded plan of `fiber-kit-exp.yaml`, in order:
 | 9 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
 | 10 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
 | 11 | fiber-realign | exp_final (in place) | final re-extraction for curation |
+| (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
 (`FK_REALIGN_VARIANT: stderiv_C5_D34`, the reference session's lag feature space -- inference never
