@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.39.2"
+version = "0.40.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -17,11 +17,25 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "License :: OSI Approved :: MIT License",
 ]
+# Everything installs by default (the extras below are kept as names so existing
+# `pip install fiber-kit[consensus]` lines still work; they will be split out again later).
+# Only the GPU extra stays optional: cupy needs the wheel matching the local CUDA.
 dependencies = [
     "numpy>=1.21",
     "scipy>=1.7",
     "scikit-learn>=1.0",
     "pyyaml>=5.3",
+    "diptest>=0.5",                 # DipSplit
+    "matplotlib>=3.5",              # figures (fiber-view, tools)
+    "pyqtgraph>=0.13",              # fiber-view-gui
+    "PySide6>=6.8",                 # fiber-view-gui, fiber-plan-edit (Qt >= 6.8)
+    "holoviews>=1.18",              # fiber-qc report
+    "bokeh>=3.3",
+    "openTSNE>=1.0",                # fiber-consensus
+    "networkx>=2.8",
+    "scikit-image>=0.19",
+    "umap-learn>=0.5",              # tools/theta_bg_topology.py latent map
+    "gudhi>=3.8",                   # tools/theta_bg_topology.py persistent homology (wheels; ripser also used if present)
 ]
 
 [project.optional-dependencies]

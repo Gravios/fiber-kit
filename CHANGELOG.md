@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.0] — every package installs by default; theta_bg_topology maps cycles without position
+- pyproject: all optional packages are core dependencies (diptest, matplotlib, pyqtgraph, PySide6,
+  holoviews, bokeh, openTSNE, networkx, scikit-image) plus umap-learn and gudhi for the topology tool.
+  The extras keep their names; only `gpu` (cupy, CUDA-specific) stays optional.  Resolves in a fresh venv.
+- tools/theta_bg_topology.py
+  - extract: `--phase-bins` (default 8, was 4 fixed quarters); a `--clu-stage` whose `--clu-method`
+    file is missing now falls back to the stage's single `.clu.*.<g>.<stage>` (a mistyped
+    stderiv_C4_D34 silently dropped every group's unit counts) and errors out when no group resolves.
+  - analyze: the map is the point now, not time.  Slow drift is removed per feature (`--detrend-s`,
+    60 s running mean) -- the previous Isomap was ordered by session time.  A 2-D LATENT MAP of the
+    theta cycles (UMAP, else Isomap) from the phase x channel background pattern; continuity of
+    consecutive cycles on it; place-like FIELDS of the sorted units on the latent map (Skaggs
+    information vs a 60-s circular-shift null, odd/even-run stability) -- with `--features bg` the map
+    is background-only, so a stable unit field means the background pattern predicts that unit.
+    Saves `<out>_map.npz` (map coordinates per cycle) and a figure (map by time, occupancy, longest
+    theta run as a trajectory, null map, top unit fields).
+
 ## [0.39.2] — anchor-link translates fiber-session's anchors into the fragment layer
 - fiber-session writes its overlap anchors as pairs of its own .clc ATOM ids.  With `frag-layer: units`
   on exp_chunk (the exp plan) there is no exp_chunk .fibers, so the linker fell back to fiber-session's
