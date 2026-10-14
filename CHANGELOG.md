@@ -4,6 +4,13 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.2] — theta_bg_topology: drop dropout epochs before mapping
+- Cycles on flat signal (zero background in the .fil: dropouts or blanked stretches) and within
+  `--flat-guard-s` (150 s) of them are excluded; `--exclude-min` drops manual windows.  On the g6
+  session (6 phase bins) the detached islands of the latent map (69.9-72 and 78-80.5 min, around the
+  three dropouts) carried ALL of the long H1 bars (3.5 vs null 0.6) and the largest H0 gap; with them
+  excluded the map is one component, H1 0.29 vs null 0.22, dimension 18.5 vs 18.0, continuity = null.
+
 ## [0.40.1] — theta_bg_topology: bins of the Hilbert theta phase
 - extract `--phase-mode phase` (new default): `--phase-bins` equal bins of the Hilbert theta phase from
   the trough (6 bins = 60 deg each); theta is asymmetric, so these differ in duration.  `--phase-mode

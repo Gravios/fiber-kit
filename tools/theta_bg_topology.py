@@ -426,6 +426,23 @@ def cmd_analyze(a):
     t, ratio, dur = Z["t"], Z["ratio"], Z["dur"]
     nb = Z["bg"].shape[1]
     ok = np.isfinite(Z["bg"]).all((1, 2)) & (Z["nsamp"].min(1) >= a.min_samples)
+    # Flat signal (all-zero .fil: dropouts, blanked or padded stretches) gives zero background energy;
+    # cycles near it carry the edge artefact.  Both form their own island on the map and their own
+    # long H1 loops (g6: 69.9-71 and 78-80.5 min), so they are excluded with a guard, plus any
+    # --exclude-min windows.
+    flat = (Z["bg"] <= 0).any((1, 2))
+    bad = np.zeros(len(t), bool)
+    if flat.any():
+        tf = np.sort(t[flat]); j = np.searchsorted(tf, t)
+        dprev = np.abs(t - tf[np.maximum(j - 1, 0)]); dnext = np.abs(tf[np.minimum(j, tf.size - 1)] - t)
+        bad |= np.minimum(dprev, dnext) <= a.flat_guard_s
+    for w in (a.exclude_min.split(",") if a.exclude_min else []):
+        lo, hi = (float(v) * 60 for v in w.split("-"))
+        bad |= (t >= lo) & (t <= hi)
+    if bad.any():
+        _log(f"[analyze] excluded {int(bad.sum())} cycles: {int(flat.sum())} on flat signal (+-{a.flat_guard_s:g} s guard)"
+             + (f", windows {a.exclude_min} min" if a.exclude_min else ""))
+    ok &= ~bad
     thr = np.quantile(ratio[ok], a.theta_q)
     sel = ok & (ratio >= thr) & (dur >= 0.09) & (dur <= 0.20)
     idx = np.flatnonzero(sel)
@@ -560,6 +577,9 @@ def main(argv=None):
     n.add_argument("--k", type=int, default=10); n.add_argument("--excl-s", type=float, default=30.0,
                    help="neighbours within +-this many seconds do not count as revisits")
     n.add_argument("--landmarks", type=int, default=300); n.add_argument("--embed-n", type=int, default=5000)
+    n.add_argument("--flat-guard-s", type=float, default=150.0,
+                   help="drop cycles within this many s of a cycle with zero background (flat .fil); g6: the artefact islands reach ~2 min past a dropout")
+    n.add_argument("--exclude-min", default="", help="time windows to drop, e.g. '69.5-71.5,78-81' (minutes)")
     n.add_argument("--detrend-s", type=float, default=60.0,
                    help="subtract each feature's running mean over this window (s); 0 = keep slow drift")
     n.add_argument("--map-k", type=int, default=30, help="neighbours for the 2-D latent map (UMAP / Isomap)")
