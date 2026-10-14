@@ -4,6 +4,12 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.38.6] — backbone-link writes the noise bin's children under parent 1
+- backbone-link's .clp mapped every child through the fragment->unit table, which has no entry for the
+  reserve bin, so the children of cluster 1 got parent 0 and the .clc/.clp triple disagreed with the
+  .clu on every reserved spike (16,975 on g6) -- a later stage carrying the hierarchy fell back to .clu
+  only.  Children of 1 now map to 1; verified: the rebuilt triple equals the .clu, .clu unchanged.
+
 ## [0.38.5] — xcorr-merge's drift table lands where backbone-link looks for it
 - fiber-xcorr-merge wrote its drift transform with `np.savez(<path>)`, which appends `.npz`, while
   fiber-pipeline passes backbone-link the canonical `<base>.fibers.<method>.<group>.<stage>`: the

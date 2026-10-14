@@ -318,8 +318,9 @@ def main():
         nchild = int(child.max()) if child.size else 0
         lut = np.zeros(max(nchild, 1), np.int64)                 # body[i] = parent of child i+1
         for c, u in zip(child_ids, parent_in):
-            if c > 0:
-                lut[int(c) - 1] = fs_to_unit.get(int(u), 0)
+            if c > 0:                                    # the noise bin (1) owns its children too, else
+                lut[int(c) - 1] = (1 if int(u) == 1         # the triple disagrees with the .clu on every
+                                   else fs_to_unit.get(int(u), 0))   # reserved spike
         nfib = int(len(set(new[new > 1].tolist())))
         nio.write_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.out_tag), child)
         nio.write_clu_file(nio.session_path(base, "clp", elec, variant=a.clu_method, tag=a.out_tag),
