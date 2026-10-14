@@ -4,6 +4,19 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.3] — theta_bg_topology: log theta index and a two-state HMM for theta epochs
+- extract: the per-cycle theta index is now log( P[5-12] / (P[0-4] + P[13-15]) ) (band powers of the
+  reference LFP, zero-phase Butterworth, 1-s window `--ratio-win-s`, averaged over the cycle); the cycle
+  filter band is 5-12 Hz.  Stored as `ratio` with `ratio_kind = log_theta_index`.
+- analyze `--theta-state hmm` (default): a two-state Gaussian HMM (Baum-Welch + Viterbi, no extra
+  dependency) over the time-ordered per-cycle index; the high-mean state is theta.  Reports both
+  states' means/sds, stay probabilities, mean dwell times and the theta fraction.  `--theta-state
+  threshold` keeps `--theta-min` (absolute, on the log index) or the `--theta-q` quantile.  Old npz
+  files (amplitude ratio) are fed to the HMM as log(ratio).
+- 11-min g6 test: states at 0.55 / 1.95 (sd 0.54 / 0.51), dwell 2.7 / 3.8 s, 59 % theta; theta runs
+  190 -> 108 (longer, contiguous epochs instead of single cycles over a median cut).  Synthetic
+  two-state sequence: 99.6 % of samples labelled correctly.
+
 ## [0.40.2] — theta_bg_topology: drop dropout epochs before mapping
 - Cycles on flat signal (zero background in the .fil: dropouts or blanked stretches) and within
   `--flat-guard-s` (150 s) of them are excluded; `--exclude-min` drops manual windows.  On the g6

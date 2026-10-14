@@ -4,7 +4,8 @@
 Two steps (run `extract` once, iterate on `analyze`):
 
   extract   streams the session once and writes <out>.npz:
-              * theta cycles from the LFP (5-11 Hz, trough to trough) with theta/delta ratio,
+              * theta cycles from the LFP (5-12 Hz, trough to trough) with the theta index
+                log(P[5-12] / (P[0-4] + P[13-15])),
                 duration and amplitude per cycle (all cycles; the theta selection is made in analyze)
               * BACKGROUND per cycle x theta quarter x channel: mean-square of the .fil over samples at
                 least --guard-ms from any detected spike of that channel's group (spike-free activity)
@@ -83,20 +84,34 @@ def lfp_trace(path, nchan, chans, sr, target_sr=1250.0, start_s=0.0, chunk_s=60.
     return np.concatenate(out).astype(np.float32), fs, ds
 
 
-def theta_cycles(x, fs, band=(5.0, 11.0), delta=(2.0, 4.0)):
-    """Troughs of the theta phase -> cycles; per cycle: start/end (lfp samples), theta/delta ratio
-    (1-s smoothed amplitudes), duration, theta amplitude.  Also returns the phase."""
+def band_power(x, fs, lo, hi, win_s):
+    """power in [lo, hi] Hz (lo = 0 -> low-pass), zero-phase 3rd-order Butterworth, squared and
+    averaged over a centred win_s window."""
+    from scipy.signal import butter, sosfiltfilt
+    x = x.astype(np.float64) - np.mean(x)
+    sos = (butter(3, hi, "low", fs=fs, output="sos") if lo <= 0
+           else butter(3, [lo, hi], "bp", fs=fs, output="sos"))
+    y = sosfiltfilt(sos, x) ** 2
+    k = np.ones(max(1, int(win_s * fs))); k /= k.sum()
+    return np.convolve(y, k, "same")
+
+
+def theta_cycles(x, fs, band=(5.0, 12.0), win_s=1.0):
+    """Troughs of the theta phase -> cycles.  Per cycle: start/end (lfp samples), duration, theta
+    amplitude, and the THETA INDEX  log( P[5-12] / (P[0-4] + P[13-15]) ), band powers averaged over a
+    centred win_s window and then over the cycle (the curator's theta/delta measure: the 13-15 Hz
+    term keeps broadband / beta-dominated epochs from passing as theta).  Also returns the phase."""
     from scipy.signal import butter, sosfiltfilt, hilbert
     th = sosfiltfilt(butter(3, band, "bp", fs=fs, output="sos"), x.astype(np.float64))
-    de = sosfiltfilt(butter(3, delta, "bp", fs=fs, output="sos"), x.astype(np.float64))
     zt = hilbert(th); ph = np.angle(zt)
-    k = np.ones(int(fs)) / fs
-    at = np.convolve(np.abs(zt), k, "same"); ad = np.convolve(np.abs(hilbert(de)), k, "same")
+    pt = band_power(x, fs, 5.0, 12.0, win_s)
+    pn = band_power(x, fs, 0.0, 4.0, win_s) + band_power(x, fs, 13.0, 15.0, win_s)
     tr = np.flatnonzero((ph[:-1] > 0) & (ph[1:] <= 0) & (np.abs(ph[:-1] - ph[1:]) > np.pi)) + 1
     a, b = tr[:-1], tr[1:]
-    ratio = np.array([at[i:j].mean() / max(ad[i:j].mean(), 1e-9) for i, j in zip(a, b)])
+    C1, C2 = np.r_[0, np.cumsum(pt)], np.r_[0, np.cumsum(pn)]
+    logratio = np.log(np.maximum((C1[b] - C1[a]), 1e-30) / np.maximum((C2[b] - C2[a]), 1e-30))
     amp = np.array([np.abs(zt[i:j]).mean() for i, j in zip(a, b)])
-    return dict(start=a, end=b, ratio=ratio, dur=(b - a) / fs, amp=amp), ph
+    return dict(start=a, end=b, ratio=logratio, dur=(b - a) / fs, amp=amp), ph
 
 
 def _res_for_group(nio, base, g, variant):
@@ -128,7 +143,7 @@ def cmd_extract(a):
            else [c for g in groups for c in ginfo[g]["channels"] if c not in dead])
     _log(f"[extract] theta from {os.path.basename(lfp_path)} ({lfp_n} ch @ {lfp_sr:g} Hz), median of {len(tch)} ch")
     x, fs, _ = lfp_trace(lfp_path, lfp_n, tch, lfp_sr)
-    cyc, ph = theta_cycles(x, fs, band=(a.theta_lo, a.theta_hi))
+    cyc, ph = theta_cycles(x, fs, band=(a.theta_lo, a.theta_hi), win_s=a.ratio_win_s)
     ncyc = len(cyc["start"])
     _log(f"[extract] {ncyc} cycles over {x.size / fs / 60:.1f} min (median {1e3 * np.median(cyc['dur']):.0f} ms)")
     # phase-bin per LFP sample (-1 outside cycles).  --phase-mode phase: NB equal bins of the Hilbert
@@ -223,7 +238,8 @@ def cmd_extract(a):
             raise SystemExit(f"[extract] --clu-stage {a.clu_stage}: no group had a readable .clu (tried e.g. "
                              f"{', '.join(os.path.basename(x) for x in tried[:3])}); check --clu-method")
     out = a.out if a.out.endswith(".npz") else a.out + ".npz"
-    np.savez_compressed(out, t=(cyc["start"] / fs + lfp_t0), dur=cyc["dur"], ratio=cyc["ratio"], amp=cyc["amp"],
+    np.savez_compressed(out, t=(cyc["start"] / fs + lfp_t0), dur=cyc["dur"], ratio=cyc["ratio"], ratio_kind="log_theta_index",
+                        amp=cyc["amp"],
                         bg=bg, nsamp=nsamp, channels=np.array(allch), units=(U if U is not None else np.zeros((ncyc, NB, 0))),
                         unit_names=np.array(unames), meta=json.dumps(dict(base=base, groups=groups, sr=sr, lfp_fs=fs,
                                                                           guard_ms=a.guard_ms, theta=[a.theta_lo, a.theta_hi],
@@ -234,6 +250,46 @@ def cmd_extract(a):
 # ════════════════════════════════════════════════════════════════════════════
 #  analyze
 # ════════════════════════════════════════════════════════════════════════════
+def hmm2(x, n_iter=100, tol=1e-6):
+    """Two-state Gaussian HMM on a 1-D sequence (Baum-Welch in scaled form, then Viterbi).
+    Returns (states, means, sds, transition matrix, posterior of the high-mean state); state 1 is
+    the state with the higher mean."""
+    x = np.asarray(x, float); n = x.size
+    mu = np.percentile(x, [25, 75]).astype(float); sd = np.full(2, x.std() + 1e-9)
+    A = np.array([[0.99, 0.01], [0.01, 0.99]]); pi = np.array([0.5, 0.5]); prev = -np.inf
+    def emis(mu, sd):
+        return np.exp(-0.5 * ((x[:, None] - mu) / sd) ** 2) / (sd * np.sqrt(2 * np.pi)) + 1e-300
+    for _ in range(n_iter):
+        B = emis(mu, sd)
+        al = np.empty((n, 2)); c = np.empty(n)
+        al[0] = pi * B[0]; c[0] = al[0].sum(); al[0] /= c[0]
+        for t in range(1, n):
+            al[t] = (al[t - 1] @ A) * B[t]; c[t] = al[t].sum(); al[t] /= c[t]
+        be = np.empty((n, 2)); be[-1] = 1.0
+        for t in range(n - 2, -1, -1):
+            be[t] = (A @ (B[t + 1] * be[t + 1])) / c[t + 1]
+        g = al * be; g /= g.sum(1, keepdims=True)
+        xi = (al[:-1, :, None] * A[None] * (B[1:] * be[1:])[:, None, :]) / c[1:, None, None]
+        A = xi.sum(0) / xi.sum((0, 2))[:, None]; pi = g[0]
+        w = g.sum(0); mu = (g * x[:, None]).sum(0) / w
+        sd = np.sqrt((g * (x[:, None] - mu) ** 2).sum(0) / w) + 1e-9
+        ll = np.log(c).sum()
+        if ll - prev < tol * abs(ll):
+            break
+        prev = ll
+    B = np.log(emis(mu, sd)); lA = np.log(A + 1e-300)
+    d = np.log(pi + 1e-300) + B[0]; bp = np.zeros((n, 2), int)
+    for t in range(1, n):
+        m = d[:, None] + lA; bp[t] = m.argmax(0); d = m.max(0) + B[t]
+    st = np.empty(n, int); st[-1] = int(d.argmax())
+    for t in range(n - 2, -1, -1):
+        st[t] = bp[t + 1, st[t + 1]]
+    hi = int(np.argmax(mu))
+    if hi == 0:
+        st = 1 - st; mu, sd = mu[::-1], sd[::-1]; A = A[::-1, ::-1]; g = g[:, ::-1]
+    return st, mu, sd, A, g[:, 1]
+
+
 def twonn(X, rng, n=4000):
     """Facco et al. TwoNN intrinsic dimension (MLE on mu = r2/r1)."""
     from sklearn.neighbors import NearestNeighbors
@@ -443,11 +499,30 @@ def cmd_analyze(a):
         _log(f"[analyze] excluded {int(bad.sum())} cycles: {int(flat.sum())} on flat signal (+-{a.flat_guard_s:g} s guard)"
              + (f", windows {a.exclude_min} min" if a.exclude_min else ""))
     ok &= ~bad
-    thr = np.quantile(ratio[ok], a.theta_q)
-    sel = ok & (ratio >= thr) & (dur >= 0.09) & (dur <= 0.20)
+    kind = str(Z["ratio_kind"]) if "ratio_kind" in Z.files else "amp_ratio_5-11_2-4"
+    lr = ratio if kind == "log_theta_index" else np.log(np.maximum(ratio, 1e-9))
+    hmm_info = None
+    if a.theta_state == "hmm":
+        # two-state HMM over the time-ordered per-cycle theta index: theta vs non-theta epochs with
+        # their own dwell times, rather than a cut on single cycles
+        fin = np.isfinite(lr)
+        st = np.zeros(len(lr), int); post = np.zeros(len(lr))
+        st[fin], mu, sd, A, post[fin] = hmm2(lr[fin])
+        is_theta = st == 1
+        dwell = [float(np.mean(t[1:] - t[:-1])) / max(1 - A[k, k], 1e-9) for k in (0, 1)]
+        hmm_info = dict(index=kind, means=np.round(mu, 3).tolist(), sds=np.round(sd, 3).tolist(),
+                        p_stay=[round(float(A[0, 0]), 4), round(float(A[1, 1]), 4)],
+                        mean_dwell_s=[round(d, 2) for d in dwell], theta_frac=round(float(is_theta.mean()), 3))
+        _log(f"[analyze] HMM on {kind}: non-theta mean {mu[0]:.2f} (sd {sd[0]:.2f}), theta mean {mu[1]:.2f} "
+             f"(sd {sd[1]:.2f}); dwell {dwell[0]:.1f} / {dwell[1]:.1f} s; theta {100 * is_theta.mean():.0f}% of cycles")
+    elif a.theta_min is not None:
+        is_theta = lr >= a.theta_min
+    else:
+        is_theta = lr >= np.quantile(lr[ok], a.theta_q)
+    sel = ok & is_theta & (dur >= 1 / a.theta_hi_hz) & (dur <= 1 / a.theta_lo_hz)
     idx = np.flatnonzero(sel)
     run = np.r_[0, np.cumsum(np.diff(idx) != 1)]
-    _log(f"[analyze] {sel.sum()} theta cycles (ratio >= q{a.theta_q:g}) of {len(t)}; {run.max() + 1} runs; "
+    _log(f"[analyze] {sel.sum()} theta cycles ({a.theta_state}) of {len(t)}; {run.max() + 1} runs; "
          f"{(t[idx][-1] - t[idx][0]) / 60:.1f} min span; {nb} phase bins x {Z['bg'].shape[2]} ch")
     tt = t[idx]
     F = features(Z, a.features, a.remove_level)[idx]
@@ -458,7 +533,7 @@ def cmd_analyze(a):
     for j in range(Fn.shape[1]):
         Fn[:, j] = np.roll(Fn[:, j], int(rng.integers(minsh, max(minsh + 1, n - minsh))))
     Xn, _ = pipeline(Fn, a, rng, nk=nk)
-    res = dict(n_cycles=int(n), phase_bins=int(nb), features=a.features, remove_level=bool(a.remove_level),
+    res = dict(n_cycles=int(n), theta_state=a.theta_state, hmm=hmm_info, phase_bins=int(nb), features=a.features, remove_level=bool(a.remove_level),
                detrend_s=a.detrend_s, smooth=a.smooth, pca_dims=nk)
     res["twonn"] = dict(real=round(twonn(X, rng), 2), null=round(twonn(Xn, rng), 2))
     rv, rdt, rfar = revisit(X, tt, a.k, a.excl_s, rng); nv, ndt, nfar = revisit(Xn, tt, a.k, a.excl_s, rng)
@@ -555,7 +630,9 @@ def main(argv=None):
     e.add_argument("--lfp-start-s", type=float, default=0.0, help="session time (s) of the LFP's first sample")
     e.add_argument("--theta-channels", default=None, help="LFP channels for the theta median (default: all group channels)")
     e.add_argument("--dead-channels", default=None, help="channels to ignore everywhere")
-    e.add_argument("--theta-lo", type=float, default=5.0); e.add_argument("--theta-hi", type=float, default=11.0)
+    e.add_argument("--theta-lo", type=float, default=5.0); e.add_argument("--theta-hi", type=float, default=12.0)
+    e.add_argument("--ratio-win-s", type=float, default=1.0,
+                   help="window (s) of the band powers in the theta index log(P[5-12]/(P[0-4]+P[13-15]))")
     e.add_argument("--res-variant", default="", help="pin the .res variant (default: the shared .res of each group)")
     e.add_argument("--guard-ms", type=float, default=1.0, help="samples within this of a detected spike are excluded")
     e.add_argument("--clu-method", default="stderiv_C5_D34"); e.add_argument("--clu-stage", default="",
@@ -570,7 +647,13 @@ def main(argv=None):
     n.add_argument("npz")
     n.add_argument("--features", choices=["bg", "units", "both"], default="bg")
     n.add_argument("--remove-level", type=int, default=1, help="1 = drop each cycle's overall background level")
-    n.add_argument("--theta-q", type=float, default=0.5, help="theta/delta ratio quantile for a theta cycle")
+    n.add_argument("--theta-state", choices=["hmm", "threshold"], default="hmm",
+                   help="hmm = two-state Gaussian HMM on the per-cycle theta index (default); threshold = "
+                        "--theta-min or the --theta-q quantile")
+    n.add_argument("--theta-q", type=float, default=0.5, help="theta index quantile for a theta cycle (if no --theta-min)")
+    n.add_argument("--theta-min", type=float, default=None,
+                   help="absolute threshold on log(P[5-12]/(P[0-4]+P[13-15])) (e.g. 0 = theta exceeds the rest)")
+    n.add_argument("--theta-lo-hz", type=float, default=5.0); n.add_argument("--theta-hi-hz", type=float, default=12.0)
     n.add_argument("--min-samples", type=int, default=50, help="spike-free samples needed per channel x quarter")
     n.add_argument("--smooth", type=int, default=3, help="moving average over this many consecutive cycles")
     n.add_argument("--pca-var", type=float, default=0.9); n.add_argument("--pca-max", type=int, default=30)
