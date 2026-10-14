@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.39.1] — tools/theta_bg_topology.py: theta-cycle background and place-like topology over a session
+- `extract` streams the session once: theta cycles (5-11 Hz troughs of the group-median LFP; theta/delta
+  ratio, duration, amplitude per cycle), the spike-free background per cycle x theta quarter x channel
+  (.fil mean-square >= --guard-ms from any spike of the channel's group), optional unit counts per
+  cycle quarter from a clu stage.  `analyze` (iterate on the npz): background pattern / units / both,
+  smoothed over consecutive cycles, PCA; TwoNN dimension, revisit structure, persistent homology
+  (ripser or gudhi) and an Isomap embedding against a per-feature circular-shift null of the same
+  dimension; with --pos (.whl) blocked-CV position decoding and feature-vs-place distance.
+- Smoke-tested on the 11-min group-6 window (8 ch, no position): runs end to end in ~2 min; there the
+  background pattern is ~10-dimensional and its H1 bars match the null -- too little coverage to judge,
+  the full-session multi-group run is the test.
+
 ## [0.39.0] — fiber-lowmix: split low-amplitude mixture units after noise whitening
 - New stage `fiber-lowmix` (opt-in plan step, POST stage; knobs FK_LOWMIX_* in fiber-kit-exp.yaml [D]).
   Per low-amplitude unit: standard .spk, per-channel Legendre smoothing (deg 20), whitening with the
