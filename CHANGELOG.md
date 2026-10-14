@@ -4,6 +4,12 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.5] — theta HMM fitted on usable cycles only
+- The dropout cycles (flat .fil, theta index ~log(1e-30) = -69) were in the HMM fit and became the
+  "non-theta" state on the full g6 session (mean -30, sd 33; 99.6 % of cycles called theta).  The HMM
+  now fits only cycles that pass the flat/guard and sample checks, winsorised to the 0.5-99.5 % range.
+  Full g6 session (3 phase bins): states 0.13 / 1.46 (sd 0.57 / 0.51), dwell 2.8 / 3.1 s, 53 % theta.
+
 ## [0.40.4] — fiber-session runs on non-32-sample spike windows (nSamples 64 / peak 33)
 - The chunk whitener drew its spike-free baseline as fixed 32-sample snippets, but the feature mask is
   built peak-relative for the session's window (build_masks): with nSamples 64 / peak 33 (Plexon

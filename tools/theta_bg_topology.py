@@ -505,16 +505,20 @@ def cmd_analyze(a):
     if a.theta_state == "hmm":
         # two-state HMM over the time-ordered per-cycle theta index: theta vs non-theta epochs with
         # their own dwell times, rather than a cut on single cycles
-        fin = np.isfinite(lr)
+        # Fit only on usable cycles: dropout stretches give an index near log(1e-30) (-69) and, left
+        # in, become a state of their own (g6 full session: "non-theta" mean -30, sd 33, 99.6 % theta).
+        # The remaining values are winsorised to their 0.5-99.5 % range for the same reason.
+        fin = np.isfinite(lr) & ok
+        lo_, hi_ = np.percentile(lr[fin], [0.5, 99.5])
         st = np.zeros(len(lr), int); post = np.zeros(len(lr))
-        st[fin], mu, sd, A, post[fin] = hmm2(lr[fin])
-        is_theta = st == 1
+        st[fin], mu, sd, A, post[fin] = hmm2(np.clip(lr[fin], lo_, hi_))
+        is_theta = (st == 1) & fin
         dwell = [float(np.mean(t[1:] - t[:-1])) / max(1 - A[k, k], 1e-9) for k in (0, 1)]
         hmm_info = dict(index=kind, means=np.round(mu, 3).tolist(), sds=np.round(sd, 3).tolist(),
                         p_stay=[round(float(A[0, 0]), 4), round(float(A[1, 1]), 4)],
-                        mean_dwell_s=[round(d, 2) for d in dwell], theta_frac=round(float(is_theta.mean()), 3))
+                        mean_dwell_s=[round(d, 2) for d in dwell], theta_frac=round(float(is_theta[fin].mean()), 3))
         _log(f"[analyze] HMM on {kind}: non-theta mean {mu[0]:.2f} (sd {sd[0]:.2f}), theta mean {mu[1]:.2f} "
-             f"(sd {sd[1]:.2f}); dwell {dwell[0]:.1f} / {dwell[1]:.1f} s; theta {100 * is_theta.mean():.0f}% of cycles")
+             f"(sd {sd[1]:.2f}); dwell {dwell[0]:.1f} / {dwell[1]:.1f} s; theta {100 * is_theta[fin].mean():.0f}% of usable cycles")
     elif a.theta_min is not None:
         is_theta = lr >= a.theta_min
     else:
