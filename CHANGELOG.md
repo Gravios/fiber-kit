@@ -4,6 +4,11 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.6] — theta_bg_topology figure: the longest theta run is the longest
+- The trajectory panel took `run[argmax(bincount(run))]` -- the run id OF the cycle whose index equals
+  the longest run's id -- so it drew an arbitrary run (10 cycles on the g6 3-bin session; the longest
+  has 157).  Figure only; the JSON metrics were unaffected.
+
 ## [0.40.5] — theta HMM fitted on usable cycles only
 - The dropout cycles (flat .fil, theta index ~log(1e-30) = -69) were in the HMM fit and became the
   "non-theta" state on the full g6 session (mean -30, sd 33; 99.6 % of cycles called theta).  The HMM

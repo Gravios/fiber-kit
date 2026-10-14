@@ -601,7 +601,7 @@ def cmd_analyze(a):
         ax.imshow(np.bincount(bx * G + by, minlength=G * G).reshape(G, G).T, origin="lower", cmap="Greys")
         ax.set_title("occupancy (rank-normalised map)", fontsize=9)
         ax = fig.add_subplot(2, 5, 3)
-        r0 = run[np.argmax(np.bincount(run))]; m = run == r0
+        r0 = int(np.argmax(np.bincount(run))); m = run == r0          # the run id with most cycles
         ax.scatter(Y[:, 0], Y[:, 1], s=1, color="0.85")
         ax.plot(Y[m, 0], Y[m, 1], "-", color="0.3", lw=0.8); ax.scatter(Y[m, 0], Y[m, 1], c=np.arange(m.sum()), s=8, cmap="plasma")
         ax.set_title(f"longest theta run ({m.sum()} cycles)", fontsize=9)
