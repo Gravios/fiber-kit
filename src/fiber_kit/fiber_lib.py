@@ -85,8 +85,17 @@ def _fit_whitener(base, mask):
     return W, nmean, len(base)
 
 
+def _baseline_win(mask, win=None):
+    """Length of the baseline snippets: the spike window (`win`, i.e. nSamples) when known, else just
+    long enough for the mask.  A fixed 32 broke every session whose mask reaches past sample 31
+    (nSamples 64 / peak 33: MASK_FULL = 29..43 -> IndexError in _fit_whitener)."""
+    m = np.asarray(mask)
+    need = int(m.size if m.dtype == bool else (int(m.max()) + 1 if m.size else 0))
+    return max(int(win) if win else 32, need)
+
+
 def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, pad=1):
-    """Draw up to n_base off-spike 32-sample snippets WITHOUT materializing the
+    """Draw up to n_base off-spike `win`-sample snippets WITHOUT materializing the
     whole span.  `read_window(r0, r1)` returns the raw (rows, nCh) float window;
     only sampled windows are read and stderiv-transformed.  Forbidden zones are
     tested by searchsorted on the sorted spike times (no T-length mask)."""
@@ -110,7 +119,7 @@ def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, pa
     return base
 
 
-def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0):
+def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None):
     """Noise whitener + mean in the masked spkD space, from off-spike baseline.
     fil_trace: (T,nCh) raw voltage (already restricted to the group's channels);
     spike_samples_rel: spike times relative to trace start.  Memory-frugal: only
@@ -121,11 +130,11 @@ def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, gu
     def read_window(r0, r1):
         return fil_trace[r0:r1]
 
-    base = _collect_baseline(read_window, T, spike_samples_rel, n_base, guard, seed)
+    base = _collect_baseline(read_window, T, spike_samples_rel, n_base, guard, seed, win=_baseline_win(mask, win))
     return _fit_whitener(base, mask)
 
 
-def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000, guard=24, seed=0):
+def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None):
     """Memmap whitener: identical statistics to chunk_whitener but reads ONLY the
     sampled baseline windows from `filmm` (shape (Ttot, nTotalCh)), so peak memory
     is O(n_base * 32 * nGroupCh) regardless of span length.  Contiguous channel
@@ -141,7 +150,7 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
             return filmm[s0 + r0: s0 + r1, lo:hi]
         return filmm[s0 + r0: s0 + r1, :][:, gch]
 
-    base = _collect_baseline(read_window, T, spike_rel, n_base, guard, seed)
+    base = _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=_baseline_win(mask, win))
     return _fit_whitener(base, mask)
 
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
@@ -434,8 +443,8 @@ def location_cy(waveforms, y_um):
 # ── chunk whitener, memmap path ──────────────────────────────────────────────
 # Moved out of fiber_session: it is an adapter over chunk_whitener_mm just below,
 # so its home is here rather than in a CLI stage that four other modules had to
-# import to reach it.  `nsamp` is accepted and unused -- kept in the signature
-# because every existing call site passes it positionally.
+# import to reach it.  `nsamp` sets the baseline snippet length (the spike window), so a mask built
+# for a non-32 window (build_masks) indexes inside it.
 def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
     # memmap path: reads only sampled baseline windows, never the whole span.
-    return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask)
+    return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask, win=nsamp)

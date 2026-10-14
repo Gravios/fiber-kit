@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.4] — fiber-session runs on non-32-sample spike windows (nSamples 64 / peak 33)
+- The chunk whitener drew its spike-free baseline as fixed 32-sample snippets, but the feature mask is
+  built peak-relative for the session's window (build_masks): with nSamples 64 / peak 33 (Plexon
+  session) MASK_FULL is samples 29..43 -> "IndexError: index 32 is out of bounds".  The baseline
+  snippets now have the spike window's length (`fil_chunk_whitener` passes nsamp; the other entry
+  points size them from the mask).
+- cluster_chunk (the coarse pass and the fine/reseed re-cuts in cluster_chunk_fine) was called without
+  the session mask and fell back to the 32-sample MASK_FULL (samples 11..25), while the whitener was
+  fit on the session mask: the features and the whitener described different samples.  On the 64-sample
+  window that left every spike coarse-unassigned (0 fibers); on 42/peak-21 sessions (the reference)
+  the coarse features sat 6 samples before the peak-relative span.  All three calls now pass the mask.
+- Test session built from the 36-47 min g6 data re-extracted at 64/33: 0 -> 224 global fibers (42/21
+  on the same spikes: 225).  42/21 sorts change with the corrected coarse mask (ARI 0.19 vs before --
+  fiber-session over-splits, so the partition is not stable to feature changes); re-run fiber-session
+  on existing sessions before comparing against earlier fiber_session outputs.  test_spike_window
+  (fails on the old code with the reported IndexError).
+
 ## [0.40.3] — theta_bg_topology: log theta index and a two-state HMM for theta epochs
 - extract: the per-cycle theta index is now log( P[5-12] / (P[0-4] + P[13-15]) ) (band powers of the
   reference LFP, zero-phase Butterworth, 1-s window `--ratio-win-s`, averaged over the cycle); the cycle

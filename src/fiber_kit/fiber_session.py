@@ -667,7 +667,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # coarse groups; narrower -> tighter bands, so amplitude-distinct cells stay separate coarse fibers
     # for the fine splitter to resolve.  Only the COARSE call is exposed; the per-fiber fine re-cluster
     # keeps the default band (it already operates within one coarse fiber).
-    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr, seed_density=coarse_seed_density)
+    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr, seed_density=coarse_seed_density,
+                           mask=mask)
     ct0 = float(res_abs.min()); ct1 = float(res_abs.max())   # chunk time bounds for rate/presence
     fine = np.full(len(waves), -1, int); geoms = []; nid = 0
     for cf in np.unique(coarse[coarse >= 0]):
@@ -689,7 +690,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         elif method == "none":
             groups = [np.arange(len(cidx))]
         elif method == "fiber":
-            sub = cluster_chunk(wsplit, W, nmean, min_group=fine_mg, kappa=fine_kappa, dedup_deg=fine_dedup)
+            sub = cluster_chunk(wsplit, W, nmean, min_group=fine_mg, kappa=fine_kappa, dedup_deg=fine_dedup, mask=mask)
             groups = ([np.arange(len(cidx))] if (sub < 0).all()
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
         elif method == "rkk":
@@ -764,7 +765,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 if len(grp) < 2 * fine_mg or _median_resid_ratio(wcf[grp], mask) < reseed_residual_thr:
                     newg.append(grp); continue
                 sub = cluster_chunk(wcf[grp], W, nmean, min_group=fine_mg, kappa=fine_kappa,
-                                    dedup_deg=fine_dedup, seed_density=coarse_seed_density)
+                                    dedup_deg=fine_dedup, seed_density=coarse_seed_density, mask=mask)
                 if (sub < 0).all() or len(np.unique(sub[sub >= 0])) < 2:
                     newg.append(grp); continue
                 pieces = [np.flatnonzero(sub == u) for u in np.unique(sub[sub >= 0])]
