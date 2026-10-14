@@ -4,6 +4,11 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.40.1] — theta_bg_topology: bins of the Hilbert theta phase
+- extract `--phase-mode phase` (new default): `--phase-bins` equal bins of the Hilbert theta phase from
+  the trough (6 bins = 60 deg each); theta is asymmetric, so these differ in duration.  `--phase-mode
+  time` keeps the previous equal-duration bins.  The mode is recorded in the npz meta.
+
 ## [0.40.0] — every package installs by default; theta_bg_topology maps cycles without position
 - pyproject: all optional packages are core dependencies (diptest, matplotlib, pyqtgraph, PySide6,
   holoviews, bokeh, openTSNE, networkx, scikit-image) plus umap-learn and gudhi for the topology tool.

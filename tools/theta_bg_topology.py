@@ -128,16 +128,21 @@ def cmd_extract(a):
            else [c for g in groups for c in ginfo[g]["channels"] if c not in dead])
     _log(f"[extract] theta from {os.path.basename(lfp_path)} ({lfp_n} ch @ {lfp_sr:g} Hz), median of {len(tch)} ch")
     x, fs, _ = lfp_trace(lfp_path, lfp_n, tch, lfp_sr)
-    cyc, _ = theta_cycles(x, fs, band=(a.theta_lo, a.theta_hi))
+    cyc, ph = theta_cycles(x, fs, band=(a.theta_lo, a.theta_hi))
     ncyc = len(cyc["start"])
     _log(f"[extract] {ncyc} cycles over {x.size / fs / 60:.1f} min (median {1e3 * np.median(cyc['dur']):.0f} ms)")
-    # phase-bin per LFP sample (-1 outside cycles); NB equal-duration bins trough to trough
+    # phase-bin per LFP sample (-1 outside cycles).  --phase-mode phase: NB equal bins of the Hilbert
+    # theta phase, starting at the trough (bin k = [-pi + k*2pi/NB, -pi + (k+1)*2pi/NB)) -- theta is
+    # asymmetric, so these are NOT equal in duration; time: NB equal-duration bins trough to trough.
     NB = int(a.phase_bins)
     qbin = np.full(x.size, -1, np.int64)
     for c in range(ncyc):
         s, e = cyc["start"][c], cyc["end"][c]
-        q = np.minimum(((np.arange(s, e) - s) * NB) // max(e - s, 1), NB - 1)
-        qbin[s:e] = c * NB + q
+        if a.phase_mode == "phase":
+            q = np.floor(((ph[s:e] + np.pi) % (2 * np.pi)) / (2 * np.pi / NB)).astype(np.int64)
+        else:
+            q = ((np.arange(s, e) - s) * NB) // max(e - s, 1)
+        qbin[s:e] = c * NB + np.clip(q, 0, NB - 1)
     lfp_t0 = a.lfp_start_s
 
     # ── background from the .fil ──
@@ -222,7 +227,7 @@ def cmd_extract(a):
                         bg=bg, nsamp=nsamp, channels=np.array(allch), units=(U if U is not None else np.zeros((ncyc, NB, 0))),
                         unit_names=np.array(unames), meta=json.dumps(dict(base=base, groups=groups, sr=sr, lfp_fs=fs,
                                                                           guard_ms=a.guard_ms, theta=[a.theta_lo, a.theta_hi],
-                                                                          phase_bins=NB)))
+                                                                          phase_bins=NB, phase_mode=a.phase_mode)))
     _log(f"[extract] wrote {out}: {ncyc} cycles x {NB} phase bins x {len(allch)} ch" + (f" + {len(unames)} units" if unames else ""))
 
 
@@ -539,7 +544,9 @@ def main(argv=None):
     e.add_argument("--clu-method", default="stderiv_C5_D34"); e.add_argument("--clu-stage", default="",
                    help="clu stage for unit counts (empty = background only)")
     e.add_argument("--min-unit-spikes", type=int, default=200)
-    e.add_argument("--phase-bins", type=int, default=8, help="equal-duration theta phase bins per cycle (trough to trough)")
+    e.add_argument("--phase-bins", type=int, default=8, help="theta phase bins per cycle, starting at the trough")
+    e.add_argument("--phase-mode", choices=["phase", "time"], default="phase",
+                   help="phase = equal bins of the Hilbert theta phase (default); time = equal-duration bins")
     e.add_argument("--chunk-s", type=float, default=30.0, help="seconds of .fil per read (30 s x 96 ch = 375 MB float32)")
     e.add_argument("--out", required=True)
     n = sp.add_parser("analyze", help="topology of the per-cycle background vs a feature-shift null")
