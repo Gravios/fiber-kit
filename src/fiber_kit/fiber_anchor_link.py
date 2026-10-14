@@ -125,6 +125,49 @@ def read_anchor_pairs(path):
     return [(int(a), int(b)) for _, a, b in ap[:, :3]]
 
 
+def translate_anchor_pairs(pairs, anchor_clc, frag_clu, min_frac=0.6):
+    """Re-express overlap anchors in the FRAGMENT layer's ids.
+
+    fiber-session writes its anchors as pairs of its own .clc ATOM ids.  When the linker runs on
+    another layer -- the stage's flat .clu (--frag-layer units), or a later stage such as intrachunk's
+    exp_chunk -- those numbers name different clusters, and reading them as fragment ids seeds
+    arbitrary pairs (seeding bypasses the score floor).  Each anchor atom is mapped to the fragment
+    holding at least `min_frac` of its spikes (reserve labels 0/1 never count); pairs with an unmapped
+    end, or whose ends land in the same fragment, are dropped.  Identity when the layers are equal.
+    Returns (pairs, stats)."""
+    anchor_clc = np.asarray(anchor_clc); frag_clu = np.asarray(frag_clu)
+    st = dict(n_in=len(pairs), unmapped=0, same=0, dup=0)
+    if anchor_clc.shape == frag_clu.shape and np.array_equal(anchor_clc, frag_clu):
+        st["identity"] = True
+        return list(pairs), st
+    st["identity"] = False
+    need = sorted({int(x) for p in pairs for x in p})
+    m = {}
+    for at in need:
+        lab = frag_clu[anchor_clc == at]
+        if lab.size == 0:
+            continue
+        v, c = np.unique(lab, return_counts=True)
+        ok = v > max(RESERVE)
+        if not ok.any():
+            continue
+        k = int(np.argmax(np.where(ok, c, -1)))
+        if c[k] / lab.size >= min_frac:
+            m[at] = int(v[k])
+    out, seen = [], set()
+    for x, y in pairs:
+        if x not in m or y not in m:
+            st["unmapped"] += 1; continue
+        if m[x] == m[y]:
+            st["same"] += 1; continue
+        key = (m[x], m[y])
+        if key in seen:
+            st["dup"] += 1; continue
+        seen.add(key); out.append(key)
+    st["n_out"] = len(out)
+    return out, st
+
+
 def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng):
     """Fragment template: realign -> denoise -> mutual-centre, then median +/- sigma."""
     idx = np.asarray(idx)
@@ -357,6 +400,11 @@ def main():
                          "An explicit --in-clu overrides both.")
     ap.add_argument("--spk-method", "--spk-variant", dest="spk_variant", default="standard",
                     help="waveform axis for templates/warp (standard = curation axis)")
+    ap.add_argument("--anchor-stage", default=_knob_default("FK_ALINK_ANCHOR_STAGE", str, "fiber_session", gcfg),
+                    help="stage whose .clc atoms fiber-session's anchors index (used when the anchors come "
+                         "from the unstaged .fibers): fiber_session, or fs_clean after fiber-consensus")
+    ap.add_argument("--anchor-majority", type=float, default=_knob_default("FK_ALINK_ANCHOR_MAJORITY", float, 0.6, gcfg),
+                    help="an anchor atom maps to the fragment holding at least this fraction of its spikes")
     ap.add_argument("--fibers", default=None, help="path to the .fibers npz carrying the overlap anchors "
                                                    "(default: derive from --clu-method/--clu-stage)")
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="anchor_linked",
@@ -465,9 +513,29 @@ def main():
           f"over {len(byc)} chunks")
 
     fib = a.fibers or nio.session_path(base, "fibers", elec, variant=a.clu_method, tag=a.clu_stage)
+    own = bool(a.fibers) or os.path.exists(fib)
     if not os.path.exists(fib):
         fib = nio.session_path(base, "fibers", elec, variant=a.clu_method)
     pairs = read_anchor_pairs(fib)
+    if pairs:
+        # The anchors index the .clc atoms of the stage that WROTE them: this stage's own .fibers ->
+        # this stage's .clc; fiber-session's unstaged .fibers -> --anchor-stage's .clc (fiber_session;
+        # fiber-consensus' fs_clean carries the same atom ids).  Translate them into the fragment
+        # layer, or seed nothing: a wrong-layer id is an arbitrary pair, and seeds skip the floor.
+        astage = a.clu_stage if own else a.anchor_stage
+        ap_ = nio.session_path(base, "clc", elec, variant=a.clu_method, tag=astage)
+        if os.path.exists(ap_):
+            _, aclc = nio.read_clu_file(ap_, n_spikes=res.size)
+            n0 = len(pairs)
+            pairs, tst = translate_anchor_pairs(pairs, aclc, frag_clu, min_frac=a.anchor_majority)
+            if not tst["identity"]:
+                print(f"[anchor-link] anchors translated from .{astage} atoms to the fragment layer: {n0} -> "
+                      f"{len(pairs)} (no {a.anchor_majority:g} majority {tst['unmapped']}, same fragment "
+                      f"{tst['same']}, duplicate {tst['dup']})")
+        else:
+            print(f"[anchor-link] anchors: no .clc at .{astage} to resolve their atom ids against the fragment "
+                  f"layer -- NOT seeding ({len(pairs)} anchors ignored; set --anchor-stage)")
+            pairs = []
     seeds = [(row[x], row[y]) for x, y in pairs if x in row and y in row]
     print(f"[anchor-link] anchors: {len(pairs)} in {os.path.basename(fib) if os.path.exists(fib) else '(none)'}"
           f" -> {len(seeds)} usable")

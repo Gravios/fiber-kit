@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.39.2] — anchor-link translates fiber-session's anchors into the fragment layer
+- fiber-session writes its overlap anchors as pairs of its own .clc ATOM ids.  With `frag-layer: units`
+  on exp_chunk (the exp plan) there is no exp_chunk .fibers, so the linker fell back to fiber-session's
+  and read those atom ids as exp_chunk UNIT ids: any number that exists in both layers became a pair
+  of unrelated units, and seeds bypass the score floor (g8 run: "72 -> 17 usable ... recovers 6% of the
+  anchors ... seeded 16/17").  Now each anchor atom maps to the fragment holding >= 0.6 of its spikes
+  (`--anchor-stage`, default fiber_session; `--anchor-majority`), pairs inside one fragment or without
+  a majority drop out, and with no .clc to resolve against nothing is seeded.  Mini session (overlap
+  sort, units layer): the old path read 10 arbitrary pairs; translated, 16 of 17 anchors map to pairs
+  already in one unit and 1 has no majority, so nothing is (wrongly) seeded.  test_anchor_link_reserve.
+
 ## [0.39.1] — tools/theta_bg_topology.py: theta-cycle background and place-like topology over a session
 - `extract` streams the session once: theta cycles (5-11 Hz troughs of the group-median LFP; theta/delta
   ratio, duration, amplitude per cycle), the spike-free background per cycle x theta quarter x channel

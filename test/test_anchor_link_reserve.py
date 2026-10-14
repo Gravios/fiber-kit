@@ -53,6 +53,28 @@ def test_cells_never_numbered_into_the_reserve():
     assert sorted(set(parent[1:].tolist())) == list(range(2, 2 + 3))
 
 
+def test_anchor_pairs_translate_to_the_fragment_layer():
+    # atoms 2..7 (fiber-session .clc); fragments merge atoms {2,3}->10, {4}->11, {5,6}->12; atom 7 is
+    # split evenly between 11 and 12 (no majority); atom 8 is all noise
+    atom = np.repeat([2, 3, 4, 5, 6, 7, 7, 8], 50)
+    frag = np.repeat([10, 10, 11, 12, 12, 11, 12, 1], 50)
+    pairs = [(2, 4), (3, 5), (2, 3), (7, 4), (6, 8), (3, 4)]
+    out, st = fal.translate_anchor_pairs(pairs, atom, frag, min_frac=0.6)
+    assert out == [(10, 11), (10, 12)], out
+    assert st["same"] == 1 and st["unmapped"] == 2 and st["dup"] == 1 and not st["identity"]
+    # same layer -> identity (ids untouched, even ones a translation would drop)
+    out2, st2 = fal.translate_anchor_pairs(pairs, atom, atom)
+    assert out2 == pairs and st2["identity"]
+
+
+def test_wrong_layer_ids_are_not_read_as_fragments():
+    # the bug: anchor atom ids that happen to exist as fragment ids name OTHER clusters
+    atom = np.repeat([2, 3, 4, 5], 40)
+    frag = np.repeat([5, 4, 3, 2], 40)              # same numbers, permuted meaning
+    out, _ = fal.translate_anchor_pairs([(2, 3)], atom, frag)
+    assert out == [(5, 4)]
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

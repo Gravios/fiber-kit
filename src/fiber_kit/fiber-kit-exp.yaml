@@ -521,6 +521,11 @@ FK_ALINK_MAX_GAP:        4        # 4 | 1-4 (chunks).  Bridge a cell silent for 
                                   #   gap progressively; the yield comes from relaxing it, not from iterating at a fixed one.
 FK_ALINK_MIN_FRAG:       15       # 15 | 15-40.  Min spikes for a fragment to carry a template (else left as its own cell).
 FK_ALINK_SPK_CAP:        1500     # 1500 | 600-3000.  Spikes per fragment for the template.
+FK_ALINK_ANCHOR_STAGE:   fiber_session  # fiber_session | fs_clean.  Stage whose .clc ATOMS fiber-session's overlap anchors
+                                  #   index.  The linker runs on exp_chunk UNITS, so each anchor atom is mapped to the
+                                  #   unit holding >= ANCHOR_MAJORITY of its spikes; pairs already in one unit drop out.
+                                  #   Before 0.39.2 the atom ids were read as unit ids: arbitrary seeded links.
+FK_ALINK_ANCHOR_MAJORITY: 0.6     # 0.6 | 0.5-0.8.
 #   PRIM_FRAC/Z/WIN/SLIDE/IOU_THR above are a coordinate search against the anchors (positives) and the
 #   within-chunk pairs (negatives) on the reference session: TPR at 1% FPR 67% -> 79%, AUC 0.9745 -> 0.9810
 #   versus the backbone defaults.  Fitted on 63 anchors with NO held-out split, so treat as that session's
