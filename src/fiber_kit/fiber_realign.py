@@ -651,14 +651,16 @@ def main():
                 # grammar implies one too ('+' => sets => order 5).  If they disagree,
                 # one of them is wrong about this session, and picking either would
                 # write a file whose name contradicts its contents.
-                pat_order = 5 if fst.sdiff_spec_uses_sets(pat) else 4
+                pat_order = fst.sdiff_spec_order(pat)
                 if spec.order != pat_order:
                     _log(f"variant '{v}': token says order {spec.order} but the session's "
                          f"sdiffPairs parses as order {pat_order}; refusing rather than writing "
                          f"a file whose name contradicts its contents.")
                     continue
                 try:
-                    if pat_order == 5:
+                    if pat_order == 6:
+                        wav = fst.apply_stderiv_transform(raw_ext, exprs=fst.parse_sdiff_exprs(pat))
+                    elif pat_order == 5:
                         wav = fst.apply_stderiv_transform(raw_ext, sets=fst.parse_sdiff_sets(pat))
                     else:
                         partner, _root = fst.parse_sdiff_pairs(pat)

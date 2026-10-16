@@ -159,6 +159,7 @@ transform is not the plain all-pairs derivative:
 | `stderiv_S<order>` | plain spatial derivative at that order; any `sdiffPairs` deliberately unused |
 | `stderiv_C4` | the session's custom `sdiffPairs` single-partner pattern |
 | `stderiv_C5` | the session's custom `sdiffPairs` per-channel reference sets |
+| `stderiv_C6` | the session's custom `sdiffPairs` expressions over `c0`, `c1`, … (one per channel) |
 
 A bare preference entry matches its whole **family**, so `prefer_derived()` finds
 `.spk.stderiv_C5.5` even though the list only names `stderiv`. This matters: the
@@ -179,9 +180,15 @@ by `test/custody_token_conformance` against `test/custody_vectors.tsv`.
   the file's own header, so a dropped-channel (N−1) or kept-channel (N) `.fet` both
   load without configuration.
 - `fiber_pca.Method` mirrors `neurosuite::core::Method` **by integer value** — a
-  basis written by either repo is read by the other. Values 7 (`STDERIV_CUSTOM`) and
-  8 (`STDERIV_CUSTOM_CAR`) correspond to the `_C4` / `_C5` tokens. Held in step by
-  `test/pca_method_vectors.tsv`, an identical copy of neurosuite-3's.
+  basis written by either repo is read by the other. Values 7 (`STDERIV_CUSTOM`),
+  8 (`STDERIV_CUSTOM_CAR`) and 9 (`STDERIV_EXPR`) correspond to the `_C4` / `_C5` /
+  `_C6` tokens. Held in step by `test/pca_method_vectors.tsv`, an identical copy of
+  neurosuite-3's.
+- The `sdiffPairs` grammar (`fiber_stderiv`) mirrors neurosuite-3's: the order-4
+  partner map (root wired to its first predecessor, as the extractor writes it),
+  order-5 reference sets, and order-6 expressions (`c0 - (c1 + c2)/2, …`, any
+  arithmetic, usual precedence). `test/sdiff_expr_vectors.tsv` is an identical copy
+  of neurosuite-3's expression vectors, run by `test/test_sdiff_expr.py`.
 - fiber-kit **never applies the stderiv transform itself**; it reads whatever the
   extractor wrote.
 - `fiber_pca.read_pca` defaults to `prefer_standard()` and deliberately never falls

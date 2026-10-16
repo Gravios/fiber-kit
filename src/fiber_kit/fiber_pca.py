@@ -55,6 +55,7 @@ class Method(enum.IntEnum):
     STDERIV_ALLPAIRS  = 6          # canonical
     STDERIV_CUSTOM     = 7         # per-group sdiffPairs partner map    (stderiv_C4)
     STDERIV_CUSTOM_CAR = 8         # per-group sdiffPairs reference sets (stderiv_C5)
+    STDERIV_EXPR       = 9         # per-group sdiffPairs expressions    (stderiv_C6)
 
 
 def method_tag(m):
@@ -63,7 +64,7 @@ def method_tag(m):
     if m in (Method.SDIFF_FIRST, Method.SDIFF_LAPLACIAN, Method.SDIFF_ALLPAIRS):
         return "sdiff"
     if m in (Method.STDERIV_FIRST, Method.STDERIV_LAPLACIAN, Method.STDERIV_ALLPAIRS,
-             Method.STDERIV_CUSTOM, Method.STDERIV_CUSTOM_CAR):
+             Method.STDERIV_CUSTOM, Method.STDERIV_CUSTOM_CAR, Method.STDERIV_EXPR):
         return "stderiv"
     return "standard"
 
@@ -72,13 +73,13 @@ def has_temporal_diff(m):
     """True if the method applies the temporal first-difference (stderiv vs sdiff/raw)."""
     return Method(m) in (Method.STDERIV_FIRST, Method.STDERIV_LAPLACIAN,
                          Method.STDERIV_ALLPAIRS, Method.STDERIV_CUSTOM,
-                         Method.STDERIV_CUSTOM_CAR)
+                         Method.STDERIV_CUSTOM_CAR, Method.STDERIV_EXPR)
 
 
 def spatial_order(m):
     """Spatial-derivative order a method applies (0=none, 1=first, 2=laplacian,
-    3=allpairs, 4=custom pattern, 5=custom reference-set).  Mirrors
-    neurosuite::core::spatialOrder."""
+    3=allpairs, 4=custom pattern, 5=custom reference-set, 6=custom expressions).
+    Mirrors neurosuite::core::spatialOrder."""
     m = Method(m)
     if m in (Method.SDIFF_FIRST, Method.STDERIV_FIRST):
         return 1
@@ -90,6 +91,8 @@ def spatial_order(m):
         return 4
     if m is Method.STDERIV_CUSTOM_CAR:
         return 5
+    if m is Method.STDERIV_EXPR:
+        return 6
     return 0
 
 def read_pcad(path):

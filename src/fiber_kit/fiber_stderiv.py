@@ -124,8 +124,234 @@ def parse_sdiff_sets(spec):
 
 
 def sdiff_spec_uses_sets(spec):
-    """True iff the pattern uses order-5 SET syntax (any '+'), else order-4."""
+    """True iff the pattern uses order-5 SET syntax (any '+'), else order-4.  False for the
+    expression form (order 6), whose '+' is arithmetic: see sdiff_spec_order."""
+    if sdiff_spec_is_expression(spec):
+        return False
     return "+" in str(spec or "")
+
+
+# ── order 6: expressions ──────────────────────────────────────────────────────────
+#
+# Port of neurosuite-3 libneurosuite-core/src/neurosuite/core/channel_expr.hpp: one arithmetic
+# expression per output channel, in channel order, over the group's channels c0, c1, ...:
+#     "c0 - (c1 + c2)/2, c1 - c0, c2 - 0.5*c3, (c3 - c2)^2"
+# + - * / ^ and parentheses with the usual precedence (^ right-associative and binding tighter
+# than a unary minus); numbers are constants; any arithmetic.  A non-finite result is 0 and a
+# result beyond +-1e9 is held there.  Both implementations run the same vectors
+# (test/sdiff_expr_vectors.tsv, an identical copy of neurosuite-3's).
+
+EXPR_LIMIT = 1e9
+_EXPR_MAX_DEPTH = 64
+
+
+def sdiff_spec_is_expression(spec):
+    """True when a pattern is written as expressions (it names a channel cN)."""
+    s = str(spec or "")
+    return "c" in s or "C" in s
+
+
+def sdiff_spec_order(spec):
+    """The spatial order a pattern selects: 6 for expressions, 5 for reference sets, else 4."""
+    if sdiff_spec_is_expression(spec):
+        return 6
+    return 5 if sdiff_spec_uses_sets(spec) else 4
+
+
+class ChannelExpr:
+    """One output channel's expression, compiled to postfix ("num", v) / ("chan", i) / op."""
+
+    def __init__(self, text):
+        self.text = text.strip()
+        self.code = []
+        self.max_chan = -1
+        self._depth = 0
+        self._sp = 0
+        self._p = 0
+        if not self.text:
+            raise ValueError("an empty expression")
+        self._parse()
+
+    # parsing -------------------------------------------------------------------------------
+    def _err(self, msg, col=True):
+        where = f" (column {self._p + 1})" if col else ""
+        return ValueError(f"'{self.text}' {msg}{where}")
+
+    def _skip(self):
+        while self._p < len(self.text) and self.text[self._p] in " \t":
+            self._p += 1
+
+    def _peek(self, c):
+        self._skip()
+        return self._p < len(self.text) and self.text[self._p] == c
+
+    def _emit(self, op, arg=None):
+        self.code.append((op, arg))
+        if op in ("num", "chan"):
+            self._sp += 1
+            self._depth = max(self._depth, self._sp)
+        elif op != "neg":
+            self._sp -= 1
+
+    def _parse(self):
+        self._expr()
+        self._skip()
+        if self._p != len(self.text):
+            c = self.text[self._p]
+            raise self._err("has a ')' without its '('" if c == ")"
+                            else f"has '{c}' where an operator is expected")
+        if self.max_chan < 0:
+            raise self._err("uses no channel (channels are written c0, c1, ...)", col=False)
+        if self._depth > _EXPR_MAX_DEPTH:
+            raise self._err("is nested too deeply", col=False)
+
+    def _expr(self):
+        self._term()
+        while self._peek("+") or self._peek("-"):
+            op = self.text[self._p]
+            self._p += 1
+            self._term()
+            self._emit("add" if op == "+" else "sub")
+
+    def _term(self):
+        self._unary()
+        while self._peek("*") or self._peek("/"):
+            op = self.text[self._p]
+            self._p += 1
+            self._unary()
+            self._emit("mul" if op == "*" else "div")
+
+    def _unary(self):
+        if self._peek("-"):
+            self._p += 1
+            self._unary()
+            self._emit("neg")
+            return
+        if self._peek("+"):
+            self._p += 1
+            self._unary()
+            return
+        self._power()
+
+    def _power(self):
+        self._primary()
+        if self._peek("^"):
+            self._p += 1
+            self._unary()                          # right-associative: 2^3^2 = 2^(3^2)
+            self._emit("pow")
+
+    def _primary(self):
+        self._skip()
+        t = self.text
+        if self._p >= len(t):
+            raise self._err("ends where a channel, number or '(' is expected")
+        c = t[self._p]
+        if c == "(":
+            self._p += 1
+            self._expr()
+            if not self._peek(")"):
+                raise self._err("is missing a ')'")
+            self._p += 1
+            return
+        if c in "cC":
+            self._p += 1
+            start = self._p
+            while self._p < len(t) and t[self._p].isdigit():
+                self._p += 1
+            if self._p == start:
+                self._p = start - 1
+                raise self._err("has a 'c' without a channel number")
+            ch = int(t[start:self._p])
+            if ch > 1000000:
+                raise self._err("has a channel number that is too large")
+            self.max_chan = max(self.max_chan, ch)
+            self._emit("chan", ch)
+            return
+        if c.isdigit() or c == ".":
+            start = self._p
+            while self._p < len(t) and t[self._p].isdigit():
+                self._p += 1
+            if self._p < len(t) and t[self._p] == ".":
+                self._p += 1
+                while self._p < len(t) and t[self._p].isdigit():
+                    self._p += 1
+            if self._p - start == 1 and c == ".":
+                self._p = start
+                raise self._err("has a '.' that is not a number")
+            if self._p < len(t) and t[self._p] in "eE":
+                q = self._p + 1
+                if q < len(t) and t[q] in "+-":
+                    q += 1
+                if q < len(t) and t[q].isdigit():
+                    self._p = q
+                    while self._p < len(t) and t[self._p].isdigit():
+                        self._p += 1
+            self._emit("num", float(t[start:self._p]))
+            self._skip()
+            if self._p < len(t) and t[self._p] in "cC(":
+                raise self._err("needs a '*' between a number and what follows it")
+            return
+        raise self._err(f"has '{c}' where a channel, number or '(' is expected")
+
+    # evaluation ----------------------------------------------------------------------------
+    def eval(self, chan):
+        """Value for channel values chan(i) (scalars or same-shape numpy arrays), float64."""
+        st = []
+        with np.errstate(all="ignore"):
+            for op, arg in self.code:
+                if op == "num":
+                    st.append(np.float64(arg))
+                elif op == "chan":
+                    st.append(np.asarray(chan(arg), np.float64))
+                elif op == "neg":
+                    st[-1] = -st[-1]
+                else:
+                    b = st.pop()
+                    a = st.pop()
+                    st.append(a + b if op == "add" else a - b if op == "sub" else
+                              a * b if op == "mul" else a / b if op == "div" else np.power(a, b))
+            v = np.asarray(st[0], np.float64) if st else np.float64(0.0)
+            v = np.where(np.isfinite(v), v, 0.0)
+        return np.clip(v, -EXPR_LIMIT, EXPR_LIMIT)
+
+
+def parse_sdiff_exprs(spec):
+    """Compile an expression pattern: one ChannelExpr per output channel (comma-separated).
+    ValueError naming the element and the problem when it does not follow the grammar.  A group
+    written in an older form (no channel names) is converted to the expressions it computes."""
+    s = str(spec or "")
+    if not sdiff_spec_is_expression(s):
+        s = sdiff_pattern_as_exprs(s)
+    out = []
+    for k, el in enumerate(s.split(",")):
+        try:
+            out.append(ChannelExpr(el))
+        except ValueError as e:
+            raise ValueError(f"sdiffPairs expression {k}: {e}") from None
+    return out
+
+
+def sdiff_pattern_as_exprs(spec):
+    """An order-4 or order-5 pattern written as the expressions it computes (bit-identical:
+    0-1 -> c0-c1, 0-1+2 -> c0-(c1+c2)/2).  Mirrors sdiffPairsAsExpr / sdiffSetsAsExpr."""
+    if sdiff_spec_uses_sets(spec):
+        sets = parse_sdiff_sets(spec)
+        return ",".join(f"c{k}-(" + "+".join(f"c{m}" for m in st) + f")/{len(st)}"
+                        for k, st in enumerate(sets))
+    partner, _ = parse_sdiff_pairs(spec)
+    return ",".join(f"c{k}-c{p}" for k, p in enumerate(partner))
+
+
+def check_exprs_fit(exprs, n_chan):
+    """ValueError unless the expressions fit a group of n_chan channels (one per channel, no
+    channel beyond the group's)."""
+    if len(exprs) != n_chan:
+        raise ValueError(f"{len(exprs)} expressions for {n_chan} channels "
+                         f"(one per channel, in channel order)")
+    for k, e in enumerate(exprs):
+        if e.max_chan >= n_chan:
+            raise ValueError(f"expression {k} ('{e.text}') uses c{e.max_chan} but the group has "
+                             f"c0..c{n_chan - 1}")
 
 
 def plain_order_spec(order, n_chan):
@@ -147,7 +373,7 @@ def plain_order_spec(order, n_chan):
     raise ValueError(f"plain spatial-derivative order {order} does not exist (1-3)")
 
 
-def apply_stderiv_transform(raw_ext, partner=None, sets=None):
+def apply_stderiv_transform(raw_ext, partner=None, sets=None, exprs=None):
     """ns3 stderiv transform, unified over the in-use orders (allpairs / custom / custom-CAR).
 
     Ported from stderiv_transform.hpp / process_extractspikes_stderiv (fill_sdiff_buffer +
@@ -155,6 +381,7 @@ def apply_stderiv_transform(raw_ext, partner=None, sets=None):
 
         order 4 (partner): sd[t,a] = x[t,a] - x[t, partner[a]]
         order 5 (sets):    sd[t,a] = x[t,a] - mean(x[t, sets[a]])
+        order 6 (exprs):   sd[t,a] = exprs[a] over x[t, 0..C)  (parse_sdiff_exprs)
         order 3 (neither): sd[t,a] = nChanGrp * x[t,a] - Sum_j x[t,j]      (SDIFF_ALLPAIRS)
 
     Then, for EVERY order, round-half-away + clamp to int16 (the C++ holds sd in a short buffer --
@@ -177,7 +404,10 @@ def apply_stderiv_transform(raw_ext, partner=None, sets=None):
     """
     r = np.asarray(raw_ext, np.float64)
     C = r.shape[2]
-    if partner is not None:                                  # order 4
+    if exprs is not None:                                    # order 6
+        check_exprs_fit(exprs, C)
+        sd = np.stack([e.eval(lambda i: r[:, :, i]) * np.ones(r.shape[:2]) for e in exprs], axis=2)
+    elif partner is not None:                                # order 4
         if len(partner) != C:
             raise ValueError(f"sdiffPairs covers {len(partner)} channels but the group has {C}")
         sd = r - r[:, :, partner]

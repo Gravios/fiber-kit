@@ -1,0 +1,39 @@
+# sdiff_expr_vectors.tsv — conformance vectors for the expression form of a
+# custom spatial pattern (sdiffPairs written with c0, c1, ...; order 6, method
+# stderiv_C6).  ONE table, run by every language mirror:
+#   C++    : sdiff_expr_test.cpp   (neurosuite/core/channel_expr.hpp)
+#   Python : test_sdiff_expr.py    (fiber_kit/fiber_stderiv.py — fiber-kit repo,
+#            shipping an identical copy of this file)
+#
+# Tab-separated; column 1 is the case kind.
+#   eval    <spec>  <group channel values, space-separated>  <expected outputs>
+#           outputs compared to 1e-9 relative; a non-finite result is 0, and
+#           a result beyond +-1e9 is held at +-1e9
+#   reject  <spec>  <why, for the reader>
+eval	c0-c1, c1-c2, c2-c3, c3-c2	3 5 11 -2	-2.0 -6.0 13.0 -13.0
+eval	c0 - (c1 + c2)/2, c1 - c0, c2, c3	3 5 11 -2	-5.0 2.0 11.0 -2.0
+eval	c0-c1-c2, c1, c2, c3	3 5 11 -2	-13.0 5.0 11.0 -2.0
+eval	c0 + c1*c2, c1, c2, c3	3 5 11 -2	58.0 5.0 11.0 -2.0
+eval	(c0 + c1)*c2, c1, c2, c3	3 5 11 -2	88.0 5.0 11.0 -2.0
+eval	c0/c1/2, c1, c2, c3	3 5 11 -2	0.3 5.0 11.0 -2.0
+eval	-c0^2, c1^2^0.5, 2^-1*c2, c3	3 5 11 -2	-9.0 9.738517742335421 5.5 -2.0
+eval	c0 - 0.5*c1 - .25*c2 + 1e-1*c3, c1, C2, c3	3 5 11 -2	-2.45 5.0 11.0 -2.0
+eval	c0/(c1-c1), c1, c2, c3	3 5 11 -2	0.0 5.0 11.0 -2.0
+eval	  c3 ,c2,  c1 , c0  	3 5 11 -2	-2.0 11.0 5.0 3.0
+eval	--c0, +c1, -(-c2), c3	3 5 11 -2	3.0 5.0 11.0 -2.0
+eval	c0*c1 - c2/c3, c1, c2, c3	3 5 11 -2	20.5 5.0 11.0 -2.0
+eval	(((c0))), c1, c2, c3	3 5 11 -2	3.0 5.0 11.0 -2.0
+eval	c0^20, -c1^20, c2, c3	3 5 11 -2	1000000000.0 -1000000000.0 11.0 -2.0
+eval	2^3^2*c0, c1, c2, c3	3 5 11 -2	1536.0 5.0 11.0 -2.0
+reject	c0-c1, , c2	empty element
+reject	c0-	trailing operator
+reject	c0-c1)	unmatched )
+reject	(c0-c1	missing )
+reject	2c1	implicit multiplication
+reject	c0 c1	missing operator
+reject	c-c1	c without number
+reject	1+2	no channel
+reject	c0*%c1	bad character
+reject	c0-.	lone dot
+reject	c0**c1	double operator
+reject	x0-x1	unknown name

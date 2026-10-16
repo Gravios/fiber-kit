@@ -67,7 +67,8 @@ def space_transform(space, sdiff_pairs=None):
 
       standard | fil      -> None (the .fil window itself, = .spk.standard)
       stderiv             -> SDIFF_ALLPAIRS + temporal first difference
-      stderiv_C<4|5>      -> the session's sdiffPairs pattern (partner map / reference sets)
+      stderiv_C<4|5|6>    -> the session's sdiffPairs pattern (partner map / reference sets /
+                             expressions over c0, c1, ...)
     A trailing _D<lag><dims> (feature-space suffix) is ignored: the waveform is the same.  All stderiv
     orders go through fiber_stderiv.apply_stderiv_transform, the shared mirror of the C++ extractor,
     so the windows are the ones the .spk on disk was built from (before any fiber-realign shift)."""
@@ -84,9 +85,12 @@ def space_transform(space, sdiff_pairs=None):
         raise ValueError(f"{space!r}: only the session's custom pattern (_C) is supported")
     if not sdiff_pairs:
         raise ValueError(f"{space!r} needs the session's sdiffPairs pattern")
-    order = 5 if fst.sdiff_spec_uses_sets(sdiff_pairs) else 4
+    order = fst.sdiff_spec_order(sdiff_pairs)
     if spec.order != order:
         raise ValueError(f"{space!r} says order {spec.order} but sdiffPairs parses as order {order}")
+    if order == 6:
+        exprs = fst.parse_sdiff_exprs(sdiff_pairs)
+        return lambda r: fst.apply_stderiv_transform(r, exprs=exprs).astype(np.float32)
     if order == 5:
         sets = fst.parse_sdiff_sets(sdiff_pairs)
         return lambda r: fst.apply_stderiv_transform(r, sets=sets).astype(np.float32)

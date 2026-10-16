@@ -33,6 +33,8 @@ SHARED = {
         "src/libneurosuite-core/test/custody_vectors.tsv",
     "pca_method_vectors.tsv":
         "src/libneurosuite-core/test/pca_method_vectors.tsv",
+    "sdiff_expr_vectors.tsv":
+        "src/libneurosuite-core/test/sdiff_expr_vectors.tsv",
 }
 
 
