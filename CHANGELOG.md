@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.42.0] — sdiffPairs expressions; .wtl v2; CI and one version
+- `sdiffPairs` can give one arithmetic expression per output channel over `c0`, `c1`, … (`+ - * / ^`,
+  parentheses, usual precedence): spatial order 6, method token `stderiv_C6`, PCAE method 9, the
+  same grammar and results as neurosuite-3's `channel_expr.hpp`, held in step by
+  `test/sdiff_expr_vectors.tsv`.  Older patterns keep their meaning; in a session that mixes the
+  forms, the others are evaluated as the expressions they compute.  The order-4 root output and
+  cycles now follow the extractor (the root is wired to its predecessor).
+- `neuro_io.read_wtl` reads `.wtl` version 2, the version neurosuite-3 writes (running mean/std per
+  node), as well as version 1; it returned no nodes for every file Klusters saves.  `write_wtl` still
+  writes version 1.
+- CI (`.github/workflows/ci.yml`) runs `test/run_all.py` on every push with a neurosuite-3 checkout,
+  so the shared vector tables are compared.  `test_shared_contract.py` fails when a table is missing
+  on the other side (it skipped).
+- `docs/stages.md` and `plans/TEMPLATE-all-stages.yaml` regenerated from the parsers (the drift check
+  was failing).
+- One version: `fiber_kit.__version__` said 0.25.0 and `PKG-INFO` 0.1.0 while `pyproject.toml` said
+  0.41.0.  `PKG-INFO` (generated) is removed, and `test/test_version.py` checks that
+  `pyproject.toml`, `__version__` and the newest CHANGELOG heading agree.
+
 ## [0.41.0] — theta_bg_topology: one latent map per theta phase bin
 - analyze `--map-mode per-bin`: a separate map for each phase bin from that bin's own channel pattern
   (plus that bin's unit counts with --features units/both); per bin TwoNN, H1, continuity against the
