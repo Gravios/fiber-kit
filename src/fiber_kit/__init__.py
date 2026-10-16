@@ -21,7 +21,7 @@ Python:
 
 See WORKFLOW.md (shipped with the package) for the end-to-end recipe.
 """
-__version__ = "0.42.0"   # keep equal to pyproject.toml (test/test_version.py)
+__version__ = "0.43.0"   # keep equal to pyproject.toml (test/test_version.py)
 
 from . import fiber_lib, fiber_tracer, fiber_adapt, fiber_collision, laplacian_link
 from . import neuro_io

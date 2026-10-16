@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.43.0] — shared stderiv and grammar tables; one token rule
+- `test/stderiv_vectors.tsv` (shared with neurosuite-3, where every engine now takes its spatial
+  derivative from one header) is run against `fiber_stderiv.apply_stderiv_transform`: all 27 rows
+  fiber-kit covers match to the sample, saturation and halves included.
+- `test/sdiff_grammar_vectors.tsv` (shared) pins the order-4/5 sdiffPairs grammar.  fiber_stderiv's
+  parsers now follow the C++ exactly: positions are ASCII digits only ('1_0', '+0', non-ASCII digits
+  refused), a blank token is refused, a repeated set member is refused.  `morpho_eap.parse_sdiff_sets`
+  delegates to fiber_stderiv instead of carrying a third copy.
+- `parse_variant_token`: ASCII digits only, and a `_D` with lag 0 makes the token opaque, as in the
+  three neurosuite-3 mirrors; `test/custody_vectors.tsv` gains `waveform_token` rows (run here) and
+  `drops_last` rows (not mirrored -- fiber-kit never drops channels itself).
+
 ## [0.42.0] — sdiffPairs expressions; .wtl v2; CI and one version
 - `sdiffPairs` can give one arithmetic expression per output channel over `c0`, `c1`, … (`+ - * / ^`,
   parentheses, usual precedence): spatial order 6, method token `stderiv_C6`, PCAE method 9, the
