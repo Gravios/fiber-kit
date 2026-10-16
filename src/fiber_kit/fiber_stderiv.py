@@ -51,10 +51,28 @@ def parse_sdiff_pairs(spec):
     roots = [i for i in range(maxpos) if i not in partner]
     if len(roots) != 1:
         raise ValueError(f"sdiffPairs must have exactly one root, found {roots}")
-    if roots[0] != maxpos - 1:
+    root = roots[0]
+    if root != maxpos - 1:
         raise ValueError(f"sdiffPairs root must be the last position "
-                         f"({maxpos - 1}), found {roots[0]}")
-    return [partner.get(i, i) for i in range(maxpos)], roots[0]
+                         f"({maxpos - 1}), found {root}")
+    # A tree, not just one root: every partner chain must reach the root ("0-1,1-0,2-3" has one
+    # root, 3, but 0 and 1 form a cycle).  As parseSdiffPairs refuses it.
+    for i in range(maxpos):
+        cur, steps = i, 0
+        while cur != root and steps <= maxpos:
+            cur, steps = partner[cur], steps + 1
+        if cur != root:
+            raise ValueError(f"sdiffPairs channel {i} is on a cycle that never reaches the root")
+    # The root's own output is x[root] - x[pred], pred its first predecessor in position order --
+    # exactly what parseSdiffPairs wires and process_extractspikes_stderiv writes.  (It used to be
+    # x[root] - x[root] = 0 here, so a re-extracted .spk differed from the extractor's on that
+    # channel.)
+    preds = [j for j in range(maxpos) if partner.get(j) == root]
+    if not preds:
+        raise ValueError("sdiffPairs root is disconnected")
+    out = [partner.get(i, i) for i in range(maxpos)]
+    out[root] = preds[0]
+    return out, root
 
 
 def parse_sdiff_sets(spec):
