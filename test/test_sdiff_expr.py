@@ -75,6 +75,20 @@ sets = fst.parse_sdiff_sets("0-1+2,1-0+2,2-1+3,3-2")
 check(np.array_equal(fst.apply_stderiv_transform(raw, sets=sets),
                      fst.apply_stderiv_transform(raw, exprs=fst.parse_sdiff_exprs("0-1+2,1-0+2,2-1+3,3-2"))),
       "an older-form spec given to parse_sdiff_exprs computes the same values")
+# A session mixing forms runs _C6 for every group: an older-form group's pattern is read as the
+# expressions it computes (fiber_envelope / fiber_realign), with the values of its own order.
+try:
+    from fiber_kit import fiber_envelope as fe
+except ImportError:
+    import fiber_envelope as fe
+check(np.array_equal(fe.space_transform("stderiv_C6", "0-1,1-2,2-3")(raw),
+                     fe.space_transform("stderiv_C4", "0-1,1-2,2-3")(raw)),
+      "a _C6 space with an older-form group pattern: the same values as its own order")
+try:
+    fst.parse_sdiff_exprs("(" * 400 + "c0" + ")" * 400)
+    check(False, "deep nesting is refused")
+except ValueError:
+    pass                                     # not RecursionError
 try:
     fst.apply_stderiv_transform(raw, exprs=fst.parse_sdiff_exprs("c0-c1,c1-c0"))
     check(False, "two expressions for four channels are refused")

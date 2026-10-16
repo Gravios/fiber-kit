@@ -142,7 +142,17 @@ def sdiff_spec_uses_sets(spec):
 # (test/sdiff_expr_vectors.tsv, an identical copy of neurosuite-3's).
 
 EXPR_LIMIT = 1e9
-_EXPR_MAX_DEPTH = 64
+_EXPR_MAX_DEPTH = 64     # evaluation stack (as ChannelExpr::kMaxDepth)
+_EXPR_MAX_NEST = 64      # nesting of ( ) and signs (as ChannelExpr::kMaxNest)
+_BLANKS = " \t\n\r\f\v"
+
+
+def _is_digit(c):
+    return "0" <= c <= "9"           # ASCII only, as the C++ grammar
+
+
+def _shown(c):
+    return f"'{c}'" if " " <= c <= "~" else "a non-ASCII or control character"
 
 
 def sdiff_spec_is_expression(spec):
@@ -162,12 +172,13 @@ class ChannelExpr:
     """One output channel's expression, compiled to postfix ("num", v) / ("chan", i) / op."""
 
     def __init__(self, text):
-        self.text = text.strip()
+        self.text = text.strip(_BLANKS)
         self.code = []
         self.max_chan = -1
         self._depth = 0
         self._sp = 0
         self._p = 0
+        self._nest = 0
         if not self.text:
             raise ValueError("an empty expression")
         self._parse()
@@ -175,10 +186,11 @@ class ChannelExpr:
     # parsing -------------------------------------------------------------------------------
     def _err(self, msg, col=True):
         where = f" (column {self._p + 1})" if col else ""
-        return ValueError(f"'{self.text}' {msg}{where}")
+        shown = self.text if len(self.text) <= 60 else self.text[:57] + "..."
+        return ValueError(f"'{shown}' {msg}{where}")
 
     def _skip(self):
-        while self._p < len(self.text) and self.text[self._p] in " \t":
+        while self._p < len(self.text) and self.text[self._p] in _BLANKS:
             self._p += 1
 
     def _peek(self, c):
@@ -199,7 +211,7 @@ class ChannelExpr:
         if self._p != len(self.text):
             c = self.text[self._p]
             raise self._err("has a ')' without its '('" if c == ")"
-                            else f"has '{c}' where an operator is expected")
+                            else f"has {_shown(c)} where an operator is expected")
         if self.max_chan < 0:
             raise self._err("uses no channel (channels are written c0, c1, ...)", col=False)
         if self._depth > _EXPR_MAX_DEPTH:
@@ -222,6 +234,17 @@ class ChannelExpr:
             self._emit("mul" if op == "*" else "div")
 
     def _unary(self):
+        # Every recursion of the descent passes through here, so this bounds it (no
+        # RecursionError on deep input) -- the same limit as the C++.
+        self._nest += 1
+        try:
+            if self._nest > _EXPR_MAX_NEST:
+                raise self._err("is nested too deeply", col=False)
+            self._unary_body()
+        finally:
+            self._nest -= 1
+
+    def _unary_body(self):
         if self._peek("-"):
             self._p += 1
             self._unary()
@@ -256,24 +279,25 @@ class ChannelExpr:
         if c in "cC":
             self._p += 1
             start = self._p
-            while self._p < len(t) and t[self._p].isdigit():
+            ch = 0
+            while self._p < len(t) and _is_digit(t[self._p]):
+                ch = ch * 10 + (ord(t[self._p]) - 48)
+                if ch > 1000000:
+                    raise self._err("has a channel number that is too large")
                 self._p += 1
             if self._p == start:
                 self._p = start - 1
                 raise self._err("has a 'c' without a channel number")
-            ch = int(t[start:self._p])
-            if ch > 1000000:
-                raise self._err("has a channel number that is too large")
             self.max_chan = max(self.max_chan, ch)
             self._emit("chan", ch)
             return
-        if c.isdigit() or c == ".":
+        if _is_digit(c) or c == ".":
             start = self._p
-            while self._p < len(t) and t[self._p].isdigit():
+            while self._p < len(t) and _is_digit(t[self._p]):
                 self._p += 1
             if self._p < len(t) and t[self._p] == ".":
                 self._p += 1
-                while self._p < len(t) and t[self._p].isdigit():
+                while self._p < len(t) and _is_digit(t[self._p]):
                     self._p += 1
             if self._p - start == 1 and c == ".":
                 self._p = start
@@ -282,16 +306,16 @@ class ChannelExpr:
                 q = self._p + 1
                 if q < len(t) and t[q] in "+-":
                     q += 1
-                if q < len(t) and t[q].isdigit():
+                if q < len(t) and _is_digit(t[q]):
                     self._p = q
-                    while self._p < len(t) and t[self._p].isdigit():
+                    while self._p < len(t) and _is_digit(t[self._p]):
                         self._p += 1
             self._emit("num", float(t[start:self._p]))
             self._skip()
             if self._p < len(t) and t[self._p] in "cC(":
                 raise self._err("needs a '*' between a number and what follows it")
             return
-        raise self._err(f"has '{c}' where a channel, number or '(' is expected")
+        raise self._err(f"has {_shown(c)} where a channel, number or '(' is expected")
 
     # evaluation ----------------------------------------------------------------------------
     def eval(self, chan):

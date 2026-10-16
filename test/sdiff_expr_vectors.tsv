@@ -24,6 +24,7 @@ eval	--c0, +c1, -(-c2), c3	3 5 11 -2	3.0 5.0 11.0 -2.0
 eval	c0*c1 - c2/c3, c1, c2, c3	3 5 11 -2	20.5 5.0 11.0 -2.0
 eval	(((c0))), c1, c2, c3	3 5 11 -2	3.0 5.0 11.0 -2.0
 eval	c0^20, -c1^20, c2, c3	3 5 11 -2	1000000000.0 -1000000000.0 11.0 -2.0
+eval	((((c0)))) - 1.*c1 + 1.5e+0*c2, c1, c2, c3	3 5 11 -2	14.5 5.0 11.0 -2.0
 eval	2^3^2*c0, c1, c2, c3	3 5 11 -2	1536.0 5.0 11.0 -2.0
 reject	c0-c1, , c2	empty element
 reject	c0-	trailing operator
@@ -37,3 +38,7 @@ reject	c0*%c1	bad character
 reject	c0-.	lone dot
 reject	c0**c1	double operator
 reject	x0-x1	unknown name
+reject	((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((((c0)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))), c1, c2, c3	nested beyond 64
+reject	c٣-c1	non-ASCII digit
+reject	c0*١	non-ASCII digit as a number
+reject	c0-c1e	dangling exponent

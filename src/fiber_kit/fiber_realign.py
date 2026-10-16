@@ -652,6 +652,10 @@ def main():
                 # one of them is wrong about this session, and picking either would
                 # write a file whose name contradicts its contents.
                 pat_order = fst.sdiff_spec_order(pat)
+                # A session mixing forms runs order 6 for every group, an older-form group
+                # extracted as the expressions it computes (the same values): read it so.
+                if spec.order == 6:
+                    pat_order = 6
                 if spec.order != pat_order:
                     _log(f"variant '{v}': token says order {spec.order} but the session's "
                          f"sdiffPairs parses as order {pat_order}; refusing rather than writing "

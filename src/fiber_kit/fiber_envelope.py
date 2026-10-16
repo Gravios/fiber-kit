@@ -86,6 +86,8 @@ def space_transform(space, sdiff_pairs=None):
     if not sdiff_pairs:
         raise ValueError(f"{space!r} needs the session's sdiffPairs pattern")
     order = fst.sdiff_spec_order(sdiff_pairs)
+    if spec.order == 6:
+        order = 6        # a session mixing forms: an older-form group read as its expressions
     if spec.order != order:
         raise ValueError(f"{space!r} says order {spec.order} but sdiffPairs parses as order {order}")
     if order == 6:
