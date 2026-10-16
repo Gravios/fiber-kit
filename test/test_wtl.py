@@ -3,7 +3,8 @@
 # neuro_io, the Python mirror of neurosuite-3's neurofileio readWtl/writeWtl
 # (claude/template-curation-plan.md phase 3).  A .wtl written here must read in
 # Klusters and vice versa, so this pins the shared text contract on the Python
-# side; the cross-repo interop check lives in the dev scratchpad.
+# side.  Section 6 reads a file written by neurosuite-3's writeWtl (version 2),
+# byte for byte as the C++ writer produced it.
 import os
 import sys
 import tempfile
@@ -71,9 +72,9 @@ with tempfile.TemporaryDirectory() as d:
             fh.write(body)
         return p
 
-    # A file whose header is "wtl 2" lands at the method-less wtl path for elec 7.
+    # A version neither side implements, at the method-less wtl path for elec 7.
     with open(nio.session_path(base, "wtl", 7, variant="", tag=""), "w") as fh:
-        fh.write("wtl 2\nnNodes 0\n")
+        fh.write("wtl 3\nnNodes 0\n")
     check(read_ok := (not nio.read_wtl(base, 7)["nodes"]) and nio.read_wtl(base, 7)["version"] == 0,
           "unknown version rejected (version 0, no nodes)")
 
@@ -105,6 +106,64 @@ with tempfile.TemporaryDirectory() as d:
     rk = nio.read_wtl(base, 11)
     check(len(rk["nodes"]) == 1 and rk["nodes"][0]["kind"] == "my-custom-kind",
           "unknown kind token kept verbatim (extensible)")
+
+    # ── 6. Version 2, as neurosuite-3 writes it ─────────────────────────────
+    # Output of neurofileio::writeWtl for a three-node forest (two classes, a
+    # count-0 placeholder leaf, an unknown kind); readWtl reads it back with
+    # ok=1, version=2, 3 nodes.
+    CPP_V2 = (
+        "wtl 2\n"
+        "nSamples 2\n"
+        "nChannels 2\n"
+        "nNodes 3\n"
+        "# node class kind parent a b count\n"
+        "# mean <N> ...  then  std <N> ...   (N = nSamples*nChannels, 0 = placeholder)\n"
+        "node 0 31 drift-root -1 0 120.123456789 540\n"
+        "mean 4 1.5 -2.25 0.1 1e-07\n"
+        "std 4 0.5 0.25 3 12345.7\n"
+        "node 1 31 adapt-leaf 0 1 2 0\n"
+        "mean 0\n"
+        "std 0\n"
+        "node 2 40 my-custom-kind -1 0 240 3\n"
+        "mean 4 4 5 6 7\n"
+        "std 4 0 0 0 0\n")
+    with open(nio.session_path(base, "wtl", 12, variant="", tag=""), "w") as fh:
+        fh.write(CPP_V2)
+    r2 = nio.read_wtl(base, 12)
+    n2 = r2["nodes"]
+    check(r2["version"] == 2 and r2["nSamples"] == 2 and r2["nChannels"] == 2,
+          "C++-written v2: version and geometry read")
+    check([(n["node"], n["class"], n["kind"], n["parent"], n["count"]) for n in n2]
+          == [(0, 31, "drift-root", -1, 540), (1, 31, "adapt-leaf", 0, 0),
+              (2, 40, "my-custom-kind", -1, 3)],
+          "C++-written v2: every node, its class, kind, parent and count")
+    check(len(n2) == 3 and n2[0]["b"] == 120.123456789,
+          "C++-written v2: window edges at full precision")
+    check(len(n2) == 3 and n2[0]["mean"] == [1.5, -2.25, 0.1, 1e-07]
+          and n2[0]["std"] == [0.5, 0.25, 3.0, 12345.7], "C++-written v2: running mean/std")
+    check(len(n2) == 3 and n2[1]["mean"] == [] and n2[1]["std"] == [],
+          "C++-written v2: a count-0 placeholder has empty mean/std")
+    check(len(n2) == 3 and "spikes" not in n2[0], "v2 nodes carry no spike list")
+
+    # ── 7. v2 corruption, handled as readWtl does ────────────────────────────
+    with open(nio.session_path(base, "wtl", 13, variant="", tag=""), "w") as fh:
+        fh.write("wtl 2\n"
+                 "mean 2 9 9\n"                       # before any node -> ignored
+                 "node 0 5 drift-root -1 0 10 7\n"
+                 "mean 3 1 2\n"                       # short tail -> dropped
+                 "std 99999 1 2\n"                    # more than the line can hold -> dropped
+                 "node x 5 drift-root -1 0 10 7\n"    # malformed fixed field -> skipped
+                 "node 1 5 adapt-leaf 0 0 1 -4\n"     # negative count -> skipped
+                 "someNewKey 1 2 3\n")                # unknown key -> ignored
+    r3 = nio.read_wtl(base, 13)
+    check(r3["version"] == 2 and len(r3["nodes"]) == 1 and r3["nodes"][0]["count"] == 7,
+          "v2: malformed and negative-count nodes skipped, unknown key ignored")
+    check(len(r3["nodes"]) == 1 and r3["nodes"][0]["mean"] == [] and r3["nodes"][0]["std"] == [],
+          "v2: short, oversized and stray summary lines dropped")
+
+    # v1 nodes report their spike count as `count`, as readWtl maps them.
+    check(r["nodes"][0]["count"] == 6 and r["nodes"][3]["count"] == 0,
+          "v1: count = nSpikes")
 
 print(f"\ntest_wtl: {ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)

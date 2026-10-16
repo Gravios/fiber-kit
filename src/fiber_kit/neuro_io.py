@@ -881,14 +881,19 @@ def read_wti(base, elec, variant="", tag=""):
 # source of truth — the explicit SPIKE INDICES medianed to build it.  Per-group
 # and per-stage, method-less: <base>.wtl.<elec>[.<tag>].
 #
-# Byte/field-compatible with the shared C++ reader/writer (neurofileio readWtl/
-# writeWtl); version-tagged text, one `node` line per node, the spike indices the
-# remainder of the line:
+# Field-compatible with the shared C++ reader/writer (neurofileio readWtl/
+# writeWtl).  Version 1 (written by write_wtl here) keeps the spike indices on
+# the node line:
 #
 #     wtl 1
 #     nNodes 3
 #     # node class kind parent a b nSpikes spikes...
 #     node 0 31 drift-root -1 0.000 120.000 540 12 37 59 ...
+#
+# Version 2 (what neurosuite-3's writeWtl always writes) keeps a running
+# summary instead: the node line ends with the spike count, and `mean <N> ...`,
+# `std <N> ...` lines (N = nSamples*nChannels, 0 = placeholder) follow it.
+# read_wtl reads both; neurofileio reads both.
 WTL_COLS = ["node", "class", "kind", "parent", "a", "b", "nSpikes", "spikes..."]
 
 
@@ -914,19 +919,100 @@ def write_wtl(base, elec, nodes, tag=""):
 
 
 def read_wtl(base, elec, tag=""):
-    """Read a .wtl -> dict(version, nodes=[dict(node, class, kind, parent, a, b,
-    spikes)]).  Mirrors neurofileio::readWtl: rejects a missing file or a bad
-    'wtl 1' header ({} nodes); a node line whose index count disagrees with its
-    nSpikes is skipped (a long tail is truncated to nSpikes); a declared nNodes is
-    checked against the nodes actually parsed."""
+    """Read a .wtl, version 1 or 2, exactly as neurofileio::readWtl does.
+
+    Returns dict(version, nSamples, nChannels, nodes=[...]); each node is
+    dict(node, class, kind, parent, a, b, count, mean, std), and a v1 node also
+    keeps its `spikes`.
+
+      * v2 (what neurosuite-3 writes): `node ... <count>` followed by
+        `mean <N> ...` and `std <N> ...` lines, the running summary.
+      * v1 (what write_wtl here writes): `node ... <nSpikes> <spikes...>`;
+        count = nSpikes, mean/std empty (a legacy stub, as in the C++ reader).
+
+    Rejections, as in C++: a missing file, a first line that is not
+    `wtl 1` / `wtl 2`, or a declared nNodes that disagrees with the nodes
+    parsed give dict(version=0, nodes=[]).  A node with malformed fixed fields
+    or a negative count is skipped; a v1 node with fewer indices than nSpikes is
+    skipped (a long tail is truncated); a mean/std line that is short, declares
+    more values than the line could hold, or comes before any node is dropped.
+    Unknown keys are ignored."""
     path = session_path(base, "wtl", elec, variant="", tag=tag)
-    out = dict(version=0, nodes=[])
+    empty = dict(version=0, nSamples=0, nChannels=0, nodes=[])
+    out = dict(version=0, nSamples=0, nChannels=0, nodes=[])
     have_header = False
     declared = None
     try:
         f = open(path)
     except OSError:
-        return out
+        return empty
+    with f:
+        for line in f:
+            raw = line.rstrip("\r\n")
+            s = raw.strip()
+            if not s or s.startswith("#"):
+                continue
+            parts = s.split()
+            key = parts[0]
+            if not have_header:
+                if key != "wtl" or len(parts) < 2 or parts[1] not in ("1", "2"):
+                    return empty
+                out["version"] = int(parts[1])
+                have_header = True
+                continue
+            try:
+                if key in ("nSamples", "nChannels", "nNodes"):
+                    v = int(parts[1])
+                    if key == "nNodes":
+                        declared = v
+                    else:
+                        out[key] = v
+                    continue
+            except (IndexError, ValueError):
+                continue
+            if key == "node":
+                # node <node> <class> <kind> <parent> <a> <b> <count|nSpikes> [spikes... (v1)]
+                try:
+                    nd = {"node": int(parts[1]), "class": int(parts[2]), "kind": parts[3],
+                          "parent": int(parts[4]), "a": float(parts[5]), "b": float(parts[6]),
+                          "count": int(parts[7]), "mean": [], "std": []}
+                except (IndexError, ValueError):
+                    continue                            # malformed fixed fields: skip
+                if nd["count"] < 0:
+                    continue
+                if out["version"] == 1:
+                    spikes = parts[8:8 + nd["count"]]
+                    if len(spikes) != nd["count"]:      # short tail -> skip the node
+                        continue
+                    try:
+                        nd["spikes"] = [int(x) for x in spikes]
+                    except ValueError:
+                        continue
+                out["nodes"].append(nd)
+                continue
+            if key in ("mean", "std"):
+                if not out["nodes"]:
+                    continue                            # stray summary before any node
+                try:
+                    n = int(parts[1])
+                except (IndexError, ValueError):
+                    continue
+                if n < 0 or n > len(raw) // 2 + 1:     # more values than the line can hold
+                    continue
+                vals = parts[2:2 + n]
+                if len(vals) != n:                      # short tail -> drop this line
+                    continue
+                try:
+                    out["nodes"][-1][key] = [float(x) for x in vals]
+                except ValueError:
+                    continue
+                continue
+            # unknown keys are ignored (the format can gain fields)
+    if not have_header:
+        return empty
+    if declared is not None and declared != len(out["nodes"]):
+        return empty
+    return out
     with f:
         for line in f:
             s = line.strip()
