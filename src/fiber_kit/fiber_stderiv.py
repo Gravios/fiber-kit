@@ -8,6 +8,10 @@ This is the fiber-kit mirror of neurosuite-3's C++ ground truth:
 i.e. the exact math that produced the .spk on disk.  fiber-realign (re-extraction) and any future
 consumer import from HERE instead of carrying their own copy -- a second copy is precisely the
 "shared policy re-expressed locally" drift that this codebase keeps getting bitten by.
+
+Held to the C++ by shared tables (byte-identical in neurosuite-3, test_shared_contract):
+test/stderiv_vectors.tsv (the transform, test_stderiv_vectors.py) and
+test/sdiff_expr_vectors.tsv (the expression grammar, test_sdiff_expr.py).
 """
 import numpy as np
 
@@ -17,6 +21,18 @@ def _round_half_away(x):
     disagrees on exactly-.5 values -- and order 5 produces them routinely (x minus
     the mean of an even-sized integer set)."""
     return np.sign(x) * np.floor(np.abs(x) + 0.5)
+
+
+def _position(text):
+    """A within-group channel position, as parseSdiffPosition in sdiff_pairs.h: optional
+    blanks (space, tab) around a plain ASCII decimal integer no larger than 1000000.  Anything
+    else -- a sign, '_', a non-ASCII digit, an empty field -- is -1.  (Python's int() accepts
+    '1_0', '+3' and '٣', which the C++ refuses.)"""
+    t = str(text).strip(" \t")
+    if not t or len(t) > 7 or not all("0" <= c <= "9" for c in t):
+        return -1
+    v = int(t)
+    return v if v <= 1000000 else -1
 
 
 def parse_sdiff_pairs(spec):
@@ -29,18 +45,17 @@ def parse_sdiff_pairs(spec):
     Raises ValueError on anything malformed rather than guessing.
     """
     partner, maxpos = {}, 0
-    for tok in str(spec).split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
+    for raw in str(spec).split(","):
+        if raw == "":                      # an empty field is skipped, as in sdiff_pairs.h;
+            continue                       # a blank one is a malformed token there too
+        tok = raw.strip()
         if "-" not in tok:
             raise ValueError(f"bad sdiffPairs token {tok!r} (want a-b)")
         lhs, rhs = tok.split("-", 1)
-        try:
-            a, b = int(lhs), int(rhs)
-        except ValueError:
+        a, b = _position(lhs), _position(rhs)
+        if a < 0 or b < 0:
             raise ValueError(f"bad sdiffPairs token {tok!r} (want integers)")
-        if a < 0 or b < 0 or a == b:
+        if a == b:
             raise ValueError(f"bad sdiffPairs token {tok!r}")
         if a in partner:
             raise ValueError(f"sdiffPairs channel {a} specified twice")
@@ -83,28 +98,23 @@ def parse_sdiff_sets(spec):
     set and no channel may reference itself; there is no root requirement.
     """
     toks, maxpos = [], 0
-    for tok in str(spec).split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
+    for raw in str(spec).split(","):
+        if raw == "":                      # an empty field is skipped, as in sdiff_pairs.h;
+            continue                       # a blank one is a malformed token there too
+        tok = raw.strip()
         if "-" not in tok:
             raise ValueError(f"bad sdiffSets token {tok!r} (want a-b[+c...])")
         lhs, rhs = tok.split("-", 1)
-        try:
-            a = int(lhs)
-        except ValueError:
-            raise ValueError(f"bad sdiffSets source in {tok!r}")
+        a = _position(lhs)
         if a < 0:
             raise ValueError(f"bad sdiffSets source in {tok!r}")
         members = []
         for m in rhs.split("+"):
-            m = m.strip()
-            try:
-                b = int(m)
-            except ValueError:
-                raise ValueError(f"bad sdiffSets target in {tok!r}")
+            b = _position(m)
             if b < 0 or b == a:
                 raise ValueError(f"bad sdiffSets target in {tok!r}")
+            if b in members:
+                raise ValueError(f"sdiffSets target repeated in {tok!r}")
             members.append(b)
             maxpos = max(maxpos, b + 1)
         maxpos = max(maxpos, a + 1)

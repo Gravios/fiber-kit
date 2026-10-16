@@ -223,36 +223,14 @@ def cosine(a, b):
 def parse_sdiff_sets(spec):
     """Parse an order-5 sdiffPairs spec 'a-b+c,...' into per-channel reference sets.
 
-    Mirrors parseSdiffSets in neurosuite-3's sdiff_pairs.h.  A fourth mirror of a
-    shared grammar is exactly the drift risk this codebase keeps hitting, so this
-    one is deliberately minimal and refuses rather than guessing: every channel
-    must carry a non-empty set and no channel may reference itself, the same two
-    invariants the C++ enforces.
-    """
-    toks = []
-    maxpos = 0
-    for tok in str(spec).split(","):
-        tok = tok.strip()
-        if not tok:
-            continue
-        if "-" not in tok:
-            raise ValueError(f"bad sdiffPairs token {tok!r} (want a-b[+c...])")
-        a_s, rhs = tok.split("-", 1)
-        a = int(a_s)
-        refs = [int(m) for m in rhs.split("+") if m != ""]
-        if a < 0 or not refs or a in refs:
-            raise ValueError(f"bad sdiffPairs token {tok!r}")
-        maxpos = max(maxpos, a + 1, max(refs) + 1)
-        toks.append((a, refs))
-    sets = [None] * maxpos
-    for a, refs in toks:
-        if sets[a] is not None:
-            raise ValueError(f"sdiffPairs channel {a} specified twice")
-        sets[a] = refs
-    missing = [i for i, s in enumerate(sets) if s is None]
-    if missing:
-        raise ValueError(f"sdiffPairs channels {missing} have no reference set")
-    return sets
+    fiber_stderiv.parse_sdiff_sets, the one Python port of parseSdiffSets in
+    neurosuite-3's sdiff_pairs.h (this module used to carry its own copy, which
+    accepted 'a-b+' and repeated members that the C++ refuses)."""
+    try:
+        from . import fiber_stderiv as fst
+    except ImportError:
+        import fiber_stderiv as fst
+    return fst.parse_sdiff_sets(spec)
 
 
 def stderiv(x, sets, drop_last=False):
@@ -271,6 +249,11 @@ def stderiv(x, sets, drop_last=False):
     drop_last mirrors SDIFF_PASS, which drops the last channel downstream at PCA.
     It is False here because the .spk on disk is full width -- the drop happens at
     the PCA stage, not on the waveform.
+
+    Unlike fiber_stderiv.apply_stderiv_transform (the extractor's transform on
+    recorded int16 samples) this is the same linear map in float, with no rounding
+    or int16 saturation: its inputs are model potentials, not ADC counts, so there
+    is nothing to quantize.
     """
     x = np.asarray(x, float)
     out = np.empty_like(x)
