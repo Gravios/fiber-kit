@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# setuptools writes this into sdists; the metadata of record is pyproject.toml
+/PKG-INFO
