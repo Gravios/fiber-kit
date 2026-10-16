@@ -2,7 +2,8 @@
 # ONE table, run by every language mirror so they cannot drift:
 #   C++    : custody_conformance_test.cpp  (custody.hpp)
 #   Python : test_custody_conformance.py   (ndm_resolve_io.py)
-#   bash   : (future) ndm_custody mirror
+#   bash   : test_custody_conformance.sh     (ndm_custody)
+#   fiber-kit: test_custody_token_conformance.py (neuro_io; token kinds only)
 #
 # Tab-separated.  Column 1 is the case kind; remaining columns depend on kind.
 # Empty fields are written as empty strings between tabs (trailing tabs matter).
@@ -14,6 +15,8 @@
 #                 (existing-csv = comma-separated suffixes touched under "<tmp>/sess.")
 #   method_token  <token>  <family>  <kind>  <order>   (kind/order empty when absent)
 #   is_stderiv    <method>  <0|1>
+#   waveform_token <token>  <waveform token>
+#   drops_last    <order>  <0|1>
 #
 # ── classify ────────────────────────────────────────────────────────────────
 classify	clu	MethodSpecific
@@ -95,6 +98,52 @@ method_token	stderiv_C5_D34	stderiv	C	5
 method_token	stderivfoo	stderivfoo		
 method_token	stderiv_C	stderiv_C		
 method_token	stderiv_X3	stderiv_X3		
+# An unknown, repeated or malformed suffix makes the WHOLE token opaque even
+# after a suffix has been peeled.  (C++ and ndm_custody used to keep the part
+# peeled so far: stderiv_X1_D34 -> family stderiv_X1, lag 3.)
+method_token	stderiv_X1_D34	stderiv_X1_D34		
+method_token	stderiv_D34_D21	stderiv_D34_D21		
+method_token	stderiv_S3_C4	stderiv_S3_C4		
+method_token	stderiv_C5_D3	stderiv_C5_D3		
+method_token	stderiv_D134	stderiv_D134		
+method_token	stderiv_D04	stderiv_D04		
+# ...but a part that is not _<char><digits> at all only ends the peeling.
+method_token	stderiv_foo_D34	stderiv_foo		
+method_token	stderiv_D34_C5	stderiv	C	5
+method_token	stderiv_C123	stderiv	C	123
+method_token	stderiv_C007	stderiv	C	7
+method_token	stderiv_C٣	stderiv_C٣		
+# -- waveform_token: the waveform space of a feature-space token -------------
+#   waveform_token  <token>  <waveform token>
+# A _D<lag><dims> token names features over the waveforms of the token without
+# it; anything without a well-formed lag is returned unchanged (never rewritten).
+waveform_token	stderiv_C5_D34	stderiv_C5
+waveform_token	stderiv_D34	stderiv
+waveform_token	sdiff_S3_D21	sdiff_S3
+waveform_token	standard_D12	standard
+waveform_token	stderiv_D34_C5	stderiv_C5
+waveform_token	stderiv_S3_D90	stderiv_S3
+waveform_token	stderiv	stderiv
+waveform_token	stderiv_C5	stderiv_C5
+waveform_token	stderiv_D04	stderiv_D04
+waveform_token	stderiv_D3	stderiv_D3
+waveform_token	stderiv_D134	stderiv_D134
+waveform_token	stderiv_X1_D34	stderiv_X1_D34
+waveform_token	stderiv_D34_D21	stderiv_D34_D21
+waveform_token	stderiv_foo_D34	stderiv_foo
+waveform_token	foo_D34	foo
+# -- drops_last: does a spatial order leave a channel PCA drops? -------------
+#   drops_last  <order>  <0|1>
+# 1 and 3 are rank deficient; 4's root output is redundant; 5 drops by
+# convention; 2 (Laplacian), 6 (expressions) and 0 keep every channel.
+drops_last	0	0
+drops_last	1	1
+drops_last	2	0
+drops_last	3	1
+drops_last	4	1
+drops_last	5	1
+drops_last	6	0
+drops_last	7	0
 # -- stderiv domain: family test, NOT a "stderiv" prefix test -----------------
 is_stderiv	stderiv	1
 is_stderiv	stderiv_S3	1

@@ -102,10 +102,10 @@ def parse_variant_token(variant):
         if cut == -1:
             break
         suffix = rest[cut + 1:]
-        if len(suffix) < 2 or not suffix[1:].isdigit():
+        if len(suffix) < 2 or not all("0" <= c <= "9" for c in suffix[1:]):   # ASCII, as the C++
             break
         if suffix[0] == "D":
-            if lag or len(suffix) != 3:      # repeated, or not _D<lag><dims>
+            if lag or len(suffix) != 3 or suffix[1] == "0":   # repeated, not _D<lag><dims>, lag 0
                 return VariantSpec(variant, None, None, 0, 0)
             lag, dims = int(suffix[1]), int(suffix[2])
         elif suffix[0] in ("S", "C"):

@@ -102,6 +102,10 @@ with open(VECTORS) as fh:
             got = nio.is_stderiv_variant(token)
             check(got == want, f"is_stderiv_variant({token!r}) == {want} (got {got})")
 
+        elif kind == "waveform_token":
+            got = nio.waveform_token(f[1])
+            check(got == f[2], f"waveform_token({f[1]!r}) == {f[2]!r} (got {got!r})")
+
         else:
             skipped[kind] = skipped.get(kind, 0) + 1
 
@@ -109,7 +113,9 @@ print(f"custody token conformance (fiber-kit): {ran} checks, {fails} failed")
 if skipped:
     detail = ", ".join(f"{k}×{n}" for k, n in sorted(skipped.items()))
     print(f"  not mirrored by fiber-kit, skipped: {detail}")
-    unexpected = sorted(set(skipped) - {"method_of", "parse_anchor"})
+    # drops_last: fiber-kit never reduces channels for PCA itself (it reads the
+    # basis width), so it has no mirror of that rule.
+    unexpected = sorted(set(skipped) - {"method_of", "parse_anchor", "drops_last"})
     if unexpected:
         print(f"  NOTE: unrecognised vector kind(s) {unexpected} — the canonical "
               f"table gained something; check whether fiber-kit should mirror it")
