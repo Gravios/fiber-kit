@@ -2,8 +2,8 @@
 """
 test_shared_contract.py — the cross-repo shared files must be byte-identical.
 
-custody_vectors.tsv, pca_method_vectors.tsv, sdiff_expr_vectors.tsv and
-stderiv_vectors.tsv are
+custody_vectors.tsv, pca_method_vectors.tsv, sdiff_expr_vectors.tsv,
+stderiv_vectors.tsv and sdiff_grammar_vectors.tsv are
 shipped in BOTH fiber-kit and neurosuite-3 on purpose: each is one table run by
 every language mirror, so the implementations cannot drift apart.  That only
 holds while the two copies are the same file, so changing a vector file is a
@@ -34,6 +34,8 @@ SHARED = {
         "src/libneurosuite-core/test/sdiff_expr_vectors.tsv",
     "stderiv_vectors.tsv":
         "src/libneurosuite-core/test/stderiv_vectors.tsv",
+    "sdiff_grammar_vectors.tsv":
+        "src/libneurosuite-core/test/sdiff_grammar_vectors.tsv",
 }
 
 

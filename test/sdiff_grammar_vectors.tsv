@@ -1,0 +1,53 @@
+# sdiff_grammar_vectors.tsv -- the order-4/5 sdiffPairs grammar (libklustersshared
+# sdiff_pairs.h): which spatial order a pattern selects, and the partner map or
+# reference sets it parses to, or its refusal.  Run by klustersshared_sdiff_pairs_test
+# (C++), fiber-kit test/test_sdiff_grammar.py (fiber_stderiv) and, for the order
+# column, ndmanager-plugins test_sdiff_grammar.sh (ndm_custody's
+# ndm_sdiff_pattern_order).  Byte-identical copies in both repositories
+# (test_shared_contract).  Expressions (order 6) are pinned by sdiff_expr_vectors.tsv.
+#
+# Columns (TAB-separated; a spec may carry spaces, never a TAB):
+#   spec    one group's pattern, or a colon-separated list (the -P form)
+#   order   what sdiffSpecOrder selects: 6 names a channel, else 5 with '+', else 4
+#   pairs   parseSdiffPairs: the partner position per channel (the root wired to its
+#           first predecessor), or ERR when refused; '-' for a spec not parsed here
+#   sets    parseSdiffSets: one set per channel, members joined by '+', or ERR; '-' as above
+0-1,1-2,2-3	4	1 2 3 2	ERR
+0-3,1-3,2-1	4	3 3 1 0	ERR
+0-1,1-0	4	ERR	1 0
+0-1,1-0,2-3	4	ERR	ERR
+1_0-1,1-0	4	ERR	ERR
++0-1,1-0	5	ERR	ERR
+0-1, ,1-2	4	ERR	ERR
+0-1,,1-2	4	1 2 1	ERR
+ 0-1 , 1-2 	4	1 2 1	ERR
+0-1,1-2,2-3,	4	1 2 3 2	ERR
+0-1+2,1-0+2,2-1+3,3-2+1	5	ERR	1+2 0+2 1+3 2+1
+0-1+2,1-0+2,2-1+3,3-2	5	ERR	1+2 0+2 1+3 2
+0-1+1,1-0	5	ERR	ERR
+0-1+,1-0	5	ERR	ERR
+0-1+2,1-0	5	ERR	ERR
+0-0,1-0	4	ERR	ERR
+0- 1,1 -2	4	1 2 1	ERR
+٣-1,1-2	4	ERR	ERR
+0-1,0-2,1-2	4	ERR	ERR
+0-1000001,1-0	4	ERR	ERR
+0-2,1-2	4	2 2 0	ERR
+2-0,0-1,1-3	4	1 3 0 1	ERR
+0-1	4	1 0	ERR
+1-0	4	ERR	ERR
+0-1,1-2,2-3,3-4,4-5,5-6,6-7	4	1 2 3 4 5 6 7 6	ERR
+7-0,0-1,1-2,2-3,3-4,4-5,5-6	4	ERR	ERR
+0-1+2+3,1-0+2+3,2-0+1+3,3-0+1+2	5	ERR	1+2+3 0+2+3 0+1+3 0+1+2
+0-1+2,1-0+2+3,2-1,3-2	5	ERR	1+2 0+2+3 1 2
+0-1-2,1-2	4	ERR	ERR
+0-a,1-0	4	ERR	ERR
+0-1+2,1-2,2-0+1	5	ERR	1+2 2 0+1
+0--1,1-0	4	ERR	ERR
+-1,1-0	4	ERR	ERR
+0-1,	4	1 0	ERR
+c0-c1,c1-c0	6	-	-
+C0-c1,c1	6	-	-
+0-1,1-2:c0-c1,c1	6	-	-
+0-1,1-2:0-1+2,1-0,2-1	5	-	-
+0-1+2,1-0+2,2-1:0-1,1-2	5	-	-
