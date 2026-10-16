@@ -1,0 +1,53 @@
+# ---------------------------------------------------------------------------
+# Continuous integration — every check in test/run_all.py, on every push.
+#
+# run_all.py discovers test/test_*.py, runs tools/gen_stages_doc.py --check
+# --template (docs/stages.md and the plan template match the parsers) and ruff
+# (advisory).  neurosuite-3 is checked out alongside so test_shared_contract
+# compares the vector tables both repositories carry (NS3_ROOT); without it the
+# contract test only lists hashes.
+#
+# If neurosuite-3 is private, the second checkout needs a token with read
+# access (actions/checkout `token:`).
+# ---------------------------------------------------------------------------
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: run_all (ubuntu-24.04, Python 3.12)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out neurosuite-3 (for test_shared_contract)
+        uses: actions/checkout@v4
+        with:
+          repository: Gravios/neurosuite-3
+          path: .neurosuite-3          # hidden: kept out of the src/test/tools scans
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install fiber-kit and ruff
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . ruff
+
+      - name: Run every check
+        env:
+          NS3_ROOT: ${{ github.workspace }}/.neurosuite-3
+          QT_QPA_PLATFORM: offscreen     # stages that import Qt need no display
+          MPLBACKEND: Agg
+        run: python test/run_all.py

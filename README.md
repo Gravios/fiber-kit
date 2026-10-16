@@ -33,6 +33,7 @@ emits per-fiber geometry plus quality / firing / drift statistics for curation.
 - [Python API](#python-api)
 - [Design notes (what was tried and rejected)](#design-notes-what-was-tried-and-rejected)
 - [Project layout](#project-layout)
+- [Tests](#tests)
 - [Requirements](#requirements)
 - [License](#license)
 
@@ -480,10 +481,29 @@ src/fiber_kit/
   validate_merge_candidates.py  full-session evidence for merge candidates
   WORKFLOW.md         end-to-end recipe (also shipped as package data)
 test/
+  run_all.py          every check: test_*.py (discovered), the stage-doc drift
+                      check, ruff (advisory)
+  test_*.py           one check each; exit non-zero on failure
+  *_vectors.tsv       tables shared byte for byte with neurosuite-3
   verify_optimizations.py  regression + rig verification (equality, parallel,
                            GPU) for the vectorized/parallel kernels; `--bench`
                            prints speedups, `--gpu` checks the CuPy path
 ```
+
+## Tests
+
+```sh
+python3 test/run_all.py                                   # everything
+python3 test/run_all.py --fast                            # skip the ~1 min checks
+NS3_ROOT=/path/to/neurosuite-3 python3 test/run_all.py    # also compare the shared tables
+python3 test/test_wtl.py                                  # one check
+```
+
+A new `test/test_*.py` is picked up without editing `run_all.py`; it only has to
+exit non-zero on failure. CI (`.github/workflows/ci.yml`) runs `run_all.py` on
+every push with a neurosuite-3 checkout, so `test_shared_contract.py` compares
+the `*_vectors.tsv` tables against neurosuite-3's copies. A vector change has to
+land in both repositories.
 
 ## Requirements
 
