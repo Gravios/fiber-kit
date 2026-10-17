@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.46.0] — template deconvolution; burst-signature merges
+- `fiber_deconv`: detection-anchored sub-sample template deconvolution -- continuous signal, R = 4
+  Fourier phases, VAR(4) noise whitening, amplitude prior with a joint refit after every placement,
+  stopping threshold from off-spike noise, agreement and partners judged up to a noise-corrected,
+  lag-tolerant template equivalence (0.93).  Synthetic: 0.76-0.87 vs 0.53-0.62 for
+  `fiber_collision` on collision-affected detections, timing error 0.3 vs 0.76 samples, 0.23 % of
+  pure-noise pseudo-detections placed.
+- `fiber-session --deconv` (`FK_SESSION_DECONV`; exp profile on): `deconv_agree`,
+  `deconv_partner_frac`, `deconv_n_equiv` in `.fibers` and a `.deconv.<method>.<elec>.<stage>.tsv`
+  manifest; changes no label.  `deconv_agree` tracks purity where the contaminant is distinguishable.
+  `--deconv-assign` (`FK_SESSION_DECONV_ASSIGN`, off: 70-95 % precision on synthetic sessions) parks
+  attributed noise spikes as child atoms.
+- `fiber_ccg.burst_evidence` and `fiber-peel --burst-foot-lo` (`FK_PEEL_BURST_FOOT_LO`; exp profile
+  0.80): below the footprint floor, merge only on a powered refractory dip AND the complex-spike burst
+  signature (smaller fragment follows the larger by 2-15 ms).  Simulated: 10/15 bursting cells,
+  0/25 negatives including a monosynaptic pair.
+- fiber-session takes the detection peak from `build_masks` when the YAML has none (it was
+  `int(None)` on the new path); fiber-stochastic slices `_process_chunk`'s result.
+- Neither method has been run on a real session yet: docs/methods.md says what to read first.
+
 ## [0.45.0] — reference files shared with neurosuite-3; committed-model readers
 - `test/golden/`: small `.wti`/`.wtf`/`.wtl`/`.eap`/`.tcl` files, `golden.*` written by neurosuite-3's
   C++ writers and `fk.*` by `neuro_io`, byte-identical in both repositories (hashes in `contract.yaml`).
