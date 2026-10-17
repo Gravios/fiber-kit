@@ -2,7 +2,8 @@
 # which reads and writes the same files, and to ndmanager, which runs it as an
 # ndm plugin.
 #
-#   contract        bumped whenever anything below changes
+#   contract        bumped when plugin_protocol, session_schema or formats change
+#                   (a table change shows in vectors and needs no bump)
 #   plugin_protocol the ndm-plugin-protocol ndm_fiber-kit speaks
 #   session_schema  parameters.version of the SESSION.yaml it reads
 #   formats         version-tagged formats: the highest version read (every
@@ -25,7 +26,7 @@ formats:
   tcl: {read: 1, write: 1}
   eap: {read: 1, write: 1}
 vectors:
-  custody_vectors.tsv: 8eea244182dea935478eaebec552116d
+  custody_vectors.tsv: 4e3f5c4a51219d35b724002062d190c6
   pca_method_vectors.tsv: f3f475f25582f3d9518b1ac7f5c36908
   sdiff_expr_vectors.tsv: a067fcdf129af0f2184cdbb0a3d2697d
   sdiff_grammar_vectors.tsv: 25f9cbf4f82e952a6e533ab29ca83702

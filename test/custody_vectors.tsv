@@ -53,6 +53,14 @@ parse_anchor	exp.v2.clu.sdiff.8	exp.v2	clu	sdiff	8		1
 parse_anchor	/d/sirotaA-jg-000005-20120312.spk.stderiv.5	sirotaA-jg-000005-20120312	spk	stderiv	5		1
 parse_anchor	sess.fil						0
 parse_anchor	garbage						0
+# The group is ASCII digits, at most 9 of them (it must fit an int); leading
+# zeros are read as decimal.  A longer group used to throw std::out_of_range in
+# C++; a non-ASCII digit was a group in Python only.
+parse_anchor	sess.clu.123456789	sess	clu		123456789		1
+parse_anchor	sess.clu.stderiv.007	sess	clu	stderiv	7		1
+parse_anchor	sess.clu.stderiv.1234567890						0
+parse_anchor	sess.clu.99999999999999999999						0
+parse_anchor	sess.clu.stderiv.٣						0
 # ── resolve ─────────────────────────────────────────────────────────────────
 resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	spk	5	stderiv	sess.spk.5	1
 resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	res	5	stderiv	sess.res.standard.5	1
@@ -113,6 +121,11 @@ method_token	stderiv_D34_C5	stderiv	C	5
 method_token	stderiv_C123	stderiv	C	123
 method_token	stderiv_C007	stderiv	C	7
 method_token	stderiv_C٣	stderiv_C٣		
+# An order longer than 9 digits is malformed (it would overflow a 32-bit int in
+# C++), so the whole token is opaque; 9 digits is the longest order accepted.
+method_token	stderiv_C123456789	stderiv	C	123456789
+method_token	stderiv_C1234567890	stderiv_C1234567890		
+method_token	stderiv_S99999999999999999999	stderiv_S99999999999999999999		
 # -- waveform_token: the waveform space of a feature-space token -------------
 #   waveform_token  <token>  <waveform token>
 # A _D<lag><dims> token names features over the waveforms of the token without
@@ -132,6 +145,7 @@ waveform_token	stderiv_X1_D34	stderiv_X1_D34
 waveform_token	stderiv_D34_D21	stderiv_D34_D21
 waveform_token	stderiv_foo_D34	stderiv_foo
 waveform_token	foo_D34	foo
+waveform_token	stderiv_C1234567890_D34	stderiv_C1234567890_D34
 # -- drops_last: does a spatial order leave a channel PCA drops? -------------
 #   drops_last  <order>  <0|1>
 # 1 and 3 are rank deficient; 4's root output is redundant; 5 drops by
@@ -183,6 +197,12 @@ resolve_any	res.sdiff_S2.5	res	5		sess.res.sdiff_S2.5	1
 resolve_any	spk.stderiv_C5.5	spk	5		sess.spk.stderiv_C5.5	1
 # a known token still beats an arbitrary one
 resolve_any	res.stderiv_C5.5,res.standard.5	res	5		sess.res.standard.5	1
+# several other tagged copies: the first in byte order of the file name wins
+# (not the filesystem's listing order, nor the locale's collation: 'S' < 's')
+resolve_any	res.stderiv_C5.5,res.stderiv_C4.5	res	5		sess.res.stderiv_C4.5	1
+resolve_any	res.stderiv_C5.5,res.Stderiv_C9.5	res	5		sess.res.Stderiv_C9.5	1
+# a dotted middle part is not a bare token and is never resolved to
+resolve_any	res.x.y.5	res	5		sess.res.standard.5	0
 # untagged legacy name is the last resort, after every tagged copy
 resolve_any	res.5	res	5		sess.res.5	1
 resolve_any	res.5,res.stderiv_C5.5	res	5		sess.res.stderiv_C5.5	1

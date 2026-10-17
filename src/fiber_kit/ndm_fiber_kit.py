@@ -26,7 +26,7 @@ except ImportError:
 
 # The ndm-plugin-protocol this plugin speaks; contract.yaml `plugin_protocol`.
 PROTOCOL = "1"
-# contract.yaml `contract`: bumped whenever anything in contract.yaml changes.
+# contract.yaml `contract`: bumped when plugin_protocol, session_schema or formats change.
 CONTRACT = 1
 
 

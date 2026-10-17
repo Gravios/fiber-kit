@@ -120,7 +120,7 @@ def parse_variant_token(variant):
                 return VariantSpec(variant, None, None, 0, 0)
             lag, dims = int(suffix[1]), int(suffix[2])
         elif suffix[0] in ("S", "C"):
-            if kind:
+            if kind or len(suffix) - 1 > 9:   # repeated, or an order longer than 9 digits
                 return VariantSpec(variant, None, None, 0, 0)
             kind, order = suffix[0], int(suffix[1:])
         else:
