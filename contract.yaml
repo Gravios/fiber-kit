@@ -8,7 +8,8 @@
 #   session_schema  parameters.version of the SESSION.yaml it reads
 #   formats         version-tagged formats: the highest version read (every
 #                   version from 1 up is read) and the version written
-#   vectors         MD5 of each table shared byte for byte with neurosuite-3
+#   vectors         MD5 of each table and reference file shared byte for byte
+#                   with neurosuite-3
 #
 # Checked against the code by test/test_contract.py (contract,
 # plugin_protocol, session_schema, formats) and by test/test_shared_contract.py
@@ -31,3 +32,12 @@ vectors:
   sdiff_expr_vectors.tsv: a067fcdf129af0f2184cdbb0a3d2697d
   sdiff_grammar_vectors.tsv: 25f9cbf4f82e952a6e533ab29ca83702
   stderiv_vectors.tsv: 7b6dd2867969da270375a3bf661d4a03
+  golden/fk.wti.1: b5cafd8c10059fe7ae60d1eb7175ddde
+  golden/fk.wti.2: d350dbc5988dbafb8fa0d9dafce3bad3
+  golden/fk.wtl.1: f22cb5a1d94baff7df6850f83f5b4dfa
+  golden/golden.eap.1: 3e932a5c120de43897a01d58effd5744
+  golden/golden.tcl.1: 52830127deac1c273f904f229e96b3d3
+  golden/golden.wtf.standard.1: 8bea6aa6c604b6f0ca41af81a3001841
+  golden/golden.wti.1: 8a86cf159902a896e1451bbdd295392f
+  golden/golden.wti.2: a3781cda6abb77fca579da87ba6395f8
+  golden/golden.wtl.1: cea09cd10c9160b26e240f85a5be1b6a

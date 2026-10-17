@@ -5,7 +5,9 @@ test_shared_contract.py — fiber-kit and neurosuite-3 agree on what they share.
 custody_vectors.tsv, pca_method_vectors.tsv, sdiff_expr_vectors.tsv,
 stderiv_vectors.tsv and sdiff_grammar_vectors.tsv are shipped in BOTH
 repositories on purpose: each is one table run by every language mirror, so
-the implementations cannot drift apart.  Each repository also keeps a
+the implementations cannot drift apart.  So are the template-library reference
+files in golden/ (.wti/.wtf/.wtl/.eap/.tcl written by each side's writers and
+read by the other's readers).  Each repository also keeps a
 contract.yaml at its root (plugin protocol, session schema, the versions of the
 version-tagged formats, and the hashes of the shared tables).
 
@@ -41,6 +43,10 @@ SHARED = {
     "stderiv_vectors.tsv":       "src/libneurosuite-core/test/stderiv_vectors.tsv",
     "sdiff_grammar_vectors.tsv": "src/libneurosuite-core/test/sdiff_grammar_vectors.tsv",
 }
+# The template-library reference files (test_golden_formats.py, neurosuite-3's
+# golden_formats_test.cpp).
+for _g in ['fk.wti.1', 'fk.wti.2', 'fk.wtl.1', 'golden.eap.1', 'golden.tcl.1', 'golden.wtf.standard.1', 'golden.wti.1', 'golden.wti.2', 'golden.wtl.1']:
+    SHARED["golden/" + _g] = "src/libneurosuite-core/test/golden/" + _g
 
 bad = 0
 
