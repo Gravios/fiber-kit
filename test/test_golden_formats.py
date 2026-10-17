@@ -25,6 +25,7 @@
 # The content is spelled out once here and once in neurosuite-3's
 # golden_formats_test.cpp; keep the two in step.
 import os
+import shutil
 import sys
 import tempfile
 
@@ -170,6 +171,14 @@ def main():
         for name in ("golden.wtf.standard.1", "golden.eap.1", "golden.tcl.1"):
             check(read_bytes(os.path.join(d, name)) == read_bytes(os.path.join(GOLDEN, name)),
                   f"{name}: neuro_io writes the C++ bytes")
+
+        print("\nread_mti/read_mtf read the committed-model names (same schemas):")
+        shutil.copy(os.path.join(GOLDEN, "golden.wti.2"), os.path.join(d, "m.mti.3.final"))
+        shutil.copy(os.path.join(GOLDEN, "golden.wtf.standard.1"), os.path.join(d, "m.mtf.standard.3.final"))
+        m = os.path.join(d, "m")
+        check_wti(nio.read_mti(m, 3, tag="final"), 2, True, "m.mti.3.final")
+        check(np.array_equal(nio.read_mtf(m, 3, NS, NCH, variant="standard", tag="final"), WTF),
+              "m.mtf.standard.3.final: every sample")
 
         print("\nThe neuro_io writers still produce the committed fk.* files:")
         write_fk(d)

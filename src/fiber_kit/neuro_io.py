@@ -53,7 +53,7 @@ __all__ = [
     "read_cluster_res",
     "read_fet_file", "read_fet", "write_fet_file", "write_fet",
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
-    "write_wtf", "read_wtf", "write_wti", "read_wti", "WTI_COLS",
+    "write_wtf", "read_wtf", "write_wti", "read_wti", "WTI_COLS", "read_mti", "read_mtf",
     "write_eap", "read_eap", "write_tcl", "read_tcl", "EAP_ABSENT",
     "open_signal",
     "fibers_path",
@@ -784,9 +784,32 @@ def write_wtf(base, elec, templates, variant="", tag=""):
 def read_wtf(base, elec, nsamp, nchan, variant="", tag=""):
     """Read a .wtf written by write_wtf -> (R, nsamp, nchan) float array (int16 on
     disk).  R is inferred from the file size, as for .spk."""
-    raw = np.fromfile(session_path(base, "wtf", elec, variant=variant, tag=tag), dtype=SPK_DTYPE)
+    return _read_template_stack(session_path(base, "wtf", elec, variant=variant, tag=tag), nsamp, nchan)
+
+
+def _read_template_stack(path, nsamp, nchan):
+    raw = np.fromfile(path, dtype=SPK_DTYPE)
     r = raw.size // (nsamp * nchan)
     return raw[: r * nsamp * nchan].reshape(r, nsamp, nchan).astype(float)
+
+
+# ── .mti / .mtf — the curator's committed template model ─────────────────────
+# Klusters' "Commit lineage" (neurosuite-3 core template_generate.hpp,
+# renderLineageToFiles) renders the .wtl forest to <base>.mti.<elec>[.<tag>]
+# (the .wti v2 schema, method-less) and <base>.mtf.<variant>.<elec>[.<tag>]
+# (the .spk/.wtf schema).  Same bytes as .wti/.wtf; the role differs: the
+# .mti/.mtf are the final templates, the .wti/.wtf the auto-generated library.
+
+def read_mti(base, elec, tag=""):
+    """Read a committed model index <base>.mti.<elec>[.<tag>] -> the dict
+    read_wti returns."""
+    return _read_wti_path(session_path(base, "mti", elec, variant="", tag=tag))
+
+
+def read_mtf(base, elec, nsamp, nchan, variant="", tag=""):
+    """Read a committed model stack <base>.mtf[.<variant>].<elec>[.<tag>] ->
+    (R, nsamp, nchan) float array, row-aligned to read_mti's rows."""
+    return _read_template_stack(session_path(base, "mtf", elec, variant=variant, tag=tag), nsamp, nchan)
 
 
 def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag=""):
@@ -844,7 +867,10 @@ def read_wti(base, elec, variant="", tag=""):
     and unknown header keys, rejects a missing `wti 1|2` header ({} rows), reads '-'
     back as '' in a src field.  Accepts VERSION 1 or 2 — v2 has a `parent` column
     before the src_clu_* columns; a v1 row reads back with parent = -1."""
-    path = session_path(base, "wti", elec, variant=variant, tag=tag)
+    return _read_wti_path(session_path(base, "wti", elec, variant=variant, tag=tag))
+
+
+def _read_wti_path(path):
     out = dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
     have_header = False
     with open(path) as f:
