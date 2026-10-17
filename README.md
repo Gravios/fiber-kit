@@ -289,9 +289,9 @@ depth matches the later track's start within `--continuity-depth-gate` per chunk
 **and** (b) their template signatures agree (cosine ≥ `--continuity-sig-thr`).
 Bridges may refuse, so genuine discontinuities are preserved.
 
-![hybrid linker](doc/linking/hybrid_linker.png)
+![hybrid linker](docs/linking/hybrid_linker.png)
 
-*Synthetic coherent-drift validation (`doc/linking/hybrid_linker_prototype.py`).
+*Synthetic coherent-drift validation (`docs/linking/hybrid_linker_prototype.py`).
 Dots are per-chunk fibers coloured by true unit; grey lines are final global
 tracks; green = a continuity bridge between the same unit, red dashed = a wrong
 cross-identity bridge. The sparse unit (~0.045 Hz) fails overlap and fragments
@@ -318,7 +318,7 @@ and `fiber-view-tour`, fed by the `<base>.bundles.<group>.npz` written by
 
 **Per-channel template montage** — `fiber-view <session> <group> --mode templates`
 
-![templates](doc/fiber-view/templates.png)
+![templates](docs/fiber-view/templates.png)
 
 *Real data (g5 clusters 343, 33). For each fiber (row block) and channel, x = time
 (samples), y = position along the fiber (low→high energy), colour = amplitude;
@@ -328,7 +328,7 @@ footprint (33, bend ~100°) visibly morphs down the fiber.*
 
 **HDR spike-density isosurfaces** — transparent shells around each fiber
 
-![isosurfaces](doc/fiber-view/isosurfaces.png)
+![isosurfaces](docs/fiber-view/isosurfaces.png)
 
 *Real data (8 largest g5 fibers). The 50% / 90% shells enclose that fraction of a
 fiber's member spikes (highest-density region), in the fiber's own local PCA(3)
@@ -340,7 +340,7 @@ genuinely low-dimensional.*
 
 **Local fibers as curves through feature space** — `--mode manifold`
 
-![manifold](doc/fiber-view/manifold.png)
+![manifold](docs/fiber-view/manifold.png)
 
 *Real data (g5). Each fiber is the curve `r·d(r)` rising from the shared origin
 (×, `r=0`) into its own footprint direction; dots mark high-energy tips. PCA(3)
@@ -349,7 +349,7 @@ bend — pair it with the template montage.*
 
 **Chunk-spanning bundle + drift manifold** — one global fiber across the session
 
-![bundle](doc/fiber-view/bundle_drift_sheet.png)
+![bundle](docs/fiber-view/bundle_drift_sheet.png)
 
 *Synthetic, known drift. A bundle is one global fiber's per-chunk trajectories in
 a shared frame, coloured by time; the transparent sheet is lofted between
@@ -361,7 +361,7 @@ sliders that mix the top-K PCs into the three display axes.*
 
 **Most-interesting projection tour** — `fiber-view-tour <base>.bundles.<group>.npz`
 
-![tour](doc/fiber-view/tour.gif)
+![tour](docs/fiber-view/tour.gif)
 
 *Synthetic. Guided projection pursuit: a smooth path through the shared PC space
 of the selected bundles, visiting the projections that best expose between-bundle

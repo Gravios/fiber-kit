@@ -21,6 +21,9 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   energy-scaled median±σ band overlap, the Omlor–Giese drift-warp veto, waveform complexity, and the
   refractory cross-correlogram gate, with signatures and parameters.
 
+- **fiber-view/**, **linking/** — the figures the README and `WORKFLOW.md` show, and the
+  synthetic hybrid-linker prototype that made `linking/hybrid_linker.png`.
+
 The top-level [README](../README.md) has the narrative overview, install, quick start, per-fiber
 statistics, curation/merge-validation, visualization (`fiber-view`), and design notes.
 

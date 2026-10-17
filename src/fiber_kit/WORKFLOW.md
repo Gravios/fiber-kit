@@ -489,8 +489,8 @@ returns the index columns plus each stat as its own named column
 
 ### fiber-view: figures + rotatable bundle GUI (v0.19.0)
 
-![templates](../../doc/fiber-view/templates.png)
-![bundle + drift sheet](../../doc/fiber-view/bundle_drift_sheet.png)
+![templates](../../docs/fiber-view/templates.png)
+![bundle + drift sheet](../../docs/fiber-view/bundle_drift_sheet.png)
 
 Two front-ends over the fiber math, both optional-dep (`pip install 'fiber-kit[viz]'`).
 
@@ -545,7 +545,7 @@ affect only the view, not the metric.
 
 ### Interesting-projection tour video (v0.21.0)
 
-![interesting tour](../../doc/fiber-view/tour.gif)
+![interesting tour](../../docs/fiber-view/tour.gif)
 
 Rather than hunt through the mix sliders by hand, the tour finds the projections
 that best EXPOSE the selected bundles' structure and animates a smooth path
@@ -590,13 +590,13 @@ The depth coordinate is an energy-weighted channel centroid (`_chunk_fiber_featu
 geometry-free, uses channel positions when available); the signature is the masked
 mean template. The **signature gate** is the load-bearing part: it blocks identity
 swaps when a different unit appears where a vanished one drifted to. Synthetic
-coherent-drift validation (`doc/linking/hybrid_linker_prototype.py`): overlap-only
+coherent-drift validation (`docs/linking/hybrid_linker_prototype.py`): overlap-only
 → 16 globals (sparse unit in 8 pieces); signature-gated hybrid → 9 = ground truth,
 0 id-mixing, sparse recovered, X/Y kept apart; the ablation without the gate → 8
 globals with an X↔Y identity swap. Calibrate `--continuity-sig-thr` / depth gate on
 real data; this is a validated mechanism, not a tuned default.
 
-![hybrid linker](../../doc/linking/hybrid_linker.png)
+![hybrid linker](../../docs/linking/hybrid_linker.png)
 
 ---
 
