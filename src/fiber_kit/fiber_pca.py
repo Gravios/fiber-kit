@@ -110,7 +110,7 @@ def read_pcad(path):
     magic, version = struct.unpack("<2i", raw[:8])
     if magic != PCAE_MAGIC:
         raise ValueError(f"{path}: not a PCAE file (magic={magic:#x}); regenerate as PCAE")
-    if version not in (1, 2):
+    if not 1 <= version <= PCAE_VERSION:
         raise ValueError(f"{path}: unsupported PCAE version {version}")
     nCh, data2use, nComp, recShift, centered = struct.unpack("<5i", raw[8:28])
     if version >= 2:

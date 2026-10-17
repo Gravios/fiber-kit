@@ -14,6 +14,10 @@
 import os
 from dataclasses import dataclass, fields as _dc_fields
 
+# parameters.version of the session YAMLs this code is written against (the
+# version neurosuite-3 writes); contract.yaml `session_schema`.
+SESSION_SCHEMA = "1.0"
+
 _LP = "\u25b8 session"
 def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
 def _det(k, v, w=9): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")

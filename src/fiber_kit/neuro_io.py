@@ -68,6 +68,17 @@ FET_DTYPE = np.dtype("<i8")   # .fet    int32 header + int64 values, row-major
 SPK_DTYPE = np.dtype("<i2")   # .spk    int16 sample-major, no header
 FET_HDR_DTYPE = np.dtype("<i4")
 
+# ── versions of the version-tagged formats ──────────────────────────────────
+# (read, write): the highest version read (every version from 1 up is read)
+# and the version written.  contract.yaml at the repository root states the
+# same, test_contract.py holds the two together, and `ndm_fiber-kit
+# --ndm-version` prints them so ndmanager can warn on a mismatch.  The PCAE
+# basis is fiber_pca's (PCAE_VERSION).
+WTI_VERSION = (2, 2)   # "wti <v>"; v2 adds the parent column, written when a row has one
+WTL_VERSION = (2, 1)   # "wtl <v>"; v2 node summaries are read, v1 spike lists written
+TCL_VERSION = (1, 1)   # "tcl <v>"
+EAP_VERSION = (1, 1)   # 4th byte of the b"EAP" magic
+
 
 # ── variant-aware input resolution (mirrors neurofileio::resolveInput) ───────
 ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found"])
@@ -794,7 +805,7 @@ def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag="
     as neurofileio's v2; otherwise version 1, byte-identical to before.  `collision`
     is just another `link` value and needs no version."""
     any_parent = any(int(rd.get("parent", -1)) >= 0 for rd in rows)
-    ver = 2 if any_parent else 1
+    ver = WTI_VERSION[1] if any_parent else 1
     path = session_path(base, "wti", elec, variant=variant, tag=tag)
     with open(path, "w") as f:
         f.write("wti %d\n" % ver)
@@ -844,7 +855,8 @@ def read_wti(base, elec, variant="", tag=""):
             parts = s.split()
             key = parts[0]
             if not have_header:
-                if key != "wti" or len(parts) < 2 or parts[1] not in ("1", "2"):
+                if (key != "wti" or len(parts) < 2 or not parts[1].isdigit()
+                        or not 1 <= int(parts[1]) <= WTI_VERSION[0]):
                     return dict(version=0, nSamples=0, nChannels=0, peakSample=-1, sr=0.0, rows=[])
                 out["version"] = int(parts[1])
                 have_header = True
@@ -904,7 +916,7 @@ def write_wtl(base, elec, nodes, tag=""):
     these).  Mirrors neurofileio::writeWtl; pair with read_wtl."""
     path = session_path(base, "wtl", elec, variant="", tag=tag)
     with open(path, "w") as f:
-        f.write("wtl 1\n")
+        f.write("wtl %d\n" % WTL_VERSION[1])
         f.write("nNodes %d\n" % len(nodes))
         f.write("# node class kind parent a b nSpikes spikes...\n")
         for nd in nodes:
@@ -955,7 +967,8 @@ def read_wtl(base, elec, tag=""):
             parts = s.split()
             key = parts[0]
             if not have_header:
-                if key != "wtl" or len(parts) < 2 or parts[1] not in ("1", "2"):
+                if (key != "wtl" or len(parts) < 2 or not parts[1].isdigit()
+                        or not 1 <= int(parts[1]) <= WTL_VERSION[0]):
                     return empty
                 out["version"] = int(parts[1])
                 have_header = True
@@ -1035,7 +1048,7 @@ def write_eap(base, elec, cells, group=0, flags=0, tag=""):
     n, t = (int(arr.shape[0]), int(arr.shape[1])) if arr.ndim == 2 else (0, 0)
     path = session_path(base, "eap", elec, variant="", tag=tag)
     with open(path, "wb") as f:
-        f.write(b"EAP\x01")
+        f.write(b"EAP" + bytes([EAP_VERSION[1]]))
         f.write(struct.pack("<IIII", n, t, int(group), int(flags)))
         f.write(b"\x00" * 12)
         f.write(arr.tobytes())
@@ -1052,7 +1065,7 @@ def read_eap(base, elec, tag=""):
     try:
         with open(path, "rb") as f:
             hdr = f.read(32)
-            if len(hdr) < 32 or hdr[:4] != b"EAP\x01":
+            if len(hdr) < 32 or hdr[:3] != b"EAP" or not 1 <= hdr[3] <= EAP_VERSION[0]:
                 return out
             n, t, grp, flags = struct.unpack("<IIII", hdr[4:20])   # hdr[20:32] = pad[12]
             body = np.frombuffer(f.read(int(n) * int(t)), dtype=np.int8)
@@ -1076,7 +1089,7 @@ def write_tcl(base, elec, entries, n_classes=None):
     def dash(x):
         return "-" if (x is None or x == "") else str(x)
     with open(path, "w") as f:
-        f.write("tcl 1\n")
+        f.write("tcl %d\n" % TCL_VERSION[1])
         f.write("nClasses %d\n" % int(n_classes))
         f.write("# col\tstatus\tlabel\tprovenance_clu\tprovenance_stage\tcreated\n")
         for e in entries:
@@ -1108,9 +1121,10 @@ def read_tcl(base, elec):
                     continue
                 if not have:
                     p = s.split()
-                    if len(p) < 2 or p[0] != "tcl" or p[1] != "1":
+                    if (len(p) < 2 or p[0] != "tcl" or not p[1].isdigit()
+                            or not 1 <= int(p[1]) <= TCL_VERSION[0]):
                         return dict(empty)
-                    out["version"] = 1
+                    out["version"] = int(p[1])
                     have = True
                     continue
                 if s.startswith("nClasses"):

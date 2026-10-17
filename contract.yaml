@@ -1,0 +1,32 @@
+# contract.yaml — what fiber-kit promises at its boundaries: to neurosuite-3,
+# which reads and writes the same files, and to ndmanager, which runs it as an
+# ndm plugin.
+#
+#   contract        bumped whenever anything below changes
+#   plugin_protocol the ndm-plugin-protocol ndm_fiber-kit speaks
+#   session_schema  parameters.version of the SESSION.yaml it reads
+#   formats         version-tagged formats: the highest version read (every
+#                   version from 1 up is read) and the version written
+#   vectors         MD5 of each table shared byte for byte with neurosuite-3
+#
+# Checked against the code by test/test_contract.py (contract,
+# plugin_protocol, session_schema, formats) and by test/test_shared_contract.py
+# (vectors; with a neurosuite-3 checkout, against neurosuite-3's
+# contract.yaml).  Kept flat, in this layout, so both are read without a YAML
+# library.  How to change it: neurosuite-3 doc/dev/RECIPES.md §2.5.
+contract: 1
+repository: fiber-kit
+plugin_protocol: 1
+session_schema: '1.0'
+formats:
+  pca: {read: 2, write: 2}
+  wti: {read: 2, write: 2}
+  wtl: {read: 2, write: 1}
+  tcl: {read: 1, write: 1}
+  eap: {read: 1, write: 1}
+vectors:
+  custody_vectors.tsv: 8eea244182dea935478eaebec552116d
+  pca_method_vectors.tsv: f3f475f25582f3d9518b1ac7f5c36908
+  sdiff_expr_vectors.tsv: a067fcdf129af0f2184cdbb0a3d2697d
+  sdiff_grammar_vectors.tsv: 25f9cbf4f82e952a6e533ab29ca83702
+  stderiv_vectors.tsv: 7b6dd2867969da270375a3bf661d4a03

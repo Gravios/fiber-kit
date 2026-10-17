@@ -8,7 +8,7 @@ Run:        ndm_fiber-kit <session>.yaml [<group>] [stages...]
             session yaml programs[ndm_fiber-kit] entry.
 Protocol:   ndm_fiber-kit --ndm-describe [--format xml]   NDManager program: schema (YAML; the source of truth)
             ndm_fiber-kit --ndm-programs                   the session.yaml `programs:` entry to paste in
-            ndm_fiber-kit --ndm-version                    protocol + plugin version
+            ndm_fiber-kit --ndm-version                    protocol, plugin version, format versions
 """
 import os
 import subprocess
@@ -17,11 +17,38 @@ import sys
 try:
     from .config import FiberKitPlugin
     from . import session_yaml
+    from . import neuro_io, fiber_pca
 except ImportError:
     from config import FiberKitPlugin
     import session_yaml
+    import neuro_io
+    import fiber_pca
 
+# The ndm-plugin-protocol this plugin speaks; contract.yaml `plugin_protocol`.
 PROTOCOL = "1"
+# contract.yaml `contract`: bumped whenever anything in contract.yaml changes.
+CONTRACT = 1
+
+
+def formats():
+    """(name, read, write) for each version-tagged format: the highest version
+    read and the version written.  contract.yaml `formats` states the same."""
+    return [
+        ("pca", fiber_pca.PCAE_VERSION, fiber_pca.PCAE_VERSION),
+        ("wti",) + neuro_io.WTI_VERSION,
+        ("wtl",) + neuro_io.WTL_VERSION,
+        ("tcl",) + neuro_io.TCL_VERSION,
+        ("eap",) + neuro_io.EAP_VERSION,
+    ]
+
+
+def ndm_version():
+    """The --ndm-version answer: the protocol line first (ndmanager's handshake),
+    then the plugin version, then one `format <name> <read> <write>` line per
+    format (ndmanager warns when they do not match its own)."""
+    lines = ["ndm-plugin-protocol %s" % PROTOCOL, "fiber-kit %s" % _version()]
+    lines += ["format %s %d %d" % f for f in formats()]
+    return "\n".join(lines) + "\n"
 
 
 def _version():
@@ -30,7 +57,12 @@ def _version():
         try:
             return version("fiber-kit")
         except PackageNotFoundError:
-            return "0+unknown"
+            pass
+    except Exception:
+        pass
+    try:                                    # imported from a source checkout
+        from . import __version__
+        return __version__
     except Exception:
         return "0+unknown"
 
@@ -51,7 +83,7 @@ def main(argv=None):
         sys.stdout.write(FiberKitPlugin.programs_entry())
         return 0
     if argv and argv[0] == "--ndm-version":
-        sys.stdout.write("ndm-plugin-protocol %s\nfiber-kit %s\n" % (PROTOCOL, _version()))
+        sys.stdout.write(ndm_version())
         return 0
     if not argv or argv[0] in ("-h", "--help"):
         sys.stderr.write(__doc__)

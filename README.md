@@ -505,6 +505,15 @@ every push with a neurosuite-3 checkout, so `test_shared_contract.py` compares
 the `*_vectors.tsv` tables against neurosuite-3's copies. A vector change has to
 land in both repositories.
 
+`contract.yaml` (repository root) records what fiber-kit promises neurosuite-3
+and ndmanager: the ndm plugin protocol, the session-schema version, the
+version it reads and writes of each version-tagged format (`.pca`, `.wti`,
+`.wtl`, `.tcl`, `.eap`), and the hashes of the shared tables.
+`test_contract.py` checks it against the code; `test_shared_contract.py`
+checks the hashes and, with `NS3_ROOT`, that each side reads every version the
+other writes. `ndm_fiber-kit --ndm-version` prints the same format versions,
+so ndmanager can warn about a mismatch.
+
 ## Requirements
 
 Python ≥ 3.9 · numpy ≥ 1.21 · scipy ≥ 1.7 · scikit-learn ≥ 1.0 ·
