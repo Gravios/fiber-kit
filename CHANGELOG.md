@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.45.0] — reference files shared with neurosuite-3; committed-model readers
+- `test/golden/`: small `.wti`/`.wtf`/`.wtl`/`.eap`/`.tcl` files, `golden.*` written by neurosuite-3's
+  C++ writers and `fk.*` by `neuro_io`, byte-identical in both repositories (hashes in `contract.yaml`).
+  `test/test_golden_formats.py` reads every field of `golden.*`, checks that `write_wtf`, `write_eap`
+  and `write_tcl` give the C++ bytes and that the writers still produce `fk.*`; neurosuite-3 reads `fk.*`
+  with its C++ readers.
+- `neuro_io.read_mti` / `read_mtf`: the committed template model Klusters renders from the lineage
+  (`.mti`, `.wti` v2 schema; `.mtf`, `.wtf` schema).
+- `doc/` (figures only) is merged into `docs/`.
+
 ## [0.44.1] — custody token bound; two int-range fixes
 - `neuro_io.parse_variant_token`: an `S`/`C` order longer than 9 digits makes the token opaque, as in
   neurosuite-3 (whose parser overflowed).  `custody_vectors.tsv` is neurosuite-3's updated copy.
