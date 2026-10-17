@@ -1341,7 +1341,58 @@ def _process_chunk(task):
     lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
                                     candidates_out=cand, shed=sd, waves_std=waves_std, **kw)
     sd["_unsorted_ext"] = int((lab < 0).sum())
-    return c, ext, lab, geoms, cand, sd
+    dcv = _deconv_chunk(ctx, res_e, lab, geoms, s0, s1) if ctx.get("deconv") else None
+    return c, ext, lab, geoms, cand, sd, dcv
+
+
+def _deconv_chunk(ctx, res_e, lab, geoms, s0, s1):
+    """fiber_deconv on one chunk's detections against its own fibers.  Adds
+    deconv_agree / deconv_partner_frac to each geom; returns a dict of
+    per-detection arrays (ext order) plus the rescue mask, or {'error': msg}
+    (a failed chunk is reported and skipped, never fatal to the sort)."""
+    try:
+        from . import fiber_deconv as fd
+    except ImportError:
+        import fiber_deconv as fd
+    dc = ctx["deconv"]
+    try:
+        excl = {l for l, g in enumerate(geoms) if g.get("collision") or g.get("undefined")}
+        read_raw = fd.memmap_reader(ctx["filmm"], ctx["gch"])
+        r = fd.deconvolve(read_raw, res_e, lab, ctx["nsamp"], ctx["peak"], ctx["sr"],
+                          s0=s0, s1=s1, R=dc["phases"], order=dc["order"],
+                          refrac_ms=dc["refrac_ms"], null_q=dc["null_q"], thr_floor=dc["floor"],
+                          min_n=dc["min_n"], exclude=excl, equiv_cos=dc["equiv_cos"])
+    except Exception as e:                                   # noqa: BLE001 -- report, keep the sort
+        return {"error": f"{type(e).__name__}: {e}"}
+    lab = np.asarray(lab)
+    in_excl = np.isin(lab, list(excl)) if excl else np.zeros(len(lab), bool)
+    # Agreement up to template EQUIVALENCE: fragments of one cell share a template, and which of them
+    # the pursuit names is not a disagreement with the clustering.
+    agree_sp = np.array([int(p_) in r.equiv.get(int(l), ()) for l, p_ in zip(lab, r.primary)])
+    good = set()
+    for l, g in enumerate(geoms):
+        own = (lab == l) & (r.primary >= 0)
+        ag = float(np.mean(agree_sp[own])) if own.any() and l in r.equiv else float("nan")
+        g["deconv_agree"] = ag
+        g["deconv_partner_frac"] = float(np.mean(r.partner[lab == l] >= 0)) if (lab == l).any() else float("nan")
+        g["deconv_n_equiv"] = int(len(r.equiv.get(l, ())))
+        if np.isfinite(ag) and ag >= dc["fiber_agree"] and own.sum() >= 20 and l not in excl:
+            good.add(l)
+    # Calibrate the margin on the fibers where pursuit and clustering corroborate each other.  On a
+    # contaminated fiber the disagreements are the CLUSTERING's errors (deconv_agree tracks purity), so
+    # they would only push the margin to infinity; and rescues go only into corroborated fibers.
+    in_good = np.isin(lab, list(good)) if good else np.zeros(len(lab), bool)
+    clean = in_good & (r.primary >= 0)
+    m_thr = fd.calibrate_margin(r.margin[clean], agree_sp[clean],
+                                target=dc["agree"], floor=dc["margin_min"])
+    prim_good = np.isin(r.primary, list(good)) if good else np.zeros(len(lab), bool)
+    # A partner within the anchoring tolerance means the detection IS two coincident spikes: either
+    # label is right, so neither is written (the manifest lists both).
+    coincident = (r.partner >= 0) & (np.abs(r.partner_dt) <= 4)
+    rescue = ((lab < 0) | in_excl) & prim_good & (r.margin >= m_thr) & ~coincident
+    return dict(primary=r.primary, margin=r.margin, dt=r.dt, amp=r.amp, gain=r.gain,
+                partner=r.partner, partner_dt=r.partner_dt, rescue=rescue, m_thr=m_thr, thr=r.thr,
+                placements=r.placements)
 
 
 def add_core_arguments(ap):
@@ -1456,6 +1507,37 @@ def add_core_arguments(ap):
     ap.add_argument("--adapt-taumax", type=float, default=0.5)
     ap.add_argument("--collision-flag", action="store_true", help="route recoverable collisions from noise to a dedicated collision cluster")
     ap.add_argument("--collision-gain", type=float, default=0.09); ap.add_argument("--collision-shift", type=int, default=8)
+    ap.add_argument("--deconv", dest="deconv", action=argparse.BooleanOptionalAction,
+                    default=bool(_fk_default("FK_SESSION_DECONV", 0.0)),
+                    help="detection-anchored sub-sample template deconvolution per chunk (fiber_deconv): "
+                         "per-fiber deconv_agree contamination QC in .fibers and a .deconv.tsv manifest of "
+                         "labels, collision partners and undetected spikes.  Changes no label unless "
+                         "--deconv-assign")
+    ap.add_argument("--deconv-assign", dest="deconv_assign", action=argparse.BooleanOptionalAction,
+                    default=bool(_fk_default("FK_SESSION_DECONV_ASSIGN", 0.0)),
+                    help="with --deconv: move confidently attributed noise / collision-cluster spikes into "
+                         "their fiber as a parked child atom.  Off by default: on synthetic sessions with "
+                         "look-alike cells its precision fell to 70-90 percent (docs/methods.md)")
+    ap.add_argument("--deconv-phases", type=int, default=4, help="sub-sample phases per template (1 = whole samples)")
+    ap.add_argument("--deconv-order", type=int, default=4, help="order of the VAR noise-whitening filter")
+    ap.add_argument("--deconv-refrac-ms", type=float, default=1.0,
+                    help="a unit is not placed twice within this many ms")
+    ap.add_argument("--deconv-floor", type=float, default=16.0,
+                    help="lowest pursuit gain (2 x log-likelihood) accepted, whatever the noise null says")
+    ap.add_argument("--deconv-null-q", type=float, default=0.995,
+                    help="quantile of the off-spike first-step gain used as the stopping threshold")
+    ap.add_argument("--deconv-agree", type=float, default=0.999,
+                    help="margin calibration: agreement with the clustering required among clean spikes above it")
+    ap.add_argument("--deconv-margin-min", type=float, default=10.0,
+                    help="floor on the calibrated label margin (2 x log-likelihood ratio, best vs other unit)")
+    ap.add_argument("--deconv-min-n", type=int, default=30, help="min spikes for a fiber to get a template")
+    ap.add_argument("--deconv-fiber-agree", type=float, default=0.95,
+                    help="a fiber whose spikes the pursuit labels with an equivalent template at least this often is "
+                         "corroborated: the margin is calibrated on such fibers and only they receive rescues")
+    ap.add_argument("--deconv-equiv-cos", type=float, default=0.93,
+                    help="fibers whose templates reach this whitened cosine (noise-corrected, best over +/-4 "
+                         "samples) are equivalent: the over-split fragments of a cell.  Agreement, margin and "
+                         "collision partners are judged up to equivalence.  >1 = identity only")
     ap.add_argument("--quality-metrics", action="store_true", help="also compute L-ratio + isolation distance (O(N*K))")
     ap.add_argument("--quality-dims", type=int, default=10, help="PCA dims for L-ratio/isolation Mahalanobis")
     ap.add_argument("--pca-k", type=int, default=6); ap.add_argument("--max-sub", type=int, default=8)
@@ -1642,6 +1724,66 @@ def _park_consolidated(clu, new_clu, child, parent, next_atom, park_min=0):
     return new_clu.astype(np.int32), next_atom
 
 
+def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, gid,
+                  t_min, chunk_s, nchunks, log, det):
+    """Fold per-chunk fiber_deconv results into the sort and the manifest.
+
+    Only CORE spikes of each chunk are taken (overlap spikes belong to the
+    neighbour), mirroring how labels are assigned.  Rescued spikes move from
+    noise / the collision fiber to the deconvolved fiber's global id and are
+    parked as one new child atom per (source atom, fiber) -- reviewable and
+    revertible in Klusters.  The manifest lists every core detection the
+    pursuit labelled, every collision partner, and every placement that no
+    detection anchors (an undetected spike: advisory, never in the .clu)."""
+    new_clu = clu.copy()
+    n_err = n_resc = n_part = n_un = 0
+    mthr = []
+    rows = []
+    for c in sorted(chunk_deconv):
+        d = chunk_deconv[c]
+        if "error" in d:
+            n_err += 1
+            det("deconv", f"chunk {c + 1}: skipped ({d['error']})")
+            continue
+        lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
+        ext = ext_idx[c]
+        mthr.append(d["m_thr"])
+        for j in np.flatnonzero((res[ext] >= lo_s) & (res[ext] < hi_s)):
+            g = int(ext[j])
+            pg = gid.get((c, int(d["primary"][j])), -1) + 1 if d["primary"][j] >= 0 else 0
+            qg = gid.get((c, int(d["partner"][j])), -1) + 1 if d["partner"][j] >= 0 else 0
+            resc = bool(d["rescue"][j]) and pg > 0
+            if resc:
+                new_clu[g] = pg; n_resc += 1
+            n_part += qg > 0
+            if pg or qg:
+                rows.append((g, int(res[g]), c, int(clu[g]), pg, d["dt"][j], d["amp"][j], d["gain"][j],
+                             d["margin"][j], int(resc), qg, d["partner_dt"][j]))
+        pl = d["placements"]
+        for row in pl[pl["anchor"] < 0]:
+            if lo_s <= row["t"] < hi_s:
+                ug = gid.get((c, int(row["unit"])), -1) + 1
+                rows.append((-1, int(round(row["t"])), c, 0, ug, row["t"] - round(row["t"]), row["amp"],
+                             row["gain"], np.nan, 0, 0, np.nan))
+                n_un += 1
+    if a.deconv_assign and n_resc:
+        clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom)
+    man = nio.session_path(a.base, "deconv", a.elec, variant=a.method, tag=a.clu_stage) + ".tsv"
+    with open(man, "w") as f:
+        f.write("spike\tres\tchunk\tclu\tdeconv_clu\tdt\tamp\tgain\tmargin\trescued"
+                "\tpartner_clu\tpartner_dt\n")
+        for r_ in rows:
+            f.write("\t".join(f"{v:.3f}" if isinstance(v, (float, np.floating)) else str(v)
+                              for v in r_) + "\n")
+    fin = [m for m in mthr if np.isfinite(m)]
+    det("deconv", f"{n_resc:,} spikes {'parked into' if a.deconv_assign else 'attributable to'} fibers"
+                  f" \u00b7 {n_part:,} collision partners \u00b7 {n_un:,} unanchored placements"
+                  + (f" \u00b7 margin {np.median(fin):.1f} (median)" if fin else " \u00b7 margin: none calibrated")
+                  + (f" \u00b7 {n_err} chunk(s) failed" if n_err else ""))
+    det("", f"{man}")
+    return clu, next_atom
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Cluster a session group into fibers. Reads <session>.yaml "
@@ -1669,7 +1811,9 @@ def main():
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
-    mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full; p = len(mask) * a.nchan
+    _masks = fl.build_masks(cfg["nsamp"], cfg["peak"])
+    mask = _masks.full; p = len(mask) * a.nchan
+    peak = int(_masks.offset)                 # the YAML peak, or build_masks' inference without one
 
     # ── skip-if-extant: never rebuild (and silently overwrite) an existing sort ──
     #   FK_SESSION_SKIP_EXTANT=1: when the destination .clu this invocation would write
@@ -1717,6 +1861,7 @@ def main():
     ext_idx = [np.array([], int) for _ in range(nchunks)]; ext_lab = [np.array([], int) for _ in range(nchunks)]
     chunk_geoms = [[] for _ in range(nchunks)]; chunk_tmin = [0.0] * nchunks
     chunk_candidates = [[] for _ in range(nchunks)]
+    chunk_deconv = {}
 
     # ── build per-chunk tasks (small chunks skipped here, serially & cheaply) ──
     meth = "none" if a.no_fine else a.fine_method
@@ -1744,7 +1889,12 @@ def main():
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
-               method=a.method)
+               method=a.method, peak=peak,
+               deconv=(dict(phases=a.deconv_phases, order=a.deconv_order, refrac_ms=a.deconv_refrac_ms,
+                            floor=a.deconv_floor, null_q=a.deconv_null_q, agree=a.deconv_agree,
+                            margin_min=a.deconv_margin_min, min_n=a.deconv_min_n,
+                            equiv_cos=a.deconv_equiv_cos, fiber_agree=a.deconv_fiber_agree)
+                       if a.deconv else None))
 
     tasks = []; ncore_of = {}
     for c in range(nchunks):
@@ -1759,8 +1909,10 @@ def main():
     shed_total = {}
 
     def _store(result):
-        c, ext, lab, geoms, cand, sd = result
+        c, ext, lab, geoms, cand, sd, dcv = result
         ext_idx[c] = ext; ext_lab[c] = lab; chunk_geoms[c] = geoms; chunk_candidates[c] = cand
+        if dcv is not None:
+            chunk_deconv[c] = dcv
         for k, v in sd.items():
             shed_total[k] = shed_total.get(k, 0) + int(v)
         print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore_of[c]:>7,} core   \u2192  {len(geoms):>4} fibers")
@@ -1840,6 +1992,11 @@ def main():
                     parent[aid] = gid[(c, l)] + 1          # fiber id (+1; matches the .clu convention)
                 child[g] = aid
     clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
+
+    # ── deconvolution: park confidently attributed noise / collision spikes, write the manifest ──
+    if a.deconv:
+        clu, next_atom = _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv,
+                                       ext_idx, gid, t_min, chunk_s, nchunks, log, det)
 
     # ── optional per-spike consolidation (strip / knn) of the finished labels ──
     #   Session fibers are chunk-local by construction (linking only NAMES them across
@@ -2006,6 +2163,10 @@ def main():
         adapt_corr=col('adapt_corr', np.float32), adapt_tau=col('adapt_tau', np.float32),
         adapt_snr=col('adapt_snr', np.float32), adapt_meanabsz=col('adapt_meanabsz', np.float32),
         adapt_fracz3=col('adapt_fracz3', np.float32),
+        # deconvolution QC (NaN when --deconv was off or the chunk's pursuit failed)
+        deconv_agree=np.array([r.get('deconv_agree', np.nan) for r in rows], np.float32),
+        deconv_partner_frac=np.array([r.get('deconv_partner_frac', np.nan) for r in rows], np.float32),
+        deconv_n_equiv=np.array([r.get('deconv_n_equiv', 0) for r in rows], int),
         template=np.stack([r['template'] for r in rows]) if M else np.zeros((0, a.nsamp, a.nchan), np.float32),
         grid=np.stack([r['grid'] for r in rows]) if M else np.zeros((0, a.n_grid), np.float32),
         dir=np.stack([r['dir'] for r in rows]) if M else np.zeros((0, a.n_grid, p), np.float32),

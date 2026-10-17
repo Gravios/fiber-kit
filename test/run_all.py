@@ -34,7 +34,7 @@ ROOT = os.path.dirname(HERE)
 
 # Each spawns one interpreter per stage, so they cost about a minute.  Worth it
 # in CI, not worth it on every save -- hence --fast.
-SLOW = {"test_stage_startup.py", "test_consensus.py"}   # consensus: ~3 min of t-SNE runs
+SLOW = {"test_stage_startup.py", "test_consensus.py", "test_session_deconv.py"}   # consensus: ~3 min of t-SNE runs; deconv: three fiber-session runs
 SLOW_EXTRA = {"gen_stages_doc --check"}
 
 

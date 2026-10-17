@@ -229,7 +229,7 @@ def _draw_worker(task):
     no per-draw work."""
     import fiber_kit.fiber_session as fsess
     c, ext_d, res_d, di = task
-    _, _, lab, geoms, _, _ = fsess._process_chunk((c, ext_d, res_d))
+    lab, geoms = fsess._process_chunk((c, ext_d, res_d))[2:4]
     members = [di[np.flatnonzero(lab == gk)]
                for gk in sorted(set(int(x) for x in lab if x >= 0))]
     return geoms, members

@@ -163,6 +163,14 @@ FK_SESSION_REFIT_ITERS: 0             # extra {realign fiber spikes -> refit tem
                                  #   passes.  Recovers true members rejected for a bad sub-sample offset; marginal on
                                  #   clean fibers (existing per-fiber realign already handles most), helps contaminated
                                  #   ones.  0 = single pass.
+FK_SESSION_DECONV: 1                 # 0 | 1.  Detection-anchored sub-sample template deconvolution per chunk
+                                 #   (fiber_deconv).  Writes deconv_agree into .fibers -- the fraction of a fiber's
+                                 #   spikes the pursuit explains with its own (or an indistinguishable) template, a
+                                 #   contamination measure -- and a .deconv.tsv manifest of labels, collision partners
+                                 #   and undetected spikes.  Changes no label by itself.
+FK_SESSION_DECONV_ASSIGN: 0      # 0 | 1.  With DECONV: park noise / collision-cluster spikes the pursuit attributes to
+                                 #   a corroborated fiber with a calibrated margin as a new child atom of that fiber.
+                                 #   0: its precision fell to 70-90 percent on synthetic sessions with look-alike cells.
                                  #   >0 draws ridge seeds toward CONCENTRATED modes of the waveform space
                                  #   (p ~ local_density**this), concentrating the seed budget on isolated,
                                  #   reproducible modes (isolation, not firing rate).  1 = fully density-weighted.
