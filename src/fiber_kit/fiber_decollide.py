@@ -111,7 +111,13 @@ def decollide_spikes(raw_waves, res_times, clu_ids, sel, decomp, raw_templates):
     order = np.argsort(np.asarray(out_t, dtype=np.int64), kind="stable")
     new_t = np.asarray(out_t, dtype=np.int64)[order]
     new_c = np.asarray(out_c, dtype=np.int64)[order]
-    new_w = np.rint(np.asarray(out_w)[order]).astype(nio.SPK_DTYPE)
+    # Saturate to the int16 range before the cast: a large constituent amplitude
+    # times its template could exceed it, and astype wraps (-40000 -> +25536).
+    # NaN -> 0.  Matches core/decollide.hpp applyMethod.
+    info = np.iinfo(nio.SPK_DTYPE)
+    new_w = np.nan_to_num(np.rint(np.asarray(out_w, dtype=float)[order]), nan=0.0,
+                          posinf=info.max, neginf=info.min)
+    new_w = np.clip(new_w, info.min, info.max).astype(nio.SPK_DTYPE)
     return new_t, new_c, new_w, manifest
 
 

@@ -193,6 +193,28 @@ def test_eap_mode_matches_clu_on_clean_members():
         assert np.array_equal(Te[ie[(6, "drift", 0)]], Tc[ic[(3, "drift", 0)]])
 
 
+
+def test_eap_mode_refuses_a_class_outside_the_columns():
+    """A class id that is not a column is an error, not an IndexError, and a
+    negative id does not wrap to a column counted from the end."""
+    with tempfile.TemporaryDirectory() as d:
+        b = _make_session(d)
+        _, clu = nio.read_clu_at(b, 6, variant="stderiv_C5_D34", tag="lab_units")
+        N, T = clu.size, 4
+        cells = np.full((N, T), nio.EAP_ABSENT, np.int8)
+        cells[clu == 2, 1] = 0
+        nio.write_eap(b, 6, cells, group=6, tag="lab_units")
+        for bad in (T, -1):
+            try:
+                ft.generate(b, 6, nsamp=NS, nchan=NCH, sr=SR, variants=["standard"],
+                            clu_variant="stderiv_C5_D34", clu_tag="lab_units",
+                            out_tag="bad", links=("drift",), n_chunks=2, eap=True, units=[bad])
+                raised = ""
+            except ValueError as e:
+                raised = str(e)
+            assert "not a column" in raised, (bad, raised)
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

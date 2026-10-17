@@ -45,6 +45,22 @@ def test_subtraction_recovers_both_constituents():
     assert np.allclose(w_by[11][core], (a2 * T2)[core], atol=2.0)      # k1 removed, recentred
 
 
+
+def test_output_saturates_to_int16():
+    """A constituent whose subtraction leaves a value beyond int16 saturates
+    (it used to wrap through astype: -40000 -> +25536)."""
+    T1 = _pulse(16, 20000, ch=0)
+    T2 = _pulse(16, 20000, ch=1)
+    coll = 2.0 * T1 + T2                       # channel 0 reaches -40000
+    nt, nc, nw, man = fd.decollide_spikes(
+        [coll], [1000], [10], [0],
+        dict(k1=[10], a1=[2.0], tau1=[0], k2=[11], a2=[1.0], tau2=[0], gain=[0.9]),
+        {10: T1, 11: T2})
+    w10 = nw[np.flatnonzero(nc == 10)[0]]
+    assert int(w10[16, 0]) == -32768, int(w10[16, 0])
+    assert int(w10.max()) <= 0                  # nothing wrapped positive
+
+
 def test_recovered_times_and_recentring():
     T1 = _pulse(16, 1000, ch=0); T2 = _pulse(16, 800, ch=1)
     tau1, tau2 = 0, 4

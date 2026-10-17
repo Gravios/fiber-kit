@@ -139,6 +139,12 @@ def generate(base, elec, *, nsamp, nchan, sr, variants, clu_variant, clu_tag="",
             if not units:                                   # no registry / none active
                 units = [j for j in range(cells.shape[1])
                          if bool(np.any(cells[:, j] != nio.EAP_ABSENT))]
+        # A class is a column.  Out of range used to raise IndexError, and a
+        # negative one silently read a column from the end (-1 -> the last).
+        for u in units:
+            if not 0 <= int(u) < cells.shape[1]:
+                raise ValueError(f"class {u} is not a column of the .eap "
+                                 f"(0..{cells.shape[1] - 1})")
     else:
         _, clu = nio.read_clu_at(base, elec, variant=clu_variant, tag=clu_tag)
         if clu.size != N:
