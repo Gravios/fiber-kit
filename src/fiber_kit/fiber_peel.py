@@ -9,6 +9,10 @@ greedy best-footprint-cosine merging gated by TWO complementary signals:
     shape clustering useless).
   * the refractory cross-correlogram does NOT veto (powered-only, ratio-based).
 
+Optionally (--burst-foot-lo) a third, POSITIVE, signal reaches below the
+footprint floor: the complex-spike burst signature in the cross-CCG
+(fiber_ccg.burst_evidence) together with a powered refractory dip.
+
 The two are complementary -- each covers the other's blind spot:
   - footprint-similar but INDEPENDENT cells (two real units at one site, cosine
     high) are blocked by the refractory veto;
@@ -58,7 +62,9 @@ def _unit(v):
 def peel_agglomerate(footprints, times, counts, duration, sr, *,
                      foot_hi=0.97, foot_lo=0.90, anneal_steps=4,
                      refrac_ms=2.0, refrac_thr=0.3, refrac_min_exp=5.0,
-                     refrac_censor_ms=0.0):
+                     refrac_censor_ms=0.0, burst_lo=0.0, burst_ms=(2.0, 15.0),
+                     burst_base_ms=(50.0, 150.0), burst_alpha=0.01, burst_ratio=2.0,
+                     burst_min_count=10, stats=None):
     """Greedy, confidence-ordered footprint+refractory agglomeration of fragments.
 
     footprints : list of 1-D float arrays (mean waveform per fragment; any common
@@ -71,14 +77,26 @@ def peel_agglomerate(footprints, times, counts, duration, sr, *,
     The anneal descends theta from foot_hi to foot_lo; at each level the
     highest-cosine non-vetoed pair merges first (so the most certain identities --
     the dominant clean unit's own fragments at cosine ~1.0 -- fuse earliest).
+
+    burst_lo > 0 adds a BURST pass after the anneal, for pairs with
+    burst_lo <= cosine < foot_lo: the later spikes of a CA1 complex-spike burst
+    are smaller and broader, so a cell cut by amplitude leaves fragments whose
+    footprints disagree more than foot_lo allows.  Such a pair merges only on
+    POSITIVE timing evidence, both at once: a powered refractory dip
+    (refractory_gate 'allow', not 'abstain') and the burst signature in the
+    cross-correlogram, the smaller fragment following the larger by
+    burst_ms (fiber_ccg.burst_evidence).  Highest cosine first; survivors'
+    footprints are re-weighted after each merge.  `stats` (a dict) receives
+    n_burst_merges.
     """
     n = len(footprints)
     if n == 0:
         return []
     refr = cg.refrac_samples(refrac_ms, sr)
     cens = cg.refrac_samples(refrac_censor_ms, sr)
-    Fn = np.vstack([_unit(np.asarray(f, float) - np.asarray(f, float).mean())
-                    for f in footprints])           # (n, d) mean-subtracted unit footprints
+    Fr = np.vstack([np.asarray(f, float) - np.asarray(f, float).mean()
+                    for f in footprints])           # (n, d) mean-subtracted footprints (amplitude kept)
+    Fn = np.vstack([_unit(f) for f in Fr])          # (n, d) unit footprints
     tim = [np.asarray(t, np.int64) for t in times]
     cnt = [int(c) for c in counts]
     parent = list(range(n))
@@ -119,6 +137,7 @@ def peel_agglomerate(footprints, times, counts, duration, sr, *,
                 continue
             # accept: keep the lower id `a`, count-weighted footprint, union train
             Fn[a] = _unit(Fn[a] * cnt[a] + Fn[b] * cnt[b])
+            Fr[a] = (Fr[a] * cnt[a] + Fr[b] * cnt[b]) / (cnt[a] + cnt[b])
             tim[a] = np.sort(np.concatenate([tim[a], tim[b]]))
             cnt[a] += cnt[b]
             parent[b] = a
@@ -135,6 +154,49 @@ def peel_agglomerate(footprints, times, counts, duration, sr, *,
                     if (lo, hi) in blacklist:
                         continue
                     heapq.heappush(heap, (-float(c), lo, hi, ver[lo], ver[hi]))
+
+    n_burst = 0
+    if burst_lo and burst_lo < foot_lo:
+        tried = set()
+        while True:
+            live = np.flatnonzero(alive)
+            if len(live) < 2:
+                break
+            C = Fn[live] @ Fn[live].T
+            iu, ju = np.triu_indices(len(live), 1)
+            cu = C[iu, ju]
+            sel = np.flatnonzero((cu >= burst_lo) & (cu < foot_lo))
+            merged = False
+            for k in sel[np.argsort(-cu[sel], kind="stable")]:
+                a, b = int(live[iu[k]]), int(live[ju[k]])
+                key = (a, b, ver[a], ver[b])
+                if key in tried:
+                    continue
+                tried.add(key)
+                g = cg.refractory_gate(tim[a], tim[b], duration, refr,
+                                       thr=refrac_thr, min_exp=refrac_min_exp, censor=cens)
+                if g["verdict"] != "allow":
+                    continue
+                big, small = (a, b) if np.linalg.norm(Fr[a]) >= np.linalg.norm(Fr[b]) else (b, a)
+                be = cg.burst_evidence(tim[big], tim[small], sr, burst_ms=burst_ms,
+                                       base_ms=burst_base_ms, alpha=burst_alpha,
+                                       ratio=burst_ratio, min_count=burst_min_count)
+                if be["verdict"] != "burst":
+                    continue
+                Fn[a] = _unit(Fn[a] * cnt[a] + Fn[b] * cnt[b])
+                Fr[a] = (Fr[a] * cnt[a] + Fr[b] * cnt[b]) / (cnt[a] + cnt[b])
+                tim[a] = np.sort(np.concatenate([tim[a], tim[b]]))
+                cnt[a] += cnt[b]
+                parent[b] = a
+                alive[b] = False
+                ver[a] += 1
+                n_burst += 1
+                merged = True
+                break                                  # footprints changed: rescan
+            if not merged:
+                break
+    if stats is not None:
+        stats["n_burst_merges"] = n_burst
 
     def find(x):
         while parent[x] != x:
@@ -238,7 +300,24 @@ def main():
     ap.add_argument("--refrac-censor-ms", type=float, default=0.0,
                     help="censor window (ms) dropping duplicate detections of one spike")
     ap.add_argument("--min-n", type=int, default=15, help="min spikes for a fragment to participate")
+    ap.add_argument("--burst-foot-lo", type=float, default=0.0,
+                    help="burst pass: pairs with this <= footprint cosine < --foot-lo merge only on a powered "
+                         "refractory dip AND the complex-spike burst signature in the cross-CCG (0 = off)")
+    ap.add_argument("--burst-ms", default="2,15",
+                    help="burst window (ms): the smaller fragment follows the larger by lo..hi")
+    ap.add_argument("--burst-base-ms", default="50,150",
+                    help="flank window (ms, both sides) giving the expected cross-CCG rate")
+    ap.add_argument("--burst-alpha", type=float, default=0.01,
+                    help="significance for the forward peak (Poisson) and the ordering (binomial)")
+    ap.add_argument("--burst-ratio", type=float, default=2.0,
+                    help="forward count must reach this multiple of the flank expectation")
+    ap.add_argument("--burst-min-count", type=int, default=10,
+                    help="min forward+backward pairs to test the burst signature (else abstain)")
     a = ap.parse_args()
+
+    def _pair(txt):
+        lo, hi = (float(x) for x in str(txt).split(","))
+        return (lo, hi)
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))
     base = cfg.base
@@ -254,11 +333,15 @@ def main():
     res = nio.read_res(base, elec)
     spk, _ = nio.open_spkD(base, elec, nsamp, nch, prefer=clu_method)
 
+    st = {}
     out, n_merged = peel_clu(
         src, res, spk, sr, min_n=a.min_n,
         foot_hi=a.foot_hi, foot_lo=a.foot_lo, anneal_steps=a.anneal_steps,
         refrac_ms=a.refrac_ms, refrac_thr=a.refrac_thr,
-        refrac_min_exp=a.refrac_min_exp, refrac_censor_ms=a.refrac_censor_ms)
+        refrac_min_exp=a.refrac_min_exp, refrac_censor_ms=a.refrac_censor_ms,
+        burst_lo=a.burst_foot_lo, burst_ms=_pair(a.burst_ms), burst_base_ms=_pair(a.burst_base_ms),
+        burst_alpha=a.burst_alpha, burst_ratio=a.burst_ratio, burst_min_count=a.burst_min_count,
+        stats=st)
 
     ncl = int(out.max()) + 1
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
@@ -269,6 +352,9 @@ def main():
     _log(f"{n_in:,} fragments → {n_out:,} units  ({n_merged:,} merges)")
     _det("footprint", f"{a.foot_hi:.2f} → {a.foot_lo:.2f}")
     _det("refractory", f"{a.refrac_ms} ms · thr {a.refrac_thr}")
+    if a.burst_foot_lo:
+        _det("burst", f"{st.get('n_burst_merges', 0):,} merges in cosine [{a.burst_foot_lo:.2f}, {a.foot_lo:.2f}) "
+                      f"on refractory dip + burst CCG")
     _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
 
 

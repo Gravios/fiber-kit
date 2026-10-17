@@ -925,6 +925,10 @@ FK_PEEL_REFRAC_MIN_EXP:  5.0      # 5.0 | 3-10.  Min expected coincidences for t
                                   #   abstains (merge allowed on footprint alone) -- so it only ever removes a false merge.
 FK_PEEL_REFRAC_CENSOR_MS: 0.0     # 0.0 | 0-0.5 (ms).  Censor window dropping duplicate detections of one spike.
 FK_PEEL_MIN_N:           15       # 15 | 10-40.  Min spikes for a fragment to participate (footprint/CCG reliability).
+FK_PEEL_BURST_FOOT_LO:   0.80     # 0 | 0.75-0.88.  BURST pass after the anneal: pairs with this <= cosine < FOOT_LO merge
+                                  #   only on a POWERED refractory dip AND the complex-spike burst signature in the
+                                  #   cross-CCG (smaller fragment follows the larger by 2-15 ms).  Recovers cells cut by
+                                  #   burst amplitude/broadening.  0 = off.  Never merges on an abstaining refractory test.
 # ----- fiber-xcorr-merge : fuse near-identical clusters by Klusters roll-shift cosine -----------------------
 # Runs AFTER fiber-backbone-link: the highest roll-shift-cosine pair (max cosine over circular time shifts of
 # the two mean waveforms) at/above cos-thr fuses first, the combined spikes are RE-ALIGNED and the merged

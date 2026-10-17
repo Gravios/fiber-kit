@@ -127,6 +127,63 @@ def split_gate(t_a, t_b, duration, refrac, thr=0.3, min_exp=5.0, censor=0):
     return dict(verdict=verdict, ratio=r, c_obs=c_obs, c_exp=c_exp, powered=c_exp >= min_exp)
 
 
+def lag_counts(t_ref, t_tgt, lo, hi):
+    """Number of (ref, tgt) pairs with lo < t_tgt - t_ref <= hi (samples; both sorted)."""
+    t_ref = np.asarray(t_ref); t_tgt = np.asarray(t_tgt)
+    a = np.searchsorted(t_tgt, t_ref + lo, "right")
+    b = np.searchsorted(t_tgt, t_ref + hi, "right")
+    return int((b - a).sum())
+
+
+def burst_evidence(t_big, t_small, sr, *, burst_ms=(2.0, 15.0), base_ms=(50.0, 150.0),
+                   alpha=0.01, ratio=2.0, min_count=10):
+    """Complex-spike burst signature in the cross-correlogram of two fragments.
+
+    A CA1 pyramidal cell fires complex-spike bursts whose later spikes are
+    smaller and broader, so a sort that cuts the cell by amplitude leaves a
+    LARGE fragment whose spikes are followed, 2-15 ms later, by the SMALL
+    fragment's.  Their cross-correlogram (small relative to big) then has a
+    peak on the forward side and much less on the backward side.  Neither a
+    pair of independent cells nor two cells co-modulated by theta produces
+    that: theta raises both sides of the correlogram alike, and over 2-15 ms
+    by far less than `ratio` relative to the 50-150 ms flanks.
+
+    This is POSITIVE same-cell evidence, so it is strict, and it is meant to
+    be combined with a powered refractory dip (refractory_gate 'allow'):
+    monosynaptic excitation also gives a forward peak, but no dip at zero lag.
+
+      forward  = pairs with burst_ms[0] < t_small - t_big <= burst_ms[1]
+      backward = the mirror window
+      expected = the flank rate (base_ms, both sides) over the same width
+
+    verdict 'burst'   forward >= min_count, Poisson P(>= forward | expected) < alpha,
+                      forward >= ratio * expected, and forward > backward with
+                      binomial P < alpha (larger -> smaller ordering)
+            'none'    enough counts to test, but the signature is absent
+            'abstain' forward + backward < min_count: no power
+    """
+    from scipy.stats import binomtest, poisson
+    t_big = np.sort(np.asarray(t_big, np.int64)); t_small = np.sort(np.asarray(t_small, np.int64))
+    ms = float(sr) / 1000.0
+    b0, b1 = burst_ms[0] * ms, burst_ms[1] * ms
+    f0, f1 = base_ms[0] * ms, base_ms[1] * ms
+    fwd = lag_counts(t_big, t_small, b0, b1)
+    bwd = lag_counts(t_big, t_small, -b1, -b0)
+    flank = lag_counts(t_big, t_small, f0, f1) + lag_counts(t_big, t_small, -f1, -f0)
+    expected = flank * (b1 - b0) / (2.0 * (f1 - f0))
+    out = dict(forward=fwd, backward=bwd, expected=float(expected),
+               ratio=(fwd / expected if expected > 0 else float("inf")), p_peak=1.0, p_order=1.0)
+    if fwd + bwd < min_count:
+        out["verdict"] = "abstain"
+        return out
+    out["p_peak"] = float(poisson.sf(fwd - 1, max(expected, 1e-9)))
+    out["p_order"] = float(binomtest(fwd, fwd + bwd, 0.5, alternative="greater").pvalue)
+    ok = (fwd >= min_count and out["p_peak"] < alpha and out["ratio"] >= ratio
+          and out["p_order"] < alpha)
+    out["verdict"] = "burst" if ok else "none"
+    return out
+
+
 # ───────────────────────────── standalone QC CLI ─────────────────────────────
 def main():
     import argparse

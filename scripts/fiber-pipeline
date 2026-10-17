@@ -322,6 +322,7 @@ PEEL_REFRAC_THR="${FK_PEEL_REFRAC_THR:-0.3}"          # coincidence-ratio above 
 PEEL_REFRAC_MIN_EXP="${FK_PEEL_REFRAC_MIN_EXP:-5.0}"  # min expected coincidences for the veto to be powered
 PEEL_REFRAC_CENSOR_MS="${FK_PEEL_REFRAC_CENSOR_MS:-0.0}"
 PEEL_MIN_N="${FK_PEEL_MIN_N:-15}"                     # min spikes for a fragment to participate
+PEEL_BURST_FOOT_LO="${FK_PEEL_BURST_FOOT_LO:-0}"      # burst pass floor below foot-lo (0 = off): merge on refractory dip + burst CCG
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
@@ -585,7 +586,7 @@ fiber_peel() {        # 3b. footprint+refractory consolidation of refine fragmen
         --foot-hi "$PEEL_FOOT_HI" --foot-lo "$PEEL_FOOT_LO" \
         --refrac-ms "$PEEL_REFRAC_MS" --refrac-thr "$PEEL_REFRAC_THR" \
         --refrac-min-exp "$PEEL_REFRAC_MIN_EXP" --refrac-censor-ms "$PEEL_REFRAC_CENSOR_MS" \
-        --min-n "$PEEL_MIN_N" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+        --min-n "$PEEL_MIN_N" --burst-foot-lo "$PEEL_BURST_FOOT_LO" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
 fiber_cpos() {        # 4. positions ON the refine clu, from the RAW/standard spk

@@ -76,6 +76,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | `FK_PEEL_REFRAC_THR` | `0.3` | 0.3 \| 0.2-0.4.  Coincidence ratio (obs/exp) above which the pair is two cells -> veto. |
 | `FK_PEEL_REFRAC_MIN_EXP` | `5.0` | 5.0 \| 3-10.  Min expected coincidences for the veto to be POWERED; below this it abstains (merge allowed on footprint alone) -- so it only ever removes a false merge. |
 | `FK_PEEL_REFRAC_CENSOR_MS` | `0.0` | 0.0 \| 0-0.5 (ms).  Censor window dropping duplicate detections of one spike. |
+| `FK_PEEL_BURST_FOOT_LO` | `0.80` (production: 0) | 0 \| 0.75-0.88.  BURST pass after the anneal: pairs with this <= cosine < FOOT_LO merge only on a POWERED refractory dip AND the complex-spike burst signature in the cross-CCG (smaller fragment follows the larger by 2-15 ms).  0 = off. See [methods](methods.md#burst-signature-in-the-cross-correlogram-fiber_ccgburst_evidence). |
 | `FK_PEEL_MIN_N` | `15` | 15 \| 10-40.  Min spikes for a fragment to participate (footprint/CCG reliability). |
 
 ## fiber-intrachunk
