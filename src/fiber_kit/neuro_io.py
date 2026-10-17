@@ -1013,36 +1013,6 @@ def read_wtl(base, elec, tag=""):
     if declared is not None and declared != len(out["nodes"]):
         return empty
     return out
-    with f:
-        for line in f:
-            s = line.strip()
-            if not s or s.startswith("#"):
-                continue
-            parts = s.split()
-            key = parts[0]
-            if not have_header:
-                if key != "wtl" or len(parts) < 2 or parts[1] != "1":
-                    return dict(version=0, nodes=[])
-                out["version"] = 1
-                have_header = True
-                continue
-            if key == "nNodes" and len(parts) > 1:
-                declared = int(parts[1])
-            elif key == "node" and len(parts) >= 8:
-                # node <node> <class> <kind> <parent> <a> <b> <nSpikes> <spikes...>
-                nsp = int(parts[7])
-                spikes = parts[8:8 + nsp]
-                if len(spikes) != nsp:                  # short tail -> skip the node
-                    continue
-                out["nodes"].append({
-                    "node": int(parts[1]), "class": int(parts[2]), "kind": parts[3],
-                    "parent": int(parts[4]), "a": float(parts[5]), "b": float(parts[6]),
-                    "spikes": [int(x) for x in spikes]})
-    if not have_header:
-        return dict(version=0, nodes=[])
-    if declared is not None and declared != len(out["nodes"]):
-        return dict(version=0, nodes=[])
-    return out
 
 
 # ── .eap / .tcl — EAP membership matrix + template-class registry ────────────
