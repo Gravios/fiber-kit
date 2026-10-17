@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.44.0] — contract.yaml; format versions in --ndm-version
+- `contract.yaml` (repository root) records the ndm plugin protocol, the session-schema version, the
+  version read and written of each version-tagged format (`.pca` 2/2, `.wti` 2/2, `.wtl` 2/1, `.tcl`
+  1/1, `.eap` 1/1) and the hashes of the shared tables.  `test/test_contract.py` checks it against the
+  code: the constants, what each writer puts on disk, and that each reader refuses the next version.
+- `test_shared_contract.py` checks the tables against those hashes on its own; with `NS3_ROOT` it also
+  checks that neurosuite-3's `contract.yaml` agrees and that each side reads every version the other
+  writes.
+- `ndm_fiber-kit --ndm-version` adds `format <name> <read> <write>` lines, which ndmanager uses to warn
+  about a mismatch, and reports the source version when the package is not installed.
+- `neuro_io`: the version literals are named constants (`WTI_VERSION`, `WTL_VERSION`, `TCL_VERSION`,
+  `EAP_VERSION`); an unreachable copy of the old v1 `.wtl` reader is gone.
+- Releases are tagged from this version on (`v0.44.0`).
+
 ## [0.43.0] — shared stderiv and grammar tables; one token rule
 - `test/stderiv_vectors.tsv` (shared with neurosuite-3, where every engine now takes its spatial
   derivative from one header) is run against `fiber_stderiv.apply_stderiv_transform`: all 27 rows
