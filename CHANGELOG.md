@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.44.1] — custody token bound; two int-range fixes
+- `neuro_io.parse_variant_token`: an `S`/`C` order longer than 9 digits makes the token opaque, as in
+  neurosuite-3 (whose parser overflowed).  `custody_vectors.tsv` is neurosuite-3's updated copy.
+- `fiber_template.generate(eap=True)`: a class that is not a column of the `.eap` raises `ValueError`
+  (it raised `IndexError`, and a negative class read a column from the end).
+- `fiber_decollide.decollide_spikes`: output waveforms saturate to int16 instead of wrapping.
+- `contract.yaml`: the contract number is bumped only when the protocol, the session schema or a format
+  changes.
+
 ## [0.44.0] — contract.yaml; format versions in --ndm-version
 - `contract.yaml` (repository root) records the ndm plugin protocol, the session-schema version, the
   version read and written of each version-tagged format (`.pca` 2/2, `.wti` 2/2, `.wtl` 2/1, `.tcl`
