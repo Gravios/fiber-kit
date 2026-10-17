@@ -80,6 +80,18 @@ pipeline:
   #       collision-flag: false           # route recoverable collisions from noise to a dedicated collision cluster
   #       collision-gain: 0.09
   #       collision-shift: 8
+  #       deconv: false                   # detection-anchored sub-sample template deconvolution per chunk (fiber_deconv): per-fiber deconv_agree contamination QC in .fibers and a .deconv.tsv manifest of labels, collision partners and undetected spikes. Changes no label unless --deconv-assign
+  #       deconv-assign: false            # with --deconv: move confidently attributed noise / collision-cluster spikes into their fiber as a parked child atom. Off by default: on synthetic sessions with look-alike cells its precision fell to 70-90 percent (docs/methods.md)
+  #       deconv-phases: 4                # sub-sample phases per template (1 = whole samples)
+  #       deconv-order: 4                 # order of the VAR noise-whitening filter
+  #       deconv-refrac-ms: 1.0           # a unit is not placed twice within this many ms
+  #       deconv-floor: 16.0              # lowest pursuit gain (2 x log-likelihood) accepted, whatever the noise null says
+  #       deconv-null-q: 0.995            # quantile of the off-spike first-step gain used as the stopping threshold
+  #       deconv-agree: 0.999             # margin calibration: agreement with the clustering required among clean spikes above it
+  #       deconv-margin-min: 10.0         # floor on the calibrated label margin (2 x log-likelihood ratio, best vs other unit)
+  #       deconv-min-n: 30                # min spikes for a fiber to get a template
+  #       deconv-fiber-agree: 0.95        # a fiber whose spikes the pursuit labels with an equivalent template at least this often is corroborated: the margin is calibrated on such fibers and only they receive rescues
+  #       deconv-equiv-cos: 0.93          # fibers whose templates reach this whitened cosine (noise-corrected, best over +/-4 samples) are equivalent: the over-split fragments of a cell. Agreement, margin and collision partners are judged up to equivalence. >1 = identity only
   #       quality-metrics: false          # also compute L-ratio + isolation distance (O(N*K))
   #       quality-dims: 10                # PCA dims for L-ratio/isolation Mahalanobis
   #       pca-k: 6
@@ -306,6 +318,12 @@ pipeline:
   #       refrac-min-exp: 5.0             # min expected coincidences for the veto to be powered (else abstain -> merge allowed)
   #       refrac-censor-ms: 0.0           # censor window (ms) dropping duplicate detections of one spike
   #       min-n: 15                       # min spikes for a fragment to participate
+  #       burst-foot-lo: 0.0              # burst pass: pairs with this <= footprint cosine < --foot-lo merge only on a powered refractory dip AND the complex-spike burst signature in the cross-CCG (0 = off)
+  #       burst-ms: 2,15                  # burst window (ms): the smaller fragment follows the larger by lo..hi
+  #       burst-base-ms: 50,150           # flank window (ms, both sides) giving the expected cross-CCG rate
+  #       burst-alpha: 0.01               # significance for the forward peak (Poisson) and the ordering (binomial)
+  #       burst-ratio: 2.0                # forward count must reach this multiple of the flank expectation
+  #       burst-min-count: 10             # min forward+backward pairs to test the burst signature (else abstain)
   #     }}
 
   # ===== fiber-cpos : Write a per-spike cluster-position sidecar (.cpos) by localizing each cluster's median RAW template (monopole+dipole). Reads <session>.yaml. =====

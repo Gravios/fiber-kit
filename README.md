@@ -231,6 +231,7 @@ across the session (drift, rate stability, isolation over time).
 | Isolation | `resid_med`, `resid_mad`, `nn_dist` + `nn_gid` (closest fiber in direction-profile space), `lratio`, `iso_dist` (`--quality-metrics` only) |
 | Within-chunk drift | `radius_slope` (/min), `depth_slope` (/min), `dir_drift` (first- vs second-half direction change) |
 | Adaptation | `adapt_corr`, `adapt_tau`, `adapt_snr`, `adapt_meanabsz`, `adapt_fracz3` |
+| Deconvolution (`--deconv` only; NaN otherwise) | `deconv_agree` (fraction of the fiber's spikes the template pursuit explains with its own or an indistinguishable template: a contamination measure), `deconv_partner_frac`, `deconv_n_equiv` |
 
 ```python
 import numpy as np
@@ -242,8 +243,9 @@ for g in np.unique(f['gid'][f['gid'] >= 0]):
 ```
 
 Curation flags: low `nn_dist` → merge candidate; high `hill_fp`/`refrac` →
-contamination; high `|radius_slope|`/`dir_drift` → chunk too long; low
-`presence` → unit drifts in/out.
+contamination; low `deconv_agree` → contaminated by a distinguishable cell;
+high `|radius_slope|`/`dir_drift` → chunk too long; low `presence` → unit
+drifts in/out.
 
 ## Curation: merge candidates & validation
 
@@ -448,10 +450,14 @@ aren't re-attempted:
   waveform is a linear re-encoding; after re-whitening it is an orthogonal
   rotation, so a whitened-L2 classifier is invariant to it (rank-deficient ones
   only lose information). Confirmed empirically.
-- **Collision detection, not decomposition.** Flagging recoverable collisions by
-  matching-pursuit gain is reliable; decomposing a collision to a specific fiber
-  pair is separability-bound (~15–19%) and kept advisory only. Amplitude-pinned
-  decomposition is least-squares-dominated and not recommended on raw output.
+- **Collision detection, not decomposition (in the snippet).** Flagging recoverable
+  collisions by matching-pursuit gain is reliable; decomposing a collision to a
+  specific fiber pair *inside one snippet* is separability-bound (~15–19%) and kept
+  advisory only. Amplitude-pinned decomposition is least-squares-dominated and not
+  recommended on raw output. `fiber_deconv` (`fiber-session --deconv`) decomposes on
+  the continuous signal with sub-sample phases and an amplitude prior instead; its
+  labels and partners go to a manifest and never into the `.clu` unless
+  `--deconv-assign` (see [methods](docs/methods.md#template-deconvolution-fiber_deconv)).
 - **Refractory validation is full-session.** Within one shank the cross-CG
   `[0,2] ms` bin is confounded by collision removal; `fiber-validate-merges`
   keys on the `[2,5] ms` band and the across-session rate handoff instead.
@@ -469,6 +475,7 @@ src/fiber_kit/
   klustakwik.py       standalone KlustaKwik CEM (the "rkk" split)
   fiber_adapt.py      EWMA adaptation fit / residual / de-adapt
   fiber_collision.py  collision templates, matching-pursuit decompose/detect
+  fiber_deconv.py     detection-anchored sub-sample template deconvolution (fiber-session --deconv)
   laplacian_link.py   curve-continuity fragment linking; energy-banding report
   fiber_session.py    pipeline + CLI (cluster_chunk_fine, link, I/O, main)
   fiber_localize.py   monopole+dipole physical localization from raw waveform spread

@@ -18,8 +18,9 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   (position vs. morphology), back-propagation, and the CA1 afferent topology.  Answers questions the
   sort itself cannot: how much waveform variance is the cell and how much is everything else.
 - **[methods.md](methods.md)** — the core numerical primitives (`fiber_geometry`, `fiber_ccg`): the
-  energy-scaled median±σ band overlap, the Omlor–Giese drift-warp veto, waveform complexity, and the
-  refractory cross-correlogram gate, with signatures and parameters.
+  energy-scaled median±σ band overlap, the Omlor–Giese drift-warp veto, waveform complexity, the
+  refractory cross-correlogram gate and the burst signature, template deconvolution (`fiber_deconv`),
+  with signatures, parameters and validation.
 
 - **fiber-view/**, **linking/** — the figures the README and `WORKFLOW.md` show, and the
   synthetic hybrid-linker prototype that made `linking/hybrid_linker.png`.

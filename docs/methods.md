@@ -662,3 +662,132 @@ noise by default, each as its own .clc child so it stays reviewable).
   does not by itself isolate a neuron.  The GT does not arbitrate here (it is built from the same
   limited tools); the stage's use is to expose the groups for review and to feed the novel groups
   back to a second fiber-session round, not a verified gain.
+
+## Template deconvolution (`fiber_deconv`)
+
+Stage: `fiber-session --deconv` ([stages](stages.md), knobs `FK_SESSION_DECONV`,
+`FK_SESSION_DECONV_ASSIGN` in [config](config.md)).  It changes no label unless `--deconv-assign`.
+
+### Why, and what it changes relative to `fiber_collision`
+
+`fiber_collision` decomposes a collision inside one 42-sample snippet against whole-sample rolled
+templates; on real data its pair decomposition is separability-bound (~15–19 %).  Three things limit it,
+and the 2025–26 template matchers that do best on overlapping spikes (Wobble in SpikeInterface's
+modular benchmark; DARTsort) remove the same three:
+
+* **Continuous signal.**  Segments covering every detection and its neighbours are pursued, so a partner
+  off the detection is fitted whole rather than truncated at the window edge.
+* **Sub-sample phases.**  Each template at R = 4 Fourier-interpolated phases.
+* **Amplitude prior + joint refit.**  `G = 2ac − a²n − λ(a − 1)²` with `λ = 1/sd_a²` (the unit's own
+  robust amplitude spread), `a` bounded to `[max(0.25, 1 − 5 sd), min(3, 1 + 5 sd)]`; after every
+  placement all amplitudes in the segment are refitted jointly (orthogonal matching pursuit).  Without
+  the refit the first of two overlapping spikes absorbs part of its partner (amplitude 1.19 instead of
+  1.00 in the unit test).
+
+### Noise model
+
+The pursuit is a maximum-likelihood fit, so inner products are taken after whitening.  The snippet
+whitener mixes samples inside a fixed window and cannot be convolved; instead a VAR(4) is fitted on
+off-spike stretches of the transformed signal, `e_t = x_t − Σ A_i x_{t−i}`, followed by `Σ_e^{−1/2}`.
+The filter is causal and time-invariant, so the whitened signal is still a sum of whitened templates.
+The allpairs transform sums to zero across channels: the residual has rank C − 1 and the null direction
+is zeroed, not floored.  Templates come from the same transformed continuous signal (allpairs stderiv of
+the `.fil`, the space the chunk whitener uses), averaged over up to 400 median-aligned spikes per fiber.
+
+### Stopping, anchoring, equivalence
+
+* **Threshold**: the 99.5 % quantile of the first-step gain on 400 off-spike windows of the chunk,
+  floored at 16.  With the amplitude prior pure noise rarely approaches the floor.
+* **Anchoring**: each detection takes the highest-gain placement within ±4 samples; the strongest
+  placement of a distinguishable template within half a window that no detection anchors is its
+  collision **partner**; placements nothing anchors are **unanchored** (undetected spikes, advisory).
+* **Equivalence**: fiber-session is over-split by design, so several fibers carry one cell's template.
+  Two templates are equivalent when their whitened cosine — noise-corrected (`|T|² − d/n`) and best
+  over ±4 samples — is ≥ 0.93.  Agreement, the label **margin** (gain minus the best gain of a
+  non-equivalent template refitted alone on the same event: twice a log-likelihood ratio) and partners
+  are judged up to equivalence.  Transitive families (complete linkage) were tried first and failed
+  both ways: collision-laden or offset fragments split a cell's family, look-alike cells chained.
+  On the synthetic sessions pure same-cell fragment pairs sat at ≥ 0.92.
+
+### Outputs
+
+* `.fibers`: `deconv_agree` (fraction of the fiber's placed spikes labelled with an equivalent template),
+  `deconv_partner_frac`, `deconv_n_equiv`.
+* `<base>.deconv.<method>.<elec>.<stage>.tsv`: `spike res chunk clu deconv_clu dt amp gain margin
+  rescued partner_clu partner_dt`, one row per labelled core detection and per unanchored placement
+  (`spike` = −1).  `dt` is the sub-sample time correction to `res`.
+* `--deconv-assign`: noise and collision-cluster spikes attributed to a **corroborated** fiber
+  (`deconv_agree ≥ 0.95`, ≥ 20 placed spikes) with margin ≥ the calibrated threshold, and with no
+  partner within 4 samples (an exact coincidence: either label is right), are parked as one new child
+  atom per (source, fiber).  The threshold is the lowest margin whose top set, on corroborated fibers,
+  agrees with the clustering within 0.002 of the high-confidence plateau (floor 10).  Calibrating to a
+  fixed 0.999 failed: on a contaminated fiber the disagreements are the clustering's errors.
+
+### Validation (synthetic only)
+
+Benchmark 1 — clustering = ground truth, 11 units on an 8-site 20 µm shank (two look-alike pairs, a
+narrow 15–25 Hz interneuron, small units), AR(2) spatially correlated noise, complex-spike bursts with
+amplitude attenuation and broadening, collisions censored at detection (smaller spike within ±10
+samples of a larger one), against `fiber_collision.decompose_batch` on the same detections:
+
+| | noise sd 14 | noise sd 25 |
+|---|---|---|
+| collision-affected detections labelled correctly | **0.87** vs 0.62 | **0.76** vs 0.53 |
+| censored partner: right unit | **0.55** vs 0.43 | **0.36** vs 0.34 |
+| timing error of clean spikes (samples) | **0.28** vs 0.76 (detection) | **0.35** vs 0.76 |
+| spurious partner on detections without one | 1.8 % | 0.7 % |
+| pure noise, templates absent: placements per pseudo-detection | 0.23 % | — |
+
+The snippet baseline does far better here than on real data, so the table says the method is better,
+not by how much on a real session.
+
+Benchmark 2 — through fiber-session (its own over-split clustering), three synthetic sessions:
+
+| | easy (6 units, sd 14) | hard (11 units, sd 14) | hard (11 units, sd 25) |
+|---|---|---|---|
+| impure fibers (< 0.95, ≥ 100 spikes) flagged by `deconv_agree < 0.95` | 3/8 | 24/33 | 35/39 |
+| pure fibers flagged | 2/12 | 0/11 | 0/1 |
+| `--deconv-assign` precision | 0.95 | 0.90 | 0.70 |
+
+`deconv_agree` equals the fiber's purity to within a few percent when the contaminant is a
+distinguishable cell (0.58 for a 58 %-pure fiber, 0.867 for 86.7 %).  Look-alike contamination stays
+invisible — equivalent templates count as agreement — which is why the easy session, whose impurity is
+mostly look-alike, flags only 3/8.  The rescue's precision on the sessions with look-alikes is why
+`--deconv-assign` is off; a second pass with a dictionary built only from corroborated fibers did not
+raise it (0.90 → 0.76, 0.70 → 0.57).
+
+### Limits
+
+* Not yet run on a real session.  The two numbers to read first on g5/g6 are the distribution of
+  `deconv_agree` (does it single out the fibers the t-SNE lasso cleans?) and the unanchored count
+  (spurious placements come from poor templates: fragments made of collisions or contaminated means).
+* Cost: on the 15 k-detection, 115-fiber synthetic session fiber-session took 196 s against 129 s;
+  gain evaluation dominates.  The atom cross-correlations are cached per placed atom (a full table is
+  ~170 MB at that size).
+* Templates are fixed within a chunk; drift inside a 12-min chunk is not modelled.
+
+## Burst signature in the cross-correlogram (`fiber_ccg.burst_evidence`)
+
+Used by `fiber-peel --burst-foot-lo` ([stages](stages.md), knob `FK_PEEL_BURST_FOOT_LO`).  SLAy (2025)
+scores merges with cross-correlogram structure; this is a CA1-specific, stricter form of that term.
+
+The later spikes of a CA1 complex-spike burst are smaller and broader, so a sort that cuts a cell by
+amplitude leaves a large fragment whose spikes are followed 2–15 ms later by the small fragment's, and
+footprints that disagree more than peel's floor (0.90) allows.  `burst_evidence(t_big, t_small, sr)`
+says **burst** when, in the cross-CCG of small relative to big:
+
+* forward pairs (2–15 ms) ≥ 10, Poisson `P(≥ fwd | expected) < 0.01` against the rate in the 50–150 ms
+  flanks (both sides), and ≥ 2× that rate;
+* forward > backward with binomial `P < 0.01` (larger → smaller ordering).
+
+It says **abstain** below 10 forward + backward pairs.  Monosynaptic excitation also produces a forward
+peak; it has no zero-lag dip, so the gate peel applies is the conjunction: `refractory_gate` **allow**
+(powered; *abstain* is not enough) **and** `burst`.  peel's burst pass runs after the anneal, over pairs
+with `burst_lo ≤ cosine < foot_lo`, highest cosine first, re-weighting the survivor's footprint after
+each merge.
+
+Simulated 20-min trains, five seeds (`test/test_peel_burst.py` runs one): the conjunction passes 10/15
+bursting cells cut by amplitude — all ten at 2 Hz; the five misses are 0.5 Hz cells whose refractory
+test abstains, left unmerged by choice — and 0/25 negatives (independent cells, theta co-modulated
+cells, a monosynaptic pair, the big fragment of one bursting cell against the small of another, two
+theta interneurons).  Not yet run on a real session.
