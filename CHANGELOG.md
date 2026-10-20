@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.47.0] — fiber-session re-sorts around kept units
+- `fiber-session --in-stage <stage> --exclude-units 3,7,12-15`: the listed clusters of the input clu
+  (`<base>.clu.<in-method>.<elec>.<stage>`; `--in-method` defaults to `--method`) never enter a chunk.
+  `--exclude-as carry` (default) writes each back as one cluster and one atom of its own after the new
+  fibers and logs `input -> output` ids; `--exclude-as noise` makes them cluster 0.  Refuses an input
+  clu not aligned to the `.res` (a stage with its own `.res`), a malformed list, `--exclude-units`
+  without `--in-stage`, and an output that would overwrite the input clu.
+- `fiber-pipeline`: a fiber-session plan step's `in:` becomes `--in-stage`; the list rides `params:`.
+
 ## [0.46.0] — template deconvolution; burst-signature merges
 - `fiber_deconv`: detection-anchored sub-sample template deconvolution -- continuous signal, R = 4
   Fourier phases, VAR(4) noise whitening, amplitude prior with a joint refit after every placement,
