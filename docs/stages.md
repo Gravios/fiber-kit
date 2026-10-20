@@ -39,6 +39,18 @@ the tables below show the canonical name first with the old one in parentheses.
 
 Cluster a session group into fibers.
 
+**Re-sorting around kept units.**  `--in-stage <stage> --exclude-units <ids>` takes the clu
+`<base>.clu.<in-method>.<elec>.<stage>` (in-method defaults to `--method`) and keeps the listed
+clusters' spikes out of every chunk, so they shape no cluster.  With `--exclude-as carry` (default)
+each listed unit is written back as one cluster and one atom of its own, after the new fibers; the log
+prints `input -> output` ids.  `--exclude-as noise` makes them cluster 0.  Ids 0 and 1 (artefact,
+noise) always go to 0; ids absent from the input are reported and ignored.  The input clu must have
+one label per spike of the `.res` fiber-session reads (a stage with its own `.res`, e.g. decollided, is
+refused), and the run refuses to write over it.  In a plan, a fiber-session step's `in:` is passed as
+`--in-stage` and the list rides `params:`:
+
+    - {stage: fiber-session, in: curated, out: resort, params: {exclude-units: "3,7,12-15"}}
+
 Positional: `session`, `group`
 
 | flag | default | description |
@@ -156,6 +168,10 @@ Positional: `session`, `group`
 | `--feat-lag` | `0` | FK_SESSION_FEAT_LAG. >0 = fine-split shape features become PC1 sampled at -N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3. 0 = classic. |
 | `--feat-lag-pc2` | `1` | with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only |
 | `--exclude-clu` | — | per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0. |
+| `--in-stage` | — | input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused |
+| `--in-method` | — | variant token of the input-stage clu (default: --method), e.g. the --out-variant alias a curated clu was saved under |
+| `--exclude-units` | — | clusters of the input-stage clu whose spikes are excluded from the sort: comma-separated ids and ranges, e.g. 3,7,12-15. Excluded spikes never enter a chunk; see --exclude-as for what the output holds for them |
+| `--exclude-as` | `carry` | carry (default): each excluded unit is written back as one cluster of its own (one atom), after the new fibers; ids 0 and 1 of the input go to 0. noise: excluded spikes are cluster 0, like --exclude-clu — choices: `carry`, `noise` |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the fine-split shape features and use a per-call local SVD (legacy behaviour) |
 | `--clu-stage` | `fiber_session` | post-group stage tag for the clu: <base>.clu.<method>.<elec>[.<stage>] (default 'fiber_session'); pass --clu-stage '' for an untagged .clu |
 | `--skip-extant` | `0` | FK_SESSION_SKIP_EXTANT. 1 = if the destination .clu this run would write already exists (--out, else <base>.clu.<out-variant or method>.<elec>[.<clu-stage>]), log it and exit before any compute -- a plan re-run resumes past its fiber-session step instead of regenerating hours of sort over the top of an extant (possibly hand-curated) one. Delete the file, or set 0 (the default), to rebuild. |
