@@ -1619,6 +1619,22 @@ def add_core_arguments(ap):
                     help="per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- "
                          "e.g. fiber-flag-artifacts' output.  Excluded spikes never enter a chunk, so they "
                          "cannot shape a cluster; they are emitted as cluster 0.")
+    ap.add_argument("--in-stage", dest="in_stage", default=None,
+                    help="input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units "
+                         "names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>).  It must be "
+                         "aligned to the .res this run reads (same spike count); a stage with its own .res "
+                         "(e.g. decollided) is refused")
+    ap.add_argument("--in-method", dest="in_method", default=None,
+                    help="variant token of the input-stage clu (default: --method), e.g. the "
+                         "--out-variant alias a curated clu was saved under")
+    ap.add_argument("--exclude-units", dest="exclude_units", default=None,
+                    help="clusters of the input-stage clu whose spikes are excluded from the sort: "
+                         "comma-separated ids and ranges, e.g. 3,7,12-15.  Excluded spikes never enter a "
+                         "chunk; see --exclude-as for what the output holds for them")
+    ap.add_argument("--exclude-as", dest="exclude_as", choices=["carry", "noise"], default="carry",
+                    help="carry (default): each excluded unit is written back as one cluster of its own "
+                         "(one atom), after the new fibers; ids 0 and 1 of the input go to 0.  "
+                         "noise: excluded spikes are cluster 0, like --exclude-clu")
     ap.add_argument("--no-cluster-basis", action="store_true",
                     help="ignore the global .pca basis for the fine-split shape features and use a "
                          "per-call local SVD (legacy behaviour)")
@@ -1722,6 +1738,68 @@ def _park_consolidated(clu, new_clu, child, parent, next_atom, park_min=0):
             parent[int(next_atom + j)] = int(fid)
         next_atom += len(uk)
     return new_clu.astype(np.int32), next_atom
+
+
+def parse_unit_list(text):
+    """'3,7,12-15' -> [3, 7, 12, 13, 14, 15] (sorted, unique).  Whitespace is
+    ignored; an empty string is an empty list.  Raises ValueError on anything
+    that is not a non-negative integer or an ascending a-b range."""
+    out = set()
+    for tok in str(text).replace(" ", "").split(","):
+        if not tok:
+            continue
+        lo, sep, hi = tok.partition("-")
+        if not lo.isdigit() or (sep and not hi.isdigit()):
+            raise ValueError(f"--exclude-units: '{tok}' is not an id or an a-b range")
+        lo = int(lo); hi = int(hi) if sep else lo
+        if hi < lo:
+            raise ValueError(f"--exclude-units: range '{tok}' runs backwards")
+        out.update(range(lo, hi + 1))
+    return sorted(out)
+
+
+def load_input_stage(base, elec, method, stage, nspk, units):
+    """Read the input-stage clu and resolve `units` against it.
+
+    Returns (in_clu, in_path, excluded_mask, present, missing).  Refuses
+    (SystemExit) when the clu does not have one label per spike of the .res
+    this run reads -- a stage that carries its own .res (de-collision adds
+    spikes) would otherwise exclude the wrong spikes by index."""
+    path = nio.session_path(base, "clu", elec, variant=method, tag=stage)
+    try:
+        _, in_clu = nio.read_clu_at(base, elec, variant=method, tag=stage)
+    except FileNotFoundError as e:
+        raise SystemExit(f"--in-stage: {e}") from None
+    in_clu = np.asarray(in_clu, np.int64)
+    if in_clu.size != nspk:
+        raise SystemExit(f"--in-stage: {os.path.basename(path)} has {in_clu.size:,} labels but the .res has "
+                         f"{nspk:,} spikes -- the stage carries its own .res (e.g. decollided) or belongs to "
+                         f"another detection; fiber-session reads the shared .res and cannot follow it")
+    present = [u for u in units if np.any(in_clu == u)]
+    missing = [u for u in units if u not in present]
+    excl = np.isin(in_clu, present) if present else np.zeros(nspk, bool)
+    return in_clu, path, excl, present, missing
+
+
+def _carry_units(clu, child, parent, next_atom, in_clu, units):
+    """Write each excluded unit back as one cluster of its own: a new atom per
+    unit, parented to a fresh fiber id after every existing one.  Units 0 and 1
+    (Klusters' artefact and noise) stay in cluster 0.  Returns (clu, next_atom,
+    {unit: provisional fiber id}); the hierarchy save renumbers, so final ids
+    are read back from the written clu."""
+    clu = np.asarray(clu).copy()
+    nxt = int(max([int(clu.max()) if clu.size else 0] + [int(v) for v in parent.values()])) + 1
+    prov = {}
+    for u in units:
+        m = in_clu == u
+        if u in (0, 1) or not m.any():
+            continue
+        clu[m] = nxt
+        child[m] = next_atom
+        parent[next_atom] = nxt
+        prov[u] = nxt
+        nxt += 1; next_atom += 1
+    return clu.astype(np.int32), next_atom, prov
 
 
 def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, gid,
@@ -1840,6 +1918,26 @@ def main():
         if _ex.size != nspk:
             raise SystemExit(f"--exclude-clu has {_ex.size} labels, .res has {nspk}")
         keep = _ex == 0
+    # ── input stage + unit exclusions ──
+    in_clu = None; excl_units = []
+    if a.exclude_units is not None and a.in_stage is None:
+        raise SystemExit("--exclude-units names clusters of an input clu: give --in-stage "
+                         "(--in-stage '' for the stage-less <base>.clu.<method>.<elec>)")
+    if a.in_stage is not None:
+        in_method = a.in_method or a.method
+        try:
+            units = parse_unit_list(a.exclude_units or "")
+        except ValueError as e:
+            raise SystemExit(str(e)) from None
+        in_clu, in_path, excl_mask, excl_units, missing = load_input_stage(
+            a.base, a.elec, in_method, a.in_stage, nspk, units)
+        outs = [a.out] if a.out else [nio.session_path(a.base, "clu", a.elec, variant=v, tag=a.clu_stage)
+                                      for v in (a.method, a.out_variant) if v]
+        for o in outs:                                  # never write the sort over the clu it excludes from
+            if os.path.abspath(o) == os.path.abspath(in_path):
+                raise SystemExit(f"--in-stage: the output {os.path.basename(o)} would overwrite the input "
+                                 f"clu -- choose another --clu-stage")
+        keep &= ~excl_mask
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=a.method)
     nio.check_spk_count(nspk, spk, spkpath, a.nsamp, a.nchan)
     filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
@@ -1847,6 +1945,17 @@ def main():
     if a.exclude_clu:
         det("exclude", f"{int((~keep).sum()):,} spikes ({100 * (~keep).mean():.4f}%) from "
                        f"{os.path.basename(a.exclude_clu)} -- emitted as cluster 0")
+    if in_clu is not None:
+        det("input", f"{os.path.basename(in_path)}  ({len(np.unique(in_clu)):,} clusters)")
+        if a.exclude_units is not None:
+            n_ex = int(np.isin(in_clu, excl_units).sum()) if excl_units else 0
+            det("exclude", f"{len(excl_units)} unit(s), {n_ex:,} spikes ({100 * n_ex / max(nspk, 1):.2f}%) -- "
+                           + ("each carried back as its own cluster" if a.exclude_as == "carry"
+                              else "emitted as cluster 0"))
+            if missing:
+                det("", f"not in the input clu (ignored): {','.join(map(str, missing))}")
+        else:
+            det("exclude", "no --exclude-units: nothing excluded")
     det("source", spkpath)
     det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
     det("feature-align", fl.get_feature_align())
@@ -2016,6 +2125,10 @@ def main():
         clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom,
                                             park_min=getattr(a, "cons_park_min", 0))
 
+    carried = {}
+    if in_clu is not None and excl_units and a.exclude_as == "carry":
+        clu, next_atom, carried = _carry_units(clu, child, parent, next_atom, in_clu, excl_units)
+
     if a.out:
         clu_out = a.out
         nio.write_clu_file(clu_out, clu)
@@ -2027,6 +2140,11 @@ def main():
         det("hierarchy", f"{len(parent)} atoms -> {len(set(parent.values()))} fibers (.clu/.clc/.clp)")
     else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
+    if carried:                                           # final ids: the hierarchy save renumbers
+        _, _final = nio.read_clu_file(clu_out)
+        _final = np.asarray(_final)
+        det("carried", ", ".join(f"{u}->{int(_final[np.flatnonzero(in_clu == u)[0]])}" for u in sorted(carried))
+                       + "  (input unit -> output cluster)")
 
     # ── optional ALIAS copies under a second variant token ──
     #   Klusters resolves .fet/.clu/.spk by the SAME token, so viewing a clustering in a differently

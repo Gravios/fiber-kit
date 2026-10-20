@@ -486,6 +486,9 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_DECONV_ASSIGN" = "1" ] && sess_args+=(--deconv-assign)        # park attributed noise spikes
     local excl_args=()
     [ "$SESSION_EXCLUDE" = "1" ] && excl_args+=(--exclude-clu "$(mask_path)")
+    # a plan step's in: names fiber-session's input stage (the clu --exclude-units refers to);
+    # the unit list itself rides the step's params, e.g. params: {exclude-units: "3,7,12-15"}
+    [ -n "${STEP_IN:-}" ] && excl_args+=(--in-stage "$STEP_IN")
     _run fiber-session "$SESS" "$ELEC" \
         --clu-stage "${STEP_OUT:-fiber_session}" \
         "${excl_args[@]+"${excl_args[@]}"}" \
