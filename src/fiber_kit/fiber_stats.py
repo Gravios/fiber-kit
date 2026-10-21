@@ -22,8 +22,10 @@ import numpy as np
 
 try:
     from . import fiber_session as fs, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    from . import fiber_stderiv as fst
 except ImportError:
     import fiber_session as fs, fiber_lib as fl, neuro_io as nio, session_yaml as sy
+    import fiber_stderiv as fst
 
 
 def resid_frame_med(waves, mask):
@@ -65,7 +67,7 @@ def main():
     ap = argparse.ArgumentParser(
         description="Extract per-(chunk,cluster) fiber statistics from an existing "
                     "sort (no re-clustering). Reads <session>.yaml for channels/sr (no probe needed; depth is energy-weighted).")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
     nio.add_clu_args(ap, stage_default="refine", method_help="feature space BEFORE the group (standard|stderiv|...); default stderiv", stage_help="fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> " "(default: refine; '' = no stage)", in_clu_help="explicit .clu path (overrides --clu-method/--variant)")
     ap.add_argument("--chunk-min", type=float, default=12.0)
     ap.add_argument("--overlap-min", type=float, default=4.0)
@@ -81,7 +83,7 @@ def main():
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs)
     base = cfg["base"]; elec = a.group
     ntotal, nchan, nsamp, sr = cfg["ntotal"], cfg["nchan"], cfg["nsamp"], cfg["sr"]
     gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
@@ -91,9 +93,16 @@ def main():
     spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
     assert spk.shape[0] == len(res) == len(clu), \
         f".res {len(res)} / .clu {len(clu)} / {spkpath} {spk.shape[0]} mismatch"
+    space = nio.spk_variant(spkpath, base, elec)
+    try:                                       # the whitener's noise model: the .spk's own space
+        space_tf = fst.space_transform(space, cfg.get("sdiff_pairs"))
+    except ValueError as e:
+        raise SystemExit(f"fiber-stats: no noise model for {spkpath}: {e} -- give the group's sdiffPairs in "
+                         f"the session YAML or --sdiff-pairs") from None
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     nclu = len(np.unique(clu[clu >= 0]))
-    print(f"loaded {len(res)} spikes, {nclu} clusters ({spkpath})")
+    print(f"loaded {len(res)} spikes, {nclu} clusters ({spkpath}); noise model: "
+          f"{fst.space_label(space, cfg.get('sdiff_pairs'))}")
 
     t_min, t_max = int(res.min()), int(res.max())
     if a.whole_session:
@@ -115,7 +124,7 @@ def main():
     for c, ext, core, tmin in windows:
         res_e = res[ext]
         s0 = int(res_e.min()) - nsamp; s1 = int(res_e.max()) + nsamp + 1
-        W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask)
+        W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask, transform=space_tf)
         waves = np.asarray(spk[ext], dtype=float)
         r = _rows_for_window(waves, res_e, clu[ext], W, nmean, mask, sr, a.n_grid,
                              c, tmin, a.min_cluster, core)

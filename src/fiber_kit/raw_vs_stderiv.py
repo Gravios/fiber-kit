@@ -36,8 +36,10 @@ except ImportError:
     import fiber_lib as fl
 try:
     from .fiber_session import cluster_chunk_fine, read_res, open_spkD
+    from . import fiber_stderiv as fst
 except ImportError:
     from fiber_session import cluster_chunk_fine, read_res, open_spkD
+    import fiber_stderiv as fst
 try:
     from . import session_yaml as sy
 except ImportError:
@@ -87,17 +89,22 @@ def pair_acc(A, B, featfn, fine, inset, reps=10):
 
 def main():
     ap = argparse.ArgumentParser(description="raw .fil vs stderiv discrimination of the original fibers; reads <session>.yaml.")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
     ap.add_argument("--chunk-min-start", type=float, default=0.0); ap.add_argument("--chunk-min", type=float, default=10.0)
     ap.add_argument("--min-spikes", type=int, default=60); ap.add_argument("--min-group", type=int, default=200)
     a = ap.parse_args()
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs)
     a.base = cfg["base"]; a.elec = a.group
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
     gch = np.array(cfg["channels"], int); _m = fl.build_masks(cfg["nsamp"], cfg["peak"]); OFF = _m.offset; mask = _m.full
 
-    res = read_res(a.base, a.elec); spk_mm, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
+    res = read_res(a.base, a.elec); spk_mm, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan)
+    try:                                       # the stderiv whitener: the .spk's own space
+        sd_tf = fst.space_transform(nio.spk_variant(spkpath, a.base, a.elec), cfg.get("sdiff_pairs"))
+    except ValueError as e:
+        raise SystemExit(f"no noise model for {spkpath}: {e} -- give the group's sdiffPairs in the "
+                         f"session YAML or --sdiff-pairs") from None
     fil = nio.open_signal(f"{a.base}.fil", a.ntotal)
     s0 = int(a.chunk_min_start * 60 * a.sr); s1 = int((a.chunk_min_start + a.chunk_min) * 60 * a.sr)
     sel = np.flatnonzero((res >= s0) & (res < s1))
@@ -106,7 +113,7 @@ def main():
     print(f"chunk {a.chunk_min_start:.0f}-{a.chunk_min_start+a.chunk_min:.0f} min: {len(sel)} spikes")
 
     # stderiv whitener + clustering = ORIGINAL fibers
-    Wsd, nmsd, _ = fl.chunk_whitener(span, rel, mask=mask)
+    Wsd, nmsd, _ = fl.chunk_whitener(span, rel, mask=mask, transform=sd_tf)
     fine, _ = cluster_chunk_fine(spk, res_c, Wsd, nmsd, coarse_mg=a.min_group, mask=mask, sr=a.sr,
                                  method="rkk", dipsplit=False, rkk_dims=6, incl_k=3.0,
                                  merge_corr=0.90, merge_method="sliding")

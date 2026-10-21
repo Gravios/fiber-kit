@@ -58,6 +58,10 @@ try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
+try:
+    from . import fiber_stderiv as fst
+except ImportError:
+    import fiber_stderiv as fst
 
 
 # ── curve geometry ───────────────────────────────────────────────────────────
@@ -164,11 +168,13 @@ def spike_positions(Xg, manifold):
 # ── session driver: per chunk compute features, project onto unit manifolds ──
 def run(base, elec, fibers_file, nsamp, nchan, ntotal, gch, sr, clu_path=None,
         relink=True, min_nspk=60, n_u=64, chunk_min=20.0, min_n=20,
-        mask=None, verbose=True):
+        mask=None, verbose=True, sdiff_pairs=None):
     """Assign every sorted spike a drift-independent position along its unit's
     manifold (consolidated from `fibers_file`).  Per-spike whitened features are
     computed per chunk (realign-per-unit + the chunk whitener, as fiber-session
     does); the MANIFOLD is the stored/consolidated one, not re-estimated.
+    `sdiff_pairs`: the group's pattern, needed when the .spk is a stderiv_C<n> one (the chunk
+    whitener's noise model is built in the .spk's own space).
     Returns res-ordered arrays: res, unit, s, conf, energy, chunk."""
     try:
         from .fiber_session import read_res, open_spkD, fil_chunk_whitener
@@ -178,7 +184,12 @@ def run(base, elec, fibers_file, nsamp, nchan, ntotal, gch, sr, clu_path=None,
                                      n_u=n_u, verbose=verbose)
     mask = meta['mask'] if mask is None else mask
     res = read_res(base, elec)
-    spk, _ = open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = open_spkD(base, elec, nsamp, nchan)
+    try:                                   # the chunk whitener's noise model: the .spk's own space
+        space_tf = fst.space_transform(nio.spk_variant(spkpath, base, elec), sdiff_pairs)
+    except ValueError as e:
+        raise ValueError(f"no noise model for {spkpath}: {e} (the group's sdiffPairs comes from "
+                         f"--session or --sdiff-pairs)") from None
     n = min(len(res), spk.shape[0]); res = res[:n]
     if clu_path:
         _, labels = nio.read_clu_file(clu_path)
@@ -200,7 +211,7 @@ def run(base, elec, fibers_file, nsamp, nchan, ntotal, gch, sr, clu_path=None,
             continue
         res_e = res[sel]; waves = np.asarray(spk[sel], float); lab_e = labels[sel]
         s0 = int(res_e.min()) - nsamp; s1 = int(res_e.max()) + nsamp + 1
-        W, nmean, _ = fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask)
+        W, nmean, _ = fil_chunk_whitener(filmm, gch, s0, s1, res_e, nsamp, mask, transform=space_tf)
         for u in np.unique(lab_e[lab_e > 0]):
             if u not in manifolds:
                 continue
@@ -240,7 +251,10 @@ def main():
     ap.add_argument("--nchan", type=int, default=None, help="override: channels in this group (default from YAML)")
     ap.add_argument("--ntotal", type=int, default=None, help="override: total channels in the .fil (default from YAML)")
     ap.add_argument("--channels", default=None, help="comma-separated global channel ids (else from --session/.fibers)")
-    ap.add_argument("--session", default=None, help="session .yaml for channel/sr lookup")
+    ap.add_argument("--session", default=None, help="session .yaml for channel/sr/sdiffPairs lookup")
+    ap.add_argument("--sdiff-pairs", default=None,
+                    help="override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with "
+                         "(default from --session)")
     ap.add_argument("--sr", type=float, default=None)
     ap.add_argument("--clu", default=None, help="cluster file (the re-linked .clu)")
     ap.add_argument("--no-relink", action="store_true", help="use raw .fibers gid units instead of re-linked tracks")
@@ -252,12 +266,15 @@ def main():
     # channels / sr / nsamp / nchan / ntotal: prefer explicit, else session, else the .fibers meta
     gch = sr = None
     nsamp, nchan, ntotal = a.nsamp, a.nchan, a.ntotal
+    sdiff = a.sdiff_pairs
     if a.channels:
         gch = [int(c) for c in a.channels.split(",")]
     if a.sr:
         sr = a.sr
-    if a.session and (gch is None or sr is None or nsamp is None or nchan is None or ntotal is None):
+    if a.session and (gch is None or sr is None or nsamp is None or nchan is None or ntotal is None
+                      or sdiff is None):
         prm = sy.resolve_session_params(a.session, a.elec)
+        sdiff = sdiff or prm.get("sdiff_pairs")
         gch = gch or prm["channels"]; sr = sr or prm.get("sr")
         nsamp = nsamp if nsamp is not None else prm.get("nsamp")
         nchan = nchan if nchan is not None else prm.get("nchan")
@@ -272,7 +289,7 @@ def main():
         raise SystemExit("[position] need nSamples/nChannels/nTotal from <session>.yaml or --nsamp/--nchan/--ntotal")
     out = run(a.base, a.elec, a.fibers, nsamp, nchan, ntotal, gch, sr,
               clu_path=a.clu, relink=not a.no_relink, min_nspk=a.min_nspk,
-              n_u=a.n_u, chunk_min=a.chunk_min, min_n=a.min_n)
+              n_u=a.n_u, chunk_min=a.chunk_min, min_n=a.min_n, sdiff_pairs=sdiff)
     pos_path, npz_path = write_positions(out, a.base, a.elec)
     print(f"[position] wrote {pos_path} and {npz_path}")
 

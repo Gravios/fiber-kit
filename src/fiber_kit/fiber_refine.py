@@ -58,6 +58,7 @@ try:
     from . import fiber_geometry as fg
     from . import backend as _bk
     from . import fiber_ccg as ccg
+    from . import fiber_stderiv as fst
     from .klustakwik import klustakwik as _rkk
 except ImportError:                                   # script / flat-layout fallback
     import fiber_lib as fl
@@ -70,6 +71,7 @@ except ImportError:                                   # script / flat-layout fal
     import fiber_geometry as fg
     import backend as _bk
     import fiber_ccg as ccg
+    import fiber_stderiv as fst
     from klustakwik import klustakwik as _rkk
 
 # scoring context threaded through the helpers: whitener, masked window, rate,
@@ -1020,8 +1022,11 @@ def _init_refine_worker(cfg):
     """Pool initializer (also run for the serial path): stash the static config and open the
     .spkD / .fil memmaps once per worker process.  Mirrors fiber_session._init_chunk_worker."""
     _RCTX.clear(); _RCTX.update(cfg)
-    _RCTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
-                                    prefer=cfg.get("method"))
+    _RCTX["spk"], spkpath = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                          prefer=cfg.get("method"))
+    # the chunk whitener's noise model is built in the space of the .spk this worker reads
+    _RCTX["space_tf"] = fst.space_transform(nio.spk_variant(spkpath, cfg["base"], cfg["elec"]),
+                                            cfg.get("sdiff_pairs"))
     _RCTX["filmm"] = nio.open_signal(f'{cfg["base"]}.fil', cfg["ntotal"])
     if cfg.get("need_raw"):                     # standard .spk for the cell-type-aware warp-resid gate
         _RCTX["raw"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"], prefer=["standard"])
@@ -1038,7 +1043,8 @@ def _refine_one_chunk(task):
     waves_e = np.asarray(ctx["spk"][ext], dtype=float)
     raw_e = np.asarray(ctx["raw"][ext], dtype=float) if "raw" in ctx else None
     s0 = int(res_e.min()) - ctx["nsamp"]; s1 = int(res_e.max()) + ctx["nsamp"] + 1
-    Wc, nmc, _ = fl.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+    Wc, nmc, _ = fl.fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"],
+                                       transform=ctx["space_tf"])
     labc, _ = refine(waves_e, res_e, Wc, nmc, ctx["mask"], ctx["sr"],
                      init_labels=init_e, min_group=ctx["min_group"], raw_waves=raw_e, verbose=False, **ctx["refine_kw"])
     return c, ext, labc, Wc, nmc
@@ -1049,7 +1055,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                    min_group=40, track_geometry=False, make_bundles=False,
                    strict_link=True, link_min_anchor=20,
                    link_continuity=False, continuity_kw=None, chpos=None, jobs=1, verbose=True,
-                   method=None):
+                   method=None, sdiff_pairs=None):
     """Drift-aware refine: window the session, fit a SEPARATE whitener + run the
     full refine loop INSIDE each window (so each window is quasi-stationary),
     then link per-window fibers by overlap-anchor (fs.link_chunks: same physical
@@ -1085,7 +1091,7 @@ def refine_chunked(waves, res, base, elec, ntotal, nsamp, nchan, gch, mask, sr,
                 or refine_kw.get("merge_warp_resid_thr_pyr") is not None)
     cfg = dict(base=base, elec=elec, ntotal=ntotal, nsamp=nsamp, nchan=nchan, gch=gch,
                mask=mask, sr=sr, min_group=min_group, refine_kw=refine_kw, need_raw=need_raw,
-               method=method)
+               method=method, sdiff_pairs=sdiff_pairs)
     jobs = max(1, int(jobs))
     if jobs == 1 or len(tasks) <= 1:                            # chunks are independent; serial == the former inline loop
         _init_refine_worker(cfg)
@@ -1192,7 +1198,7 @@ def main():
         prog="fiber-refine",
         description="Dedup at the imposed refractory, then iteratively split/peel a "
                     "fine sort into clean units; writes a refined .clu (+ deduped .res).")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
     ap.add_argument("--in-clu", default=None,
                     help="path to the input sort to refine; "
                          "default = canonical .clu if present, else a fresh fine sort")
@@ -1430,8 +1436,9 @@ def main():
         _gpu_line = _bk.backend_name() + ("" if _on else "  (unavailable -> CPU)")
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs)
     base = cfg["base"]; elec = a.group
+    sdiff = cfg.get("sdiff_pairs")
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     mask = fl.build_masks(nsamp, cfg["peak"]).full
@@ -1450,6 +1457,12 @@ def main():
     res = nio.read_res(base, elec)
     spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan, prefer=a.out_method)
     nio.check_spk_count(len(res), spk, spkpath, nsamp, nchan)
+    space = nio.spk_variant(spkpath, base, elec)
+    try:                                       # the whitener's noise model: the .spk's own space
+        space_tf = fst.space_transform(space, sdiff)
+    except ValueError as e:
+        raise SystemExit(f"fiber-refine: no noise model for {os.path.basename(spkpath)}: {e} -- give the "
+                         f"group's sdiffPairs in the session YAML or --sdiff-pairs") from None
     waves = np.asarray(spk[:], dtype=float)
     init = None
     if a.in_clu is not None and os.path.exists(a.in_clu):
@@ -1464,6 +1477,7 @@ def main():
             init = None
     _log(f"group {elec} · {len(res):,} spikes")
     _det("source", spkpath)
+    _det("noise model", fst.space_label(space, sdiff))
     _det("input", f"{len(np.unique(init[init>=0])):,} clusters" if init is not None else "no input .clu → fresh fine sort")
     _det("refractory", _refr)
     _det("feature-align", fl.get_feature_align())
@@ -1514,7 +1528,7 @@ def main():
             link_continuity=a.link_continuity,
             continuity_kw=dict(sig_thr=a.continuity_sig_thr, depth_gate=a.continuity_depth_gate,
                                max_gap=a.continuity_max_gap),
-            verbose=True, method=a.out_method)
+            verbose=True, method=a.out_method, sdiff_pairs=sdiff)
         ids = np.where(glab < 0, 0, glab + 1).astype(np.int64)
         clu_path = nio.write_clu(base, elec, ids, variant=a.out_method, tag=a.out_stage)
         res_path = nio.write_res(base, elec, res, variant=a.out_method, tag=a.out_stage)
@@ -1535,7 +1549,7 @@ def main():
     # whitener from the .fil baseline over the (deduped) spike span
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     s0 = int(res.min()) - nsamp; s1 = int(res.max()) + nsamp + 1
-    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
+    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask, transform=space_tf)
 
     snaps = [] if a.track_geometry else None
     raw_waves_ws = None

@@ -287,7 +287,8 @@ def run_stochastic(a):
         import fiber_pca as _fpca
 
     cfg_s = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                      nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+                                      nchan=a.nchan, nsamp=a.nsamp, sr=a.sr,
+                                      sdiff_pairs=getattr(a, "sdiff_pairs", None))
     a.base = cfg_s["base"]; a.elec = a.group
     a.ntotal = cfg_s["ntotal"]; a.nchan = cfg_s["nchan"]; a.nsamp = cfg_s["nsamp"]; a.sr = cfg_s["sr"]
     gch = np.array(cfg_s["channels"], int)
@@ -300,10 +301,15 @@ def run_stochastic(a):
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                fast_stats=bool(getattr(a, "stochastic_fast_stats", False)),
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
-               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False))
+               gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
+               sdiff_pairs=cfg_s.get("sdiff_pairs"))
     global _POOL_CFG
     _POOL_CFG = cfg                                   # so parallel-draw pool workers re-init the same ctx
-    fsess._init_chunk_worker(cfg)
+    try:                               # the noise model is built in the .spk's waveform space
+        fsess._init_chunk_worker(cfg)
+    except ValueError as e:
+        raise SystemExit(f"fiber-stochastic: no noise model for this session's .spk: {e} -- give the group's "
+                         f"sdiffPairs in the session YAML or --sdiff-pairs, or run --no-whiten") from None
     process = fsess._process_chunk
 
     # The clu/clc/clp must carry the SAME variant token as the waveforms they label:
@@ -779,7 +785,7 @@ def main():
     ap = argparse.ArgumentParser(description="ensemble/consensus fibering diagnostic (fiber_stochastic). "
                                              "Reads <session>.yaml; CLI flags override. Reuses the real "
                                              "per-chunk clusterer, so results reflect the production path.")
-    sy.add_session_args(ap)            # same session/group/channels resolution as fiber_session
+    sy.add_session_args(ap, sdiff=True)   # same session/group/channels resolution as fiber_session
     fsess.add_core_arguments(ap)       # identical clusterer knobs
     add_arguments(ap)                  # the --stochastic-* diagnostic knobs
     a = ap.parse_args()

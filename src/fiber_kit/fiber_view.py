@@ -28,6 +28,7 @@ from . import fiber_lib as fl
 from . import fiber_tracer as ft
 from . import neuro_io as nio
 from . import session_yaml as sy
+from . import fiber_stderiv as fst
 
 try:
     import matplotlib
@@ -497,14 +498,19 @@ def load_bundles_npz(path):
 
 # ── on-disk loading for the CLI ──────────────────────────────────────────────
 def load_group(session, group, in_clu=None, channels=None, ntotal=None, nchan=None,
-               nsamp=None, sr=None, dedup=True):
+               nsamp=None, sr=None, dedup=True, sdiff_pairs=None):
     cfg = sy.resolve_session_params(session, group, channels=channels, ntotal=ntotal,
-                                    nchan=nchan, nsamp=nsamp, sr=sr)
+                                    nchan=nchan, nsamp=nsamp, sr=sr, sdiff_pairs=sdiff_pairs)
     base = cfg["base"]; elec = group
     ntotal = cfg["ntotal"]; nchan = cfg["nchan"]; nsamp = cfg["nsamp"]; sr = cfg["sr"]
     gch = np.array(cfg["channels"], int); mask = fl.build_masks(cfg["nsamp"], cfg["peak"]).full
     res = nio.read_res(base, elec)
-    spk, _ = nio.open_spkD(base, elec, nsamp, nchan)
+    spk, spkpath = nio.open_spkD(base, elec, nsamp, nchan)
+    try:                                   # the whitener's noise model: the .spk's own space
+        space_tf = fst.space_transform(nio.spk_variant(spkpath, base, elec), cfg.get("sdiff_pairs"))
+    except ValueError as e:
+        raise SystemExit(f"[fiber-view] no noise model for {spkpath}: {e} -- give the group's sdiffPairs "
+                         f"in the session YAML or --sdiff-pairs") from None
     waves = np.asarray(spk[:], dtype=float)
     if in_clu and os.path.exists(in_clu):
         _, ids = nio.read_clu_file(in_clu, n_spikes=len(res))
@@ -519,7 +525,7 @@ def load_group(session, group, in_clu=None, channels=None, ntotal=None, nchan=No
         res = res[keep]; waves = waves[keep]; lab = lab[keep]
     filmm = nio.open_signal(f"{base}.fil", ntotal)
     s0 = int(res.min()) - nsamp; s1 = int(res.max()) + nsamp + 1
-    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask)
+    W, nmean, _ = fl.fil_chunk_whitener(filmm, gch, s0, s1, res, nsamp, mask, transform=space_tf)
     return dict(base=base, elec=elec, waves=waves, res=res, lab=lab, W=W, nmean=nmean,
                 mask=mask, sr=sr, gch=gch, nchan=nchan, floor=int(floor))
 
@@ -540,7 +546,7 @@ def main():
     ap = argparse.ArgumentParser(prog="fiber-view",
                                  description="Visualise fibers: template montages, a 3-D manifold of "
                                              "local fiber curves, and ISI/geometry panels.")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
     ap.add_argument("--in-clu", default=None, help="sort to view (default canonical .clu)")
     ap.add_argument("--fibers", default="top:6",
                     help="comma list of .clu cluster ids, 'top:N', or 'all' (default top:6)")
@@ -554,7 +560,8 @@ def main():
     _need_mpl()
 
     d = load_group(a.session, a.group, in_clu=a.in_clu, channels=a.channels_ovr,
-                   ntotal=a.ntotal, nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, dedup=not a.no_dedup)
+                   ntotal=a.ntotal, nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, dedup=not a.no_dedup,
+                   sdiff_pairs=a.sdiff_pairs)
     flabels = _ids_to_labels(d["lab"], a.fibers)
     if not flabels:
         raise SystemExit("[fiber-view] no valid fibers selected")

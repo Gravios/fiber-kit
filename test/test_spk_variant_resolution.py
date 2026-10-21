@@ -108,8 +108,10 @@ def main():
             _write_spk(f"{base}.spk.stderiv_C5_D34.1", 34)
             import numpy as _np
             _np.zeros(100 * 2, dtype=_np.int16).tofile(f"{base}.fil")
+            # no_whiten: the noise model is not under test here, and a 2-channel group has no
+            # order-5 pattern to build one from (the worker would refuse the _C token without it)
             cfg = dict(base=base, elec=1, nsamp=NSAMP, nchan=NCH,
-                       fil=f"{base}.fil", ntotal=2, cf={}, method="stderiv_C5_D34")
+                       fil=f"{base}.fil", ntotal=2, cf={}, method="stderiv_C5_D34", no_whiten=True)
             fs._init_chunk_worker(cfg)
             check("chunk worker opens the exact-token spk from cfg['method']",
                   int(fs._CTX["spk"][0, 0, 0]) == 34)

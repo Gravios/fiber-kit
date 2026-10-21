@@ -226,11 +226,12 @@ _SESSION_FIELDS = tuple(f.name for f in _dc_fields(SessionCfg))
 
 
 def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=True,
-                     nchan=True, sr=True, probe=False, peak=False, nsamp_default=None):
+                     nchan=True, sr=True, probe=False, peak=False, nsamp_default=None, sdiff=False):
     """Register the standard <session>.yaml CLI arguments on `ap` so the ~15 tools that resolve a
     session stop hand-rolling (and occasionally mistyping) them.  Pair with resolve_session_params,
     which returns a SessionCfg.  Keyword flags select which overrides to expose; nsamp_default /
-    peak / probe cover the documented per-tool variations."""
+    peak / probe cover the documented per-tool variations; sdiff adds --sdiff-pairs for the tools
+    that build a noise model in the .spk's waveform space (a _C token needs the pattern)."""
     if positional:
         ap.add_argument("session", help="session basename or folder (finds <session>.yaml)")
         ap.add_argument("group", type=int, help="1-based spike group")
@@ -250,6 +251,10 @@ def add_session_args(ap, *, positional=True, channels=True, ntotal=True, nsamp=T
         ap.add_argument("--peak", type=int, default=16, help="peak sample index within the window")
     if probe:
         ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry")
+    if sdiff:
+        ap.add_argument("--sdiff-pairs", default=None,
+                        help="override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was "
+                             "built with (default from YAML)")
     return ap
 
 
@@ -291,7 +296,8 @@ def pipeline_section(session, stage, program="ndm_fiber-kit"):
 
 
 def resolve_session_params(session, group, channels=None, ntotal=None, nchan=None,
-                           nsamp=None, sr=None, require=("channels", "ntotal"), verbose=True):
+                           nsamp=None, sr=None, require=("channels", "ntotal"), verbose=True,
+                           sdiff_pairs=None):
     """Resolve run parameters from <session>.yaml with CLI overrides taking
     precedence.  If no YAML is found, falls back to treating `session` as the
     file base and relies entirely on the passed overrides.  `require` lists the
@@ -329,6 +335,7 @@ def resolve_session_params(session, group, channels=None, ntotal=None, nchan=Non
     if nchan is not None: cfg["nchan"] = nchan
     if nsamp is not None: cfg["nsamp"] = nsamp
     if sr is not None: cfg["sr"] = sr
+    if sdiff_pairs: cfg["sdiff_pairs"] = str(sdiff_pairs).strip()
     if cfg.get("channels") and cfg.get("nchan") is None:
         cfg["nchan"] = len(cfg["channels"])
 

@@ -17,7 +17,8 @@ def test_whitener_on_a_64_sample_window():
     spikes = np.sort(rng.choice(np.arange(100, 199000), 300, replace=False))
     m = fl.build_masks(64, 33)
     assert m.full.max() >= 32                       # the case that used to crash
-    W, nmean, nb = fl.fil_chunk_whitener(fil, np.arange(8), 0, fil.shape[0], spikes, 64, m.full)
+    W, nmean, nb = fl.fil_chunk_whitener(fil, np.arange(8), 0, fil.shape[0], spikes, 64, m.full,
+                                         transform=fl.allpairs_spkD)
     d = len(m.full) * 8
     assert W.shape == (d, d) and nmean.shape == (d,) and nb > 1000
 
@@ -27,9 +28,20 @@ def test_32_sample_window_unchanged():
     fil = rng.standard_normal((100000, 8)).astype(np.float32)
     spikes = np.sort(rng.choice(np.arange(100, 99000), 100, replace=False))
     a = fl.chunk_whitener_mm(fil, np.arange(8), 0, fil.shape[0], spikes, mask=fl.MASK_FULL, n_base=500)
-    b = fl.fil_chunk_whitener(fil, np.arange(8), 0, fil.shape[0], spikes, 32, fl.MASK_FULL)
+    b = fl.fil_chunk_whitener(fil, np.arange(8), 0, fil.shape[0], spikes, 32, fl.MASK_FULL,
+                              transform=fl.allpairs_spkD)
     assert fl._baseline_win(fl.MASK_FULL) == 32 and fl._baseline_win(fl.MASK_FULL, 32) == 32
     assert a[0].shape == b[0].shape
+
+
+def test_stage_whitener_needs_the_waveform_space():
+    """No default space: the all-pairs default silently whitened stderiv_C5 / standard sessions."""
+    fil = np.zeros((1000, 8), np.float32)
+    try:
+        fl.fil_chunk_whitener(fil, np.arange(8), 0, 1000, np.array([500]), 32, fl.MASK_FULL)
+    except TypeError:
+        return
+    raise AssertionError("fil_chunk_whitener ran without transform=")
 
 
 if __name__ == "__main__":

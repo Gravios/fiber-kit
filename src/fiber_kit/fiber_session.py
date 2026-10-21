@@ -108,6 +108,10 @@ try:
 except ImportError:
     import fiber_pca as _fpca
 try:
+    from . import fiber_stderiv as fst
+except ImportError:
+    import fiber_stderiv as fst
+try:
     from . import backend as _bk
 except ImportError:
     import backend as _bk
@@ -1304,8 +1308,11 @@ def _init_chunk_worker(cfg):
     _CTX.clear(); _CTX.update(cfg)
     if cfg.get("gpu"):
         _bk.use_gpu(True)
-    _CTX["spk"], _ = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
-                                   prefer=cfg.get("method"))
+    _CTX["spk"], spkpath = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                         prefer=cfg.get("method"))
+    # The noise model is built in the space of the .spk this worker reads (fil_chunk_whitener).
+    _CTX["space_tf"] = None if cfg.get("no_whiten") else fst.space_transform(
+        nio.spk_variant(spkpath, cfg["base"], cfg["elec"]), cfg.get("sdiff_pairs"))
     _CTX["spk_std"] = None
     if float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:      # inter-channel-timing gate needs RAW templates
         try:
@@ -1335,7 +1342,8 @@ def _process_chunk(task):
         W = np.eye(Xraw.shape[1])
         nmean = Xraw.mean(0)
     else:
-        W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"])
+        W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"],
+                                         transform=ctx["space_tf"])
     cand = []
     sd = {}
     lab, geoms = cluster_chunk_fine(waves, res_e, W, nmean, ctx["min_group"], ctx["mask"], ctx["sr"],
@@ -1867,7 +1875,7 @@ def main():
         description="Cluster a session group into fibers. Reads <session>.yaml "
                     "(or <session>/<session>.yaml) for channels/sr/nChannels; "
                     "CLI flags override the YAML.")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
     add_core_arguments(ap)
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
@@ -1884,8 +1892,9 @@ def main():
         _on = _bk.use_gpu(True)
         _gpu_line = _bk.backend_name() + ("" if _on else "  (unavailable -> CPU)")
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr)
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs)
     a.base = cfg["base"]; a.elec = a.group
+    sdiff = cfg.get("sdiff_pairs")
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
@@ -1940,6 +1949,13 @@ def main():
         keep &= ~excl_mask
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=a.method)
     nio.check_spk_count(nspk, spk, spkpath, a.nsamp, a.nchan)
+    space = nio.spk_variant(spkpath, a.base, a.elec)
+    if not a.no_whiten:                        # fail here, not inside a chunk worker
+        try:
+            fst.space_transform(space, sdiff)
+        except ValueError as e:
+            raise SystemExit(f"fiber-session: no noise model for {os.path.basename(spkpath)}: {e} -- give the "
+                             f"group's sdiffPairs in the session YAML or --sdiff-pairs, or run --no-whiten") from None
     filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
     log(f"group {a.elec} \u00b7 {a.method} \u00b7 {nspk:,} spikes")
     if a.exclude_clu:
@@ -1957,6 +1973,7 @@ def main():
         else:
             det("exclude", "no --exclude-units: nothing excluded")
     det("source", spkpath)
+    det("noise model", "off (--no-whiten)" if a.no_whiten else fst.space_label(space, sdiff))
     det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
     det("feature-align", fl.get_feature_align())
     det("realign", "sub-sample" if fl.realign_subsample() else "whole-sample")
@@ -1998,7 +2015,7 @@ def main():
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
-               method=a.method, peak=peak,
+               method=a.method, peak=peak, sdiff_pairs=sdiff,
                deconv=(dict(phases=a.deconv_phases, order=a.deconv_order, refrac_ms=a.deconv_refrac_ms,
                             floor=a.deconv_floor, null_q=a.deconv_null_q, agree=a.deconv_agree,
                             margin_min=a.deconv_margin_min, min_n=a.deconv_min_n,

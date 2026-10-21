@@ -12,6 +12,11 @@ This drives the real CLI on a synthetic two-chunk session whose directory also
 holds TWO stderiv-family .spk variants, so the run doubles as an end-to-end
 check of the method-token threading (main AND the chunk worker resolve the
 exact --method token instead of raising the family-ambiguity error).
+
+It also checks the noise model end to end: the .spk is a stderiv_C5 one, so the
+chunk whitener needs the group's sdiffPairs (here --sdiff-pairs, the session
+has no YAML) and says which space it whitens in; without the pattern the stage
+refuses cleanly instead of whitening in the all-pairs space.
 """
 import os
 import subprocess
@@ -23,7 +28,8 @@ import numpy as np
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 SR = 20000.0
-NSAMP, NCH, NTOTAL = 32, 2, 4
+NSAMP, NCH, NTOTAL = 32, 3, 4
+SETS3 = "0-1+2,1-0+2,2-0+1"          # order-5 reference sets for the 3-channel group
 PER_CHUNK = 300
 
 
@@ -62,18 +68,24 @@ def main():
         env["PYTHONPATH"] = os.pathsep.join(
             [os.path.join(os.path.dirname(__file__), "..", "src"),
              env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
-        r = subprocess.run(
-            [sys.executable, "-m", "fiber_kit.fiber_session", base, "1",
-             "--channels", "0,1", "--ntotal", str(NTOTAL), "--nsamp", str(NSAMP),
-             "--sr", str(int(SR)), "--method", "stderiv_C5_D34",
-             "--no-link", "--no-fine", "--chunk-min", "0.5", "--overlap-min", "0",
-             "--min-group", "50", "--clu-stage", "nolink"],
-            capture_output=True, text=True, env=env, timeout=420)
+        argv = [sys.executable, "-m", "fiber_kit.fiber_session", base, "1",
+                "--channels", "0,1,2", "--ntotal", str(NTOTAL), "--nsamp", str(NSAMP),
+                "--sr", str(int(SR)), "--method", "stderiv_C5_D34",
+                "--no-link", "--no-fine", "--chunk-min", "0.5", "--overlap-min", "0",
+                "--min-group", "50", "--clu-stage", "nolink"]
+        r0 = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=420)
+        out0 = r0.stdout + r0.stderr
+        check("a stderiv_C5 .spk without its sdiffPairs is refused, cleanly",
+              r0.returncode != 0 and "sdiffPairs" in out0 and "Traceback" not in out0)
+        r = subprocess.run(argv + ["--sdiff-pairs", SETS3],
+                           capture_output=True, text=True, env=env, timeout=420)
         out = r.stdout + r.stderr
         if r.returncode != 0:
             print(out[-4000:])
         check("fiber-session --no-link exits 0 on the two-variant directory", r.returncode == 0)
         check("ran chunk-disjoint (the no-link mode)", "chunk-disjoint" in out)
+        check("whitens in the .spk's own space (C5 sets from --sdiff-pairs)",
+              f"noise model   stderiv, sdiffPairs {SETS3} (order 5)" in out)
         check("resolved the exact --method spk (no family-ambiguity error)",
               ".spk.stderiv_C5_D34.1" in out and "several 'stderiv' variants" not in out)
         clu = f"{base}.clu.stderiv_C5_D34.1.nolink"
@@ -82,7 +94,7 @@ def main():
         check("emitted .fibers with EMPTY drift_anchor_pairs (0, 3)",
               fib["drift_anchor_pairs"].shape == (0, 3))
 
-    print(f"test_session_nolink_e2e: {ok}/5 checks passed")
+    print(f"test_session_nolink_e2e: {ok}/7 checks passed")
 
 
 if __name__ == "__main__":

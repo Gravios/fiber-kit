@@ -60,6 +60,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
 | `--chunk-min` (`--chunk-minutes`) | `12.0` |  |
 | `--overlap-min` | `4.0` |  |
 | `--min-group` | `200` | COARSE min spikes/fiber (for linking) |
@@ -259,6 +260,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
 | `--in-clu` | — | path to the input sort to refine; default = canonical .clu if present, else a fresh fine sort |
 | `--out-method` | `stderiv` | feature space written BEFORE the group (standard\|stderiv\|...); refine operates in stderiv space, so default stderiv |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the split-stage shape features and use a per-call local SVD (legacy behaviour) |
@@ -885,7 +887,8 @@ Positional: `base`, `elec`
 | `--nchan` | — | override: channels in this group (default from YAML) |
 | `--ntotal` | — | override: total channels in the .fil (default from YAML) |
 | `--channels` | — | comma-separated global channel ids (else from --session/.fibers) |
-| `--session` | — | session .yaml for channel/sr lookup |
+| `--session` | — | session .yaml for channel/sr/sdiffPairs lookup |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from --session) |
 | `--sr` | — |  |
 | `--clu` | — | cluster file (the re-linked .clu) |
 | `--no-relink` | flag (off) | use raw .fibers gid units instead of re-linked tracks |
@@ -1058,6 +1061,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
 | `--clu-method` | `stderiv` | feature space BEFORE the group (standard\|stderiv\|...); default stderiv |
 | `--clu-stage` (`--variant`) | `refine` | fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<variant> (default: refine; '' = no stage) |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--variant) |
@@ -1302,6 +1306,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
 | `--chunk-min-start` | `0.0` |  |
 | `--chunk-min` | `10.0` |  |
 | `--min-spikes` | `60` |  |
@@ -1322,6 +1327,7 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
 | `--in-clu` | — | sort to view (default canonical .clu) |
 | `--fibers` | `top:6` | comma list of .clu cluster ids, 'top:N', or 'all' (default top:6) |
 | `--mode` | `all` | choices: `templates`, `manifold`, `stats`, `all` |

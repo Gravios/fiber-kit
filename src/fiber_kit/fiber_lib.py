@@ -474,9 +474,10 @@ def location_cy(waveforms, y_um):
 # so its home is here rather than in a CLI stage that four other modules had to
 # import to reach it.  `nsamp` sets the baseline snippet length (the spike window), so a mask built
 # for a non-32 window (build_masks) indexes inside it.
-def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask, *, transform=allpairs_spkD):
+def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask, *, transform):
     """The stages' chunk whitener (memmap path: reads only sampled baseline windows, never the whole
-    span).  `transform`: the waveform space of the spikes it will whiten,
+    span).  `transform` is REQUIRED: the waveform space of the spikes it will whiten,
     fiber_stderiv.space_transform(neuro_io.spk_variant(spk_path, base, group), sdiffPairs) -- None
-    for a raw .spk.standard.  The default is the historical all-pairs stderiv space."""
+    for a raw .spk.standard.  There is no default because the one there was (all-pairs stderiv)
+    silently whitened stderiv_C5 and standard sessions in the wrong space."""
     return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask, win=nsamp, transform=transform)
