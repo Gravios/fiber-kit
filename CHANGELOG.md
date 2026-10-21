@@ -4,6 +4,10 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.49.1] — `fk run <elec>` runs the whole plan
+- `fk run 6` runs what `fiber-pipeline 6` runs (the plan, or the canonical stages without one);
+  steps, `--from` and `--to` narrow it.
+
 ## [0.49.0] — unique plan step names; `fk list` / `fk run`
 - Every plan step has a unique id, `<stage>-<k>` (its k-th run of that stage in plan order:
   `fiber-realign-1/2/3` in fiber-kit-exp.yaml), and may carry its own `name:` alias.
