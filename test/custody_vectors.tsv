@@ -26,6 +26,7 @@ classify	pca	MethodSpecific
 classify	col	MethodSpecific
 classify	model	MethodSpecific
 classify	klg	MethodSpecific
+classify	nst	MethodSpecific
 classify	res	Shared
 classify	spk	Shared
 classify	fil	SessionWide
@@ -38,6 +39,7 @@ method_of	sess.clu.stderiv.5	stderiv
 method_of	sess.clc.stderiv.5	stderiv
 method_of	sess.spk.standard.5	standard
 method_of	sess.clu.sdiff.12	sdiff
+method_of	sess.nst.stderiv_C5.7	stderiv_C5
 method_of	sess.spk.5	
 method_of	a.b.spk.5	
 method_of	/path/to/sirotaA-jg-000005-20120312.clu.stderiv.5	stderiv
@@ -49,6 +51,7 @@ parse_anchor	sess.clc.stderiv.5.microfiber	sess	clc	stderiv	5	microfiber	1
 parse_anchor	sess.clc.7	sess	clc		7		1
 parse_anchor	sess.clu.5	sess	clu		5		1
 parse_anchor	sess.clu.stderiv.5.drift	sess	clu	stderiv	5	drift	1
+parse_anchor	sess.nst.standard.7	sess	nst	standard	7		1
 parse_anchor	exp.v2.clu.sdiff.8	exp.v2	clu	sdiff	8		1
 parse_anchor	/d/sirotaA-jg-000005-20120312.spk.stderiv.5	sirotaA-jg-000005-20120312	spk	stderiv	5		1
 parse_anchor	sess.fil						0
@@ -70,6 +73,8 @@ resolve	spk.5,res.standard.5,fet.stderiv.5,pca.stderiv.5,clu.stderiv.5,fil	fil	5
 resolve	spk.stderiv.7	spk	7	stderiv	sess.spk.stderiv.7	1
 resolve	res.5	res	5	stderiv	sess.res.5	1
 resolve		clu	9	stderiv	sess.clu.stderiv.9	0
+resolve	nst.standard.7,nst.7	nst	7	stderiv_C5	sess.nst.stderiv_C5.7	0
+resolve	nst.standard.7,nst.stderiv_C5.7	nst	7	stderiv_C5	sess.nst.stderiv_C5.7	1
 resolve		spk	3	stderiv	sess.spk.stderiv.3	0
 # _D<lag><dims> names a FEATURE space over the waveforms of the token without it, so a
 # Shared .spk/.res for a lag token falls back to that waveform token before standard.

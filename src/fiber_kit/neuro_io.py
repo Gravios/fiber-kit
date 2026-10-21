@@ -78,6 +78,8 @@ WTI_VERSION = (2, 2)   # "wti <v>"; v2 adds the parent column, written when a ro
 WTL_VERSION = (2, 1)   # "wtl <v>"; v2 node summaries are read, v1 spike lists written
 TCL_VERSION = (1, 1)   # "tcl <v>"
 EAP_VERSION = (1, 1)   # 4th byte of the b"EAP" magic
+NST_VERSION = (1, 1)   # NSTE header int32 #1 (neurosuite-3 core/noise_stats.hpp kNsteVersion)
+NSTE_MAGIC = 0x4E535445
 
 
 # ── variant-aware input resolution (mirrors neurofileio::resolveInput) ───────
@@ -343,13 +345,13 @@ def read_clu(base, elec, n_spikes=None, prefer=None):
 # Mirror of custody.hpp::resolve / ndm_resolve_io.resolve; test/custody_vectors.tsv ("classify" and
 # "resolve" rows) is run against it by test_custody_token_conformance.
 _SHARED_TYPES = {"res", "spk"}
-_METHOD_SPECIFIC_TYPES = {"clu", "clc", "fet", "pca", "col", "model", "klg"}
+_METHOD_SPECIFIC_TYPES = {"clu", "clc", "fet", "pca", "col", "model", "klg", "nst"}
 _SESSION_WIDE_TYPES = {"fil", "dat", "xml", "yaml", "nrs", "par", "eeg", "lfp"}
 
 
 def classify_type(type_):
     """'Shared' (res, spk: one physical copy across methods), 'MethodSpecific' (clu, clc, fet, pca,
-    col, model, klg: strict, no fallback) or 'SessionWide' (fil, dat, ...: no method, no group)."""
+    col, model, klg, nst: strict, no fallback) or 'SessionWide' (fil, dat, ...: no method, no group)."""
     if type_ in _SHARED_TYPES:
         return "Shared"
     if type_ in _SESSION_WIDE_TYPES:
@@ -756,6 +758,54 @@ def write_spk_file(path, waves):
     """Write a .spk/.spkD: int16, sample-major, no header (inverse of
     open_spk_file).  `waves` is (nSpikes, nsamp, nchan)."""
     np.asarray(waves, dtype=SPK_DTYPE).tofile(path)
+    return path
+
+
+def read_nst(path):
+    """Read a .nst (NSTE v1: neurosuite-3 core/noise_stats.hpp, written by ndm_extractspikes -R -N):
+    the noise statistics of one group in the waveform space of the .spk of the same method.
+
+    Returns a dict: nsamp, nchan, peak, guard, passes, n_requested, n_drawn, n_kept,
+    n_rejected_flat, n_rejected_outlier, zmax, seed, sigma (nchan,), mean (nsamp, nchan) and
+    cov (nsamp*nchan, nsamp*nchan) -- both in the .spk row layout, element t*nchan + c.
+    Raises ValueError on a wrong magic, a newer version or a short file."""
+    raw = open(path, "rb").read()
+    if len(raw) < 88:
+        raise ValueError(f"{path}: too short for an NSTE header")
+    h = np.frombuffer(raw, "<i4", 8, 0)
+    if int(h[0]) != NSTE_MAGIC:
+        raise ValueError(f"{path}: not an NSTE file (magic {int(h[0]):#x})")
+    if not 1 <= int(h[1]) <= NST_VERSION[0]:
+        raise ValueError(f"{path}: NSTE version {int(h[1])} (this reader: <= {NST_VERSION[0]})")
+    ns, nc = int(h[2]), int(h[3])
+    cnt = np.frombuffer(raw, "<i8", 5, 32)
+    zmax, seed = np.frombuffer(raw, "<f8", 2, 72)
+    D = ns * nc
+    body = np.frombuffer(raw, "<f8", offset=88)
+    if ns <= 0 or nc <= 0 or body.size != nc + D + D * D:
+        raise ValueError(f"{path}: {body.size} doubles for a {ns}x{nc} window (want {nc + D + D * D})")
+    return dict(nsamp=ns, nchan=nc, peak=int(h[4]), guard=int(h[5]), passes=int(h[6]),
+                n_requested=int(cnt[0]), n_drawn=int(cnt[1]), n_kept=int(cnt[2]),
+                n_rejected_flat=int(cnt[3]), n_rejected_outlier=int(cnt[4]),
+                zmax=float(zmax), seed=float(seed), sigma=body[:nc].copy(),
+                mean=body[nc:nc + D].reshape(ns, nc).copy(), cov=body[nc + D:].reshape(D, D).copy())
+
+
+def write_nst(path, s):
+    """Write `s` (read_nst's dict) as NSTE v1, byte-compatible with core::writeNoiseStats."""
+    ns, nc = int(s["nsamp"]), int(s["nchan"])
+    D = ns * nc
+    mean = np.asarray(s["mean"], "<f8").reshape(D)
+    cov = np.asarray(s["cov"], "<f8").reshape(D * D)
+    sigma = np.asarray(s["sigma"], "<f8").reshape(nc)
+    with open(path, "wb") as f:
+        f.write(np.array([NSTE_MAGIC, NST_VERSION[1], ns, nc, s.get("peak", 0), s.get("guard", 0),
+                          s.get("passes", 0), 0], "<i4").tobytes())
+        f.write(np.array([s.get(k, 0) for k in ("n_requested", "n_drawn", "n_kept",
+                                                 "n_rejected_flat", "n_rejected_outlier")],
+                         "<i8").tobytes())
+        f.write(np.array([s.get("zmax", 0.0), s.get("seed", 0.0)], "<f8").tobytes())
+        f.write(sigma.tobytes()); f.write(mean.tobytes()); f.write(cov.tobytes())
     return path
 
 

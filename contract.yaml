@@ -16,7 +16,7 @@
 # (vectors; with a neurosuite-3 checkout, against neurosuite-3's
 # contract.yaml).  Kept flat, in this layout, so both are read without a YAML
 # library.  How to change it: neurosuite-3 doc/dev/RECIPES.md §2.5.
-contract: 1
+contract: 2
 repository: fiber-kit
 plugin_protocol: 1
 session_schema: '1.0'
@@ -26,8 +26,9 @@ formats:
   wtl: {read: 2, write: 1}
   tcl: {read: 1, write: 1}
   eap: {read: 1, write: 1}
+  nst: {read: 1, write: 1}
 vectors:
-  custody_vectors.tsv: 4e3f5c4a51219d35b724002062d190c6
+  custody_vectors.tsv: 51d6647663ba117ed064fbe645052ae4
   pca_method_vectors.tsv: f3f475f25582f3d9518b1ac7f5c36908
   sdiff_expr_vectors.tsv: a067fcdf129af0f2184cdbb0a3d2697d
   sdiff_grammar_vectors.tsv: 25f9cbf4f82e952a6e533ab29ca83702
