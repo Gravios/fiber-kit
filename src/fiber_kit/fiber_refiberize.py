@@ -75,8 +75,12 @@ class FiberHierarchy:
         clp_path = clp or nio.session_path(base, "clp", group, variant=variant, tag=tag)
         _, child = nio.read_clu_file(clc_path)
         _, parent_arr = nio.read_clu_file(clp_path)        # parent_arr[c-1] = fiber of child c
+        # A 0 in the .clp is either an unused child id or a child deliberately parked in the
+        # artefact bin (fiber-realign's same-sample duplicates); keep the latter -- a child that
+        # holds spikes -- so it is not reported as an orphan on every refiberize.
+        present = set(np.unique(np.asarray(child)[np.asarray(child) > 0]).tolist())
         parent = {c + 1: int(parent_arr[c]) for c in range(parent_arr.size)
-                  if int(parent_arr[c]) > 0}
+                  if int(parent_arr[c]) > 0 or (c + 1) in present}
         self = cls(child, parent)
         self._paths = dict(base=base, group=group, variant=variant, tag=tag,
                            clc=clc_path, clp=clp_path)

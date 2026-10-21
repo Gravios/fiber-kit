@@ -280,6 +280,13 @@ FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike a
                                   #   energy-centroid, no template/labels).  centroid is reference-free, so in the re-roll it
                                   #   centres on the POPULATION centroid rather than the unit template -- prefer klusters/
                                   #   template if you rely on the re-roll.
+FK_REALIGN_PARK_DUPS:    1        # 1 | 0/1.  After the shift, the later spike of every same-unit pair the alignment put on
+                                  #   one sample (two detections of one spike; identical windows) goes to cluster 0 -- one
+                                  #   child atom under 0 when the clu has its .clc/.clp.  No row is removed.  0 = only list
+                                  #   the pairs (<base>.realign.<variant>.<group>[.<stage>].tsv, cross-unit pairs always
+                                  #   listed).  fiber-session's own commit always parks; a side-by-side commit (--out-tag)
+                                  #   parks only in the clu it emits.  sirotaA-jg-000005-20120316 g6 after one commit:
+                                  #   71 such pairs in 63 units.
 FK_REFINE_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters whose top-3 feature variance exceeds this x the
                                   #   median cluster's -- a variance-ratio that targets the bloated (mixed) clusters.
 FK_REFINE_SPLIT_MIN_CORR: 0.93    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent

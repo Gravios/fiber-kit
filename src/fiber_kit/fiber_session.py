@@ -36,6 +36,7 @@
 # ════════════════════════════════════════════════════════════════════════════
 import argparse, time
 import os
+import shutil
 import numpy as np
 from collections import defaultdict, Counter
 try:
@@ -2224,14 +2225,17 @@ def main():
     if a.out:
         clu_out = a.out
         nio.write_clu_file(clu_out, clu)
+        own_paths = {"clu": clu_out}
     elif a.emit_hierarchy:                                # <base>.{clu,clc,clp}.<variant>.<elec>[.<stage>]
         from .fiber_refiberize import FiberHierarchy
         paths = FiberHierarchy(child, parent).save(a.base, a.elec, variant=a.method,
                                                    tag=a.clu_stage, backup=False)
         clu_out = paths["clu"]
+        own_paths = dict(paths)
         det("hierarchy", f"{len(parent)} atoms -> {len(set(parent.values()))} fibers (.clu/.clc/.clp)")
     else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
+        own_paths = {"clu": clu_out}
     if carried:                                           # final ids: the hierarchy save renumbers
         _, _final = nio.read_clu_file(clu_out)
         _final = np.asarray(_final)
@@ -2242,15 +2246,16 @@ def main():
     #   Klusters resolves .fet/.clu/.spk by the SAME token, so viewing a clustering in a differently
     #   named feature space needs the clu under that name too.  Written as a copy rather than a move:
     #   the --method-named artifacts stay canonical and keep their real chain of custody.
+    alias_paths = {}
     if a.out_variant and not a.out:
         if a.emit_hierarchy:
             from .fiber_refiberize import FiberHierarchy
-            ap2 = FiberHierarchy(child, parent).save(a.base, a.elec, variant=a.out_variant,
-                                                     tag=a.clu_stage, backup=False)
-            det("alias", f"{os.path.basename(ap2['clu'])} (+ .clc/.clp)")
+            alias_paths = dict(FiberHierarchy(child, parent).save(a.base, a.elec, variant=a.out_variant,
+                                                                  tag=a.clu_stage, backup=False))
+            det("alias", f"{os.path.basename(alias_paths['clu'])} (+ .clc/.clp)")
         else:
-            det("alias", os.path.basename(nio.write_clu(a.base, a.elec, clu,
-                                                        variant=a.out_variant, tag=a.clu_stage)))
+            alias_paths = {"clu": nio.write_clu(a.base, a.elec, clu, variant=a.out_variant, tag=a.clu_stage)}
+            det("alias", os.path.basename(alias_paths["clu"]))
     # ── optional .fet for Klusters ──
     #   A closure so the end-of-run realign can call it on the COMMITTED waveforms and spike times
     #   (the .fet's last column is the .res time, and its features project the committed windows).
@@ -2421,6 +2426,10 @@ def main():
         if how != "yaml":
             det("peak", f"{commit_peak} (1-based) {how} -- the YAML has no peakSampleIndex for this group")
         _commit_realign(a, clu_out, space, sdiff, commit_peak, log, det)
+        for kind, dst in alias_paths.items():             # the alias is a copy: it carries the parking too
+            src = own_paths.get(kind)
+            if src and os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
+                shutil.copyfile(src, dst)
         if a.emit_fet:                                    # the requested .fet, from the committed set
             _spk_c, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=space or a.method)
             _emit_fet(_spk_c, read_res(a.base, a.elec))
@@ -2496,8 +2505,11 @@ def _commit_realign(a, clu_path, space, sdiff, peak, log, det):
     if mode == "reextract" and not os.path.exists(fil):
         raise SystemExit(f"--realign reextract: no filtered signal {fil} (use --realign shift-spk, or "
                          f"--realign-fil <path>)")
+    # --park-duplicates: the sort is this run's own, so two detections the alignment stacks on one sample
+    # go straight to cluster 0 (one child atom under 0) instead of being counted twice in their unit.
     argv = [str(a.session), str(a.group), "--clu", clu_path, "--align-algo", a.realign_algo,
-            "--variants", "all", "--variant", space or a.method, "--no-emit-clu", "--refeaturize"]
+            "--variants", "all", "--variant", space or a.method, "--no-emit-clu", "--refeaturize",
+            "--park-duplicates"]
     argv += ["--reextract", "--fil", fil] if mode == "reextract" else ["--shift-spk"]
     for flag, val in (("--channels", a.channels), ("--ntotal", a.ntotal), ("--nchan", a.nchan),
                       ("--nsamp", a.nsamp), ("--sr", a.sr), ("--sdiff-pairs", sdiff),

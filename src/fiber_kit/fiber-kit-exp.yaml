@@ -338,6 +338,13 @@ FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the 
                                   #   63.4 % at 0.592 / 0.652.  Parity with the compiled Klusters code holds at both.
 FK_REALIGN_ITERS:        2        # 2.  Klusters --iterations: template / xcorr passes; shifts accumulate across passes.
 FK_REALIGN_MAX_SHIFT:    ""       # "" = Klusters' max(1, (peakSampleIndex-1) // 2) (10 on a 42-sample window) | N.
+FK_REALIGN_PARK_DUPS:    1        # 1 | 0/1.  After the shift, the later spike of every same-unit pair the alignment put on
+                                  #   one sample (two detections of one spike; identical windows) goes to cluster 0 -- one
+                                  #   child atom under 0 when the clu has its .clc/.clp.  No row is removed.  0 = only list
+                                  #   the pairs (<base>.realign.<variant>.<group>[.<stage>].tsv, cross-unit pairs always
+                                  #   listed).  fiber-session's own commit always parks; a side-by-side commit (--out-tag)
+                                  #   parks only in the clu it emits.  sirotaA-jg-000005-20120316 g6 after one commit:
+                                  #   71 such pairs in 63 units.
 FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike alignment algorithm (both the fiber-realign
                                   #   stage AND the post-step re-roll): klusters (default, iterative normalised-xcorr to
                                   #   the unit template), template (legacy median/un-normalised), centroid (reference-free

@@ -649,6 +649,70 @@ def realign_report(res, res_corr, ioff, labels, spk=None, target=None, min_n=20)
     return rep
 
 
+def _hierarchy_siblings(clu_path, base):
+    """(.clc, .clp) beside <base>.clu.<rest>: the same name with the type token swapped, whatever
+    variant and stage tokens <rest> holds (or none).  None when the name is not <base>.clu.*."""
+    d, name = os.path.split(os.path.abspath(str(clu_path)))
+    bn = os.path.basename(str(base))
+    if not name.startswith(f"{bn}.clu."):
+        return None
+    rest = name[len(f"{bn}.clu."):]
+    return os.path.join(d, f"{bn}.clc.{rest}"), os.path.join(d, f"{bn}.clp.{rest}")
+
+
+def park_duplicates(base, group, clu_path, rows):
+    """Move `rows` -- the later spike of each same-unit pair a commit put on one sample -- to cluster 0
+    in the clu at `clu_path`, in place, and return how many moved.  The row count never changes, so every
+    stage stays aligned with the shared .res.  When the clu has its .clc/.clp siblings (the same name
+    with the type swapped), the parked spikes become ONE new child atom whose parent is 0 (reviewable and
+    revertible in Klusters) and every other label is checked to come back unchanged; the three files are
+    rewritten where they are.  A hierarchy that does not reproduce its own .clu is left alone and only
+    the flat .clu is edited."""
+    rows = np.unique(np.asarray(rows, np.int64))
+    if rows.size == 0:
+        return 0
+    try:
+        from .fiber_refiberize import FiberHierarchy
+    except ImportError:
+        from fiber_refiberize import FiberHierarchy
+    hdr, labels = nio.read_clu_file(clu_path)
+    labels = np.asarray(labels, np.int64)
+    want = labels.copy(); want[rows] = 0
+    sib = _hierarchy_siblings(clu_path, base)
+    if sib and os.path.exists(sib[0]) and os.path.exists(sib[1]):
+        clc, clp = sib
+        h = FiberHierarchy.load(base, group, clc=clc, clp=clp)
+        if h.child.size == labels.size:
+            child = h.child.copy()
+            new = int(child.max()) + 1
+            child[rows] = new
+            parent = dict(h.parent); parent[new] = 0
+            clu_b, clc_b, clp_b = FiberHierarchy(child, parent).refiberize(renumber=False)
+            if np.array_equal(clu_b, want):
+                for path, arr in ((clu_path, clu_b), (clc, clc_b), (clp, clp_b)):
+                    nio.write_clu_file(path, arr)
+                _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster 0, child atom {new} "
+                               f"({os.path.basename(clu_path)} + .clc/.clp)")
+                return int(rows.size)
+        _det("parked", "the .clc/.clp do not reproduce the .clu; editing the flat .clu only")
+    nio.write_clu_file(clu_path, want, n_clusters=int(hdr))
+    _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster 0 ({os.path.basename(clu_path)})")
+    return int(rows.size)
+
+
+def write_coincidences(path, times, labels, same, cross, parked):
+    """TSV of the same-sample spike pairs a commit left (or parked): kind, rows, times, units."""
+    t = np.asarray(times, np.int64); lab = np.asarray(labels)
+    pk = set(np.asarray(parked, np.int64).tolist())
+    with open(path, "w") as f:
+        f.write("kind\trow_a\trow_b\ttime\tunit_a\tunit_b\tparked\n")
+        for kind, pairs in (("same_unit", same), ("cross_unit", cross)):
+            for i, j in pairs:
+                f.write(f"{kind}\t{int(i)}\t{int(j)}\t{int(t[i])}\t{int(lab[i])}\t{int(lab[j])}\t"
+                        f"{int(j) in pk}\n")
+    return path
+
+
 def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
     out_res = out_res or f"{base}.res.{elec}.realigned"
     out_off = out_off or f"{base}.offsets.{elec}.npy"
@@ -760,6 +824,15 @@ def main(argv=None):
                          "the spikes it would move, where each unit's template peaks against the target on the "
                          "windows as they are, and the same-sample spike pairs and inversions in the .res now "
                          "and after the shift.  The commit flags are ignored")
+    ap.add_argument("--park-duplicates", dest="park_duplicates", action=argparse.BooleanOptionalAction,
+                    default=bool(_kd("FK_REALIGN_PARK_DUPS", int, 0)),
+                    help="after the shift, move the later spike of every same-unit pair that landed on one "
+                         "sample (two detections of one spike; identical windows) to cluster 0 in the --clu, "
+                         "in place, as one child atom under 0 when the clu has its .clc/.clp; with --out-tag "
+                         "(the canonical .res is left alone) only in the clu emitted under the tag.  Rows are "
+                         "never removed.  Cross-unit pairs are only listed (<base>.realign.<variant>.<group>"
+                         "[.<tag>].tsv).  fiber-session's own commit parks; a stand-alone run only lists "
+                         "unless this is set [FK_REALIGN_PARK_DUPS]")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args(argv)
@@ -832,6 +905,34 @@ def main(argv=None):
         target = align_index if align_index is not None else (timestamp_index(peak) if peak is not None else None)
         realign_report(res, res_corr, ioff, labels, spk, target, min_n=a.min_n)
         return
+    if labels is not None:
+        # Aligning two detections of one spike onto the same template peak puts them on one sample with
+        # identical windows (the detector drops identical positions; the commit makes new ones).  Park the
+        # later of each same-unit pair (opt-in, in place on the --clu), list every pair for review.
+        realign_report(res, res_corr, ioff, labels)
+        same, cross = time_coincidences(res_corr, labels)
+        parked = same[:, 1] if (a.park_duplicates and len(same) and a.clu) else np.zeros(0, np.int64)
+        if parked.size and a.out_tag and not a.emit_clu:
+            _det("parked", "none: a side-by-side commit (--out-tag) parks only in the clu it emits, and "
+                           "--no-emit-clu writes none")
+            parked = np.zeros(0, np.int64)
+        if parked.size and not a.out_tag:
+            park_duplicates(base, group, a.clu, parked)    # the shared .res moved: so does the input sort
+        elif parked.size:
+            # a side-by-side commit leaves the canonical .res, and so the input sort, alone: the parking
+            # goes only into the clu it emits under the tag
+            _det("parked", f"{parked.size:,} duplicate spike(s) -> cluster 0 in the clu emitted under "
+                           f"tag {a.out_tag} (the input clu is left as it is)")
+        listed = labels
+        if parked.size:
+            labels = np.asarray(labels).copy(); labels[parked] = 0   # an emitted clu carries the parking
+        if len(same) or len(cross):
+            # rows and times are those of the .res this run writes: the stage's, or the tagged copy's
+            tsv = nio.session_path(base, "realign", group, variant=cv or out_variant,
+                                   tag=a.out_tag or _ctag) + ".tsv"
+            write_coincidences(tsv, res_corr, listed, same, cross, parked)
+            _det("pairs", f"{tsv}" + ("" if parked.size or not len(same) else
+                                      "  (same-unit pairs listed, not parked: --park-duplicates)"))
 
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
     # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose

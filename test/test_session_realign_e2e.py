@@ -9,7 +9,8 @@ transform derives, and a .pca for standard and stderiv.
   * the default (auto, .fil present) commits -- after locating the windows on disk in the .fil (the
     spike time at peakSampleIndex - 1) -- the .res moves, and the result is BYTE-IDENTICAL
     to `--realign off` followed by the plan step `fiber-realign --reextract --refeaturize
-    --variants all` -- the two paths cannot drift apart;
+    --variants all --park-duplicates` (the shipped profiles set FK_REALIGN_PARK_DUPS) -- the two
+    paths cannot drift apart;
   * every variant on disk is rebuilt: standard and stderiv re-extracted from the .fil (standard
     equals a fresh .fil read at the committed times), the opaque one rolled by the offsets rather
     than skipped, and a .fet per variant whose time column is the committed .res;
@@ -93,13 +94,14 @@ def realign_step(base):
     r = subprocess.run([sys.executable, "-m", "fiber_kit.fiber_realign", base, "1",
                         "--clu", f"{base}.clu.stderiv.1.fs", "--align-algo", "klusters",
                         "--reextract", "--refeaturize", "--no-emit-clu", "--variants", "all",
-                        "--variant", "stderiv"],
+                        "--variant", "stderiv", "--park-duplicates"],
                        capture_output=True, text=True, env=_env(), timeout=900)
     return r.returncode, r.stdout + r.stderr
 
 
 SET = ["res.1", "spk.standard.1", "spk.stderiv.1", "spk.standard_ADLP.1", "fet.standard.1",
-       "fet.stderiv.1", "clu.stderiv.1.fs", "offsets.1.npy"]
+       "fet.stderiv.1", "clu.stderiv.1.fs", "clc.stderiv.1.fs", "clp.stderiv.1.fs", "offsets.1.npy",
+       "realign.stderiv.1.fs.tsv"]
 
 
 def blob(base, ext):
@@ -150,7 +152,8 @@ def main():
         res_a = nio.read_res_file(ba + ".res.1")
         check("the .res moved", blob(ba, "res.1") != orig["res.1"])
         diff = [e for e in SET if blob(ba, e) != blob(bo, e)]
-        check("byte-identical to --realign off + fiber-realign --reextract --refeaturize --variants all",
+        check("byte-identical to --realign off + fiber-realign --reextract --refeaturize --variants all "
+              "--park-duplicates",
               not diff, f"differs: {diff}\n{out}")
 
         filmm = nio.open_signal(ba + ".fil", NTOTAL)
