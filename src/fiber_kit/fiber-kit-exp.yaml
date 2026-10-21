@@ -152,6 +152,12 @@ FK_SESSION_COARSE_DR: 0.15       # coarse radial (whitened-amplitude) band half-
                                  #   Lower -> tighter amplitude bands -> more, smaller coarse fibers (amplitude-distinct
                                  #   cells stay separate for the fine splitter); higher -> fewer, fatter coarse groups.
 FK_SESSION_NO_WHITEN: 0          # 0 | 1.  1 = cluster in the RAW mask-selected (mean-centred) feature space instead of
+FK_SESSION_WHITEN_SOURCE: auto   # auto | nst | fil | spk.  Noise whitener source.  nst = the .nst.<variant>.<group>
+                                 #   ndm_extractspikes writes beside the .spk (noise in the .spk's own transform,
+                                 #   spike-free windows, outliers rejected); fil = per-chunk .fil baseline taken into the
+                                 #   .spk's waveform space (needs the .fil); spk = per-chunk pre-peak samples of the
+                                 #   snippets (no file needed; any variant, incl. fiber-adlp's, which no transform names).
+                                 #   auto = nst when the .spk's .nst exists, else fil.
 FK_SESSION_SEED_DENSITY: 0.0     # density-preferential coarse seeding exponent.  0 = uniform stride (current);
 FK_SESSION_RESEED_RESIDUAL_THR: 0.0   # >0 enables residual-gated RESEED: after the fine split, a fiber whose
                                  #   median-subtracted residual/signal exceeds this is re-split (welded co-located

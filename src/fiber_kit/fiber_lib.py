@@ -182,6 +182,79 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
                              win=_baseline_win(mask, win), transform=transform)
     return _fit_whitener(base, mask)
 
+# ── per-chunk whitener from the snippets' own pre-peak samples (no .fil) ─────
+def spk_chunk_whitener(waves, res, mask, peak, pre_guard=10, iso_guard=None, max_seg=20000, seed=0):
+    """Noise whitener + mean in the masked space of the SNIPPETS THEMSELVES, from their pre-peak
+    samples [0, peak - pre_guard).  For when the .fil is not at hand, and for any waveform variant
+    the .fil transform does not reproduce (fil_to_spkD_space is the all-pairs stderiv, so it is the
+    wrong noise model for standard / stderiv_C<n> / per-spike filtered variants).
+
+    The pre-peak segment (16 samples at nsamp 52 / peak 26) is shorter than the mask (15 samples
+    wide, so up to lag 14), so the covariance is estimated as STATIONARY: one (nch x nch)
+    cross-covariance per lag l = 0..len(mask)-1, averaged over every in-segment sample pair at that
+    lag, assembled block-Toeplitz in the feature layout (sample-major: t*nch + c).  Snippets whose
+    previous detection sits within `iso_guard` samples (default: the window length) are skipped, so
+    a preceding spike's tail does not enter the noise estimate.  Returns (W, nmean, nseg) like
+    chunk_whitener."""
+    waves = np.asarray(waves); res = np.asarray(res, np.int64)
+    n, T, C = waves.shape
+    m = np.asarray(mask); L = int(m.size); P = int(peak) - int(pre_guard)
+    if L < 1 or P < 2:
+        raise ValueError(f"spk_chunk_whitener: pre-peak segment of {P} samples is too short")
+    iso_guard = T if iso_guard is None else int(iso_guard)
+    o = np.argsort(res, kind="stable"); gap = np.empty(n, np.int64)
+    gap[o[0]] = np.iinfo(np.int64).max; gap[o[1:]] = np.diff(res[o])
+    cand = np.flatnonzero(gap > iso_guard)
+    if cand.size < 50:
+        cand = np.arange(n)                                    # sparse chunk: keep every snippet
+    if cand.size > max_seg:
+        cand = np.sort(np.random.default_rng(seed).choice(cand, max_seg, replace=False))
+    seg = waves[cand, :P, :].astype(np.float64)
+    mu = seg.mean((0, 1))                                      # per-channel noise mean
+    seg = seg - mu
+    nl = min(L, P)
+    lagc = np.zeros((L, C, C))
+    for l in range(nl):                                        # E[x(t) x(t+l)^T], stationary
+        a = seg[:, :P - l, :].reshape(-1, C); b = seg[:, l:, :].reshape(-1, C)
+        lagc[l] = a.T @ b / a.shape[0]
+    # lags the segment cannot reach (mask wider than the pre-peak span) are left at zero
+    Cf = np.empty((L * C, L * C))
+    for i in range(L):
+        for j in range(L):
+            d = j - i
+            Cf[i * C:(i + 1) * C, j * C:(j + 1) * C] = lagc[d] if d >= 0 else lagc[-d].T
+    Cf = 0.5 * (Cf + Cf.T)
+    ev, Vv = np.linalg.eigh(Cf)
+    ev = np.maximum(ev, 1e-6 * max(float(ev.max()), 1e-12))   # block-Toeplitz is PSD only up to estimation noise
+    W = Vv @ np.diag(1.0 / np.sqrt(ev)) @ Vv.T
+    nmean = np.tile(mu, L)
+    return W, nmean, int(cand.size)
+
+
+# ── whitener from the extractor's noise statistics (.nst) ────────────────────
+def nst_whitener(stats, mask):
+    """Noise whitener + mean in the masked space from a .nst (neuro_io.read_nst): the noise
+    statistics ndm_extractspikes measured in the .spk's own transform, on random spike-free
+    windows with outliers rejected.  The feature vector is waves[:, mask, :] flattened sample-
+    major (t*nch + c), the .nst layout too, so the whitener is the mask's sub-block.  One
+    whitener for the session (the .fil source is per chunk).  Returns (W, nmean, n_kept)."""
+    m = np.asarray(mask)
+    if m.dtype == bool:
+        m = np.flatnonzero(m)
+    C = int(stats["nchan"])
+    if m.size == 0 or int(m.max()) >= int(stats["nsamp"]):
+        raise ValueError(f"nst_whitener: mask {m.min() if m.size else '-'}..{m.max() if m.size else '-'} "
+                         f"outside the .nst window of {stats['nsamp']} samples")
+    idx = (m[:, None] * C + np.arange(C)[None, :]).ravel()
+    Cf = np.asarray(stats["cov"], np.float64)[np.ix_(idx, idx)]
+    Cf = 0.5 * (Cf + Cf.T)
+    ev, Vv = np.linalg.eigh(Cf)
+    ev = np.maximum(ev, 1e-6 * max(float(ev.max()), 1e-12))
+    W = Vv @ np.diag(1.0 / np.sqrt(ev)) @ Vv.T
+    nmean = np.asarray(stats["mean"], np.float64)[m, :].ravel()
+    return W, nmean, int(stats.get("n_kept", 0))
+
+
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
 # ── feature-alignment mode switch (A/B lever for the centroid hypothesis) ────
 # "xcorr"    : centroid-seed + iterated xcorr refine (converges to the trough/template alignment).

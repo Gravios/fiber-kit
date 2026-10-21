@@ -1310,9 +1310,14 @@ def _init_chunk_worker(cfg):
         _bk.use_gpu(True)
     _CTX["spk"], spkpath = nio.open_spkD(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
                                          prefer=cfg.get("method"))
-    # The noise model is built in the space of the .spk this worker reads (fil_chunk_whitener).
-    _CTX["space_tf"] = None if cfg.get("no_whiten") else fst.space_transform(
-        nio.spk_variant(spkpath, cfg["base"], cfg["elec"]), cfg.get("sdiff_pairs"))
+    # The .fil whitener is used when no other source is: no --no-whiten, no .nst whitener, and
+    # --whiten-source fil or auto.  Its noise model is built in the space of the .spk this worker
+    # reads (fil_chunk_whitener); the nst / spk sources need no transform (and an opaque variant
+    # such as fiber-adlp's has none).
+    _use_fil = (not cfg.get("no_whiten") and cfg.get("nst_W") is None
+                and cfg.get("whiten_source", "fil") in ("fil", "auto"))
+    _CTX["space_tf"] = fst.space_transform(
+        nio.spk_variant(spkpath, cfg["base"], cfg["elec"]), cfg.get("sdiff_pairs")) if _use_fil else None
     _CTX["spk_std"] = None
     if float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:      # inter-channel-timing gate needs RAW templates
         try:
@@ -1320,7 +1325,8 @@ def _init_chunk_worker(cfg):
                                               prefer=nio.prefer_standard())
         except FileNotFoundError:
             _CTX["spk_std"] = None                            # no .spk.standard -> gate silently inert
-    _CTX["filmm"] = nio.open_signal(cfg["fil"], cfg["ntotal"])
+    # the .fil is opened only when something reads it: the .fil whitener or deconvolution
+    _CTX["filmm"] = nio.open_signal(cfg["fil"], cfg["ntotal"]) if (_use_fil or cfg.get("deconv")) else None
 
 
 def _process_chunk(task):
@@ -1341,6 +1347,10 @@ def _process_chunk(task):
         Xraw = fl.realign(waves)[:, ctx["mask"], :].reshape(len(waves), -1)
         W = np.eye(Xraw.shape[1])
         nmean = Xraw.mean(0)
+    elif ctx.get("nst_W") is not None:
+        W, nmean = ctx["nst_W"], ctx["nst_mean"]
+    elif ctx.get("whiten_source") == "spk":
+        W, nmean, _ = fl.spk_chunk_whitener(waves, res_e, ctx["mask"], ctx["peak"])
     else:
         W, nmean, _ = fil_chunk_whitener(ctx["filmm"], ctx["gch"], s0, s1, res_e, ctx["nsamp"], ctx["mask"],
                                          transform=ctx["space_tf"])
@@ -1455,6 +1465,18 @@ def add_core_arguments(ap):
                          "association in the COARSE pass.  Lower -> tighter amplitude bands -> more, smaller coarse "
                          "fibers (amplitude-distinct cells stay separate for the fine splitter); higher -> fewer, "
                          "fatter coarse groups.  Default 0.15.")
+    ap.add_argument("--whiten-source", dest="whiten_source", choices=["auto", "nst", "fil", "spk"],
+                    default=(str(_gcfg.get("FK_SESSION_WHITEN_SOURCE") or os.environ.get("FK_SESSION_WHITEN_SOURCE")
+                                 or "auto")),
+                    help="FK_SESSION_WHITEN_SOURCE.  Where the noise whitener comes from.  nst = the "
+                         ".nst.<variant>.<group> ndm_extractspikes writes beside the .spk: noise measured in the "
+                         ".spk's own transform on spike-free windows, outliers rejected (one whitener for the "
+                         "session).  fil = per chunk, off-spike .fil baseline taken into the .spk's waveform "
+                         "space (fiber_stderiv.space_transform; needs the .fil, and the sdiffPairs for a _C "
+                         "variant).  spk = per chunk, the snippets' own pre-peak samples (stationary "
+                         "block-Toeplitz covariance): needs neither file and follows any variant, including ones "
+                         "no transform describes (fiber-adlp's per-spike filtered snippets).  auto (default) = "
+                         "nst when the .spk's .nst exists, else fil.  --deconv needs the .fil either way.")
     ap.add_argument("--no-whiten", dest="no_whiten", action="store_true",
                     help="cluster in the RAW mask-selected (mean-centred) feature space instead of the .fil "
                          "baseline-whitened space: identity whitener, so the radial coordinate is the raw feature "
@@ -1950,13 +1972,31 @@ def main():
     spk, spkpath = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=a.method)
     nio.check_spk_count(nspk, spk, spkpath, a.nsamp, a.nchan)
     space = nio.spk_variant(spkpath, a.base, a.elec)
-    if not a.no_whiten:                        # fail here, not inside a chunk worker
+    # ── noise statistics of the .spk actually opened (its own variant token) ──
+    nst_W = nst_mean = None; nst_note = ""
+    if not a.no_whiten and a.whiten_source in ("nst", "auto"):
+        _nstp = nio.session_path(a.base, "nst", a.elec, variant=space) if space else ""
+        if _nstp and os.path.exists(_nstp):
+            _st = nio.read_nst(_nstp)
+            if (_st["nsamp"], _st["nchan"]) != (a.nsamp, a.nchan):
+                raise SystemExit(f"{_nstp}: {_st['nsamp']}x{_st['nchan']} window, the .spk is "
+                                 f"{a.nsamp}x{a.nchan}")
+            nst_W, nst_mean, _nk = fl.nst_whitener(_st, mask)
+            nst_note = f"{os.path.basename(_nstp)} ({_nk:,} windows)"
+        elif a.whiten_source == "nst":
+            raise SystemExit(f"--whiten-source nst: no {_nstp or '.nst for ' + os.path.basename(spkpath)} "
+                             "(ndm_extractspikes writes it beside the .spk; noiseWindows > 0)")
+    use_fil = (not a.no_whiten) and nst_W is None and a.whiten_source in ("fil", "auto")
+    if use_fil:                                # fail here, not inside a chunk worker
         try:
             fst.space_transform(space, sdiff)
         except ValueError as e:
-            raise SystemExit(f"fiber-session: no noise model for {os.path.basename(spkpath)}: {e} -- give the "
-                             f"group's sdiffPairs in the session YAML or --sdiff-pairs, or run --no-whiten") from None
-    filmm = nio.open_signal(f"{a.base}.fil", a.ntotal)
+            raise SystemExit(f"fiber-session: no .fil noise model for {os.path.basename(spkpath)}: {e} -- give "
+                             f"the group's sdiffPairs in the session YAML or --sdiff-pairs, or use "
+                             f"--whiten-source spk (or nst), or run --no-whiten") from None
+    if a.deconv and not use_fil:
+        det("note", "--deconv reads the .fil: it is opened for deconvolution only")
+    filmm = nio.open_signal(f"{a.base}.fil", a.ntotal) if (use_fil or a.deconv) else None
     log(f"group {a.elec} \u00b7 {a.method} \u00b7 {nspk:,} spikes")
     if a.exclude_clu:
         det("exclude", f"{int((~keep).sum()):,} spikes ({100 * (~keep).mean():.4f}%) from "
@@ -1973,8 +2013,12 @@ def main():
         else:
             det("exclude", "no --exclude-units: nothing excluded")
     det("source", spkpath)
-    det("noise model", "off (--no-whiten)" if a.no_whiten else fst.space_label(space, sdiff))
-    det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
+    det("noise model", "off (--no-whiten)" if a.no_whiten else
+        (f"noise statistics {nst_note}" if nst_W is not None else
+         (f"snippet pre-peak, block-Toeplitz ({space or 'standard'})" if a.whiten_source == "spk"
+          else fst.space_label(space, sdiff))))
+    if filmm is not None:
+        det("recording", f"{filmm.shape[0]:,} samples \u00d7 {a.ntotal} ch")
     det("feature-align", fl.get_feature_align())
     det("realign", "sub-sample" if fl.realign_subsample() else "whole-sample")
     if _gpu_line: det("GPU", _gpu_line)
@@ -2015,6 +2059,7 @@ def main():
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
+               whiten_source=getattr(a, "whiten_source", "fil"), nst_W=nst_W, nst_mean=nst_mean,
                method=a.method, peak=peak, sdiff_pairs=sdiff,
                deconv=(dict(phases=a.deconv_phases, order=a.deconv_order, refrac_ms=a.deconv_refrac_ms,
                             floor=a.deconv_floor, null_q=a.deconv_null_q, agree=a.deconv_agree,
