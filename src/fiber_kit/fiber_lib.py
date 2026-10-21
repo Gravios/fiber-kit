@@ -71,7 +71,23 @@ def fil_to_spkD_space(fil_trace):
     T2 = np.empty_like(T1); T2[1:] = T1[1:] - T1[:-1]; T2[0] = 0
     return T2
 
-# ── per-chunk whitener from occupancy-masked .fil baseline (in spkD space) ──
+
+def allpairs_spkD(raw_ext):
+    """fil_to_spkD_space for a batch of windows that carry ONE extra leading sample: (n, L+1, C) raw
+    -> (n, L, C) float32, all-pairs + temporal difference, unrounded.  The chunk whitener's historical
+    noise space, kept bit for bit as the default of chunk_whitener / chunk_whitener_mm.  On .fil
+    samples (integers) it equals fiber_stderiv.space_transform('stderiv') unless the extractor's int16
+    clamp bites."""
+    x = np.asarray(raw_ext, dtype=np.float32)
+    T1 = x.shape[2] * x - x.sum(2, keepdims=True)
+    return T1[:, 1:] - T1[:, :-1]
+
+# ── per-chunk whitener from occupancy-masked .fil baseline ───────────────────
+# The noise model must be in the SAME waveform space as the spikes it whitens.  A model in another
+# space is not white for them: all-pairs noise has no per-sample common mode, so whitening a
+# stderiv_C5 .spk with it blows up exactly the common-mode-like directions C5 keeps (on a real C5
+# session 80% of the whitened noise and ~93% of each spike's whitened energy sat in 15 such
+# directions).  Hence the `transform` argument below: the space of the .spk being whitened.
 def _fit_whitener(base, mask):
     """Fit the masked-space mean + ZCA whitener from collected baseline snippets."""
     if len(base) == 0:
@@ -94,16 +110,18 @@ def _baseline_win(mask, win=None):
     return max(int(win) if win else 32, need)
 
 
-def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, pad=1):
-    """Draw up to n_base off-spike `win`-sample snippets WITHOUT materializing the
-    whole span.  `read_window(r0, r1)` returns the raw (rows, nCh) float window;
-    only sampled windows are read and stderiv-transformed.  Forbidden zones are
-    tested by searchsorted on the sorted spike times (no T-length mask)."""
+def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, transform=allpairs_spkD):
+    """Draw up to n_base off-spike `win`-sample snippets WITHOUT materializing the whole span and
+    return them in the waveform space `transform` builds ((n, win+1, C) raw -> (n, win, C); None =
+    raw).  `read_window(r0, r1)` returns the raw (rows, nCh) window; each snippet is read with ONE
+    extra leading row so the temporal difference at t = 0 uses the true previous sample (a snippet at
+    the very start of the span repeats its first row: a zero first difference, as before).
+    Forbidden zones are tested by searchsorted on the sorted spike times (no T-length mask)."""
     sp = np.sort(np.asarray(spike_rel, dtype=np.int64))
     rng = np.random.default_rng(seed)
-    base = []; tries = 0; maxtries = 50 * n_base
+    raws = []; tries = 0; maxtries = 50 * n_base
     hi_start = max(1, T - win)
-    while len(base) < n_base and tries < maxtries:
+    while len(raws) < n_base and tries < maxtries:
         tries += 1
         start = int(rng.integers(0, hi_start))
         # reject if any spike falls in [start-guard, start+win+guard)
@@ -111,34 +129,44 @@ def _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=32, pa
         j = np.searchsorted(sp, start + win + guard, "right")
         if j > i:
             continue
-        r0 = max(0, start - pad)                 # 1 extra row so the temporal diff is exact
-        seg = np.asarray(read_window(r0, start + win), dtype=np.float32)
+        seg = np.asarray(read_window(max(0, start - 1), start + win), dtype=np.float32)
         if seg.shape[0] < win:
             continue
-        base.append(np.asarray(fil_to_spkD_space(seg)[-win:], dtype=np.float32))
-    return base
+        if seg.shape[0] == win:                  # no row before the span: repeat the first
+            seg = np.concatenate([seg[:1], seg])
+        raws.append(seg[-(win + 1):])
+    if not raws:
+        return []
+    R = np.stack(raws)
+    return R[:, 1:] if transform is None else np.asarray(transform(R), dtype=np.float32)
 
 
-def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None):
-    """Noise whitener + mean in the masked spkD space, from off-spike baseline.
-    fil_trace: (T,nCh) raw voltage (already restricted to the group's channels);
-    spike_samples_rel: spike times relative to trace start.  Memory-frugal: only
-    the sampled snippets are stderiv-transformed, never the whole trace."""
+def chunk_whitener(fil_trace, spike_samples_rel, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None,
+                   transform=allpairs_spkD):
+    """Noise whitener + mean in the masked waveform space `transform` builds from the .fil
+    ((n, L+1, C) raw -> (n, L, C), e.g. fiber_stderiv.space_transform(token, sdiffPairs); None =
+    raw), from off-spike baseline.  The default is the historical all-pairs spkD space -- right only
+    for an all-pairs stderiv .spk.  fil_trace: (T,nCh) raw voltage (already restricted to the
+    group's channels); spike_samples_rel: spike times relative to trace start.  Memory-frugal: only
+    the sampled snippets are transformed, never the whole trace."""
     fil_trace = np.asarray(fil_trace)
     T = fil_trace.shape[0]
 
     def read_window(r0, r1):
         return fil_trace[r0:r1]
 
-    base = _collect_baseline(read_window, T, spike_samples_rel, n_base, guard, seed, win=_baseline_win(mask, win))
+    base = _collect_baseline(read_window, T, spike_samples_rel, n_base, guard, seed,
+                             win=_baseline_win(mask, win), transform=transform)
     return _fit_whitener(base, mask)
 
 
-def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None):
+def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000, guard=24, seed=0, win=None,
+                      transform=allpairs_spkD):
     """Memmap whitener: identical statistics to chunk_whitener but reads ONLY the
     sampled baseline windows from `filmm` (shape (Ttot, nTotalCh)), so peak memory
     is O(n_base * 32 * nGroupCh) regardless of span length.  Contiguous channel
-    groups are sliced as a view; non-contiguous fall back to per-window fancy index."""
+    groups are sliced as a view; non-contiguous fall back to per-window fancy index.
+    `transform`: the waveform space, as in chunk_whitener."""
     s0 = max(0, int(s0)); s1 = min(filmm.shape[0], int(s1)); T = s1 - s0
     gch = np.asarray(gch, dtype=np.int64)
     contiguous = gch.size > 0 and bool((np.diff(gch) == 1).all())
@@ -150,7 +178,8 @@ def chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=MASK_FULL, n_base=6000
             return filmm[s0 + r0: s0 + r1, lo:hi]
         return filmm[s0 + r0: s0 + r1, :][:, gch]
 
-    base = _collect_baseline(read_window, T, spike_rel, n_base, guard, seed, win=_baseline_win(mask, win))
+    base = _collect_baseline(read_window, T, spike_rel, n_base, guard, seed,
+                             win=_baseline_win(mask, win), transform=transform)
     return _fit_whitener(base, mask)
 
 # ── per-spike trough realignment (mandatory: ~3.5-sample jitter) ────────────
@@ -445,6 +474,9 @@ def location_cy(waveforms, y_um):
 # so its home is here rather than in a CLI stage that four other modules had to
 # import to reach it.  `nsamp` sets the baseline snippet length (the spike window), so a mask built
 # for a non-32 window (build_masks) indexes inside it.
-def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask):
-    # memmap path: reads only sampled baseline windows, never the whole span.
-    return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask, win=nsamp)
+def fil_chunk_whitener(filmm, gch, s0, s1, spike_abs, nsamp, mask, *, transform=allpairs_spkD):
+    """The stages' chunk whitener (memmap path: reads only sampled baseline windows, never the whole
+    span).  `transform`: the waveform space of the spikes it will whiten,
+    fiber_stderiv.space_transform(neuro_io.spk_variant(spk_path, base, group), sdiffPairs) -- None
+    for a raw .spk.standard.  The default is the historical all-pairs stderiv space."""
+    return chunk_whitener_mm(filmm, gch, s0, s1, spike_abs, mask=mask, win=nsamp, transform=transform)
