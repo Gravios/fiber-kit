@@ -144,6 +144,7 @@ fiber-pipeline 5 --plan plans/09-backbone-xcorr.yaml   # a custom, reorderable, 
 fiber-pipeline 5 --dry-run …           # print the stage commands instead of running them
 fiber-pipeline -l                      # list stages
 fk list                                # list the plan's steps by their unique names
+fk run 5                               # the whole plan (same as fiber-pipeline 5)
 fiber-pipeline 5 fiber-realign-2       # run ONE plan step (its plan in/out/params)
 fiber-pipeline 5 --from fiber-cpos-2   # the plan from that step on (--to <step> ends a span)
 ```
@@ -183,6 +184,8 @@ fiber-pipeline 5 fiber-realign-2                     # positional step names (pl
 fiber-pipeline 5 --step fiber-consensus-1 --step 7   # --step, repeatable
 fiber-pipeline 5 --from fiber-anchor-link-1          # to the end of the plan
 fk run 5 fiber-cpos-1..fiber-realign-2 --dry-run     # the same through fk
+fk run 5                                             # the whole plan, as fiber-pipeline 5
+fk run 5 --from fiber-cpos-2 --to fiber-realign-3    # a span
 ```
 
 Selected steps run in plan order with their plan tags and params; the plan's bookkeeping still sees every

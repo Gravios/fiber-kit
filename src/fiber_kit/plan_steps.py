@@ -245,15 +245,23 @@ def _cmd_list(a):
 
 
 def _cmd_run(a):
+    """`fk run <elec>` runs what `fiber-pipeline <elec>` runs: the whole plan (--plan, else the
+    pipeline: of $FK_CONFIG), or the canonical stages when there is no plan.  Steps, --from and --to
+    narrow it to those plan steps."""
     path = default_plan(a.plan)
-    if not path:
+    sel = list(a.steps)
+    if a.from_ or a.to:
+        sel.append(f"{a.from_ or ''}..{a.to or ''}")
+    if sel and not path:
         raise PlanError("no plan to run steps of: give --plan <file>, or run where fiber-kit.yaml (or "
                         "$FK_CONFIG) has a 'pipeline:' section")
-    steps = load_steps(path)
-    resolve(steps, a.steps)                                  # fail here, with the plan in hand
+    if path:                                                 # fail here, with the plan in hand
+        steps = load_steps(path)
+        if sel:
+            resolve(steps, sel)
     exe = shutil.which("fiber-pipeline") or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "fiber-pipeline")
-    cmd = [exe, str(a.elec), "--plan", path] + [x for s in a.steps for x in ("--step", s)]
+    cmd = [exe, str(a.elec)] + (["--plan", path] if path else []) + [x for s in sel for x in ("--step", s)]
     if a.method:
         cmd += ["--method", a.method]
     if a.dry_run:
@@ -263,8 +271,8 @@ def _cmd_run(a):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="fk", description="fiber-kit pipeline plans: list the steps by their unique names, run chosen "
-                               "steps.  A step is named <stage>-<k> (its k-th run of that stage, in plan "
+        prog="fk", description="fiber-kit pipeline plans: list the steps by their unique names, run the "
+                               "plan or chosen steps of it.  A step is named <stage>-<k> (its k-th run of that stage, in plan "
                                "order) or by its own `name:` in the plan; a stage that runs once is also its "
                                "bare stage name.")
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -273,10 +281,13 @@ def main(argv=None):
     pl.add_argument("--plan", help="plan file (default: the 'pipeline:' section of $FK_CONFIG or "
                                    "./fiber-kit.yaml, as fiber-pipeline)")
     pl.add_argument("--names", action="store_true", help="print only the step names, one per line")
-    pr = sub.add_parser("run", help="run chosen steps of the plan (fiber-pipeline <elec> --plan P --step ...)")
+    pr = sub.add_parser("run", help="run the plan, or chosen steps of it (fk run 6 | fk run 6 fiber-realign-2)")
     pr.add_argument("elec", type=int, help="electrode group")
-    pr.add_argument("steps", nargs="+", help="steps: names, positions, ranges A..B (e.g. fiber-realign-2, "
-                                             "fiber-consensus-1..fiber-cpos-2)")
+    pr.add_argument("steps", nargs="*", help="steps to run: names, positions, ranges A..B (e.g. fiber-realign-2, "
+                                             "fiber-consensus-1..fiber-cpos-2); none = the whole plan (the "
+                                             "canonical stages when there is no plan), as fiber-pipeline <elec>")
+    pr.add_argument("--from", dest="from_", metavar="STEP", help="run from this step (to the end, or --to)")
+    pr.add_argument("--to", metavar="STEP", help="run up to and including this step")
     pr.add_argument("--plan", help="plan file (default as for `fk list`)")
     pr.add_argument("--method", "--variant", dest="method", help="session method token for the run")
     pr.add_argument("-n", "--dry-run", action="store_true", help="print the stage commands only")

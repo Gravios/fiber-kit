@@ -160,6 +160,20 @@ def main():
                              "sys.exit(main(sys.argv[1:]))", "run", "5", "fiber-intrachunk-1", "--dry-run"],
                             capture_output=True, text=True, env=e3, cwd=sess)
         check(fr.returncode == 0 and headers(fr.stdout) == ["fiber-intrachunk-1"], "fk run --dry-run forwards to fiber-pipeline")
+        fkrun = lambda *x, cfg=p: subprocess.run(                      # noqa: E731
+            [sys.executable, "-c", "import sys; from fiber_kit.plan_steps import main; sys.exit(main(sys.argv[1:]))",
+             "run", *x, "--dry-run"], capture_output=True, text=True, cwd=sess,
+            env=dict(e3, FK_CONFIG=cfg))
+        fr = fkrun("5")
+        check(fr.returncode == 0 and len(headers(fr.stdout)) == 6, "fk run 5: the whole plan")
+        fr = fkrun("5", "--from", "fiber-realign-2", "--to", "fiber-link-1")
+        check(fr.returncode == 0 and headers(fr.stdout) == ["fiber-realign-2 (realign-after-chunk)", "fiber-link-1"],
+              "fk run 5 --from / --to: the span")
+        fr = fkrun("5", cfg=os.path.join(d, "none.yaml"))
+        check(fr.returncode == 0 and not headers(fr.stdout) and "== fiber-session" in fr.stdout,
+              "fk run 5 without a plan: the canonical stages, as fiber-pipeline 5")
+        fr = fkrun("5", "fiber-realign-2", cfg=os.path.join(d, "none.yaml"))
+        check(fr.returncode == 2 and "no plan" in fr.stderr, "fk run 5 <step> without a plan is refused")
 
         print("fiber-plan-edit model / fiber-plan-lint:")
         try:
