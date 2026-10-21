@@ -238,7 +238,7 @@ Positional: `session`, `group`
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
 | `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
-| `--peak` | — | override: the group's peakSampleIndex, 1-BASED like the YAML's (default the YAML's value; fiber-session passes one when the session has none). Windows hold the spike time at index peak-1 -- neurosuite-3's cut -- which is also where the klusters algorithm aligns each template's peak |
+| `--peak` | — | override: the group's peakSampleIndex, 1-BASED like the YAML's (default the YAML's value; fiber-session passes one when the session has none). Windows hold the spike time at index peak-1 -- neurosuite-3's cut -- which is also where the klusters algorithm aligns each template's peak. With a .fil, the windows on disk are located in it first: windows cut elsewhere (a 0.38.1-0.50 commit cut them at peak) are aligned in their own geometry and re-cut at peak-1 |
 | `--clu` | — | cluster file (default <base>.clu.<group>; pass the refined/relinked one, e.g. <base>.clu.stderiv.<group>.refine) |
 | `--align-algo` (`--align-method`) | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed. (Named --align-method to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
 | `--max-shift` | — | klusters: lag search radius (default Klusters': max(1, (peak-1)//2)) [FK_REALIGN_MAX_SHIFT] |

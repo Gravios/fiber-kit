@@ -21,6 +21,8 @@
 import argparse
 import glob
 import os
+from typing import NamedTuple
+
 import numpy as np
 
 _LP = "\u25b8 fiber-realign"
@@ -448,9 +450,63 @@ def _derive_from_fil(v, raw_ext, cfg, group):
     return wav
 
 
+class WindowIndex(NamedTuple):
+    """Where the windows on disk hold the spike time (window_index)."""
+    index: int          # 0-based sample of the window that is the spike time
+    variant: str        # the .spk token it was measured on
+    frac: float         # fraction of the sampled windows a .fil cut at `index` reproduces
+    n: int              # windows sampled
+
+
+def window_index(filmm, cfg, group, res, nsamp, nch, base, tokens=("standard",), n=200, seed=0):
+    """Measure where the windows on disk hold the spike time: the 0-based k for which cutting the .fil
+    at [ts - k, ts - k + nsamp) reproduces them.  That is the geometry the windows were cut with --
+    the YAML's peakSampleIndex - 1 for a neurosuite-3 extraction, one more for windows a 0.38.1-0.50
+    commit cut -- and the index the spike time has to sit at for an alignment of THESE windows to
+    move it onto the template's peak.
+
+    Up to `n` spikes away from the file's ends are re-cut at every k and derived into the variant
+    (_derive_from_fil); the windows' central half is compared, so a --shift-spk roll's wrapped edge
+    does not hide the match.  `tokens` are tried in order until one the .fil derives reproduces at
+    a single k (at least half the sampled windows, no other k within a fifth of that).  Returns a
+    WindowIndex, or None: no variant reproduces (cut from another signal, only opaque variants, or
+    no spike inside the .fil)."""
+    import contextlib
+    import io
+    res = np.asarray(res, np.int64)
+    pad = 2 * int(nsamp) + 2
+    q = int(nsamp) // 4
+    for tok in dict.fromkeys(t for t in tokens if t):
+        try:
+            spk_v, r = open_waveforms(base, group, nsamp, nch, tok)
+        except (FileNotFoundError, ValueError):
+            continue
+        m = min(res.size, spk_v.shape[0])
+        inside = np.flatnonzero((res[:m] >= pad) & (res[:m] < filmm.shape[0] - pad))
+        if inside.size == 0:
+            return None
+        sub = np.sort(np.random.default_rng(seed).choice(inside, min(int(n), inside.size), replace=False))
+        # one wide cut per spike, [ts - nsamp - 1, ts + nsamp); the window with the spike time at k (plus
+        # its leading sample) starts nsamp - k into it
+        wide = reextract_from_fil(filmm, cfg["channels"], res[sub], 2 * nsamp + 1, nsamp + 1)
+        raw = np.concatenate([wide[:, nsamp - k:2 * nsamp - k + 1] for k in range(nsamp)])
+        with contextlib.redirect_stdout(io.StringIO()):    # a refusal here only means: try the next token
+            der = _derive_from_fil(r.variant or "standard", raw, cfg, group)
+        have = np.asarray(spk_v[sub], np.int32)
+        if der is None or der.shape[1:] != have.shape[1:]:
+            continue
+        der = np.asarray(der, np.int32).reshape(nsamp, sub.size, nsamp, -1)
+        frac = (der[:, :, q:nsamp - q, :] == have[None, :, q:nsamp - q, :]).all(axis=(2, 3)).mean(1)
+        k = int(np.argmax(frac))
+        runner = float(np.sort(frac)[-2]) if frac.size > 1 else 0.0
+        if frac[k] >= 0.5 and runner <= 0.2 * frac[k]:
+            return WindowIndex(k, r.variant or "standard", float(frac[k]), int(sub.size))
+    return None
+
+
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             min_n=20, method="klusters", peak=None, min_score=0.70, upsample=1,
-            variant="standard", verbose=True, recenter=False, rmin=0.4):
+            variant="standard", verbose=True, recenter=False, rmin=0.4, align_index=None):
     """Read the .spk of the VARIANT the clu/res points to, .res, .clu; compute per-spike
     offsets and corrected .res.
 
@@ -463,6 +519,8 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     method='template'  legacy median/un-normalised aligner;
     method='centroid'  reference-free per-spike energy-centroid alignment (fiber_lib.centroid_shift) to
                        the population's own circular-mean centroid -- needs NO peak/template/labels.
+    align_index: the klusters target when the windows on disk were measured to hold the spike time
+    somewhere else than timestamp_index(peak) (window_index); None = timestamp_index(peak).
     Returns (res, off, ioff, res_corrected, spk, spk_path, labels)."""
     # the clu names the variant exactly (.clu.stderiv.N -> .spk.stderiv.N); load THAT file, not a
     # preference search.  prefer must be a list of variant tokens (a bare string would be walked
@@ -490,10 +548,12 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     elif method == "klusters":
         # Klusters aligns to peakSampleIndex - 1 (its parameter is 1-based) whatever .spk variant is
         # loaded -- the same index the commit cuts its windows at (timestamp_index), so a committed
-        # window holds its template's peak on the target and a second pass moves nothing.
+        # window holds its template's peak on the target and a second pass moves nothing.  Windows cut
+        # with another geometry (align_index, measured) are aligned in their own: that moves each time
+        # onto its template's peak, and the commit's cut then puts the peak on timestamp_index(peak).
         if peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
-        align_peak = timestamp_index(peak)
+        align_peak = timestamp_index(peak) if align_index is None else int(align_index)
         off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample,
                                      recenter=recenter, rmin=rmin)
     else:
@@ -535,7 +595,9 @@ def main(argv=None):
                     help="override: the group's peakSampleIndex, 1-BASED like the YAML's (default the YAML's "
                          "value; fiber-session passes one when the session has none).  Windows hold the spike "
                          "time at index peak-1 -- neurosuite-3's cut -- which is also where the klusters "
-                         "algorithm aligns each template's peak")
+                         "algorithm aligns each template's peak.  With a .fil, the windows on disk are located "
+                         "in it first: windows cut elsewhere (a 0.38.1-0.50 commit cut them at peak) are "
+                         "aligned in their own geometry and re-cut at peak-1")
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
@@ -629,10 +691,37 @@ def main(argv=None):
     # --variant (explicit) wins over the clu-name inference and --out-variant, so a stderiv_C5 session
     # names its real variant instead of the hard-coded 'stderiv' the pipeline puts in the clu path.
     out_variant = a.variant or (a.out_variant if a.out_variant is not None else (cv or "standard"))
+    # Where do the windows on disk hold the spike time?  Measured against the .fil when there is one.
+    # Windows cut with another geometry than the group's (a 0.38.1-0.50 commit cut them one sample
+    # late) are aligned in their own, so each time moves onto its template's peak and the re-cut puts
+    # that peak on timestamp_index(peak): one pass repairs them, where aligning at the group's index
+    # would shift every window by the difference (and the next pass would shift it back).  Measured on
+    # the aligned variant ONLY: an old commit re-cut the variants the .fil derives and merely rolled the
+    # others, so another variant's geometry says nothing about these windows.
+    align_index = win_note = None
+    fil = a.fil or f"{base}.fil"
+    if a.align_method == "klusters" and peak is not None and cfg.get("ntotal") and os.path.exists(fil):
+        wi = window_index(nio.open_signal(fil, cfg["ntotal"]), cfg, group, nio.read_res(base, group),
+                          nsamp, nch, base, tokens=(out_variant,))
+        tp = timestamp_index(peak)
+        if wi is None:
+            win_note = (f"not located in {os.path.basename(fil)} (cut from another signal, or no variant the "
+                        f".fil derives): aligned at the group's index {tp}")
+        elif wi.index == tp:
+            win_note = (f".spk.{wi.variant}: the spike time at index {tp}, the group's geometry "
+                        f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically)")
+        else:
+            align_index = wi.index
+            win_note = (f".spk.{wi.variant}: the spike time at index {wi.index}, NOT the group's {tp} "
+                        f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically): aligned at {wi.index}"
+                        + (f", re-cut at {tp}" if fil_path else
+                           "; --shift-spk keeps that geometry (re-cut with --reextract)"))
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
         method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
-        variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin)
+        variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index)
+    if win_note:
+        _det("windows", win_note)
 
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
     # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose

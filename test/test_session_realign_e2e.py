@@ -6,7 +6,8 @@ A synthetic one-group session built from a .fil: three units whose spikes are de
 transform derives, and a .pca for standard and stderiv.
 
   * --realign off leaves .res/.spk/.fet exactly as extracted (the negative control);
-  * the default (auto, .fil present) commits: the .res moves, and the result is BYTE-IDENTICAL
+  * the default (auto, .fil present) commits -- after locating the windows on disk in the .fil (the
+    spike time at peakSampleIndex - 1) -- the .res moves, and the result is BYTE-IDENTICAL
     to `--realign off` followed by the plan step `fiber-realign --reextract --refeaturize
     --variants all` -- the two paths cannot drift apart;
   * every variant on disk is rebuilt: standard and stderiv re-extracted from the .fil (standard
@@ -144,6 +145,8 @@ def main():
         rc, out = session(ba)
         check("default run exits 0", rc == 0, out)
         check("default with a .fil commits by reextract", "realign: reextract" in out, out)
+        check("the commit locates the stderiv windows on disk at the group's index (re-cut from the .fil)",
+              f"the spike time at index {PEAK - 1}, the group's geometry" in out, out)
         res_a = nio.read_res_file(ba + ".res.1")
         check("the .res moved", blob(ba, "res.1") != orig["res.1"])
         diff = [e for e in SET if blob(ba, e) != blob(bo, e)]
