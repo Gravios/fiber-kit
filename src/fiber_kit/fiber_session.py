@@ -2416,18 +2416,75 @@ def main():
     #   main() on the .clu just written -- the same code, flags and output as the plan step
     #   `fiber-realign --reextract --refeaturize --variants all` -- so the two cannot drift apart.
     if a.realign != "off":
-        _commit_realign(a, clu_out, space, sdiff, yaml_peak if yaml_peak is not None else peak, log, det)
+        commit_peak, how = _commit_peak(yaml_peak, spk, clu,
+                                        locate=lambda: _locate_windows(a, gch, sdiff, res, space))
+        if how != "yaml":
+            det("peak", f"{commit_peak} (1-based) {how} -- the YAML has no peakSampleIndex for this group")
+        _commit_realign(a, clu_out, space, sdiff, commit_peak, log, det)
         if a.emit_fet:                                    # the requested .fet, from the committed set
             _spk_c, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=space or a.method)
             _emit_fet(_spk_c, read_res(a.base, a.elec))
     log(f"done in {time.time()-t0:.0f}s")
 
 
+def _commit_peak(yaml_peak, spk, labels, locate=None, n_units=30, per_unit=200, seed=0):
+    """The 1-based peakSampleIndex the end-of-run commit cuts its windows at (fiber-realign: the spike
+    time at peak - 1, also its klusters target).  Returns (peak, how).
+
+    The YAML's when the group has one: that is the window neurosuite-3 cut and Klusters re-cuts.
+    Without one there is no declared geometry, and where a spike peaks in its window differs between
+    data sets, so it is MEASURED.  First, where the windows on disk hold the spike time (`locate`:
+    fiber_realign.window_index against the .fil) -- the geometry they were cut with, which the commit
+    then keeps whatever the waveforms look like.  Without a .fil that reproduces them, the median over
+    the largest units of each unit's template peak (argmax of the channel-summed |mean|, the klusters
+    template peak): the extraction's index wherever the detector timestamps the peak, and the sample
+    a --shift-spk commit (which keeps the windows' geometry) holds every template on, so it re-centres
+    nothing systematically.  Before 0.51 this passed build_masks' 15/32 guess, read as 1-based: every
+    spike of a group whose spikes peak elsewhere moved by the difference."""
+    if yaml_peak is not None:
+        return int(yaml_peak), "yaml"
+    wi = locate() if locate is not None else None
+    if wi is not None:
+        return wi.index + 1, (f"measured: the .spk.{wi.variant} windows hold the spike time at index "
+                              f"{wi.index} ({wi.frac:.0%} of {wi.n} re-cut identically from the .fil)")
+    lab = np.asarray(labels)
+    ids, cnt = np.unique(lab[lab > 1], return_counts=True)
+    rng = np.random.default_rng(seed)
+    peaks = []
+    for k in np.argsort(-cnt, kind="stable")[:n_units]:
+        idx = np.flatnonzero(lab == ids[k])
+        if idx.size < 20:
+            continue
+        if idx.size > per_unit:
+            idx = np.sort(rng.choice(idx, per_unit, replace=False))
+        peaks.append(int(np.argmax(np.abs(np.asarray(spk[idx], np.float64).mean(0)).sum(1))))
+    if peaks:
+        return int(np.median(peaks)) + 1, f"measured on the template peaks of the {len(peaks)} largest units"
+    idx = np.sort(rng.choice(len(spk), min(len(spk), 2000), replace=False))
+    return (int(np.argmax(np.abs(np.asarray(spk[idx], np.float64)).mean(0).sum(1))) + 1,
+            "measured on the whole group's template peak (no unit of 20 spikes)")
+
+
+def _locate_windows(a, gch, sdiff, res, space):
+    """fiber_realign.window_index of the .spk the commit aligns (this run's own variant, and only that:
+    another variant may have been cut differently) against the .fil the commit reads, or None."""
+    fil = a.realign_fil or f"{a.base}.fil"
+    if not a.ntotal or not os.path.exists(fil):
+        return None
+    try:
+        from . import fiber_realign as frl
+    except ImportError:
+        import fiber_realign as frl
+    return frl.window_index(nio.open_signal(fil, a.ntotal),
+                            {"channels": [int(c) for c in gch], "sdiff_pairs": sdiff}, a.elec, res,
+                            a.nsamp, a.nchan, a.base, tokens=(space or a.method,))
+
+
 def _commit_realign(a, clu_path, space, sdiff, peak, log, det):
     """Run fiber-realign's in-place commit on `clu_path` (see --realign).  `sdiff` is the group's
-    sdiffPairs as this run resolved it; `peak` the window's peak sample -- the YAML's, else the one
-    this run inferred (a session sorted without a YAML would otherwise stop fiber-realign cold).
-    Returns the mode used."""
+    sdiffPairs as this run resolved it; `peak` the group's 1-based peakSampleIndex -- the YAML's, else
+    the one _commit_peak measured (a session sorted without a YAML would otherwise stop fiber-realign
+    cold).  Returns the mode used."""
     try:
         from . import fiber_realign as frl
     except ImportError:
