@@ -1863,7 +1863,7 @@ def _carry_units(clu, child, parent, next_atom, in_clu, units):
 
 def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, gid,
                   t_min, chunk_s, nchunks, log, det):
-    """Fold per-chunk fiber_deconv results into the sort and the manifest.
+    """Fold per-chunk fiber_deconv results into the sort and collect the manifest rows.
 
     Only CORE spikes of each chunk are taken (overlap spikes belong to the
     neighbour), mirroring how labels are assigned.  Rescued spikes move from
@@ -1871,7 +1871,10 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
     parked as one new child atom per (source atom, fiber) -- reviewable and
     revertible in Klusters.  The manifest lists every core detection the
     pursuit labelled, every collision partner, and every placement that no
-    detection anchors (an undetected spike: advisory, never in the .clu)."""
+    detection anchors (an undetected spike: advisory, never in the .clu).
+    Returns (clu, next_atom, rows); the rows carry PRE-SAVE cluster ids and the
+    detection times, and _write_deconv_manifest writes them once the sort is
+    saved (final ids) and committed (final times)."""
     new_clu = clu.copy()
     n_err = n_resc = n_part = n_un = 0
     mthr = []
@@ -1905,20 +1908,32 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
                 n_un += 1
     if a.deconv_assign and n_resc:
         clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom)
-    man = nio.session_path(a.base, "deconv", a.elec, variant=a.method, tag=a.clu_stage) + ".tsv"
-    with open(man, "w") as f:
-        f.write("spike\tres\tchunk\tclu\tdeconv_clu\tdt\tamp\tgain\tmargin\trescued"
-                "\tpartner_clu\tpartner_dt\n")
-        for r_ in rows:
-            f.write("\t".join(f"{v:.3f}" if isinstance(v, (float, np.floating)) else str(v)
-                              for v in r_) + "\n")
     fin = [m for m in mthr if np.isfinite(m)]
     det("deconv", f"{n_resc:,} spikes {'parked into' if a.deconv_assign else 'attributable to'} fibers"
                   f" \u00b7 {n_part:,} collision partners \u00b7 {n_un:,} unanchored placements"
                   + (f" \u00b7 margin {np.median(fin):.1f} (median)" if fin else " \u00b7 margin: none calibrated")
                   + (f" \u00b7 {n_err} chunk(s) failed" if n_err else ""))
-    det("", f"{man}")
-    return clu, next_atom
+    return clu, next_atom, rows
+
+
+def _write_deconv_manifest(path, rows, final_of, res_now):
+    """Write the deconvolution manifest in the terms of the WRITTEN sort: cluster ids as they are in
+    the saved .clu (final_of: pre-save id -> written id; 0 when the fiber is gone), `res` the time in
+    the .res as it is now -- the committed one after the end-of-run realign -- and `res_detect` the
+    time the pursuit saw.  An unanchored placement (spike -1) has no .res row and keeps its own time.
+    Until 0.51 the manifest held pre-renumber ids and pre-commit times, so neither matched the .clu
+    or the .res beside it."""
+    def fid(v):
+        return final_of.get(int(v), 0) if int(v) > 0 else 0
+    with open(path, "w") as f:
+        f.write("spike\tres\tchunk\tclu\tdeconv_clu\tdt\tamp\tgain\tmargin\trescued"
+                "\tpartner_clu\tpartner_dt\tres_detect\n")
+        for (g, t_det, c, cl, pg, dt, amp, gain, margin, resc, qg, pdt) in rows:
+            t_now = int(res_now[g]) if g >= 0 else int(t_det)
+            r_ = (g, t_now, c, fid(cl), fid(pg), dt, amp, gain, margin, resc, fid(qg), pdt, int(t_det))
+            f.write("\t".join(f"{v:.3f}" if isinstance(v, (float, np.floating)) else str(v)
+                              for v in r_) + "\n")
+    return path
 
 
 def _knob(name, fallback):
@@ -2224,9 +2239,10 @@ def main():
     clu = np.where(labels >= 0, labels + FIBER0, 0).astype(np.int32)
 
     # ── deconvolution: park confidently attributed noise / collision spikes, write the manifest ──
+    deconv_rows = None
     if a.deconv:
-        clu, next_atom = _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv,
-                                       ext_idx, gid, t_min, chunk_s, nchunks, log, det)
+        clu, next_atom, deconv_rows = _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv,
+                                                    ext_idx, gid, t_min, chunk_s, nchunks, log, det)
 
     # ── optional per-spike consolidation (strip / knn) of the finished labels ──
     #   Session fibers are chunk-local by construction (linking only NAMES them across
@@ -2268,6 +2284,11 @@ def main():
     _, _final = nio.read_clu_file(clu_out)
     _final = np.asarray(_final)
     final_of = _final_ids(clu, _final)
+    deconv_man = None
+    if deconv_rows is not None:                           # in the written ids; times rewritten after a commit
+        deconv_man = nio.session_path(a.base, "deconv", a.elec, variant=a.method, tag=a.clu_stage) + ".tsv"
+        _write_deconv_manifest(deconv_man, deconv_rows, final_of, res)
+        det("deconv", deconv_man)
     if carried:
         det("carried", ", ".join(f"{u}->{int(_final[np.flatnonzero(in_clu == u)[0]])}" for u in sorted(carried))
                        + "  (input unit -> output cluster)")
@@ -2427,6 +2448,7 @@ def main():
         meta_elec=a.elec, meta_channels=gch, meta_sr=a.sr, meta_mask=np.asarray(mask),
         meta_n_grid=a.n_grid, meta_p=p, meta_nsamp=a.nsamp, meta_nchan=a.nchan,
         meta_method=a.method, meta_chunk_min=a.chunk_min, meta_overlap_min=a.overlap_min,
+        meta_n_spikes=nspk,                               # the .res this sort indexes: a changed spike set shows
         drift_pca_basis=drift_basis, drift_pca_mean=drift_mean, drift_R=drift_R, drift_t=drift_t,
         drift_resid=drift_resid, drift_nanchor=drift_nanchor, meta_drift_k=KDRIFT,
         drift_anchor_pairs=drift_anchor_pairs)
@@ -2465,6 +2487,8 @@ def main():
             src = own_paths.get(kind)
             if src and os.path.exists(src) and os.path.abspath(src) != os.path.abspath(dst):
                 shutil.copyfile(src, dst)
+        if deconv_man is not None:                        # the manifest's res follows the committed .res
+            _write_deconv_manifest(deconv_man, deconv_rows, final_of, read_res(a.base, a.elec))
         if a.emit_fet:                                    # the requested .fet, from the committed set
             _spk_c, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=space or a.method)
             _emit_fet(_spk_c, read_res(a.base, a.elec))

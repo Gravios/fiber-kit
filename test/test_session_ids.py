@@ -89,6 +89,7 @@ def main():
               fibers.size > 0 and not (clu == 1).any() and fibers.min() >= 2, out)
         check("no atom is 1 (0 is noise only)", not (clc == 1).any() and np.array_equal(clc == 0, clu == 0))
         fib = np.load(nio.fibers_path(base, "stderiv", 1), allow_pickle=False)
+        check(".fibers records the spike count of the .res it indexes", int(fib["meta_n_spikes"]) == res.size)
         gid, cid, ch = fib["gid"], fib["clu_id"], fib["chunk"]
         check("the first global fiber is a cluster >= 2 (it was 1)", (cid[gid == 0] >= 2).all() and (gid == 0).any())
         same = all(np.unique(cid[gid == g]).size == 1 for g in np.unique(gid[gid >= 0]))

@@ -8,8 +8,12 @@ units, collisions censored at detection), run three ways:
   * --no-deconv: the deconv columns are NaN, no manifest, and every label is
     what the --deconv run wrote (--deconv alone changes nothing);
   * --deconv --deconv-assign: moves exactly the spikes the manifest marks,
-    all from noise, onto their own cell's fiber, as new child atoms.
+    all from noise, onto their own cell's fiber, as new child atoms;
+  * --deconv with the end-of-run commit: the manifest is written in the terms of the saved sort --
+    its cluster ids are ids of the written .clu, `res` is the committed .res and `res_detect` the
+    time the pursuit saw (until 0.51 both were the pre-save, pre-commit values).
 """
+import shutil
 import os
 import subprocess
 import sys
@@ -137,6 +141,34 @@ def main():
         _, clc3 = nio.read_clu_file(f"{base}.clc.stderiv.1.dca")
         check("rescued spikes are parked as new child atoms (not merged into the fibers' atoms)",
               not set(np.unique(clc3[moved]).tolist()) & set(np.unique(clc3[np.setdiff1d(np.flatnonzero(clu3 > 0), moved)]).tolist()))
+
+        # the end-of-run commit, on a copy of the extraction: the manifest follows the written sort
+        cdir = os.path.join(td, "commit"); os.mkdir(cdir)
+        for f in ("syn.fil", "syn.res.1", "syn.spk.stderiv.1", "syn.yaml"):
+            shutil.copy(os.path.join(td, f), cdir)
+        cb = os.path.join(cdir, "syn")
+        r4 = subprocess.run(
+            [sys.executable, "-m", "fiber_kit.fiber_session", cb, "1", "--method", "stderiv", "--no-link",
+             "--chunk-min", "5", "--overlap-min", "0", "--min-group", "60", "--clu-stage", "cm", "--deconv"],
+            capture_output=True, text=True, env=env, timeout=900)
+        if r4.returncode != 0:
+            print((r4.stdout + r4.stderr)[-4000:])
+        check("fiber-session --deconv with the end-of-run commit exits 0", r4.returncode == 0)
+        with open(f"{cb}.deconv.stderiv.1.cm.tsv") as fh:
+            lines = fh.read().splitlines()
+        head = lines[0].split("\t"); mrows4 = [ln.split("\t") for ln in lines[1:]]
+        _, clu4 = nio.read_clu_file(f"{cb}.clu.stderiv.1.cm")
+        ids = set(np.unique(clu4).tolist()) | {0}
+        cols = [head.index(k) for k in ("clu", "deconv_clu", "partner_clu")]
+        check("the manifest's cluster ids are ids of the written .clu",
+              all(int(r_[k]) in ids for r_ in mrows4 for k in cols))
+        res4 = nio.read_res_file(f"{cb}.res.1")
+        anch = [r_ for r_ in mrows4 if int(r_[0]) >= 0]
+        sp = np.array([int(r_[0]) for r_ in anch])
+        rr = np.array([int(r_[1]) for r_ in anch]); rd = np.array([int(r_[head.index("res_detect")]) for r_ in anch])
+        check("res = the committed .res and res_detect = the time the pursuit saw",
+              np.array_equal(rr, res4[sp]) and np.array_equal(rd, res[sp]))
+        check(f"... which the commit moved for {np.count_nonzero(rr != rd)} of {rr.size} rows", (rr != rd).any())
 
     print(f"test_session_deconv: {ok} checks passed")
 
