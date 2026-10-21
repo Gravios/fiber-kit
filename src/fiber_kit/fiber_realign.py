@@ -574,6 +574,81 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     return res, off, ioff, res_corr, spk, spk_path, labels
 
 
+def time_coincidences(times, labels, reserve=(0, 1)):
+    """Spikes that share one sample: ((same), (cross)) as (k, 2) arrays of row pairs (earlier row,
+    later row).  `same` holds pairs inside one unit -- a commit that aligns two detections of one spike
+    onto the same template peak makes one, and its windows are identical: the spike is counted twice;
+    `cross` pairs sit in two units, one of which owns the window wrongly.  Spikes in the `reserve` bins
+    (Klusters' artefact and noise clusters) are left out."""
+    t = np.asarray(times, np.int64); lab = np.asarray(labels)
+    rows = np.flatnonzero(~np.isin(lab, list(reserve)))
+    o = rows[np.lexsort((rows, t[rows]))]                 # by time, then row
+    eq = t[o][1:] == t[o][:-1]
+    a, b = o[:-1][eq], o[1:][eq]
+    pairs = np.stack([np.minimum(a, b), np.maximum(a, b)], 1) if a.size else np.zeros((0, 2), np.int64)
+    same = lab[pairs[:, 0]] == lab[pairs[:, 1]] if a.size else np.zeros(0, bool)
+    return pairs[same], pairs[~same]
+
+
+def time_inversions(times, labels, reserve=(0, 1)):
+    """(all, within_unit): how many times the .res steps backwards in row order -- over the whole
+    group, and inside each unit's own spike list (what Klusters' correlogram sweep reads in order)."""
+    t = np.asarray(times, np.int64); lab = np.asarray(labels)
+    n_all = int(np.count_nonzero(np.diff(t) < 0))
+    rows = np.flatnonzero(~np.isin(lab, list(reserve)))
+    o = rows[np.argsort(lab[rows], kind="stable")]        # unit by unit, row order kept
+    within = (lab[o][1:] == lab[o][:-1]) & (np.diff(t[o]) < 0)
+    return n_all, int(np.count_nonzero(within))
+
+
+def template_peaks(spk, labels, min_n=20, per_unit=500, reserve=(0, 1), seed=0):
+    """{unit: (n, index)}: the sample where each unit's template (mean window, channel-summed |.|)
+    peaks, on the windows as they are."""
+    lab = np.asarray(labels); rng = np.random.default_rng(seed)
+    out = {}
+    for u in np.unique(lab):
+        if int(u) in reserve:
+            continue
+        idx = np.flatnonzero(lab == u)
+        if idx.size < min_n:
+            continue
+        sub = np.sort(rng.choice(idx, per_unit, replace=False)) if idx.size > per_unit else idx
+        out[int(u)] = (int(idx.size), int(np.argmax(np.abs(np.asarray(spk[sub], np.float64).mean(0)).sum(1))))
+    return out
+
+
+def realign_report(res, res_corr, ioff, labels, spk=None, target=None, min_n=20):
+    """Log what a realign does (or would do): the spikes it moves, where each unit's template peaks
+    against the alignment target on the windows as they are, and the spike-time coincidences and
+    inversions in the .res before and after the shift.  Returns the numbers as a dict."""
+    ioff = np.asarray(ioff); n = ioff.size
+    nz = int(np.count_nonzero(ioff))
+    v, c = np.unique(ioff[ioff != 0], return_counts=True)
+    top = ", ".join(f"{int(x):+d}: {int(k):,}" for x, k in sorted(zip(v, c), key=lambda p: -p[1])[:5])
+    rep = dict(n=n, moved=nz)
+    _det("moves", f"{nz:,} of {n:,} spikes ({100 * nz / max(n, 1):.1f}%)" + (f"  [{top}]" if nz else ""))
+    if labels is None:
+        return rep
+    if spk is not None and target is not None:
+        tp = template_peaks(spk, labels, min_n=min_n)
+        d = np.array([p - int(target) for _, p in tp.values()]); w = np.array([k for k, _ in tp.values()])
+        on = int(np.count_nonzero(d == 0)) if d.size else 0
+        rep.update(units=len(tp), on_target=on)
+        if d.size:
+            dv, dc = np.unique(d, return_counts=True)
+            hist = ", ".join(f"{int(x):+d}: {int(k)}" for x, k in zip(dv, dc))
+            _det("peaks", f"{on} of {len(tp)} units' templates peak on the target (index {int(target)}), "
+                          f"{100 * w[d == 0].sum() / w.sum():.1f}% of their spikes  [peak - target: {hist}]")
+    for name, tt in (("now", res), ("after", res_corr)):
+        same, cross = time_coincidences(tt, labels)
+        inv, inv_u = time_inversions(tt, labels)
+        rep[f"same_{name}"], rep[f"cross_{name}"] = len(same), len(cross)
+        rep[f"inv_{name}"], rep[f"inv_unit_{name}"] = inv, inv_u
+        _det(f"res {name}", f"{len(same):,} same-unit and {len(cross):,} cross-unit spike pairs on one sample; "
+                            f"{inv:,} inversions ({inv_u:,} inside a unit)")
+    return rep
+
+
 def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
     out_res = out_res or f"{base}.res.{elec}.realigned"
     out_off = out_off or f"{base}.offsets.{elec}.npy"
@@ -673,9 +748,29 @@ def main(argv=None):
                          "outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE "
                          ".clu.<variant>.<group> with this stage's labels.  The stage clu already exists and "
                          "its labels are unchanged, so skipping the write keeps the base over-cluster intact.")
+    ap.add_argument("--recut", action="store_true",
+                    help="re-cut every variant's windows from the .fil at the CURRENT .res and move no spike "
+                         "(zero offsets): the repair for windows committed with another geometry (before 0.51 "
+                         "a commit cut them one sample after its alignment target) and the refresh after any "
+                         ".res edit.  Implies --reextract; pair with --refeaturize and --variants all.  The "
+                         ".clu is not re-emitted (no label changes)")
+    ap.add_argument("--check", action="store_true",
+                    help="report what a realign of this sort would do and write NOTHING: where the windows "
+                         "on disk hold the spike time against the group's peakSampleIndex - 1 (with a .fil), "
+                         "the spikes it would move, where each unit's template peaks against the target on the "
+                         "windows as they are, and the same-sample spike pairs and inversions in the .res now "
+                         "and after the shift.  The commit flags are ignored")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     a = ap.parse_args(argv)
+    if a.recut and a.check:
+        raise SystemExit("[realign] --recut writes, --check does not: pick one")
+    if a.recut and a.shift_spk:
+        raise SystemExit("[realign] --recut re-reads the .fil; --shift-spk would roll every window by zero")
+    if a.check:
+        a.reextract = a.refeaturize = a.shift_spk = False
+    if a.recut:
+        a.reextract = True
     # peak is needed for the klusters align and any commit; ntotal (the .fil width) is needed ONLY for
     # the .fil re-extraction path -- --shift-spk rolls the existing .spk, so it never reads the .fil.
     fil_path = a.reextract or (a.refeaturize and not a.shift_spk)
@@ -700,28 +795,43 @@ def main(argv=None):
     # others, so another variant's geometry says nothing about these windows.
     align_index = win_note = None
     fil = a.fil or f"{base}.fil"
-    if a.align_method == "klusters" and peak is not None and cfg.get("ntotal") and os.path.exists(fil):
+    if ((a.align_method == "klusters" or a.recut) and peak is not None and cfg.get("ntotal")
+            and os.path.exists(fil)):
         wi = window_index(nio.open_signal(fil, cfg["ntotal"]), cfg, group, nio.read_res(base, group),
                           nsamp, nch, base, tokens=(out_variant,))
         tp = timestamp_index(peak)
         if wi is None:
             win_note = (f"not located in {os.path.basename(fil)} (cut from another signal, or no variant the "
-                        f".fil derives): aligned at the group's index {tp}")
+                        f".fil derives)" + ("" if a.recut else f": aligned at the group's index {tp}"))
         elif wi.index == tp:
             win_note = (f".spk.{wi.variant}: the spike time at index {tp}, the group's geometry "
                         f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically)")
         else:
             align_index = wi.index
+            what = (f"re-cut at {tp}" if a.recut else
+                    f"a realign aligns at {wi.index}; --reextract or --recut re-cuts at {tp}" if a.check else
+                    f"aligned at {wi.index}, re-cut at {tp}" if fil_path else
+                    f"aligned at {wi.index}; --shift-spk keeps that geometry (re-cut with --reextract or --recut)")
             win_note = (f".spk.{wi.variant}: the spike time at index {wi.index}, NOT the group's {tp} "
-                        f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically): aligned at {wi.index}"
-                        + (f", re-cut at {tp}" if fil_path else
-                           "; --shift-spk keeps that geometry (re-cut with --reextract)"))
-    res, off, ioff, res_corr, spk, spk_path, labels = realign(
-        base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
-        method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
-        variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index)
+                        f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically): {what}")
+    if a.recut:
+        res = np.asarray(nio.read_res(base, group), np.int64)
+        off = np.zeros(res.size, np.float32); ioff = np.zeros(res.size, np.int32); res_corr = res.copy()
+        labels = _read_clu(a.clu)[1][:res.size] if a.clu else None
+        a.emit_clu = False                                 # no label changes: nothing to re-emit
+        _log(f"recut: {res.size:,} spikes re-cut at their current times (no alignment)")
+    else:
+        res, off, ioff, res_corr, spk, spk_path, labels = realign(
+            base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
+            method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
+            variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index)
     if win_note:
         _det("windows", win_note)
+    if a.check:
+        _log("check: nothing written")
+        target = align_index if align_index is not None else (timestamp_index(peak) if peak is not None else None)
+        realign_report(res, res_corr, ioff, labels, spk, target, min_n=a.min_n)
+        return
 
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
     # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose

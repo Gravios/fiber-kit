@@ -258,6 +258,8 @@ Positional: `session`, `group`
 | `--out-variant` | — | variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; falls back to standard). There is one .res/.clu under this variant; .spk/.fet are written per feature space in --variants (standard raw, stderiv transform) |
 | `--emit-clu` | flag (off) | re-emit the (label-unchanged) clu next to the committed .res/.spk/.fet so the set opens in Klusters as a unit (default on) |
 | `--no-emit-clu` | flag (on) | do NOT write the clu. Use when the input --clu is a stage-tagged clu but the outputs commit canonically (--out-tag ''): re-emitting would overwrite the BASE .clu.<variant>.<group> with this stage's labels. The stage clu already exists and its labels are unchanged, so skipping the write keeps the base over-cluster intact. |
+| `--recut` | flag (off) | re-cut every variant's windows from the .fil at the CURRENT .res and move no spike (zero offsets): the repair for windows committed with another geometry (before 0.51 a commit cut them one sample after its alignment target) and the refresh after any .res edit. Implies --reextract; pair with --refeaturize and --variants all. The .clu is not re-emitted (no label changes) |
+| `--check` | flag (off) | report what a realign of this sort would do and write NOTHING: where the windows on disk hold the spike time against the group's peakSampleIndex - 1 (with a .fil), the spikes it would move, where each unit's template peaks against the target on the windows as they are, and the same-sample spike pairs and inversions in the .res now and after the shift. The commit flags are ignored |
 | `--out-res` | — |  |
 | `--out-off` | — |  |
 ### `fiber-refine`
