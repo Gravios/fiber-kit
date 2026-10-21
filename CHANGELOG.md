@@ -4,6 +4,44 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.51.0] — realign commits on their target; fiber-session out of the reserve ids
+- **fiber-realign cuts committed windows where it aligned them**: the spike time at `peakSampleIndex - 1`,
+  neurosuite-3's window and the klusters target (`timestamp_index`).  Until now a `--reextract` commit
+  cut at `peakSampleIndex`, one sample late: committed templates peaked one sample after the target, a
+  second realign moved nearly every spike by +1 to undo it (96 % on sirotaA-jg-000005-20120316 group 6
+  with the exp knobs), Klusters' re-cut and fiber-realign's disagreed, and the `.pca` basis was projected
+  onto shifted windows.  `--peak` is the YAML's 1-based value.  **Sessions committed by 0.38.1-0.50 keep
+  their old windows until repaired**: docs/pipeline.md, "Repairing a session committed before 0.51".
+- **A realign aligns in the geometry the windows on disk were cut with**: with a `.fil` it locates them
+  first (`window_index`, logged as `windows`).  On windows an older commit cut at `peakSampleIndex` it
+  aligns there and re-cuts at `peakSampleIndex - 1`, so one pass repairs them; aligning at the group's
+  index would have left every window one sample early and the next pass moving every spike back.
+- fiber-session's end-of-run commit cuts at the group's YAML `peakSampleIndex`, or, without one, at the
+  index the windows on disk were cut with (located in the `.fil`; without a `.fil`, the median template
+  peak of its largest units).  It used build_masks' 15/32 guess, read as 1-based.
+- `fiber-realign --check` (report what a realign would do: the windows' geometry, moves, template peak vs
+  target, same-sample pairs, inversions; writes nothing) and `--recut` (re-extract every variant at the
+  current `.res`, move nothing).
+- `fiber-realign --park-duplicates` (`FK_REALIGN_PARK_DUPS`, on in the shipped profiles and always in
+  fiber-session's commit): the later of two spikes of one unit that a commit puts on one sample goes to
+  cluster 0 as one child atom under 0 (in fiber-session's `--out-variant` copy too; with `--out-tag`
+  only in the clu emitted under the tag); cross-unit pairs and inversions are listed in
+  `<base>.realign.<variant>.<group>[.<stage>].tsv`.  No row is removed or reordered.
+- **fiber-session numbers fibers and atoms from 2**: its first fiber was cluster 1 and its first atom 1,
+  Klusters' noise bin for every later stage, so both were lost downstream.  `.fibers` gains `clu_id` (each
+  row's cluster in the written `.clu`) and `meta_n_spikes`; the merge-candidate list gains `clu_a` /
+  `clu_b`; fiber-relink and fiber-validate-merges read them (pre-0.51 files: gid + 1, with a warning).
+- The deconvolution manifest is written after the hierarchy save and the commit: written cluster ids,
+  committed `res`, and a new `res_detect` column (the time the pursuit saw).
+- `FiberHierarchy.refiberize` parents the empty children of a vanished fiber to 0 instead of keeping an id
+  that can alias a live cluster; `FiberHierarchy.load` keeps a 0 parent for a child that holds spikes.
+- `nio.apply_spike_keep` (fiber-refine `--dedup`) subsets the `.clc` with its `.clu` (a `.clc` an earlier
+  dedup left at the old count is quarantined on its own, not with its stage), subsets the realign
+  offsets, and moves the group's deconvolution manifests and realign pair lists aside as `.stalebkp`.
+- fiber-validate-merges on a pre-0.51 candidate list keeps the pairs of fiber 0 (cluster 1 there).
+- **Sorts change**: cluster and atom ids shift by one (and are recorded), and a commit's windows move one
+  sample earlier.
+
 ## [0.50.0] — fiber-session commits its own realign
 - At the end of a run fiber-session aligns every spike to its fiber's template, writes the shifted
   times to the shared `.res` (+ `<base>.offsets.<group>.npy`), and rebuilds EVERY waveform variant's
