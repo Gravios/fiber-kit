@@ -13,7 +13,9 @@ transform derives, and a .pca for standard and stderiv.
     equals a fresh .fil read at the committed times), the opaque one rolled by the offsets rather
     than skipped, and a .fet per variant whose time column is the committed .res;
   * the jitter is what was removed: the committed times sit closer to the true times;
-  * without a .fil, auto falls back to shift-spk and commits the same .res;
+  * without a .fil, auto falls back to shift-spk and commits the same .res, and the rolled windows equal
+    the re-extracted ones away from the wrap (both keep neurosuite-3's window: the timestamp at
+    peakSampleIndex - 1, where the klusters algorithm aligns each template's peak);
   * --emit-fet writes its .fet from the committed waveforms, last column = committed .res.
 """
 import os
@@ -53,8 +55,9 @@ def _build(td, rng):
     det = (true + rng.integers(-2, 3, true.size)).astype(np.int64)        # detection jitter
     det.tofile(base + ".res.1")
     filmm = nio.open_signal(base + ".fil", NTOTAL)
-    from fiber_kit.fiber_realign import reextract_from_fil
-    raw = reextract_from_fil(filmm, [0, 1, 2], det, NSAMP + 1, PEAK + 1)
+    from fiber_kit.fiber_realign import reextract_from_fil, timestamp_index
+    # what neurosuite-3's extractor writes: the timestamp at peakSampleIndex - 1 (+1 leading sample)
+    raw = reextract_from_fil(filmm, [0, 1, 2], det, NSAMP + 1, timestamp_index(PEAK) + 1)
     nio.write_spk(base, 1, raw[:, 1:, :], variant="standard")
     nio.write_spk(base, 1, fst.apply_stderiv_transform(raw), variant="stderiv")
     shutil.copy(base + ".spk.standard.1", base + ".spk.standard_ADLP.1")   # opaque: no .fil transform
@@ -148,8 +151,8 @@ def main():
               not diff, f"differs: {diff}\n{out}")
 
         filmm = nio.open_signal(ba + ".fil", NTOTAL)
-        from fiber_kit.fiber_realign import reextract_from_fil, roll_spikes
-        raw = reextract_from_fil(filmm, [0, 1, 2], res_a, NSAMP + 1, PEAK + 1)
+        from fiber_kit.fiber_realign import reextract_from_fil, roll_spikes, timestamp_index
+        raw = reextract_from_fil(filmm, [0, 1, 2], res_a, NSAMP + 1, timestamp_index(PEAK) + 1)
         spk_std = np.fromfile(ba + ".spk.standard.1", np.int16).reshape(-1, NSAMP, NCH)
         check(".spk.standard = a fresh .fil read at the committed times", np.array_equal(spk_std, raw[:, 1:, :]))
         spk_sd = np.fromfile(ba + ".spk.stderiv.1", np.int16).reshape(-1, NSAMP, NCH)
@@ -177,6 +180,17 @@ def main():
         check("no .fil: same .res as the reextract commit of the same sort",
               np.array_equal(nio.read_res_file(bn + ".res.1"),
                              nio.read_res_file(os.path.join(td, "nofil_ref", "mini.res.1"))), out + out2)
+        # The roll keeps the extractor's window and the re-extraction must cut the same one: away from
+        # the wrap the two commits hold identical samples (a re-cut at peakSampleIndex, one sample late,
+        # fails here).
+        bref = os.path.join(td, "nofil_ref", "mini")
+        ioff_n = np.rint(np.load(bn + ".offsets.1.npy")).astype(int)
+        m = int(np.abs(ioff_n).max()) + 1
+        rolled = np.fromfile(bn + ".spk.standard.1", np.int16).reshape(-1, NSAMP, NCH)
+        recut = np.fromfile(bref + ".spk.standard.1", np.int16).reshape(-1, NSAMP, NCH)
+        check(f"shift-spk and reextract write the same windows away from the wrap (+-{m} samples)",
+              np.count_nonzero(ioff_n) > 0 and np.array_equal(rolled[:, m:NSAMP - m], recut[:, m:NSAMP - m]),
+              out + out2)
         rc, out = session(fresh("nofil2"), "--realign", "reextract", "--realign-fil", "/nonexistent.fil",
                           "--whiten-source", "spk")
         check("--realign reextract without the .fil stops with a message",

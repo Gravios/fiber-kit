@@ -205,10 +205,24 @@ def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
     return off, ioff
 
 
+def timestamp_index(peak):
+    """0-based index of the spike timestamp inside its window, from the 1-based peakSampleIndex.
+
+    neurosuite-3 cuts every window as [ts - (peakSampleIndex - 1), ...): the extractor
+    (SpikeWindowSpec.peakSample is 0-based), Klusters' re-cut after a realign
+    (klustersdoc_realign.cpp: peakSampleIndex() - 1) and the .nst header all use this index, and it is
+    the sample the klusters algorithm aligns each template's peak to.  A commit has to cut its windows
+    with the same index, or the windows it writes are one sample off from the target it aligned them to
+    (and from a fresh extraction at the same times).  Where the waveform's peak actually sits differs
+    between data sets; this is only the window geometry the YAML declares for the group."""
+    return int(peak) - 1
+
+
 def roll_spikes(spk, ioff):
     """Circularly shift each (T,C) spike window by its integer offset -- the no-.fil commit.
 
-    The realign convention is res_corrected = res + ioff and a window that starts at res-peak, so the
+    The realign convention is res_corrected = res + ioff and a window that starts at
+    res - timestamp_index(peak), so the
     re-extracted-at-res_corr window equals new[t] = old[(t+ioff) % T]; this reproduces that by a per-spike
     circular roll instead of reading the .fil.  Exact for high-pass-filtered .spk windows (the edges are
     ~zero, so the samples rolled in from the far end carry no signal).  Because the stderiv transform
@@ -226,7 +240,9 @@ def reextract_from_fil(filmm, gch, res_corr, nsamp, peak, batch=50000):
     """Re-extract each spike's waveform window from the FILTERED signal at its CORRECTED
     timestamp — the real thing, not a circular roll of the old window.  filmm is the
     (nSamples, ntotal) int16 memmap from neuro_io.open_signal; gch the group's channel
-    columns; the window is [ts - peak, ts - peak + nsamp).  Edge spikes are clamped.
+    columns; the window is [ts - peak, ts - peak + nsamp), i.e. `peak` is the 0-BASED index of
+    the timestamp in the returned window (a commit passes timestamp_index(peakSampleIndex), + 1
+    when it reads one extra leading sample).  Edge spikes are clamped.
     Returns (n, nsamp, len(gch)) int16, sample-major (the .spk layout)."""
     gch = np.asarray(gch, int)
     n = len(res_corr); Tlen = filmm.shape[0]
@@ -473,10 +489,11 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
         align_peak = target
     elif method == "klusters":
         # Klusters aligns to peakSampleIndex - 1 (its parameter is 1-based) whatever .spk variant is
-        # loaded; the .fil re-extraction keeps using the yaml value as the window geometry.
+        # loaded -- the same index the commit cuts its windows at (timestamp_index), so a committed
+        # window holds its template's peak on the target and a second pass moves nothing.
         if peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
-        align_peak = int(peak) - 1
+        align_peak = timestamp_index(peak)
         off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample,
                                      recenter=recenter, rmin=rmin)
     else:
@@ -515,8 +532,10 @@ def main(argv=None):
                     "finalize).  Probe geometry is read from <session>.yaml; flags override.")
     sy.add_session_args(ap, sdiff=True)
     ap.add_argument("--peak", type=int, default=None,
-                    help="override: peak sample index of the window (default the YAML's peakSampleIndex; "
-                         "fiber-session passes the one it inferred when the session has no YAML)")
+                    help="override: the group's peakSampleIndex, 1-BASED like the YAML's (default the YAML's "
+                         "value; fiber-session passes one when the session has none).  Windows hold the spike "
+                         "time at index peak-1 -- neurosuite-3's cut -- which is also where the klusters "
+                         "algorithm aligns each template's peak")
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
@@ -683,9 +702,11 @@ def main(argv=None):
     elif a.reextract or a.refeaturize:
         fil = a.fil or f"{base}.fil"
         filmm = nio.open_signal(fil, cfg["ntotal"])
-        # read the window PLUS one preceding sample (peak+1, nsamp+1) so the stderiv temporal diff
-        # at t=0 uses the true previous .fil sample; standard = raw_ext[:, 1:, :]
-        raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, peak + 1)
+        # Cut where neurosuite-3 cuts (the timestamp at peakSampleIndex - 1, the klusters target), PLUS
+        # one preceding sample (nsamp+1) so the stderiv temporal diff at t=0 uses the true previous .fil
+        # sample; standard = raw_ext[:, 1:, :].  (Until 0.51 this read at peakSampleIndex: every committed
+        # window sat one sample after its alignment target and after a fresh extraction at the same time.)
+        raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, timestamp_index(peak) + 1)
         # which feature spaces to refresh: standard always; stderiv (+any listed) when present
         if a.variants and a.variants.strip() == "all":
             want = _variants_on_disk(base, group) + [out_variant]
