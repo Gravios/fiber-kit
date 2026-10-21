@@ -294,6 +294,7 @@ class PlanStep:
     tags: dict = field(default_factory=dict)        # subset of TAG_FIELDS -> str
     params: dict = field(default_factory=dict)      # flag -> value
     args: list = field(default_factory=list)        # raw extra flags, passed through verbatim
+    name: str = ""                                  # optional unique step name (plan_steps); '' = <stage>-<k>
     x: float = 0.0
     y: float = 0.0
 
@@ -322,7 +323,9 @@ def load_plan(path):
             x, y = float(pos[0]), float(pos[1])
         except (TypeError, ValueError, IndexError):
             x, y = 0.0, 0.0
-        steps.append(PlanStep(stage=st["stage"], tags=tags, params=params, args=args, x=x, y=y))
+        nm = st.get("name")
+        steps.append(PlanStep(stage=st["stage"], tags=tags, params=params, args=args,
+                              name="" if nm is None else str(nm), x=x, y=y))
     return steps
 
 
@@ -403,6 +406,12 @@ def lint(steps):
     # structural: reuse validate(), but a dependency cycle is a hard error
     for w in validate(steps):
         (errors if "dependency cycle" in w else warnings).append(w)
+    # step names: unique, well-formed, not another step's <stage>-<k> id (plan_steps)
+    try:
+        from . import plan_steps as _ps
+    except ImportError:
+        import plan_steps as _ps
+    errors.extend(_ps.name_errors(steps))
     # per-step flag and value checks against the real module CLIs
     for i, s in enumerate(steps):
         accepted = stage_accepted_flags(s.stage)
@@ -474,6 +483,8 @@ def dump_plan(steps, ordered=True, header=True):
     rows = []
     for s in seq:
         d = {"stage": s.stage}
+        if s.name:
+            d["name"] = s.name
         for k in CATALOG[s.stage]["tags"]:               # in/out always (core wiring); units/cpos/spk only if set
             v = s.tags.get(k, "")
             if k in ("in", "out") or v != "":

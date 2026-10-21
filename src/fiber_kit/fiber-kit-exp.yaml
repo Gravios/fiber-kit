@@ -38,7 +38,9 @@
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
-#  that plan by default (no --plan needed); an explicit --plan <file> still overrides it.  The FK_* knobs
+#  that plan by default (no --plan needed); an explicit --plan <file> still overrides it.  Each step has a
+#  unique name, <stage>-<k> (the k-th run of that stage: fiber-realign-1/2/3) or its own `name:`;
+#  `fk list` prints them and `fiber-pipeline <elec> fiber-realign-2` runs one.  The FK_* knobs
 #  below remain the tuning surface the plan's stages read.
 # ============================================================================
 

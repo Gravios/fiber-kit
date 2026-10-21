@@ -143,6 +143,9 @@ fiber-pipeline 5 fiber-intrachunk --gate cfiber   # one stage with argument over
 fiber-pipeline 5 --plan plans/09-backbone-xcorr.yaml   # a custom, reorderable, repeatable step plan
 fiber-pipeline 5 --dry-run …           # print the stage commands instead of running them
 fiber-pipeline -l                      # list stages
+fk list                                # list the plan's steps by their unique names
+fiber-pipeline 5 fiber-realign-2       # run ONE plan step (its plan in/out/params)
+fiber-pipeline 5 --from fiber-cpos-2   # the plan from that step on (--to <step> ends a span)
 ```
 
 **Dispatch precedence:** `--plan <file>` wins; otherwise a `pipeline:` section embedded in
@@ -153,6 +156,40 @@ with different tags.  `params:` map to that stage's CLI flags (`key: val` → `-
 `key: true` → bare `--flag`).  Edit plans by hand, from `plans/TEMPLATE-all-stages.yaml` (a menu of
 every stage and its parameters), or with the GUI editor `fiber-plan-edit`; lint them with
 `fiber-plan-lint`.
+
+### Step names
+
+A plan may run a stage several times (`fiber-kit-exp.yaml` runs `fiber-realign` three times), so every
+step has a unique id, `<stage>-<k>` -- its k-th run of that stage in plan order: `fiber-realign-1`,
+`fiber-realign-2`, `fiber-realign-3`.  A step may also carry its own `name:` (letters, digits, `.`, `_`,
+`-`; unique; not another step's id), a stable alias that survives reordering, which the positional id
+does not.  `fk list` prints them:
+
+```
+$ fk list                       # the plan fiber-pipeline would run ($FK_CONFIG's, or --plan <file>)
+#   step                   name  in             out            flags
+1   fiber-session-1              -              fiber_session
+2   fiber-realign-1              fiber_session  -
+3   fiber-consensus-1            fiber_session  fs_clean       --quarantine-only 1
+...
+6   fiber-realign-2              exp_chunk      -
+```
+
+A step is selected by its id, its name, its 1-based position, or -- when the stage runs once -- the bare
+stage name; ranges `A..B` (either end open) and comma lists work too:
+
+```
+fiber-pipeline 5 fiber-realign-2                     # positional step names (plan mode)
+fiber-pipeline 5 --step fiber-consensus-1 --step 7   # --step, repeatable
+fiber-pipeline 5 --from fiber-anchor-link-1          # to the end of the plan
+fk run 5 fiber-cpos-1..fiber-realign-2 --dry-run     # the same through fk
+```
+
+Selected steps run in plan order with their plan tags and params; the plan's bookkeeping still sees every
+step, so a `fiber-link` run alone reads the units its plan's `fiber-intrachunk` emitted.  The steps come
+from `--plan`, else from the `pipeline:` section of `$FK_CONFIG`.  A bare stage name that runs more than
+once is refused with its ids; on the command line a bare KNOWN stage name (`fiber-pipeline 5
+fiber-realign`) keeps its old meaning -- that stage stand-alone with the pipeline defaults, not a plan step.
 
 ## Configuration
 

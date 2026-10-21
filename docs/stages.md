@@ -1309,6 +1309,14 @@ Positional: `plans`
 |---|---|---|
 | `--strict` | flag (off) | treat warnings as failures (CI gate) |
 | `-q` (`--quiet`) | flag (off) | print only failures |
+### `fk`
+
+Plan steps by name: `fk list` prints the steps of the plan `fiber-pipeline` would run (`--plan`, else the `pipeline:` section of `$FK_CONFIG`) with their unique ids (`<stage>-<k>`, the k-th run of that stage) and `name:` aliases; `fk run <elec> <step>...` runs chosen steps (`fiber-pipeline <elec> --plan P --step ...`).  See [pipeline.md](pipeline.md#step-names).
+
+Positional: `cmd`
+
+| flag | default | description |
+|---|---|---|
 ### `fiber-kit-init`
 
 Copy the template fiber-kit.yaml (fiber-pipeline tuning config) into the current directory.

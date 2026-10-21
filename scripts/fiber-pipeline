@@ -658,11 +658,17 @@ usage() {
     echo "usage: $(basename "$0") <elec> [all | <stage> ...]"
     echo "       $(basename "$0") <elec> <stage> [<arg> ...]   # one stage; args after it override pipeline defaults"
     echo "       $(basename "$0") <elec> --plan <plan.yaml>     # run a custom, reorderable, repeatable step plan"
+    echo "       $(basename "$0") <elec> <step> [<step> ...]     # run named steps of the plan (see: fk list)"
     echo "       $(basename "$0") --emit-plan > plan.yaml        # write the canonical plan as an editable template"
     echo "options: --plan <file>  run an ordered step plan (stages may repeat with different in/out tags+params)"
     echo "         --method <tok> | --variant <tok>  session method token for the WHOLE run (before any stage"
     echo "                         name; works bare and with --plan) -- CLI form of FK_REALIGN_VARIANT,"
     echo "                         e.g. $(basename "$0") 6 --method stderiv_C5_D34"
+    echo "         --step <name>   run only this plan step (repeatable; also comma lists and ranges A..B).  A step is"
+    echo "                         <stage>-<k>, the k-th run of that stage in the plan (fiber-realign-2), its own"
+    echo "                         'name:' in the plan, its 1-based position, or the bare stage when it runs once;"
+    echo "                         'fk list' prints them.  Uses --plan, else the plan embedded in \$FK_CONFIG"
+    echo "         --from <name> / --to <name>  run a contiguous span of plan steps (either end may be omitted)"
     echo "         --dry-run | -n  print the stage commands instead of running them (works with or without --plan)"
     echo "         --emit-plan     print the canonical plan template ; -l/--list  list stages ; -h/--help"
     echo "primary plan: a 'pipeline:' section embedded in fiber-kit.yaml (\$FK_CONFIG) runs by default ONLY when no --plan"
@@ -784,70 +790,47 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
     esac
 }
 
-# Parse a plan YAML into TAB-delimited normalised steps: stage<TAB>in<TAB>out<TAB>units<TAB>spk<TAB>cpos<TAB>argsquoted
+# Parse a plan into \x1f-delimited rows, one per step, via fiber_kit.plan_steps (the one place step
+# names are made: <stage>-<k> for the k-th run of a stage, or the step's own `name:`):
+#   selected<US>id<US>name<US>stage<US>in<US>out<US>units<US>spk<US>cpos<US>drift<US>argsquoted
+# $1 = plan file; further args = step selectors (none = every step selected).
 _plan_parse() {
-    python3 - "$1" <<'PYPLAN'
-import sys, shlex
+    python3 - "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" "$@" <<'PYPLAN'
+import os, sys
 try:
-    import yaml
-except ImportError:
-    sys.stderr.write("fiber-pipeline: --plan needs PyYAML (pip install pyyaml)\n"); sys.exit(3)
-try:
-    doc = yaml.safe_load(open(sys.argv[1])) or {}
-except Exception as e:
-    sys.stderr.write("fiber-pipeline: cannot read plan %s: %s\n" % (sys.argv[1], e)); sys.exit(1)
-steps = doc.get("pipeline") if isinstance(doc, dict) else doc
-if not isinstance(steps, list) or not steps:
-    sys.stderr.write("fiber-pipeline: plan has no 'pipeline:' list of steps\n"); sys.exit(1)
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix"}
-def field(st, k):
-    v = st.get(k, "")
-    return "" if v is None else str(v)
-rows = []
-for i, st in enumerate(steps):
-    if not isinstance(st, dict):
-        sys.stderr.write("fiber-pipeline: plan step %d is not a mapping\n" % i); sys.exit(1)
-    stage = st.get("stage")
-    if stage not in KNOWN:
-        sys.stderr.write("fiber-pipeline: plan step %d: unknown stage %r (known: %s)\n"
-                         % (i, stage, ", ".join(sorted(KNOWN)))); sys.exit(1)
-    args = []
-    params = st.get("params") or {}
-    if isinstance(params, dict):
-        for k, v in params.items():
-            flag = "--" + str(k).replace("_", "-").lstrip("-")
-            if v is True or v is None or v == "":
-                args.append(flag)                       # bare/boolean flag
-            else:
-                args += [flag, str(v)]
-    extra = st.get("args") or []
-    if isinstance(extra, list):
-        args += [str(a) for a in extra]
-    argq = " ".join(shlex.quote(a) for a in args)
-    rows.append("\x1f".join([stage, field(st, "in"), field(st, "out"),
-                           field(st, "units"), field(st, "spk"), field(st, "cpos"),
-                           field(st, "drift"), argq]))
-sys.stdout.write("\n".join(rows))
+    from fiber_kit import plan_steps
+except ImportError:                                   # a source checkout run without installing
+    sys.path.insert(0, os.path.join(sys.argv[1], "..", "src"))
+    from fiber_kit import plan_steps
+KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
+         "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge",
+         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix"}
+sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN
 }
 
-run_plan() {           # run an ordered, possibly-repeating plan of steps
-    local plan="$1"
+run_plan() {           # run an ordered, possibly-repeating plan of steps ($2.. = step selectors: run only those)
+    local plan="$1"; shift
     [ -f "$plan" ] || { echo "fiber-pipeline: plan not found: $plan" >&2; exit 2; }
-    local spec; spec="$(_plan_parse "$plan")" || exit $?
+    local spec; spec="$(_plan_parse "$plan" "$@")" || exit $?
     # Track the most recent fiber-intrachunk out-stage so a later fiber-link can
     # default its --from-units producer (<stage>.units.npz) to the stage the
     # units were actually emitted at when the plan step omits 'units'.  Without
     # this the default is the canonical 'refine_intrachunk', which is wrong for
     # any plan whose intrachunk writes a different stage (e.g. exp_chunk) and
     # makes link abort with a missing <stage>.units.npz.
-    local n=0 st pin pout punits pspk pcpos pdrift pargs
+    # With step selectors only the selected steps run, but every step still updates that
+    # bookkeeping, so a selected fiber-link sees the units its plan predecessor emitted.
+    local n=0 ran=0 total sel sid sname st pin pout punits pspk pcpos pdrift pargs
+    total=$(printf '%s\n' "$spec" | grep -c .)
     local last_intrachunk_out=refine_intrachunk
-    while IFS=$'\x1f' read -r st pin pout punits pspk pcpos pdrift pargs; do
+    while IFS=$'\x1f' read -r sel sid sname st pin pout punits pspk pcpos pdrift pargs; do
         [ -z "$st" ] && continue
         n=$((n + 1))
-        printf '== [plan %d] %s ==\n' "$n" "$st"
         [ "$st" = fiber-intrachunk ] && last_intrachunk_out="${pout:-refine_intrachunk}"
+        [ "$sel" = 1 ] || continue
+        ran=$((ran + 1))
+        printf '== [plan %d/%d] %s%s ==\n' "$n" "$total" "$sid" "${sname:+ ($sname)}"
         (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
             STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="${punits:-$last_intrachunk_out}"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
             STEP_DRIFT="$pdrift"
@@ -858,6 +841,7 @@ run_plan() {           # run an ordered, possibly-repeating plan of steps
 $spec
 EOF
     [ "$n" -gt 0 ] || { echo "fiber-pipeline: plan produced no steps" >&2; exit 1; }
+    [ "$ran" -gt 0 ] || { echo "fiber-pipeline: no plan step selected" >&2; exit 1; }
 }
 
 emit_plan() {          # print the canonical pipeline as an editable plan template
@@ -893,10 +877,20 @@ main() {
 
     # option scan: pull --dry-run/-n and --plan out of the argument list (anywhere), keep the rest positional
     local PLAN=""
-    local -a pos=()
+    local -a pos=() STEPSEL=()
+    local SEL_FROM="" SEL_TO="" HAVE_RANGE=0
     while [ "$#" -gt 0 ]; do
         case "$1" in
             -n|--dry-run)  FK_DRYRUN=1; export FK_DRYRUN; shift ;;
+            --step)        [ -n "${2:-}" ] || { echo "error: --step needs a step name (see: fk list)" >&2; exit 2; }
+                           STEPSEL+=("$2"); shift 2 ;;
+            --step=*)      STEPSEL+=("${1#--step=}"); shift ;;
+            --from)        [ -n "${2:-}" ] || { echo "error: --from needs a step name" >&2; exit 2; }
+                           SEL_FROM="$2"; HAVE_RANGE=1; shift 2 ;;
+            --from=*)      SEL_FROM="${1#--from=}"; HAVE_RANGE=1; shift ;;
+            --to)          [ -n "${2:-}" ] || { echo "error: --to needs a step name" >&2; exit 2; }
+                           SEL_TO="$2"; HAVE_RANGE=1; shift 2 ;;
+            --to=*)        SEL_TO="${1#--to=}"; HAVE_RANGE=1; shift ;;
             --emit-plan)   emit_plan; exit 0 ;;
             --plan)        PLAN="${2:-}"; [ -n "$PLAN" ] || { echo "error: --plan needs a file" >&2; exit 2; }; shift 2 ;;
             --plan=*)      PLAN="${1#--plan=}"; shift ;;
@@ -904,6 +898,7 @@ main() {
         esac
     done
     set -- "${pos[@]+"${pos[@]}"}"
+    [ "$HAVE_RANGE" = 1 ] && STEPSEL+=("${SEL_FROM}..${SEL_TO}")
 
     # electrode group: first positional if numeric, else FK_ELEC fallback
     local ELEC
@@ -943,6 +938,24 @@ main() {
     # names report cleanly).  The first token after the stage name(s) that is NOT a stage name begins
     # override args, passed through to fiber-<stage> -- only when exactly one stage is selected.
     # (Skipped in --plan mode: the plan file defines the steps and their per-step params.)
+    # Plan step names as positionals: 'fiber-pipeline 5 fiber-realign-2 fiber-cpos-2'.  A first
+    # positional that is neither a stage nor 'all' names plan steps (every positional then does;
+    # the steps run with their plan in/out/params).  A bare stage name keeps its stand-alone meaning;
+    # --step <stage> picks the plan's step when that stage runs once.
+    if [ "$#" -gt 0 ] && [ "$1" != all ]; then
+        local _is_stage=0
+        for s in "${KNOWN_STAGES[@]}"; do [ "$1" = "$s" ] && _is_stage=1; done
+        if [ "$_is_stage" = 0 ]; then STEPSEL+=("$@"); set --; fi
+    fi
+    if [ "${#STEPSEL[@]}" -gt 0 ] && [ -z "$PLAN" ]; then
+        if [ -f "$FK_CONFIG" ] && grep -qE '^pipeline:[[:space:]]*$' "$FK_CONFIG"; then
+            PLAN="$FK_CONFIG"
+        else
+            echo "error: plan step(s) ${STEPSEL[*]} named, but there is no plan: give --plan <file>, or a 'pipeline:' section in \$FK_CONFIG ($FK_CONFIG)" >&2
+            exit 2
+        fi
+    fi
+
     declare -A want=()
     local OVERRIDE_STAGE=""
     local -a OVERRIDE_ARGS=()
@@ -1027,7 +1040,7 @@ main() {
         echo "fiber-pipeline: running the primary plan embedded in $FK_CONFIG (no --plan / no stage named)" >&2
     fi
     if [ -n "$PLAN" ]; then
-        run_plan "$PLAN"
+        run_plan "$PLAN" "${STEPSEL[@]+"${STEPSEL[@]}"}"
         return
     fi
 
