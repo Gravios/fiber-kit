@@ -186,7 +186,8 @@ class FiberHierarchy:
         clu[i] = parent_of(child[i]); child 0 -> fiber 0; a child with no parent
         entry (an orphan, e.g. left by an atom edit) -> fiber 0 with a warning.
         With `renumber`, fibers are compacted to consecutive ids (0,1 preserved
-        as artefact/noise) so the output .clu has no gaps.  Returns numpy arrays
+        as artefact/noise) so the output .clu has no gaps; the children of a fiber
+        left without spikes are parented to 0.  Returns numpy arrays
         (clu_per_spike, clc_per_spike, clp_per_child)."""
         max_child = int(self.child.max()) if self.child.size else 0
         lut = np.zeros(max_child + 1, dtype=np.int64)      # lut[child_id] = fiber (0 if unmapped)
@@ -214,7 +215,12 @@ class FiberHierarchy:
                 if f <= clu.max():
                     rlut[f] = g
             clu = rlut[clu]
-            parent_out = {c: remap.get(f, f) for c, f in self.parent.items()}
+            # A fiber with no spikes left has no place in the compacted ids: its (empty) children go to
+            # 0.  Keeping the old id would alias whichever live fiber was renumbered onto it.
+            gone = sorted({int(f) for f in self.parent.values()} - set(remap))
+            if gone:
+                print(f"  {len(gone)} fiber id(s) without spikes: their children -> 0 (e.g. {gone[:5]})")
+            parent_out = {c: remap.get(f, 0) for c, f in self.parent.items()}
 
         clp = np.zeros(max_child, dtype=np.int64)          # clp[c-1] = fiber of child c
         for c, f in parent_out.items():

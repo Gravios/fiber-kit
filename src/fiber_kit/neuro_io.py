@@ -1286,7 +1286,7 @@ def _is_live_perspike(stage):
 
 
 def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
-                     types=("res", "clu", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True,
+                     types=("res", "clu", "clc", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True,
                      stale=None):
     """Subset EVERY live per-spike file of one spike group to `keep`, in place, so the
     .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a dedup --
@@ -1309,6 +1309,14 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     <file>.stalebkp (non-destructive; the live group stays consistent and the owning stage regenerates
     it).  Pass stale='error' to hard-fail, or stale='skip'/--no-dedup-strict to leave it.  `keep` is a
     boolean mask or index array over the original n_orig spikes.
+
+    The hierarchy's per-spike atom layer (.clc) is subset with its .clu (a .clp maps atom ids, not
+    spikes, and is left as it is); it never decides its stage's fate -- a .clc at another count than
+    its stage (an earlier dedup left it behind) is quarantined on its own.  Per-spike sidecars follow
+    the base stage: the realign offsets (<base>.offsets.<group>.npy) are subset, and every
+    deconvolution manifest and realign pair list of the group (<base>.deconv.*.tsv,
+    <base>.realign.*.tsv; rows indexed by spike) is moved aside as <file>.stalebkp -- its indices
+    would otherwise name other spikes.
     Returns (rewritten_paths, skipped:[(path, rows)])."""
     import glob
     import os
@@ -1322,7 +1330,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     def _rows(path, t):                                    # spike-axis length, fixed binary dtype per type
         if t == "res":
             return int(np.fromfile(path, dtype=RES_DTYPE).size)
-        if t == "clu":
+        if t in ("clu", "clc"):
             return int(max(np.fromfile(path, dtype=CLU_DTYPE).size - 1, 0))
         if t in ("spk", "spkD"):
             return int(open_spk_file(path, nsamp, nchan).shape[0])
@@ -1334,7 +1342,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     def _subset(path, t):                                  # rewrite path in place, keeping `keep` rows
         if t == "res":
             write_res_file(path, np.fromfile(path, dtype=RES_DTYPE)[keep])
-        elif t == "clu":
+        elif t in ("clu", "clc"):
             raw = np.fromfile(path, dtype=CLU_DTYPE)
             write_clu_file(path, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
         elif t in ("spk", "spkD"):
@@ -1367,6 +1375,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             stages.setdefault(tuple(stage), []).append((path, t))
 
     rewritten = []
+    base_changed = False                                   # the base spike set was subset by THIS call
     done = []                                              # already at the deduped count (idempotent)
     orphans = []                                           # whole stale/inconsistent stages, file by file
     for stage, files in stages.items():
@@ -1383,23 +1392,60 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             for (path, t), c in counts.items():
                 if c == n_orig:
                     try:
-                        _subset(path, t); rewritten.append(path)
+                        _subset(path, t); rewritten.append(path); base_changed = True
                     except Exception as e:  # noqa: BLE001
                         orphans.append((path, f"error: {e}"))
                 elif c == nkeep:
                     done.append((path, c))
                 else:
                     orphans.append((path, c))
-        elif vals == {n_orig}:
-            for (path, t), c in counts.items():            # consistent derived stage -> dedup it too
-                try:
-                    _subset(path, t); rewritten.append(path)
-                except Exception as e:  # noqa: BLE001
-                    orphans.append((path, f"error: {e}"))
-        elif vals == {nkeep}:
-            done.extend((path, c) for (path, t), c in counts.items())
-        else:                                              # stale / inconsistent stage -> whole stage as a unit
-            orphans.extend((path, c) for (path, t), c in counts.items())
+        else:
+            # The atom layer (.clc) follows its stage but never decides it: a dedup before 0.51 subset
+            # the stage's .clu and left its .clc at the old count, and that must not quarantine a live
+            # stage.  A .clc at any other count than its stage is stale on its own.
+            core = {k: c for k, c in counts.items() if k[1] != "clc"} or counts
+            atoms = {k: c for k, c in counts.items() if k[1] == "clc" and k not in core}
+            vals = set(core.values())
+            if vals == {n_orig}:
+                for (path, t), c in core.items():          # consistent derived stage -> dedup it too
+                    try:
+                        _subset(path, t); rewritten.append(path)
+                    except Exception as e:  # noqa: BLE001
+                        orphans.append((path, f"error: {e}"))
+            elif vals == {nkeep}:
+                done.extend((path, c) for (path, t), c in core.items())
+            else:                                          # stale / inconsistent stage -> whole stage as a unit
+                orphans.extend((path, c) for (path, t), c in counts.items())
+                continue
+            for (path, t), c in atoms.items():
+                if c == n_orig and vals == {n_orig}:
+                    try:
+                        _subset(path, t); rewritten.append(path)
+                    except Exception as e:  # noqa: BLE001
+                        orphans.append((path, f"error: {e}"))
+                elif c == nkeep and vals == {nkeep}:
+                    done.append((path, c))
+                else:
+                    orphans.append((path, c))
+
+    # per-spike sidecars of the base spike set (named outside the type grammar above)
+    if base_changed:
+        off = f"{base}.offsets.{elec}.npy"
+        if os.path.exists(off):
+            o = np.load(off)
+            if o.shape[0] == n_orig:
+                np.save(off, o[keep]); rewritten.append(off)
+        for kind, how in (("deconv", "re-run fiber-session --deconv to regenerate"),
+                          ("realign", "fiber-realign --check lists the pairs again")):
+            for man in sorted(glob.glob(f"{glob.escape(base)}.{kind}.*.tsv")):
+                toks = os.path.basename(man)[len(bname) + 1:-len(".tsv")].split(".")  # <kind>[.<variant>].<elec>[...]
+                ei = next((i for i in range(1, len(toks)) if toks[i].isdigit()), None)
+                if ei is None or toks[ei] != elec:
+                    continue
+                os.replace(man, man + ".stalebkp")
+                if verbose:
+                    print(f"dedup: {os.path.basename(man)} indexes the old spike set -> "
+                          f"{os.path.basename(man)}.stalebkp ({how})")
 
     if verbose:
         if rewritten:
