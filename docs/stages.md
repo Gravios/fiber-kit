@@ -980,6 +980,30 @@ Positional: `session`, `group`
 | `--centered` | flag (off) | store centered flag (projection subtracts the mean) |
 | `--stderiv` | flag (off) | fit on .spkD (stderiv) instead of .spk |
 | `--out` | — | output .pcaD path (default <base>.pca<D>.<group>) |
+### `fiber-adlp`
+
+Amplitude-dependent low-pass of the spike snippets, written as a new waveform variant: every spike gets a zero-phase low-pass whose cutoff is a power law of its amplitude, `fc = clip(fc_ref * (A / A_ref) ** gamma, fc_min, fc_max)`, so small, noise-dominated spikes are smoothed and large ones keep their detail.  Writes `.spk.<out>.<g>`, a `.pca.<out>.<g>` fitted on the filtered snippets in the input basis's window, and `.adlp.<out>.<g>.npz` (per-spike amplitude and cutoff).  Sort the variant with `fiber-session --method <out> --whiten-source spk`: the noise of a per-spike filtered variant is not that of any `.fil` or `.nst`.
+
+Positional: `session`, `group`
+
+| flag | default | description |
+|---|---|---|
+| `--nchan` (`--nch`) | — | override: channels in this group |
+| `--nsamp` | — | override: samples per spike (default from YAML) |
+| `--sr` | — | override: sampling rate |
+| `--in-variant` | `standard` | waveform variant to filter (exact token; default standard) |
+| `--out-variant` | `standard_ADLP` | variant token to write |
+| `--fc-ref` | `9000.0` | cutoff (Hz) at A = A_ref. Default 9000: where the median g7 standard spike's spectrum meets the pre-peak noise floor |
+| `--a-ref` | — | reference amplitude (default: file median ptp) |
+| `--gamma` | `1.2` | cutoff exponent: fc ~ A**gamma (0 = uniform low-pass at --fc-ref) |
+| `--fc-min` | `2500.0` | lowest cutoff (Hz) |
+| `--fc-max` | — | highest cutoff (Hz); default Nyquist, so large spikes pass unfiltered |
+| `--order` | `2` | Butterworth order (applied forward+backward) |
+| `--scope` | `spike` | spike = one cutoff from the largest channel; channel = a cutoff per channel — choices: `spike`, `channel` |
+| `--amp-lo` | `-6` | amplitude window start, samples from peak |
+| `--amp-hi` | `10` | amplitude window end, samples from peak |
+| `--block` | `40000` | spikes per processing block |
+| `--no-pca` | flag (off) | do not fit/write .pca.<out>.<g> |
 ### `fiber-branch`
 
 Flag units whose spikes branch off the single fiber d(r) (a second, energy-independent, depth-coherent waveform class).
