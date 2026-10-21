@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.49.2] — the configuration templates name their steps
+- The embedded plans in `fiber-kit.yaml` and `fiber-kit-exp.yaml` give every step a `name:`
+  (`session`, `realign-session`, `chunk`, `realign-chunk`, `link`, `realign-final`, ...), so
+  `fk run 6 realign-chunk` or `fk run 6 chunk..link` works on them; the `<stage>-<k>` ids still do.
+  The commands each step runs are unchanged.
+- `fiber-pipeline --emit-plan` and `plans/TEMPLATE-all-stages.yaml` document `name:`, `fk list`
+  and `fk run`.  The template's stray fiber-stochastic stub (inside the header) is now a
+  generated block like every other stage.
+
 ## [0.49.1] — `fk run <elec>` runs the whole plan
 - `fk run 6` runs what `fiber-pipeline 6` runs (the plan, or the canonical stages without one);
   steps, `--from` and `--to` narrow it.

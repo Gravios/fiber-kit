@@ -10,7 +10,8 @@
 #   * fiber-pipeline --dry-run runs exactly the selected steps with their plan tags/params, keeps the
 #     plan's units bookkeeping for a fiber-link selected alone, accepts step names as positionals,
 #     refuses step names when there is no plan; a bare stage name keeps its stand-alone meaning;
-#   * `fk run --dry-run` forwards to the same run; fiber-plan-edit's model round-trips `name:`.
+#   * `fk run --dry-run` forwards to the same run; fiber-plan-edit's model round-trips `name:`;
+#   * the shipped plans (fiber-kit.yaml, fiber-kit-exp.yaml, --emit-plan) name every step.
 import os
 import subprocess
 import sys
@@ -83,6 +84,16 @@ def main():
           and ids.count("fiber-realign-1") == 1 and "fiber-realign-3" in ids and "fiber-cpos-2" in ids,
           "fiber-kit-exp.yaml: <stage>-<k> ids (" + ", ".join(ids[:3]) + ", ...)")
     check(len(set(ids)) == len(ids), "every id unique")
+    for f in ("fiber-kit.yaml", "fiber-kit-exp.yaml"):
+        sh = ps.load_steps(os.path.join(ROOT, "src", "fiber_kit", f))
+        nm = [s["name"] for s in sh]
+        check(all(nm) and len(set(nm)) == len(nm) and ps.resolve(sh, ["realign-chunk"]) == [ids.index("fiber-realign-2")
+              if f.endswith("exp.yaml") else 4], f"{f}: every shipped step named, uniquely ({', '.join(nm[:3])}, ...)")
+    with tempfile.TemporaryDirectory() as d:
+        em = subprocess.run(["bash", PIPE, "--emit-plan"], capture_output=True, text=True, env=env())
+        sh = ps.load_steps(write(d, "emit.yaml", em.stdout))
+        check(em.returncode == 0 and [s["name"] for s in sh][:3] == ["session", "realign", "refine"],
+              "--emit-plan template parses, with step names")
     with tempfile.TemporaryDirectory() as d:
         p = write(d, "p.yaml", PLAN)
         st = ps.load_steps(p)

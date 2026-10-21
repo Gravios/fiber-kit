@@ -29,8 +29,9 @@
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
 #  that plan by default (no --plan needed); an explicit --plan <file> still overrides it.  Each step has a
 #  unique name, <stage>-<k> (the k-th run of that stage: fiber-realign-1/2/3) or its own `name:`;
-#  `fk list` prints them and `fiber-pipeline <elec> fiber-realign-2` runs one.  The FK_* knobs
-#  below remain the tuning surface the plan's stages read.
+#  `fk list` prints them; `fk run <elec> realign-chunk` (or fiber-realign-2, or its position) runs one,
+#  `fk run <elec> chunk..link` a span, `fk run <elec>` the whole plan.  The plan below names every step;
+#  both forms keep working.  The FK_* knobs below remain the tuning surface the plan's stages read.
 # ============================================================================
 
 
@@ -51,14 +52,14 @@
 #  intrachunk falls back to the position-free 'ms' linkage.
 # ============================================================================
 pipeline:
-  - {stage: fiber-session,    out: fiber_session}
-  - {stage: fiber-realign,    in: fiber_session}
-  - {stage: fiber-cpos,       in: fiber_session, out: fiber_session, spk: standard}
-  - {stage: fiber-intrachunk, in: fiber_session, out: fk_chunk}
-  - {stage: fiber-realign,    in: fk_chunk}
-  - {stage: fiber-cpos,       in: fk_chunk, out: fk_chunk, spk: standard}
-  - {stage: fiber-link,       in: fk_chunk, units: fk_chunk, out: fk_linked}
-  - {stage: fiber-realign,    in: fk_linked}
+  - {stage: fiber-session,        name: session,         out: fiber_session}
+  - {stage: fiber-realign,        name: realign-session, in: fiber_session}
+  - {stage: fiber-cpos,           name: cpos-session,    in: fiber_session, out: fiber_session, spk: standard}
+  - {stage: fiber-intrachunk,     name: chunk,           in: fiber_session, out: fk_chunk}
+  - {stage: fiber-realign,        name: realign-chunk,   in: fk_chunk}
+  - {stage: fiber-cpos,           name: cpos-chunk,      in: fk_chunk, out: fk_chunk, spk: standard}
+  - {stage: fiber-link,           name: link,            in: fk_chunk, units: fk_chunk, out: fk_linked}
+  - {stage: fiber-realign,        name: realign-final,   in: fk_linked}
 
 
 # ----- fiber-session : initial over-clustering -----------------------------

@@ -850,17 +850,21 @@ emit_plan() {          # print the canonical pipeline as an editable plan templa
 # different in/out tags and params.  'in'/'out'/'units'/'cpos' are clu STAGE tags ('' = the base
 # over-cluster .clu.stderiv.<elec>).  'params' become --flag value (underscores -> dashes); 'args'
 # are appended verbatim.  Run with:   fiber-pipeline <elec> --plan thisfile.yaml   (add --dry-run to preview).
+# Every step is addressable as <stage>-<k> (the k-th run of that stage) or by its optional `name:`
+# (unique; letters, digits, . _ -; not a bare number).  `fk list --plan thisfile.yaml` prints them;
+# run one or a span with   fk run <elec> --plan thisfile.yaml refine  |  ... session..cpos  |  ... 3
 pipeline:
-  - {stage: fiber-session,    out: ""}
-  - {stage: fiber-realign,    in: ""}
-  - {stage: fiber-refine,     in: "",      out: refine}
-  - {stage: fiber-cpos,       in: refine,  out: refine, spk: standard}
-  - {stage: fiber-intrachunk, in: refine,  out: refine_intrachunk}
-  - {stage: fiber-link,       in: refine,  units: refine_intrachunk, out: refine_linked}
+  - {stage: fiber-session,    name: session,   out: ""}
+  - {stage: fiber-realign,    name: realign,   in: ""}
+  - {stage: fiber-refine,     name: refine,    in: "",      out: refine}
+  - {stage: fiber-cpos,       name: cpos,      in: refine,  out: refine, spk: standard}
+  - {stage: fiber-intrachunk, name: chunk,     in: refine,  out: refine_intrachunk}
+  - {stage: fiber-link,       name: link,      in: refine,  units: refine_intrachunk, out: refine_linked}
 
-# Example -- run refine TWICE (coarse pass, then a finer pass) and link off the second:
-#   - {stage: fiber-refine,     in: "",       out: refine,   params: {large: 150}}
-#   - {stage: fiber-refine,     in: refine,   out: refine2,  params: {large: 80, merge-min-sim: 0.94}}
+# Example -- run refine TWICE (coarse pass, then a finer pass) and link off the second; the two
+# refine steps are fiber-refine-1 / fiber-refine-2, or by name refine-coarse / refine-fine:
+#   - {stage: fiber-refine,     name: refine-coarse, in: "",       out: refine,   params: {large: 150}}
+#   - {stage: fiber-refine,     name: refine-fine,   in: refine,   out: refine2,  params: {large: 80, merge-min-sim: 0.94}}
 #   - {stage: fiber-cpos,       in: refine2,  out: refine2}
 #   - {stage: fiber-intrachunk, in: refine2,  out: refine2_intrachunk}
 #   - {stage: fiber-link,       in: refine2,  units: refine2_intrachunk, out: refine2_linked}
