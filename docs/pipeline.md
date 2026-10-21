@@ -58,6 +58,41 @@ either mode rather than left stale.  `--realign-algo` (`FK_REALIGN_ALGO`) and th
 run a fiber-realign straight after fiber-session, and a stage-list run (`fiber-pipeline <elec>`
 without a plan) skips its stage-2 fiber-realign; `--realign off` restores the old behaviour.
 
+The commit cuts at the group's `peakSampleIndex` from the YAML.  Without one, fiber-session measures
+it rather than guessing: where the windows on disk hold the spike time, located in the `.fil` (their
+own geometry, which the commit keeps), or without a `.fil` the median template peak of its 30 largest
+units.  It parks the second of two spikes it stacks on one sample in cluster 0 (`--park-duplicates`,
+see [methods](methods.md#the-commits-window-051)) in the sort and in its `--out-variant` copy, and
+the deconvolution manifest is written afterwards, in the written cluster ids and the committed times.
+
+Cluster and atom ids: fiber-session's fibers and atoms start at 2.  0 and 1 are Klusters' artefact and
+noise bins, and every later stage keeps them as such (intrachunk, consensus, the linkers,
+xcorr-merge); until 0.51 the first fiber was written as cluster 1 and the first atom as 1, and both were
+lost to noise downstream.  The hierarchy save compacts ids, so a fiber's cluster is the `.fibers`'
+`clu_id` (and `clu_a` / `clu_b` in the merge-candidate list), never `gid + 1`.
+
+### Repairing a session committed before 0.51
+
+Every `fiber-realign --reextract` commit from 0.38.1 to 0.50 (fiber-session's own, and the plans'
+realign steps) cut its windows one sample after the alignment target.  Run `fiber-realign <elec>
+--check --clu <stage clu>` per group first; with the `.fil` beside the session its `windows` line
+says where the windows on disk hold the spike time:
+
+* `the spike time at index 20, the group's geometry` (42/21): nothing to repair;
+* `index 21, NOT the group's 20`: an old commit cut them.  `fiber-realign <elec> --recut --refeaturize
+  --variants all` re-cuts every variant at the current `.res` and leaves the times and the labels
+  alone.  The times are on the peaks after one old commit; after two or more they are one sample
+  late, and `--check` then shows the templates one sample before the target and a realign moving them
+  back -- run one.  A realign (or a re-sort) with the `.fil` does both in one pass instead: it aligns
+  in the windows' own geometry and re-cuts at the group's;
+* a session sorted under 0.50 is best re-sorted (fibers from 2, a manifest that matches its `.clu` and
+  `.res`).
+
+Without the `.fil` there is no `windows` line.  Templates one sample after the target mean one old
+commit (`--recut` once the `.fil` is back); after two or more the windows look right -- the templates
+on the target -- and only the `.fil` shows that they were cut one sample late.  A `--shift-spk` realign
+keeps whatever geometry the windows have.
+
 ### Where `fiber-consensus` fits: clean before merging
 
 Consensus cleans out contaminants, so it runs on the chunk-local fragments **before any merge**: every

@@ -639,6 +639,54 @@ Klusters runs use threshold 0.10, which fiber-kit-exp.yaml sets: parity holds th
 it moves 30.6 % / 93.6 % of spikes (stderiv / standard) at template correlation 0.618 / 0.707.  `test/test_realign_parity.py` holds golden shifts from the
 compiled code.
 
+### The commit's window (0.51)
+
+A commit cuts every window where neurosuite-3 cuts it: the spike time at `peakSampleIndex - 1` (the
+extractor's `SpikeWindowSpec.peakSample`, Klusters' re-cut after a realign, the `.nst` header), which
+is also the sample the klusters algorithm aligns each template's peak to.  So a committed window holds
+its template's peak on the target, equals a fresh extraction at the committed time, and a second realign
+moves nothing (`test/test_realign_geometry.py`, three window geometries).  Until 0.51 the commit cut at
+`peakSampleIndex` -- one sample after its own target -- so every committed window sat one sample late:
+a second pass with the exp-profile knobs moved 96 % of the spikes of sirotaA-jg-000005-20120316 group 6
+(90 % by exactly +1) only to undo it and left the `.res` one sample after the peak, Klusters' re-cut
+and fiber-realign's moved the times back and forth, and the `.pca` basis (fitted on extracted windows)
+was projected onto windows one sample off.  Where a spike's peak sits differs between data sets: the
+geometry is the group's own `peakSampleIndex`, and without one fiber-session measures it (below).
+
+The alignment also has to happen in the geometry the windows ON DISK were cut with, or the commit's
+re-cut shifts each window by the difference.  With a `.fil`, fiber-realign first locates them
+(`window_index`): up to 200 spikes are cut at every index, derived into the variant, and compared on the
+central half of the window (immune to the wrapped edge of a `--shift-spk` roll).  Only the variant
+being aligned is measured: an old commit re-cut the variants the `.fil` derives and merely rolled the
+others, so a variant it cannot derive is not located (and is aligned at the group's index) rather than
+given another variant's geometry.  On a session cut as
+the YAML says, the index is `peakSampleIndex - 1` and nothing changes.  On windows an older commit cut
+at `peakSampleIndex` it aligns at that index, which moves each time onto its template's peak, and the
+re-cut puts the peak on `peakSampleIndex - 1`: one pass repairs the session (`test_realign_geometry`:
+one and two old commits; aligned at the group's index instead, the windows would end one sample early
+and the next pass would move every spike).  A `--shift-spk` commit keeps the windows' geometry and says
+so.  Without a `peakSampleIndex`, fiber-session's commit takes the located index (the extractor's
+geometry, kept), and without a `.fil` the median template peak of its largest units, so a
+`--shift-spk` commit re-centres nothing.  The template peak is not the extractor's index in general: in
+the stderiv space the derivative puts it a few samples away (`test_session_commit_peak`: 13 against 10).
+
+`fiber-realign --check` reports, without writing, what a realign would do: where the windows on disk
+hold the spike time (with a `.fil`), the spikes it would move, where each unit's template peaks against
+the alignment target on the windows as they are, and same-sample spike pairs and inversions in the
+`.res` before and after.  `--recut` re-extracts every variant at the CURRENT `.res` and moves no spike
+-- the repair for windows an older commit cut that leaves the times alone
+([pipeline.md](pipeline.md#repairing-a-session-committed-before-051)).
+
+A commit can stack two detections of one spike (a second threshold crossing a few samples later) on one
+sample: two rows of a unit with identical windows.  It logs them with cross-unit pairs and inversions,
+lists them in `<base>.realign.<variant>.<group>[.<stage>].tsv`, and with `--park-duplicates`
+(`FK_REALIGN_PARK_DUPS`; fiber-session's commit always, the shipped profiles for the plan steps)
+moves the later of each same-unit pair to cluster 0 as one child atom under 0 -- in the `--clu` and
+its `.clc`/`.clp` (and fiber-session's `--out-variant` copy of them); a side-by-side commit
+(`--out-tag`) leaves the input sort alone and parks only in the clu it emits.  No row is ever
+removed or reordered: every stage's `.clu` is row-aligned with the shared `.res`.  g6 after one commit:
+71 same-unit pairs in 63 units, 14 cross-unit pairs, 22 inversions (2 inside a unit).
+
 ## Low-amplitude mixtures (`fiber_lowmix`, 0.39)
 
 Measured on the g6 reference run (fix_final: the re-run from anchor-link with the reserve fix).
@@ -742,8 +790,12 @@ averaged over up to 400 median-aligned spikes per fiber.
 * `.fibers`: `deconv_agree` (fraction of the fiber's placed spikes labelled with an equivalent template),
   `deconv_partner_frac`, `deconv_n_equiv`.
 * `<base>.deconv.<method>.<elec>.<stage>.tsv`: `spike res chunk clu deconv_clu dt amp gain margin
-  rescued partner_clu partner_dt`, one row per labelled core detection and per unanchored placement
-  (`spike` = −1).  `dt` is the sub-sample time correction to `res`.
+  rescued partner_clu partner_dt res_detect`, one row per labelled core detection and per unanchored
+  placement (`spike` = −1).  The cluster ids are numbered as in the written `.clu`; `clu` is the
+  spike's label before the pursuit rescued it and before the commit parked duplicates, so a parked
+  duplicate keeps its fiber here.  `res` is the time in the `.res` as it is after the end-of-run commit
+  and `res_detect` the time the pursuit saw (0.51; before, both were pre-save / pre-commit values).
+  `dt` is the sub-sample time correction to `res_detect`.
 * `--deconv-assign`: noise and collision-cluster spikes attributed to a **corroborated** fiber
   (`deconv_agree ≥ 0.95`, ≥ 20 placed spikes) with margin ≥ the calibrated threshold, and with no
   partner within 4 samples (an exact coincidence: either label is right), are parked as one new child
