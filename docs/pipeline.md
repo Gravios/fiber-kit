@@ -30,8 +30,8 @@ selects its input with `--clu-method <variant> --clu-stage <stage>` (or `--in-cl
 
 | # | stage | does | in → out (tag) |
 |---|---|---|---|
-| 1 | `fiber-session` | over-cluster each chunk into clean fragments (deliberately split) | → `fiber_session` (or the bare `.clu`) |
-| 2 | `fiber-realign` | Klusters-style per-spike realignment (in place) | in-place |
+| 1 | `fiber-session` | over-cluster each chunk into clean fragments (deliberately split), then commit its own realign | → `fiber_session` (or the bare `.clu`) |
+| 2 | `fiber-realign` | Klusters-style per-spike realignment (in place); skipped here when fiber-session committed its own | in-place |
 | 3 | `fiber-refine` | per-chunk split + fold + merge-back | `fiber_session` → `refine` |
 | 4 | `fiber-peel` | footprint + refractory consolidation, confidence-ordered | `refine` (in place) |
 | 5 | `fiber-cpos` | per-cluster positions/templates from the standard `.spk` | `refine` → `refine` (+`.cpos`) |
@@ -40,6 +40,23 @@ selects its input with `--clu-method <variant> --clu-stage <stage>` (or `--in-cl
 
 `fiber-realign` and `fiber-cpos` are run again after `fiber-intrachunk` in the full plans (positions
 must follow the merged labels).
+
+### fiber-session's end-of-run realign
+
+At the end of its run fiber-session aligns every spike to its fiber's template and commits the result
+(`--realign`, `FK_SESSION_REALIGN`, default `auto`): the shifted spike times go to the shared `.res`
+(and the sub-sample offsets to `<base>.offsets.<group>.npy`), and every waveform variant with a `.spk`
+on disk -- `standard`, `stderiv*`, any other method -- is rebuilt at the shifted times, with a fresh
+`.fet` from its `.pca` (`_D` alias `.fet` included; `--emit-fet` writes its own from the committed
+set).  It is fiber-realign's own code with the flags of the plan step it replaces,
+`fiber-realign --reextract --refeaturize --variants all` on the `.clu` the run just wrote, and gives
+byte-identical files (test/test_session_realign_e2e.py).  `reextract` re-reads the `.fil`;
+`shift-spk` rolls the existing `.spk`; `auto` re-extracts when the `.fil` exists and rolls otherwise.
+A variant no `.fil` transform derives (fiber-adlp's `standard_ADLP`, say) is rolled by the offsets in
+either mode rather than left stale.  `--realign-algo` (`FK_REALIGN_ALGO`) and the other
+`FK_REALIGN_*` knobs tune the alignment as they do for fiber-realign.  So the shipped plans no longer
+run a fiber-realign straight after fiber-session, and a stage-list run (`fiber-pipeline <elec>`
+without a plan) skips its stage-2 fiber-realign; `--realign off` restores the old behaviour.
 
 ### Where `fiber-consensus` fits: clean before merging
 
@@ -57,17 +74,16 @@ The embedded plan of `fiber-kit-exp.yaml`, in order:
 
 | # | stage | in -> out | what |
 |---|---|---|---|
-| 1 | fiber-session | -> fiber_session | per-chunk over-clustering (12-min chunks, 4-min overlap) |
-| 2 | fiber-realign | fiber_session (in place) | per-spike align; re-extracts and re-featurizes the .spk / .fet |
-| 3 | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
-| 4 | fiber-cpos | fs_clean | positions / templates from .spk.standard |
-| 5 | fiber-intrachunk | fs_clean -> exp_chunk | within-chunk merge |
-| 6 | fiber-realign | exp_chunk (in place) | |
-| 7 | fiber-cpos | exp_chunk | |
-| 8 | fiber-anchor-link (`frag-layer: units`) | exp_chunk -> exp_linked | cross-chunk link |
-| 9 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
-| 10 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
-| 11 | fiber-realign | exp_final (in place) | final re-extraction for curation |
+| 1 | fiber-session | -> fiber_session | per-chunk over-clustering (12-min chunks, 4-min overlap); then its own realign: shifted .res, every variant's .spk / .fet |
+| 2 | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
+| 3 | fiber-cpos | fs_clean | positions / templates from .spk.standard |
+| 4 | fiber-intrachunk | fs_clean -> exp_chunk | within-chunk merge |
+| 5 | fiber-realign | exp_chunk (in place) | |
+| 6 | fiber-cpos | exp_chunk | |
+| 7 | fiber-anchor-link (`frag-layer: units`) | exp_chunk -> exp_linked | cross-chunk link |
+| 8 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
+| 9 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
+| 10 | fiber-realign | exp_final (in place) | final re-extraction for curation |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
@@ -160,32 +176,34 @@ every stage and its parameters), or with the GUI editor `fiber-plan-edit`; lint 
 
 ### Step names
 
-A plan may run a stage several times (`fiber-kit-exp.yaml` runs `fiber-realign` three times), so every
-step has a unique id, `<stage>-<k>` -- its k-th run of that stage in plan order: `fiber-realign-1`,
-`fiber-realign-2`, `fiber-realign-3`.  A step may also carry its own `name:` (letters, digits, `.`, `_`,
+A plan may run a stage several times (`fiber-kit-exp.yaml` runs `fiber-realign` and `fiber-cpos` twice
+each), so every step has a unique id, `<stage>-<k>` -- its k-th run of that stage in plan order:
+`fiber-realign-1`, `fiber-realign-2`.  A step may also carry its own `name:` (letters, digits, `.`, `_`,
 `-`; unique; not another step's id), a stable alias that survives reordering, which the positional id
 does not.  `fk list` prints them:
 
 ```
 $ fk list                       # the plan fiber-pipeline would run ($FK_CONFIG's, or --plan <file>)
-#   step                   name  in             out            flags
-1   fiber-session-1              -              fiber_session
-2   fiber-realign-1              fiber_session  -
-3   fiber-consensus-1            fiber_session  fs_clean       --quarantine-only 1
+#   step                   name           in             out            flags
+1   fiber-session-1        session        -              fiber_session
+2   fiber-consensus-1      clean          fiber_session  fs_clean       --quarantine-only 1
+3   fiber-cpos-1           cpos-clean     fs_clean       fs_clean       spk=standard
+4   fiber-intrachunk-1     chunk          fs_clean       exp_chunk
+5   fiber-realign-1        realign-chunk  exp_chunk      -
 ...
-6   fiber-realign-2              exp_chunk      -
+10  fiber-realign-2        realign-final  exp_final      -
 ```
 
 A step is selected by its id, its name, its 1-based position, or -- when the stage runs once -- the bare
 stage name; ranges `A..B` (either end open) and comma lists work too:
 
 ```
-fiber-pipeline 5 fiber-realign-2                     # positional step names (plan mode)
+fiber-pipeline 5 realign-chunk                       # positional step names (plan mode)
 fiber-pipeline 5 --step fiber-consensus-1 --step 7   # --step, repeatable
 fiber-pipeline 5 --from fiber-anchor-link-1          # to the end of the plan
 fk run 5 fiber-cpos-1..fiber-realign-2 --dry-run     # the same through fk
 fk run 5                                             # the whole plan, as fiber-pipeline 5
-fk run 5 --from fiber-cpos-2 --to fiber-realign-3    # a span
+fk run 5 --from fiber-cpos-2 --to fiber-realign-2    # a span
 ```
 
 Selected steps run in plan order with their plan tags and params; the plan's bookkeeping still sees every

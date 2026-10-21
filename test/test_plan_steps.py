@@ -2,7 +2,7 @@
 # test_plan_steps.py -- unique plan step names (plan_steps), `fk list` / `fk run`, and
 # fiber-pipeline's step selection (--step / --from / --to / positional step names).
 #
-#   * ids: <stage>-<k>, the k-th run of a stage in plan order (fiber-kit-exp.yaml: fiber-realign-1..3);
+#   * ids: <stage>-<k>, the k-th run of a stage in plan order (fiber-kit-exp.yaml: fiber-realign-1..2);
 #   * explicit `name:` aliases; malformed, duplicate, numeric names and a name that is another
 #     step's id are refused (plan_steps and fiber-plan-lint);
 #   * selectors: id, name, position, a stage that runs once, ranges A..B (open ends), comma lists;
@@ -80,19 +80,20 @@ def main():
     print("ids and names:")
     steps = ps.load_steps(EXP)
     ids = [s["id"] for s in steps]
-    check(ids[:3] == ["fiber-session-1", "fiber-realign-1", "fiber-consensus-1"]
-          and ids.count("fiber-realign-1") == 1 and "fiber-realign-3" in ids and "fiber-cpos-2" in ids,
+    check(ids[:3] == ["fiber-session-1", "fiber-consensus-1", "fiber-cpos-1"]
+          and ids.count("fiber-realign-1") == 1 and "fiber-realign-2" in ids and "fiber-cpos-2" in ids,
           "fiber-kit-exp.yaml: <stage>-<k> ids (" + ", ".join(ids[:3]) + ", ...)")
     check(len(set(ids)) == len(ids), "every id unique")
     for f in ("fiber-kit.yaml", "fiber-kit-exp.yaml"):
         sh = ps.load_steps(os.path.join(ROOT, "src", "fiber_kit", f))
         nm = [s["name"] for s in sh]
-        check(all(nm) and len(set(nm)) == len(nm) and ps.resolve(sh, ["realign-chunk"]) == [ids.index("fiber-realign-2")
-              if f.endswith("exp.yaml") else 4], f"{f}: every shipped step named, uniquely ({', '.join(nm[:3])}, ...)")
+        rc_ = ps.resolve(sh, ["realign-chunk"])
+        check(all(nm) and len(set(nm)) == len(nm) and len(rc_) == 1 and sh[rc_[0]]["id"] == "fiber-realign-1",
+              f"{f}: every shipped step named, uniquely ({', '.join(nm[:3])}, ...); session realigns itself")
     with tempfile.TemporaryDirectory() as d:
         em = subprocess.run(["bash", PIPE, "--emit-plan"], capture_output=True, text=True, env=env())
         sh = ps.load_steps(write(d, "emit.yaml", em.stdout))
-        check(em.returncode == 0 and [s["name"] for s in sh][:3] == ["session", "realign", "refine"],
+        check(em.returncode == 0 and [s["name"] for s in sh][:3] == ["session", "refine", "cpos"],
               "--emit-plan template parses, with step names")
     with tempfile.TemporaryDirectory() as d:
         p = write(d, "p.yaml", PLAN)

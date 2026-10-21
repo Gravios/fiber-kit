@@ -75,10 +75,12 @@ def main():
         env["PYTHONPATH"] = os.pathsep.join(
             [os.path.join(os.path.dirname(__file__), "..", "src"), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
 
+        # --realign off: these runs share one directory and compare their sorts; the end-of-run
+        # commit would shift the .res/.spk the next run reads (test_session_realign_e2e covers it).
         def run(extra, stage):
             return subprocess.run(
                 [sys.executable, "-m", "fiber_kit.fiber_session", base, "1", "--method", "stderiv",
-                 "--no-link", "--chunk-min", "5", "--overlap-min", "0", "--min-group", "60",
+                 "--no-link", "--chunk-min", "5", "--overlap-min", "0", "--min-group", "60", "--realign", "off",
                  "--clu-stage", stage] + extra, capture_output=True, text=True, env=env, timeout=900)
 
         r1 = run(["--deconv"], "dc")

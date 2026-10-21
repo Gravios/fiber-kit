@@ -23,8 +23,8 @@
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
 #  Plan order (the embedded pipeline below):
-#    fiber-session -> realign -> fiber-consensus(quarantine-only) -> cpos -> fiber-intrachunk -> realign
-#                  -> cpos -> fiber-anchor-link -> fiber-xcorr-merge -> fiber-backbone-link(drift) -> realign
+#    fiber-session(+realign) -> fiber-consensus(quarantine-only) -> cpos -> fiber-intrachunk -> realign
+#                            -> cpos -> fiber-anchor-link -> fiber-xcorr-merge -> fiber-backbone-link(drift) -> realign
 #
 #  LAYOUT -- knob sections follow the plan order:
 #    [1] fiber-session   [2] fiber-realign   [3] fiber-cpos   [4] fiber-intrachunk
@@ -39,8 +39,8 @@
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
 #  that plan by default (no --plan needed); an explicit --plan <file> still overrides it.  Each step has a
-#  unique name, <stage>-<k> (the k-th run of that stage: fiber-realign-1/2/3) or its own `name:`;
-#  `fk list` prints them; `fk run <elec> realign-chunk` (or fiber-realign-2, or its position) runs one,
+#  unique name, <stage>-<k> (the k-th run of that stage: fiber-realign-1/2) or its own `name:`;
+#  `fk list` prints them; `fk run <elec> realign-chunk` (or fiber-realign-1, or its position) runs one,
 #  `fk run <elec> chunk..link` a span, `fk run <elec>` the whole plan.  The plan below names every step;
 #  both forms keep working.  The FK_* knobs below remain the tuning surface the plan's stages read.
 # ============================================================================
@@ -53,7 +53,8 @@
 #  NO-REFINE, FULL-REEXTRACT route: fiber-session (with the in-stage curator combo --
 #  strip + melting pot, FK_SESSION_CONS_MODE below) already emits clean enough atoms
 #  that fiber-refine earns nothing here, so intrachunk consumes the session output
-#  directly.  A fiber-realign runs after EVERY clu-changing stage, in --reextract
+#  directly.  A realign follows EVERY clu-changing stage (fiber-session's own end-of-
+#  run commit, FK_SESSION_REALIGN, then a fiber-realign step after the others), in --reextract
 #  --refeaturize mode (re-reads the .fil at the corrected per-spike times, rebuilds
 #  raw+stderiv .spk, reprojects every variant's .fet onto its on-disk .pca, and
 #  refreshes _D lag-alias .fet), so each stage reads freshly re-extracted spikes
@@ -61,14 +62,14 @@
 #  stays skipped; intrachunk's amp-band partition + giqr recut do the per-unit
 #  cleanup refine used to.)
 #
-#    fiber-session -> realign -> fiber-cpos
+#    fiber-session(+realign) -> fiber-cpos
 #                  -> fiber-intrachunk -> realign -> fiber-cpos
 #                  -> fiber-link -> realign
 #
 #  Tag handoff (every `in`/`cpos` is produced by an earlier `out`; cpos augments its own
 #  clu stage in place, out==in; realign is in-place from the .fil, no out):
 #    * fiber_session : shared base tag.  session over-clusters, strips and pools
-#      in-stage -> realign re-extracts -> cpos localizes the groups (raw .spk) for
+#      in-stage, then re-extracts at its realigned times -> cpos localizes the groups (raw .spk) for
 #      intrachunk's depth gate.  NOTE cpos REQUIRES probe geometry (probe files named
 #      in <session>.yaml or the probe library); without it it exits and intrachunk
 #      falls back to the position-free 'ms' linkage -- the configuration all the g6
@@ -99,7 +100,6 @@
 # ============================================================================
 pipeline:
   - {stage: fiber-session,        name: session,         out: fiber_session}
-  - {stage: fiber-realign,        name: realign-session, in: fiber_session}
   # clean before any merge (section [C]): quarantined spikes -> noise, the hierarchy carried, island / rim
   # clusters in .fs_clean_qreview + the .qrn table for review.  Needs `pip install fiber-kit[consensus]`.
   - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
@@ -161,6 +161,14 @@ FK_SESSION_WHITEN_SOURCE: auto   # auto | nst | fil | spk.  Noise whitener sourc
                                  #   .spk's waveform space (needs the .fil); spk = per-chunk pre-peak samples of the
                                  #   snippets (no file needed; any variant, incl. fiber-adlp's, which no transform names).
                                  #   auto = nst when the .spk's .nst exists, else fil.
+FK_SESSION_REALIGN: auto         # auto | reextract | shift-spk | off.  End-of-run realign: fiber-session aligns every
+                                 #   spike to its fiber's template (fiber-realign's per-spike offsets, FK_REALIGN_* knobs),
+                                 #   commits the shifted times to the shared .res, and rebuilds EVERY waveform variant's
+                                 #   .spk on disk at those times and each one's .fet (from its .pca; _D aliases too) --
+                                 #   exactly `fiber-realign --reextract --refeaturize --variants all`, in-process.
+                                 #   reextract re-reads the .fil (a variant no .fil transform derives is rolled);
+                                 #   shift-spk rolls the existing .spk; auto = reextract when the .fil exists, else
+                                 #   shift-spk.  off = .res/.spk/.fet stay as extracted (re-add a fiber-realign step).
 FK_SESSION_SEED_DENSITY: 0.0     # density-preferential coarse seeding exponent.  0 = uniform stride (current);
 FK_SESSION_RESEED_RESIDUAL_THR: 0.0   # >0 enables residual-gated RESEED: after the fine split, a fiber whose
                                  #   median-subtracted residual/signal exceeds this is re-split (welded co-located
@@ -293,7 +301,7 @@ FK_REALIGN_AFTER:        "fiber-intrachunk fiber-anchor-link fiber-link"  # stag
                                   #   new group's spikes onto its unit template (Klusters method).  A split/merge across
                                   #   drift leaves a group's troughs spread; a per-unit realign re-tightens them.  Set ""
                                   #   to disable.  CANONICAL (stage-list) mode only: the embedded plan above carries its
-                                  #   own explicit fiber-realign steps.  (fiber-session is followed by one either way.)
+                                  #   own explicit fiber-realign steps.  (fiber-session commits its own: FK_SESSION_REALIGN.)
 FK_REALIGN_AFTER_MODE:   reextract  # reextract | shift-spk.  Every realign changes ONLY the .res times; each waveform
                                   #   variant (--variants all: every .spk on disk) is then re-extracted from the .fil at
                                   #   the corrected times and its .fet regenerated from its .pca (_D aliases re-projected

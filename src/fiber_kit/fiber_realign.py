@@ -367,6 +367,71 @@ def _variant_present(base, group, variant):
         return False
 
 
+def _derive_from_fil(v, raw_ext, cfg, group):
+    """Re-derive variant `v`'s waveform from the re-extracted .fil window (`raw_ext`: nsamp+1
+    samples, one before the window).  Returns None, with the reason logged, when the .fil cannot
+    derive it (an opaque variant such as fiber-adlp's, or a _C token without a usable sdiffPairs);
+    the caller then rolls the variant's existing .spk so it still matches the shifted .res."""
+    spec = nio.parse_variant_token(v)
+    if spec.family == "standard":
+        wav = raw_ext[:, 1:, :]
+    elif spec.family in ("stderiv", "D") and spec.kind is None:
+        wav = fst.apply_stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
+    elif spec.family == "stderiv" and spec.kind == "C":
+        # _C<order> is the session's OWN pattern, carried in
+        # spikeDetection.channelGroups[<group-1>].sdiffPairs -- a partner map
+        # (order 4) or reference sets (order 5) in group-local 0-based
+        # positions.  Read from the session rather than assumed, so the
+        # re-derived waveform is the one this session's extractor produced.
+        pat = cfg.get("sdiff_pairs")
+        if not pat:
+            _log(f"variant '{v}': token says a custom pattern but "
+                 f"spikeDetection.channelGroups[{group - 1}].sdiffPairs is absent from "
+                 f"{cfg.get('yaml')}; refusing to guess one. Add it, or re-extract with "
+                 f"ndm_extractspikes -P.")
+            return None
+        # The token records the order the extractor applied; the pattern's own
+        # grammar implies one too ('+' => sets => order 5).  If they disagree,
+        # one of them is wrong about this session, and picking either would
+        # write a file whose name contradicts its contents.
+        pat_order = fst.sdiff_spec_order(pat)
+        # A session mixing forms runs order 6 for every group, an older-form group
+        # extracted as the expressions it computes (the same values): read it so.
+        if spec.order == 6:
+            pat_order = 6
+        if spec.order != pat_order:
+            _log(f"variant '{v}': token says order {spec.order} but the session's "
+                 f"sdiffPairs parses as order {pat_order}; refusing rather than writing "
+                 f"a file whose name contradicts its contents.")
+            return None
+        try:
+            if pat_order == 6:
+                wav = fst.apply_stderiv_transform(raw_ext, exprs=fst.parse_sdiff_exprs(pat))
+            elif pat_order == 5:
+                wav = fst.apply_stderiv_transform(raw_ext, sets=fst.parse_sdiff_sets(pat))
+            else:
+                partner, _root = fst.parse_sdiff_pairs(pat)
+                wav = fst.apply_stderiv_transform(raw_ext, partner=partner)
+        except ValueError as e:
+            _log(f"variant '{v}': sdiffPairs {pat!r} unusable for this group ({e})")
+            return None
+        _det("sdiff", f"{v}: order {pat_order} from session sdiffPairs {pat!r}")
+    elif spec.family == "stderiv" and spec.kind == "S":
+        # _S<order>: the extractor's plain spatial derivative (process_extractspikes_stderiv
+        # computeSDiff: 1 nearest-neighbour, 2 Laplacian, 3 all-pairs), then the temporal
+        # first-difference -- the same rounding / clamping as the other orders.
+        try:
+            partner, sets = fst.plain_order_spec(spec.order, raw_ext.shape[2])
+        except ValueError as e:
+            _log(f"variant '{v}': {e}")
+            return None
+        wav = fst.apply_stderiv_transform(raw_ext, partner=partner, sets=sets)
+        _det("sdiff", f"{v}: plain spatial-derivative order {spec.order}")
+    else:
+        _log(f"variant '{v}': no .fil transform derives it"); return None
+    return wav
+
+
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             min_n=20, method="klusters", peak=None, min_score=0.70, upsample=1,
             variant="standard", verbose=True, recenter=False, rmin=0.4):
@@ -440,12 +505,18 @@ def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
     return out_res, out_off
 
 
-def main():
+def main(argv=None):
+    """CLI entry point.  `argv` (default sys.argv[1:]) lets fiber-session run the same commit
+    in-process at the end of a sort (fiber_session --realign), flag for flag."""
     ap = argparse.ArgumentParser(
+        prog="fiber-realign",
         description="Per-spike Klusters-style realignment + corrected .res spike times, with "
                     "optional re-extraction from .fil and re-featurisation (commit-and-reextract "
                     "finalize).  Probe geometry is read from <session>.yaml; flags override.")
-    sy.add_session_args(ap)
+    sy.add_session_args(ap, sdiff=True)
+    ap.add_argument("--peak", type=int, default=None,
+                    help="override: peak sample index of the window (default the YAML's peakSampleIndex; "
+                         "fiber-session passes the one it inferred when the session has no YAML)")
     ap.add_argument("--clu", default=None,
                     help="cluster file (default <base>.clu.<group>; pass the refined/relinked one, "
                          "e.g. <base>.clu.stderiv.<group>.refine)")
@@ -523,15 +594,17 @@ def main():
                          "its labels are unchanged, so skipping the write keeps the base over-cluster intact.")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
     # peak is needed for the klusters align and any commit; ntotal (the .fil width) is needed ONLY for
     # the .fil re-extraction path -- --shift-spk rolls the existing .spk, so it never reads the .fil.
     fil_path = a.reextract or (a.refeaturize and not a.shift_spk)
     need = ("nchan", "nsamp") + (("ntotal",) if fil_path else ()) \
-        + (("peak",) if (fil_path or a.shift_spk or a.align_method == "klusters") else ())
+        + (("peak",) if (a.peak is None and (fil_path or a.shift_spk or a.align_method == "klusters")) else ())
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,
-                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, require=need)
+                                    nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs,
+                                    require=need)
     base, group, nsamp, nch = cfg["base"], cfg["group"], cfg["nsamp"], cfg["nchan"]
+    peak = a.peak if a.peak is not None else cfg.get("peak")
     # the clu's variant (e.g. stderiv) drives BOTH which .spk is aligned and which variant is committed
     cv, _ctag = _parse_clu_variant_tag(a.clu, base, group) if a.clu else ("", "")
     # --variant (explicit) wins over the clu-name inference and --out-variant, so a stderiv_C5 session
@@ -539,7 +612,7 @@ def main():
     out_variant = a.variant or (a.out_variant if a.out_variant is not None else (cv or "standard"))
     res, off, ioff, res_corr, spk, spk_path, labels = realign(
         base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
-        method=a.align_method, peak=cfg.get("peak"), min_score=a.min_score, upsample=a.upsample,
+        method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
         variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin)
 
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
@@ -612,7 +685,7 @@ def main():
         filmm = nio.open_signal(fil, cfg["ntotal"])
         # read the window PLUS one preceding sample (peak+1, nsamp+1) so the stderiv temporal diff
         # at t=0 uses the true previous .fil sample; standard = raw_ext[:, 1:, :]
-        raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, cfg["peak"] + 1)
+        raw_ext = reextract_from_fil(filmm, cfg["channels"], res_corr, nsamp + 1, peak + 1)
         # which feature spaces to refresh: standard always; stderiv (+any listed) when present
         if a.variants and a.variants.strip() == "all":
             want = _variants_on_disk(base, group) + [out_variant]
@@ -629,67 +702,23 @@ def main():
         want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
         refreshed = {}                                     # resolved token -> committed waveform
         for v in want:
-            spec = nio.parse_variant_token(v)
-            if spec.family == "standard":
-                wav = raw_ext[:, 1:, :]
-            elif spec.family in ("stderiv", "D") and spec.kind is None:
-                wav = fst.apply_stderiv_transform(raw_ext)         # SDIFF_ALLPAIRS + temporal diff (verbatim)
-            elif spec.family == "stderiv" and spec.kind == "C":
-                # _C<order> is the session's OWN pattern, carried in
-                # spikeDetection.channelGroups[<group-1>].sdiffPairs -- a partner map
-                # (order 4) or reference sets (order 5) in group-local 0-based
-                # positions.  Read from the session rather than assumed, so the
-                # re-derived waveform is the one this session's extractor produced.
-                pat = cfg.get("sdiff_pairs")
-                if not pat:
-                    _log(f"variant '{v}': token says a custom pattern but "
-                         f"spikeDetection.channelGroups[{group - 1}].sdiffPairs is absent from "
-                         f"{cfg.get('yaml')}; refusing to guess one. Add it, or re-extract with "
-                         f"ndm_extractspikes -P. NOTE this .spk is STALE against the realigned .res.")
-                    continue
-                # The token records the order the extractor applied; the pattern's own
-                # grammar implies one too ('+' => sets => order 5).  If they disagree,
-                # one of them is wrong about this session, and picking either would
-                # write a file whose name contradicts its contents.
-                pat_order = fst.sdiff_spec_order(pat)
-                # A session mixing forms runs order 6 for every group, an older-form group
-                # extracted as the expressions it computes (the same values): read it so.
-                if spec.order == 6:
-                    pat_order = 6
-                if spec.order != pat_order:
-                    _log(f"variant '{v}': token says order {spec.order} but the session's "
-                         f"sdiffPairs parses as order {pat_order}; refusing rather than writing "
-                         f"a file whose name contradicts its contents.")
-                    continue
-                try:
-                    if pat_order == 6:
-                        wav = fst.apply_stderiv_transform(raw_ext, exprs=fst.parse_sdiff_exprs(pat))
-                    elif pat_order == 5:
-                        wav = fst.apply_stderiv_transform(raw_ext, sets=fst.parse_sdiff_sets(pat))
-                    else:
-                        partner, _root = fst.parse_sdiff_pairs(pat)
-                        wav = fst.apply_stderiv_transform(raw_ext, partner=partner)
-                except ValueError as e:
-                    _log(f"variant '{v}': sdiffPairs {pat!r} unusable for this group ({e}); "
-                         f"skipping. NOTE this .spk is STALE against the realigned .res.")
-                    continue
-                _det("sdiff", f"{v}: order {pat_order} from session sdiffPairs {pat!r}")
-            elif spec.family == "stderiv" and spec.kind == "S":
-                # _S<order>: the extractor's plain spatial derivative (process_extractspikes_stderiv
-                # computeSDiff: 1 nearest-neighbour, 2 Laplacian, 3 all-pairs), then the temporal
-                # first-difference -- the same rounding / clamping as the other orders.
-                try:
-                    partner, sets = fst.plain_order_spec(spec.order, raw_ext.shape[2])
-                except ValueError as e:
-                    _log(f"variant '{v}': {e}; skipping. NOTE this .spk is STALE against the realigned .res.")
-                    continue
-                wav = fst.apply_stderiv_transform(raw_ext, partner=partner, sets=sets)
-                _det("sdiff", f"{v}: plain spatial-derivative order {spec.order}")
+            wav = _derive_from_fil(v, raw_ext, cfg, group)
+            if wav is not None:
+                how = f"re-extracted {len(wav):,} {v} spikes from {fil}"
             else:
-                _log(f"variant '{v}': no known waveform transform, skipping"); continue
+                # transform-agnostic, like --shift-spk: better than leaving this .spk/.fet stale
+                # against the shifted .res (what skipping used to do)
+                try:
+                    spk_v, _r = open_waveforms(base, group, nsamp, nch, v)
+                except Exception:
+                    spk_v, _r = None, None
+                if _r is None or _r.variant != v:          # never roll a fallback file under v's name
+                    _log(f"variant '{v}': no .spk.{v} to roll either; skipping"); continue
+                wav = roll_spikes(np.asarray(spk_v[:len(res_corr)]), ioff)
+                how = f"rolled {len(wav):,} {v} spikes by offset (the .fil cannot derive it)"
             spk_out = nio.write_spk(base, group, wav, variant=v, tag=a.out_tag)
             refreshed[v] = wav
-            _log(f"re-extracted {len(wav):,} {v} spikes from {fil} → {spk_out}")
+            _log(f"{how} → {spk_out}")
             if a.refeaturize:
                 try:
                     basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"

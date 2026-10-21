@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.50.0] — fiber-session commits its own realign
+- At the end of a run fiber-session aligns every spike to its fiber's template, writes the shifted
+  times to the shared `.res` (+ `<base>.offsets.<group>.npy`), and rebuilds EVERY waveform variant's
+  `.spk` on disk at those times, each with a fresh `.fet` from its `.pca` (`_D` alias `.fet` too).
+  `--realign auto|reextract|shift-spk|off` (`FK_SESSION_REALIGN`, default `auto`: re-extract from the
+  `.fil` when there is one, else roll the `.spk`); `--realign-algo` (`FK_REALIGN_ALGO`);
+  `--realign-fil`.  It runs fiber-realign's own `main()` with the flags of the plan step it replaces
+  (`--reextract --refeaturize --variants all` on the `.clu` just written): byte-identical output.
+  `--emit-fet` now writes its `.fet` from the committed waveforms and times.
+- The shipped plans drop the `realign-session` step (fiber-kit.yaml: 7 steps, fiber-kit-exp.yaml: 10);
+  `--emit-plan` drops its `fiber-realign` after fiber-session; a stage-list run skips the stage-2
+  fiber-realign when fiber-session committed one.  `--realign off` brings back the old outputs.
+- fiber-realign `--reextract`: a variant no `.fil` transform derives (fiber-adlp's `standard_ADLP`,
+  a `_C` token without a usable sdiffPairs) is now rolled by the offsets instead of skipped, so its
+  `.spk`/`.fet` no longer go stale against the shifted `.res`.  fiber-realign takes `--sdiff-pairs`.
+
 ## [0.49.2] — the configuration templates name their steps
 - The embedded plans in `fiber-kit.yaml` and `fiber-kit-exp.yaml` give every step a `name:`
   (`session`, `realign-session`, `chunk`, `realign-chunk`, `link`, `realign-final`, ...), so

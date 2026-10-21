@@ -1892,6 +1892,34 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
     return clu, next_atom
 
 
+def _knob(name, fallback):
+    """An FK_* knob: exported env var > $FK_CONFIG yaml > fallback (the pipeline's precedence)."""
+    v = os.environ.get(name)
+    if v in (None, ""):
+        v = (cfgmod.load_global_config() or {}).get(name)
+    return fallback if v in (None, "") else str(v)
+
+
+def add_realign_arguments(ap):
+    """The end-of-run commit: fiber-realign's in-place commit on the sort this run just wrote."""
+    ap.add_argument("--realign", choices=["auto", "reextract", "shift-spk", "off"],
+                    default=_knob("FK_SESSION_REALIGN", "auto"),
+                    help="FK_SESSION_REALIGN.  At the end of the run, align every spike to its fiber's template "
+                         "(fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the "
+                         "shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY "
+                         "waveform variant's .spk on disk at the shifted times (standard, stderiv*, ...) and its .fet "
+                         "(from its .pca; _D alias .fet included) -- what `fiber-realign --reextract --refeaturize "
+                         "--variants all` does as a separate step.  reextract = re-read the .fil; shift-spk = "
+                         "circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil "
+                         "exists, else shift-spk; off = leave .res/.spk/.fet as extracted.")
+    ap.add_argument("--realign-algo", dest="realign_algo", choices=["klusters", "template", "centroid"],
+                    default=_knob("FK_REALIGN_ALGO", "klusters"),
+                    help="FK_REALIGN_ALGO.  fiber-realign --align-algo for the end-of-run commit; its other knobs "
+                         "(FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there")
+    ap.add_argument("--realign-fil", dest="realign_fil", default=None,
+                    help="filtered signal the end-of-run re-extraction reads (default <base>.fil)")
+
+
 def main():
     ap = argparse.ArgumentParser(
         description="Cluster a session group into fibers. Reads <session>.yaml "
@@ -1899,6 +1927,7 @@ def main():
                     "CLI flags override the YAML.")
     sy.add_session_args(ap, sdiff=True)
     add_core_arguments(ap)
+    add_realign_arguments(ap)
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
     def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)
@@ -1917,6 +1946,7 @@ def main():
                                     nchan=a.nchan, nsamp=a.nsamp, sr=a.sr, sdiff_pairs=a.sdiff_pairs)
     a.base = cfg["base"]; a.elec = a.group
     sdiff = cfg.get("sdiff_pairs")
+    yaml_peak = cfg["peak"]                    # (cfg is rebound to the chunk-worker dict below)
     a.ntotal = cfg["ntotal"]; a.nchan = cfg["nchan"]; a.nsamp = cfg["nsamp"]; a.sr = cfg["sr"]
     gch = np.array(cfg["channels"], int)
     assert len(gch) == a.nchan, f"--channels has {len(gch)} entries, nchan={a.nchan}"
@@ -2222,7 +2252,9 @@ def main():
             det("alias", os.path.basename(nio.write_clu(a.base, a.elec, clu,
                                                         variant=a.out_variant, tag=a.clu_stage)))
     # ── optional .fet for Klusters ──
-    if a.emit_fet:
+    #   A closure so the end-of-run realign can call it on the COMMITTED waveforms and spike times
+    #   (the .fet's last column is the .res time, and its features project the committed windows).
+    def _emit_fet(spk_src, res_src):
         fvar = a.out_variant or a.method
         if cluster_basis is None:
             log("--emit-fet: no global .pca basis resolved; skipped")
@@ -2230,9 +2262,9 @@ def main():
             rs, d2u = int(cluster_basis["recShift"]), int(cluster_basis["data2use"])
             lg = int(cluster_basis.get("_lag", 0) or 0)
             cols = []
-            for s0 in range(0, nspk, 20000):
-                e0 = min(nspk, s0 + 20000)
-                w = fl.realign(np.asarray(spk[s0:e0], np.float64))
+            for s0 in range(0, len(res_src), 20000):
+                e0 = min(len(res_src), s0 + 20000)
+                w = fl.realign(np.asarray(spk_src[s0:e0], np.float64))
                 nb = cluster_basis["evec"].shape[0]
                 if w.shape[2] == nb + 1:
                     w = w[:, :, :nb]
@@ -2249,7 +2281,7 @@ def main():
             # column"; nFeat = nbDimensions - 1).  Without it Klusters reads the final FEATURE as a
             # time, and is left one feature short of what nFeatures implies -- which is how a .fet
             # of the wrong width corrupts its heap instead of being rejected.
-            Fi = np.column_stack([Fi, np.asarray(res, np.int64)])
+            Fi = np.column_stack([Fi, np.asarray(res_src, np.int64)])
             fp_out = nio.write_fet(a.base, a.elec, Fi, variant=fvar)
             nfeat_ch = F.shape[1] // a.nchan
             det("fet", f"{os.path.basename(fp_out)}  ({F.shape[1]} features + 1 timestamp "
@@ -2266,6 +2298,9 @@ def main():
                                  method=int(cluster_basis.get("method", 0) or 0))
                 det("pca", f"{os.path.basename(pca_out)}  ({wb['evec'].shape[1]} comp x "
                            f"{wb['data2use']} samples, recShift {wb['recShift']})")
+
+    if a.emit_fet and a.realign == "off":
+        _emit_fet(spk, res)
 
     # ── drift-transform fit from the overlap-anchors (DIAGNOSTIC; NOT used for linking) ──
     #   The anchors are exact shared-spike correspondences, so a per-adjacent-chunk-pair rigid
@@ -2374,7 +2409,55 @@ def main():
                     f.write(f"{c}\t{ga}\t{gb}\t{ai}\t{bi}\t{d:.4f}\t{thr:.4f}\n"); ncand += 1
         note = "review-only (fibers NOT merged)" if a.emit_merge_candidates else "already applied"
         det("candidates", f"{cand_out}   ({ncand:,} pairs \u00b7 {note})")
+
+    # ── end-of-run realign: shifted .res, every variant's .spk and .fet ──
+    #   Last, because everything above (consolidation, .fet, the drift fit's raw templates, the
+    #   .fibers geometry) is defined on the windows as extracted.  The commit is fiber-realign's own
+    #   main() on the .clu just written -- the same code, flags and output as the plan step
+    #   `fiber-realign --reextract --refeaturize --variants all` -- so the two cannot drift apart.
+    if a.realign != "off":
+        _commit_realign(a, clu_out, space, sdiff, yaml_peak if yaml_peak is not None else peak, log, det)
+        if a.emit_fet:                                    # the requested .fet, from the committed set
+            _spk_c, _ = open_spkD(a.base, a.elec, a.nsamp, a.nchan, prefer=space or a.method)
+            _emit_fet(_spk_c, read_res(a.base, a.elec))
     log(f"done in {time.time()-t0:.0f}s")
+
+
+def _commit_realign(a, clu_path, space, sdiff, peak, log, det):
+    """Run fiber-realign's in-place commit on `clu_path` (see --realign).  `sdiff` is the group's
+    sdiffPairs as this run resolved it; `peak` the window's peak sample -- the YAML's, else the one
+    this run inferred (a session sorted without a YAML would otherwise stop fiber-realign cold).
+    Returns the mode used."""
+    try:
+        from . import fiber_realign as frl
+    except ImportError:
+        import fiber_realign as frl
+    fil = a.realign_fil or f"{a.base}.fil"
+    mode = a.realign
+    if mode == "auto":
+        mode = "reextract" if os.path.exists(fil) else "shift-spk"
+    if mode == "reextract" and not os.path.exists(fil):
+        raise SystemExit(f"--realign reextract: no filtered signal {fil} (use --realign shift-spk, or "
+                         f"--realign-fil <path>)")
+    argv = [str(a.session), str(a.group), "--clu", clu_path, "--align-algo", a.realign_algo,
+            "--variants", "all", "--variant", space or a.method, "--no-emit-clu", "--refeaturize"]
+    argv += ["--reextract", "--fil", fil] if mode == "reextract" else ["--shift-spk"]
+    for flag, val in (("--channels", a.channels), ("--ntotal", a.ntotal), ("--nchan", a.nchan),
+                      ("--nsamp", a.nsamp), ("--sr", a.sr), ("--sdiff-pairs", sdiff),
+                      ("--peak", peak)):
+        if val not in (None, ""):
+            argv += [flag, ",".join(map(str, val)) if isinstance(val, (list, tuple)) else str(val)]
+    log(f"realign: {mode} on {os.path.basename(clu_path)}")
+    det("commit", "shifted .res + every variant's .spk/.fet  (fiber-realign " + " ".join(argv[2:]) + ")")
+    try:
+        frl.main(argv)
+    except (Exception, SystemExit) as e:                 # the sort is on disk: say how to finish it
+        if isinstance(e, SystemExit) and e.code in (None, 0):
+            raise
+        raise SystemExit(f"fiber-session: the sort is written ({os.path.basename(clu_path)}) but the "
+                         f"end-of-run realign failed: {e}\n  finish it with:  fiber-realign "
+                         + " ".join(argv) + "\n  (or rerun with --realign off)") from None
+    return mode
 
 
 if __name__ == "__main__":

@@ -237,6 +237,7 @@ SESSION_DECONV="${FK_SESSION_DECONV:-0}"                               # 1 = sub
 SESSION_DECONV_ASSIGN="${FK_SESSION_DECONV_ASSIGN:-0}"                 # 1 = also park attributed noise spikes as child atoms
 SESSION_REFIT_ITERS="${FK_SESSION_REFIT_ITERS:-0}"                     # extra realign->refit->rejudge passes at inclusion (0=single)
 if [ "$SESSION_NO_WHITEN" = "1" ]; then SESSION_WHITEN_FLAG="--no-whiten"; else SESSION_WHITEN_FLAG=""; fi
+SESSION_REALIGN="${FK_SESSION_REALIGN:-auto}"                         # end-of-run realign commit: auto|reextract|shift-spk|off
 # fiber-stochastic (diagnostic; ensemble/consensus fibering over resampled draws — writes a fiber-space
 # dump, does NOT alter the sort). All default-off / conservative.
 STOCH_DRAWS="${FK_STOCH_DRAWS:-20}"                # resampled draws per chunk
@@ -497,6 +498,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
         --coarse-dr "$SESSION_COARSE_DR" --seed-density "$SESSION_SEED_DENSITY" --reseed-residual-thr "$SESSION_RESEED_RESIDUAL_THR" --reseed-min-reduction "$SESSION_RESEED_MIN_REDUCTION" --refit-iters "$SESSION_REFIT_ITERS" $SESSION_WHITEN_FLAG --resplit-passes "$SESSION_RESPLIT_PASSES" --resplit-residual-thr "$SESSION_RESPLIT_RESIDUAL_THR" --resplit-topch "$SESSION_RESPLIT_TOPCH" --resplit-min-reduction "$SESSION_RESPLIT_MIN_REDUCTION" --resplit-merge-corr "$SESSION_RESPLIT_MERGE_CORR" \
         $SESSION_DETREND_FLAG --resplit-detrend-win "$SESSION_RESPLIT_DETREND_WIN" --resplit-detrend-min-n "$SESSION_RESPLIT_DETREND_MIN_N" \
         --feature-align "$FEATURE_ALIGN" --inclusion-k "$INCLUSION_K" \
+        --realign "$SESSION_REALIGN" --realign-algo "$REALIGN_ALGO" \
         "${sess_args[@]+"${sess_args[@]}"}" "${eband_args[@]+"${eband_args[@]}"}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -854,8 +856,7 @@ emit_plan() {          # print the canonical pipeline as an editable plan templa
 # (unique; letters, digits, . _ -; not a bare number).  `fk list --plan thisfile.yaml` prints them;
 # run one or a span with   fk run <elec> --plan thisfile.yaml refine  |  ... session..cpos  |  ... 3
 pipeline:
-  - {stage: fiber-session,    name: session,   out: ""}
-  - {stage: fiber-realign,    name: realign,   in: ""}
+  - {stage: fiber-session,    name: session,   out: ""}          # commits its own realign (--realign)
   - {stage: fiber-refine,     name: refine,    in: "",      out: refine}
   - {stage: fiber-cpos,       name: cpos,      in: refine,  out: refine, spk: standard}
   - {stage: fiber-intrachunk, name: chunk,     in: refine,  out: refine_intrachunk}
@@ -1059,6 +1060,13 @@ main() {
     # run in canonical order (curated stages last); only those in `want` actually run
     for s in "${KNOWN_STAGES[@]}"; do
         if [ -n "${want[$s]:-}" ]; then
+            # fiber-session already committed its realign (--realign): the canonical stage-2 realign
+            # would re-read the .fil for ~zero shifts.  Named explicitly, it still runs.
+            if [ "$s" = fiber-realign ] && [ "$REQUESTED_STAGES" = 0 ] && [ -n "${want[fiber-session]:-}" ] \
+               && [ "$SESSION_REALIGN" != off ]; then
+                echo "== fiber-realign  (skipped: fiber-session committed its own realign, FK_SESSION_REALIGN=$SESSION_REALIGN) =="
+                continue
+            fi
             run_stage "$s"
             case " $REALIGN_AFTER " in                 # Klusters re-roll spikes into their new groups after the step
                 *" $s "*)

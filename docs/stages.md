@@ -39,6 +39,13 @@ the tables below show the canonical name first with the old one in parentheses.
 
 Cluster a session group into fibers.
 
+**End-of-run realign.**  After the sort, `--realign` (`FK_SESSION_REALIGN`, default `auto`) aligns
+every spike to its fiber's template and commits it: the shifted times to the shared `.res` (offsets to
+`<base>.offsets.<group>.npy`), and every waveform variant's `.spk` rebuilt at those times with a fresh
+`.fet` from its `.pca` -- fiber-realign's own `--reextract --refeaturize --variants all` on the `.clu`
+just written, byte for byte.  `auto` re-extracts from the `.fil` when it exists and rolls the `.spk`
+otherwise; `off` leaves `.res`/`.spk`/`.fet` as extracted.  See docs/pipeline.md.
+
 **Re-sorting around kept units.**  `--in-stage <stage> --exclude-units <ids>` takes the clu
 `<base>.clu.<in-method>.<elec>.<stage>` (in-method defaults to `--method`) and keeps the listed
 clusters' spikes out of every chunk, so they shape no cluster.  With `--exclude-as carry` (default)
@@ -214,6 +221,9 @@ Positional: `session`, `group`
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
 | `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
+| `--realign` | `auto` | FK_SESSION_REALIGN. At the end of the run, align every spike to its fiber's template (fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY waveform variant's .spk on disk at the shifted times (standard, stderiv*, ...) and its .fet (from its .pca; _D alias .fet included) -- what `fiber-realign --reextract --refeaturize --variants all` does as a separate step. reextract = re-read the .fil; shift-spk = circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil exists, else shift-spk; off = leave .res/.spk/.fet as extracted. — choices: `auto`, `reextract`, `shift-spk`, `off` |
+| `--realign-algo` | `klusters` | FK_REALIGN_ALGO. fiber-realign --align-algo for the end-of-run commit; its other knobs (FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there — choices: `klusters`, `template`, `centroid` |
+| `--realign-fil` | — | filtered signal the end-of-run re-extraction reads (default <base>.fil) |
 ### `fiber-realign`
 
 Per-spike Klusters-style realignment + corrected .res spike times, with optional re-extraction from .fil and re-featurisation (commit-and-reextract finalize).
@@ -227,6 +237,8 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
+| `--sdiff-pairs` | — | override: the group's sdiffPairs pattern, which a stderiv_C<n> .spk was built with (default from YAML) |
+| `--peak` | — | override: peak sample index of the window (default the YAML's peakSampleIndex; fiber-session passes the one it inferred when the session has no YAML) |
 | `--clu` | — | cluster file (default <base>.clu.<group>; pass the refined/relinked one, e.g. <base>.clu.stderiv.<group>.refine) |
 | `--align-algo` (`--align-method`) | `klusters` | alignment algorithm (runs on the clu's variant waveform): klusters = iterative normalised-xcorr vs pre-aligned mean; template = legacy median/un-normalised; centroid = reference-free per-spike energy-centroid (fiber_lib.centroid_shift), no peak/template/labels needed. (Named --align-method to avoid colliding with the --method extraction-variant flag used by other tools.) — choices: `klusters`, `template`, `centroid` |
 | `--max-shift` | — | klusters: lag search radius (default Klusters': max(1, (peak-1)//2)) [FK_REALIGN_MAX_SHIFT] |
