@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.49.0] — unique plan step names; `fk list` / `fk run`
+- Every plan step has a unique id, `<stage>-<k>` (its k-th run of that stage in plan order:
+  `fiber-realign-1/2/3` in fiber-kit-exp.yaml), and may carry its own `name:` alias.
+  `fiber_kit.plan_steps` holds the rule for the runner, `fk` and fiber-plan-lint.
+- `fk list` prints the steps of the plan `fiber-pipeline` would run; `fk run <elec> <step>...` runs chosen ones.
+- `fiber-pipeline <elec> --step <s>` (repeatable), `--from` / `--to`, and positional step names
+  (`fiber-pipeline 5 fiber-realign-2`) run selected plan steps with their plan tags and params.
+  A bare stage name keeps its stand-alone meaning; a stage that runs several times is refused
+  with its ids.
+- fiber-plan-edit keeps `name:`; fiber-plan-lint flags malformed or duplicate names.
+
 ## [0.48.0] — whitening without a .fil; `.nst`; amplitude-dependent low-pass
 - `fiber-session --whiten-source` (`FK_SESSION_WHITEN_SOURCE`): `nst` = the `.nst.<variant>.<group>`
   neurosuite-3's `ndm_extractspikes` now writes beside the `.spk` (noise in the `.spk`'s own transform,
