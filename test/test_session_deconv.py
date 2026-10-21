@@ -98,15 +98,15 @@ def main():
         fib = np.load(f"{base}.fibers.stderiv.1", allow_pickle=False)
         tl = labs[keep]
         _, clu = nio.read_clu_file(f"{base}.clu.stderiv.1.dc")
-        pur = {}
-        for g in np.unique(clu[clu > 0]):
+        pur = {}                                       # purity per written cluster
+        for g in np.unique(clu[clu > 1]):
             cnt = np.bincount(tl[clu == g], minlength=len(units))
-            pur[int(g) - 1] = cnt.max() / cnt.sum()
+            pur[int(g)] = cnt.max() / cnt.sum()
         big = fib["nspk"] >= 100
         ag = fib["deconv_agree"]
         check(f"deconv_agree finite on all {big.sum()} well-populated fibers",
               big.any() and np.isfinite(ag[big]).all())
-        pp = np.array([pur.get(int(g), np.nan) for g in fib["gid"]])
+        pp = np.array([pur.get(int(c), np.nan) for c in fib["clu_id"]])   # each row's cluster, as written
         clean_f = big & (pp >= 0.99)
         check(f"pure fibers (>= 0.99, {clean_f.sum()}) are corroborated (deconv_agree >= 0.95)",
               clean_f.any() and (ag[clean_f] >= 0.95).all())

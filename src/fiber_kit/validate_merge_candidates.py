@@ -20,8 +20,10 @@
 #        Two distinct neurons co-modulated only by network state -> >= 0 correlation.
 #
 #  Reads <base>.res.<elec>, <base>.clu.<elec>, <base>.merge_candidates.<elec>.tsv.
-#  Pair ids are gid (global) = clu value - 1.  Use the gid columns from a run made
-#  with --emit-merge-candidates (review-only; gid columns are valid only then).
+#  Pairs are named by gid; their clusters are the clu_a / clu_b columns (0.51+: the
+#  hierarchy save compacts ids and fibers start at 2).  An older candidates file has
+#  no such columns and falls back to clu = gid + 1, with a warning.  Use a run made
+#  with --emit-merge-candidates (review-only; the ids are valid only then).
 #
 #  Usage:
 #    python3 validate_merge_candidates.py <FileBase> <ElecNo> --sr 32552
@@ -75,10 +77,17 @@ def main():
     res = read_res(a.base, a.elec); clu = read_clu(a.base, a.elec)
     assert len(res) == len(clu), f".res {len(res)} vs .clu {len(clu)}"
     cand_path = a.cand or f"{a.base}.merge_candidates.{a.elec}.tsv"
-    rows = [l.split("\t") for l in open(cand_path).read().splitlines()[1:] if l.strip()]
+    with open(cand_path) as fh:
+        lines = fh.read().splitlines()
+    head = lines[0].split("\t") if lines else []
+    rows = [l.split("\t") for l in lines[1:] if l.strip()]
     bands = [(0, 2), (2, 5), (5, 10), (10, 20)]    # ms; (10,20)=baseline
+    has_clu = "clu_a" in head and "clu_b" in head
+    if not has_clu:
+        print("WARNING: candidates without clu_a/clu_b (pre-0.51): assuming cluster = gid + 1")
+    ia, ib = (head.index("clu_a"), head.index("clu_b")) if has_clu else (None, None)
 
-    def times(gid): return res[clu == gid + 1].astype(float)
+    def times(cid): return res[clu == cid].astype(float)
 
     print(f"loaded {len(res)} spikes, {clu.max()} clusters; {len(rows)} candidate pairs\n")
     print(f"{'pair(gid)':>13} {'n_a':>6} {'n_b':>6} {'pdist':>6} | "
@@ -87,7 +96,12 @@ def main():
         chunk, ga, gb, _, _, pd, _ = r[0], int(r[1]), int(r[2]), r[3], r[4], float(r[5]), float(r[6])
         if ga < 0 or gb < 0:
             continue
-        tA, tB = times(ga), times(gb)
+        ca, cb = (int(r[ia]), int(r[ib])) if has_clu else (ga + 1, gb + 1)
+        # 0.51+ ids: 0 = not in the written .clu, 1 a reserve bin.  A pre-0.51 file put fiber 0 in
+        # cluster 1, a real fiber there.
+        if ca <= (1 if has_clu else 0) or cb <= (1 if has_clu else 0):
+            continue
+        tA, tB = times(ca), times(cb)
         if len(tA) < 30 or len(tB) < 30:
             continue
         c = ccg_counts(tA, tB, a.sr, bands); base = c[-1] + 1e-9

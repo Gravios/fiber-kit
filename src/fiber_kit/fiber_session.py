@@ -1259,6 +1259,34 @@ def link_continuity(gid, nglob, depth, sig, *, depth_gate=14.0, sig_thr=0.6,
 
 
 
+# ── cluster and atom ids ─────────────────────────────────────────────────────
+# 0 and 1 are Klusters' artefact and noise bins, and every later stage keeps them as such:
+# intrachunk reserve=(0, 1), consensus parks its quarantine in 1, xcorr-merge and backbone-link read
+# units as clu > 1, anchor-link holds atoms 0/1 out of the link and folds flat-label-1 spikes into
+# noise.  So the first fiber AND the first atom are 2.  (Until 0.51 global fiber 0 was written as
+# cluster 1 and the first atom as 1: two real fragments of every sort fell into the noise bin
+# downstream -- 308 + 242 spikes on sirotaA-jg-000005-20120316 group 6.)
+FIBER0 = 2
+
+
+def _fiber_id(gid, key):
+    """The pre-save cluster id of local fiber `key` = (chunk, local label): gid + FIBER0, or 0 when the
+    label is not a linked fiber (noise / unlabelled)."""
+    g = gid.get(key)
+    return int(g) + FIBER0 if g is not None and g >= 0 else 0
+
+
+def _final_ids(pre, post):
+    """{pre-save cluster id: id in the written .clu}.  The hierarchy save compacts ids (0 and 1 kept),
+    so a fiber's .clu id is not gid + FIBER0 once any fiber vanished: read it back from what was written
+    instead of assuming it."""
+    pre = np.asarray(pre, np.int64); post = np.asarray(post, np.int64)
+    if pre.size == 0:
+        return {}
+    pairs = np.unique(np.stack([pre, post], 1), axis=0)
+    return {int(a): int(b) for a, b in pairs}
+
+
 # ── chunk-level parallelism ──────────────────────────────────────────────────
 # Each chunk is independent (its own whitener, clustering, geometry), so chunks
 # are the natural coarse-grain parallel axis — the same flatten-the-independent-
@@ -1859,8 +1887,8 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
         mthr.append(d["m_thr"])
         for j in np.flatnonzero((res[ext] >= lo_s) & (res[ext] < hi_s)):
             g = int(ext[j])
-            pg = gid.get((c, int(d["primary"][j])), -1) + 1 if d["primary"][j] >= 0 else 0
-            qg = gid.get((c, int(d["partner"][j])), -1) + 1 if d["partner"][j] >= 0 else 0
+            pg = _fiber_id(gid, (c, int(d["primary"][j]))) if d["primary"][j] >= 0 else 0
+            qg = _fiber_id(gid, (c, int(d["partner"][j]))) if d["partner"][j] >= 0 else 0
             resc = bool(d["rescue"][j]) and pg > 0
             if resc:
                 new_clu[g] = pg; n_resc += 1
@@ -1871,7 +1899,7 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
         pl = d["placements"]
         for row in pl[pl["anchor"] < 0]:
             if lo_s <= row["t"] < hi_s:
-                ug = gid.get((c, int(row["unit"])), -1) + 1
+                ug = _fiber_id(gid, (c, int(row["unit"])))
                 rows.append((-1, int(round(row["t"])), c, 0, ug, row["t"] - round(row["t"]), row["amp"],
                              row["gain"], np.nan, 0, 0, np.nan))
                 n_un += 1
@@ -2179,7 +2207,7 @@ def main():
     # derived per-spike fiber layer; .clc/.clp preserve the over-split atoms for curation.
     labels = np.full(nspk, -1, int)
     child = np.zeros(nspk, np.int64)                      # per-spike atom id (.clc); 0 = noise
-    parent = {}; atom_of = {}; next_atom = 1              # (chunk,local)->atom ; atom->fiber
+    parent = {}; atom_of = {}; next_atom = FIBER0         # (chunk,local)->atom ; atom->fiber
     for c in range(nchunks):
         if len(ext_idx[c]) == 0: continue
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
@@ -2191,9 +2219,9 @@ def main():
                 aid = atom_of.get((c, l))
                 if aid is None:
                     aid = next_atom; next_atom += 1; atom_of[(c, l)] = aid
-                    parent[aid] = gid[(c, l)] + 1          # fiber id (+1; matches the .clu convention)
+                    parent[aid] = gid[(c, l)] + FIBER0     # fiber id: 0/1 are the reserve bins
                 child[g] = aid
-    clu = np.where(labels >= 0, labels + 1, 0).astype(np.int32)
+    clu = np.where(labels >= 0, labels + FIBER0, 0).astype(np.int32)
 
     # ── deconvolution: park confidently attributed noise / collision spikes, write the manifest ──
     if a.deconv:
@@ -2236,9 +2264,11 @@ def main():
     else:                                                 # <base>.clu.<variant>.<elec>[.<stage>] (flat, legacy)
         clu_out = nio.write_clu(a.base, a.elec, clu, variant=a.method, tag=a.clu_stage)
         own_paths = {"clu": clu_out}
-    if carried:                                           # final ids: the hierarchy save renumbers
-        _, _final = nio.read_clu_file(clu_out)
-        _final = np.asarray(_final)
+    # final ids: the hierarchy save renumbers, so map each pre-save id to what was written
+    _, _final = nio.read_clu_file(clu_out)
+    _final = np.asarray(_final)
+    final_of = _final_ids(clu, _final)
+    if carried:
         det("carried", ", ".join(f"{u}->{int(_final[np.flatnonzero(in_clu == u)[0]])}" for u in sorted(carried))
                        + "  (input unit -> output cluster)")
 
@@ -2363,6 +2393,10 @@ def main():
     fib_out = nio.fibers_path(a.base, a.method, a.elec)
     arrs = dict(
         gid=col('gid', int), chunk=col('chunk', int), tmin=col('tmin', np.float32),
+        # the row's cluster in the written .clu (0 = none): NOT gid + 1 -- fibers start at FIBER0 and the
+        # hierarchy save compacts ids
+        clu_id=np.array([final_of.get(int(r['gid']) + FIBER0, 0) if int(r['gid']) >= 0 else 0 for r in rows],
+                        int),
         coarse=col('coarse', int), nspk=col('n', int), radius=col('radius', np.float32),
         refrac=col('refrac', np.float32), depth=col('depth', np.float32),
         width_ms=col('width_ms', np.float32), radius_incl=col('radius_incl', np.float32),
@@ -2407,11 +2441,12 @@ def main():
         cand_out = f"{a.base}.merge_candidates.{a.elec}.tsv"
         ncand = 0
         with open(cand_out, "w") as f:
-            f.write("chunk\tgid_a\tgid_b\tlocal_a\tlocal_b\tprofile_dist\tthreshold\n")
+            f.write("chunk\tgid_a\tgid_b\tlocal_a\tlocal_b\tprofile_dist\tthreshold\tclu_a\tclu_b\n")
             for c in range(nchunks):
                 for (ai, bi, d, thr) in chunk_candidates[c]:
                     ga = gid.get((c, ai), -1); gb = gid.get((c, bi), -1)
-                    f.write(f"{c}\t{ga}\t{gb}\t{ai}\t{bi}\t{d:.4f}\t{thr:.4f}\n"); ncand += 1
+                    ca = final_of.get(_fiber_id(gid, (c, ai)), 0); cb = final_of.get(_fiber_id(gid, (c, bi)), 0)
+                    f.write(f"{c}\t{ga}\t{gb}\t{ai}\t{bi}\t{d:.4f}\t{thr:.4f}\t{ca}\t{cb}\n"); ncand += 1
         note = "review-only (fibers NOT merged)" if a.emit_merge_candidates else "already applied"
         det("candidates", f"{cand_out}   ({ncand:,} pairs \u00b7 {note})")
 

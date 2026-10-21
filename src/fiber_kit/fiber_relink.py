@@ -19,7 +19,8 @@
 #  consecutive, nspk<300 -> ~0.19, geometry too noisy to link alone).
 #
 #  Outputs a remapped <base>.clu (old gid -> merged unit) and a per-unit drift
-#  report TSV. Sparse single-chunk fibers that geometry cannot link safely are
+#  report TSV.  A fiber's cluster in the .clu is the .fibers' clu_id column (0.51+; the
+#  hierarchy save compacts ids and fibers start at 2), gid + 1 for older .fibers files. Sparse single-chunk fibers that geometry cannot link safely are
 #  left as their own units (those need the in-pipeline overlap anchors / CCG).
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
@@ -31,6 +32,20 @@ try:
 except ImportError:
     import neuro_io as nio
     import fiber_ccg as cg
+
+
+def gid_clu_maps(z):
+    """({gid: clu id}, {clu id: gid}) from a loaded .fibers.  0.51+ files carry the written cluster of
+    every row (clu_id); older ones assumed clu = gid + 1, which is wrong as soon as the hierarchy save
+    compacts ids -- kept as the fallback, with a warning."""
+    gids = np.asarray(z['gid']).astype(int)
+    if 'clu_id' in getattr(z, 'files', z):
+        cids = np.asarray(z['clu_id']).astype(int)
+    else:
+        print("[relink] WARNING: .fibers without clu_id (pre-0.51): assuming cluster = gid + 1")
+        cids = np.where(gids >= 0, gids + 1, 0)
+    g2c = {int(g): int(c) for g, c in zip(gids, cids) if g >= 0 and c > 0}
+    return g2c, {c: g for g, c in g2c.items()}
 
 
 # ── geometry distances on the stored per-fiber summaries ────────────────────
@@ -236,9 +251,12 @@ def relink(npz_path, prof_thr=0.10, tcorr_min=0.96, prof_gate=0.18, tdist_gate=0
         clu_ids = np.asarray(clu_ids).ravel()
         res = np.asarray(res).ravel()
         rowgid = F['gid'].astype(int)
+        g2c, _ = gid_clu_maps(z)
         trains = {}
         for g in np.unique(rowgid[rowgid >= 0]):
-            t = np.sort(res[clu_ids == g + 1].astype(np.int64))   # clu id = gid+1; 0 = noise
+            if int(g) not in g2c:                                 # fiber absent from the written .clu
+                continue
+            t = np.sort(res[clu_ids == g2c[int(g)]].astype(np.int64))
             if t.size:
                 trains[int(g)] = t
 
@@ -323,10 +341,11 @@ def _load_res(path):
     raise ValueError(f"could not parse .res times from {path} (tried ascii, int64, int32)")
 
 
-def rewrite_clu(clu_in, clu_out, oldgid2unit):
-    """Remap an existing binary .clu (int32 nClusters header + ids; id=gid+1,
-    0=noise) onto merged unit ids, renumbered contiguously from 1."""
-    _, ids = nio.read_clu_file(clu_in)                  # per-spike (gid+1); 0 = noise
+def rewrite_clu(clu_in, clu_out, oldgid2unit, clu2gid=None):
+    """Remap an existing binary .clu (int32 nClusters header + ids; 0=noise) onto merged unit ids,
+    renumbered contiguously from 1.  `clu2gid` maps a cluster id to its fiber gid (gid_clu_maps);
+    without it the pre-0.51 assumption gid = id - 1 is used."""
+    _, ids = nio.read_clu_file(clu_in)                  # per-spike cluster ids; 0 = noise
     # map old id -> new id (noise stays 0); units renumbered 1..K in first-seen order
     nxt = 1; out = np.empty_like(ids)
     seen = {}
@@ -334,7 +353,7 @@ def rewrite_clu(clu_in, clu_out, oldgid2unit):
         v = int(v)
         if v == 0:
             out[i] = 0; continue
-        u = oldgid2unit.get(v - 1, None)
+        u = oldgid2unit.get(clu2gid.get(v, -1) if clu2gid is not None else v - 1, None)
         if u is None:                               # gid absent from .fibers: keep distinct
             key = ('g', v)
         else:
@@ -360,7 +379,8 @@ def main():
     ap = argparse.ArgumentParser(
         description="Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).")
     ap.add_argument("fibers", help="path to <base>.fibers.<method>.<elec>.npz")
-    ap.add_argument("--clu", default=None, help="existing .clu to remap (gid+1; 0=noise)")
+    ap.add_argument("--clu", default=None, help="existing .clu to remap (the .fibers' clu_id names each "
+                                                "fiber's cluster; 0=noise)")
     ap.add_argument("--out", default=None, help="output .clu (default <clu>_relinked)")
     ap.add_argument("--report", default=None, help="per-unit drift report TSV")
     ap.add_argument("--prof-thr", type=float, default=0.10);  ap.add_argument("--tcorr-min", type=float, default=0.96)
@@ -396,7 +416,8 @@ def main():
         write_report(rep, a.report); print(f"[relink] report -> {a.report}")
     if a.clu:
         out = a.out or (a.clu + "_relinked")
-        k, n = rewrite_clu(a.clu, out, oldgid2unit)
+        _, c2g = gid_clu_maps(np.load(a.fibers, allow_pickle=True))
+        k, n = rewrite_clu(a.clu, out, oldgid2unit, c2g)
         print(f"[relink] {n} spikes remapped -> {k} units -> {out}")
 
 

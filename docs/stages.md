@@ -731,7 +731,7 @@ Positional: `fibers`
 
 | flag | default | description |
 |---|---|---|
-| `--clu` | — | existing .clu to remap (gid+1; 0=noise) |
+| `--clu` | — | existing .clu to remap (the .fibers' clu_id names each fiber's cluster; 0=noise) |
 | `--out` | — | output .clu (default <clu>_relinked) |
 | `--report` | — | per-unit drift report TSV |
 | `--prof-thr` | `0.1` |  |
