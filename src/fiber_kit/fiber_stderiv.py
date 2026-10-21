@@ -455,3 +455,85 @@ def apply_stderiv_transform(raw_ext, partner=None, sets=None, exprs=None):
     sd = np.clip(_round_half_away(sd), -32768.0, 32767.0)
     st = sd[:, 1:, :] - sd[:, :-1, :]
     return np.clip(st, -32768.0, 32767.0).astype(np.int16)
+
+
+# ── the waveform space a .spk variant token names ──────────────────────────────────
+
+def _parse_variant_token(variant):
+    try:
+        from .neuro_io import parse_variant_token
+    except ImportError:
+        from neuro_io import parse_variant_token
+    return parse_variant_token(variant)
+
+
+def space_transform(variant, sdiff_pairs=None):
+    """The transform from raw .fil windows into the waveform space a variant token names, so that
+    anything built from the .fil -- a noise whitener, a re-cut spike window -- is in the same space
+    as the .spk it goes with.  Returns a callable (n, L+1, C) -> (n, L, C) float32 on windows that
+    carry ONE extra leading sample (so the temporal difference at t = 0 uses the true previous
+    sample, as the extractor's does), or None for the untransformed space:
+
+      '' | standard | fil   -> None: the .fil window itself (.spk.standard, the untagged legacy .spk)
+      stderiv | D           -> all-pairs + temporal first difference (D: the legacy .spkD)
+      stderiv_S<1|2|3>      -> that plain spatial derivative + the temporal difference
+      stderiv_C<4|5|6>      -> the session's sdiffPairs pattern (partner map / reference sets /
+                               expressions over c0, c1, ...) + the temporal difference
+
+    A trailing _D<lag><dims> (feature-space suffix) is ignored: the waveforms are the same.  Every
+    order goes through apply_stderiv_transform, rounding and clamping included.  ValueError for any
+    other token, for a _C token without a pattern, and for a _C token whose order disagrees with the
+    order the pattern's own grammar selects."""
+    v = "" if variant is None else str(variant)
+    if v in ("", "standard", "fil"):
+        return None
+    if v == "D":
+        return lambda r: apply_stderiv_transform(r).astype(np.float32)
+    spec = _parse_variant_token(v)
+    if spec.family in ("standard", "fil"):
+        return None
+    if spec.family != "stderiv":
+        raise ValueError(f"no waveform transform for variant {v!r}")
+    if spec.kind is None:
+        return lambda r: apply_stderiv_transform(r).astype(np.float32)
+    if spec.kind == "S":
+        if spec.order not in (1, 2, 3):
+            raise ValueError(f"{v!r}: plain spatial-derivative order {spec.order} does not exist (1-3)")
+        order = spec.order
+
+        def plain(r):
+            partner, sets = plain_order_spec(order, np.shape(r)[2])
+            return apply_stderiv_transform(r, partner=partner, sets=sets).astype(np.float32)
+        return plain
+    if not sdiff_pairs:
+        raise ValueError(f"{v!r} needs the session's sdiffPairs pattern")
+    order = sdiff_spec_order(sdiff_pairs)
+    if spec.order == 6:
+        order = 6        # a session mixing forms: an older-form group read as its expressions
+    if spec.order != order:
+        raise ValueError(f"{v!r} says order {spec.order} but sdiffPairs parses as order {order}")
+    if order == 6:
+        exprs = parse_sdiff_exprs(sdiff_pairs)
+        return lambda r: apply_stderiv_transform(r, exprs=exprs).astype(np.float32)
+    if order == 5:
+        sets = parse_sdiff_sets(sdiff_pairs)
+        return lambda r: apply_stderiv_transform(r, sets=sets).astype(np.float32)
+    partner, _ = parse_sdiff_pairs(sdiff_pairs)
+    return lambda r: apply_stderiv_transform(r, partner=partner).astype(np.float32)
+
+
+def space_label(variant, sdiff_pairs=None):
+    """One line naming the space space_transform(variant, sdiff_pairs) builds, for stage logs."""
+    v = "" if variant is None else str(variant)
+    if v in ("", "standard", "fil"):
+        return "raw .fil (standard)"
+    if v == "D":
+        return "stderiv, all-pairs (legacy .spkD)"
+    spec = _parse_variant_token(v)
+    if spec.family in ("standard", "fil"):
+        return "raw .fil (standard)"
+    if spec.kind is None:
+        return "stderiv, all-pairs"
+    if spec.kind == "S":
+        return f"stderiv, plain spatial order {spec.order}"
+    return f"stderiv, sdiffPairs {sdiff_pairs} (order {spec.order})"

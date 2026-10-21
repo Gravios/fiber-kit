@@ -697,6 +697,18 @@ def open_spkD(base, elec, nsamp, nch, mode="r", prefer=None):
     return mm, r.path
 
 
+def spk_variant(path, base, group):
+    """The variant token of a waveform file resolved for (base, group): <base>.spk.<v>.<g> -> v,
+    the legacy glued <base>.spk<v>.<g> (.spkD) -> v, the untagged <base>.spk.<g> -> ''.  The
+    space of what a stage actually opened, whatever token it asked for (open_spkD may fall back
+    along the family walk).  ValueError for a path that is not a waveform file of (base, group)."""
+    p, head, tail = str(path), f"{base}.spk", f".{group}"
+    if not (p.startswith(head) and p.endswith(tail) and len(p) >= len(head) + len(tail)):
+        raise ValueError(f"{path} is not a waveform file of {base} group {group}")
+    mid = p[len(head):len(p) - len(tail)]
+    return mid[1:] if mid.startswith(".") else mid
+
+
 def check_spk_count(nspk, spk, path, nsamp, nchan, res_name=".res"):
     """Gate a stage on the working spk holding EXACTLY the .res' spike count.
 

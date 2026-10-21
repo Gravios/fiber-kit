@@ -63,41 +63,12 @@ MAD_K = 1.4826
 
 def space_transform(space, sdiff_pairs=None):
     """Waveform-space transform for a variant token, applied to raw (filtered) windows that carry
-    ONE extra leading sample: callable (n, L+1, C) -> (n, L, C), or None for the untransformed space.
-
-      standard | fil      -> None (the .fil window itself, = .spk.standard)
-      stderiv             -> SDIFF_ALLPAIRS + temporal first difference
-      stderiv_C<4|5|6>    -> the session's sdiffPairs pattern (partner map / reference sets /
-                             expressions over c0, c1, ...)
-    A trailing _D<lag><dims> (feature-space suffix) is ignored: the waveform is the same.  All stderiv
-    orders go through fiber_stderiv.apply_stderiv_transform, the shared mirror of the C++ extractor,
-    so the windows are the ones the .spk on disk was built from (before any fiber-realign shift)."""
-    if space in (None, "", "standard", "fil"):
-        return None
-    spec = nio.parse_variant_token(space)
-    if spec.family in ("standard", "fil"):
-        return None
-    if spec.family != "stderiv":
-        raise ValueError(f"unsupported waveform space {space!r}")
-    if spec.kind is None:
-        return lambda r: fst.apply_stderiv_transform(r).astype(np.float32)
-    if spec.kind != "C":
-        raise ValueError(f"{space!r}: only the session's custom pattern (_C) is supported")
-    if not sdiff_pairs:
-        raise ValueError(f"{space!r} needs the session's sdiffPairs pattern")
-    order = fst.sdiff_spec_order(sdiff_pairs)
-    if spec.order == 6:
-        order = 6        # a session mixing forms: an older-form group read as its expressions
-    if spec.order != order:
-        raise ValueError(f"{space!r} says order {spec.order} but sdiffPairs parses as order {order}")
-    if order == 6:
-        exprs = fst.parse_sdiff_exprs(sdiff_pairs)
-        return lambda r: fst.apply_stderiv_transform(r, exprs=exprs).astype(np.float32)
-    if order == 5:
-        sets = fst.parse_sdiff_sets(sdiff_pairs)
-        return lambda r: fst.apply_stderiv_transform(r, sets=sets).astype(np.float32)
-    partner, _ = fst.parse_sdiff_pairs(sdiff_pairs)
-    return lambda r: fst.apply_stderiv_transform(r, partner=partner).astype(np.float32)
+    ONE extra leading sample: callable (n, L+1, C) -> (n, L, C), or None for the untransformed space
+    (standard | fil).  stderiv is all-pairs, stderiv_S<n> a plain order, stderiv_C<4|5|6> the
+    session's sdiffPairs pattern; a trailing _D<lag><dims> is ignored.  The definition lives in
+    fiber_stderiv.space_transform, shared with the chunk whitener, so the windows here are the ones
+    the .spk on disk was built from (before any fiber-realign shift)."""
+    return fst.space_transform(space, sdiff_pairs)
 
 
 def extract(trace, times, lo, hi, transform=None, chunk=4096):
