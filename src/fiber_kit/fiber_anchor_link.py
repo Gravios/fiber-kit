@@ -271,9 +271,10 @@ def atom_chunks_and_rates(clu, res, sr, chunk_min=None):
     return chunk_of, rel
 
 
-def calibrate_floor(score, byc, target_fpr, seeds_score=None):
+def calibrate_floor(score, byc, target_fpr, seeds_score=None, null_out=None):
     """Floor at `target_fpr` percent against the WITHIN-CHUNK null (different cells by
-    construction).  Returns (floor, n_null, tpr_on_seeds)."""
+    construction).  Returns (floor, n_null, tpr_on_seeds); `null_out`, if a list, receives
+    the null scores."""
     null = []
     for v in byc.values():
         for x in range(len(v)):
@@ -281,6 +282,8 @@ def calibrate_floor(score, byc, target_fpr, seeds_score=None):
                 s = score(v[x], v[y])
                 if np.isfinite(s):
                     null.append(s)
+    if null_out is not None:
+        null_out.extend(null)
     if len(null) < 20:
         return -np.inf, len(null), np.nan
     floor = float(np.percentile(null, 100.0 - float(target_fpr)))
@@ -290,6 +293,20 @@ def calibrate_floor(score, byc, target_fpr, seeds_score=None):
         if ss.size:
             tpr = float(100.0 * np.mean(ss >= floor))
     return floor, len(null), tpr
+
+
+def seed_null_auc(seeds_score, null):
+    """Cross-chunk matching AUC: P(anchor-pair score > within-chunk null score), ties half.
+    The anchors are same-cell pairs by spike identity, the null different-cell pairs by
+    construction, so this is the separability the linker's score has on this session.
+    In-sample: the same pairs also set the floor.  NaN when either side is empty."""
+    pos = np.asarray(seeds_score, float); pos = pos[np.isfinite(pos)]
+    neg = np.asarray(null, float); neg = neg[np.isfinite(neg)]
+    if not pos.size or not neg.size:
+        return float("nan")
+    from scipy.stats import rankdata
+    r = rankdata(np.concatenate([pos, neg]))
+    return float((r[:pos.size].sum() - pos.size * (pos.size + 1) / 2.0) / (pos.size * neg.size))
 
 
 def anchor_link(frags, byc, *, seeds, score, floor, rel, nspk, chunk_of,
@@ -594,11 +611,18 @@ def main():
             cache[k] = float(o * float(unit[i] @ unit[j])) if np.isfinite(o) else np.nan
         return cache[k]
 
-    floor, n_null, tpr = calibrate_floor(score, byc, a.target_fpr,
-                                         [score(i, j) for i, j in seeds])
+    seed_scores = [score(i, j) for i, j in seeds]
+    null_scores = []
+    floor, n_null, tpr = calibrate_floor(score, byc, a.target_fpr, seed_scores, null_out=null_scores)
     print(f"[anchor-link] floor {floor:.4f} = {a.target_fpr}% FPR on {n_null} within-chunk "
           f"(different-cell) pairs | recovers {tpr:.0f}% of the anchors" if np.isfinite(tpr)
           else f"[anchor-link] floor {floor:.4f} from {n_null} within-chunk pairs")
+    _auc = seed_null_auc(seed_scores, null_scores)
+    if np.isfinite(_auc):
+        _ss = np.asarray(seed_scores, float); _ss = _ss[np.isfinite(_ss)]
+        _f1 = float(np.percentile(null_scores, 99.0))
+        print(f"[anchor-link] anchor-vs-null AUC {_auc:.4f} | TPR@1%FPR {100.0 * np.mean(_ss >= _f1):.0f}% "
+              f"({_ss.size} anchors, {len(null_scores)} null pairs; in-sample)")
 
     warp_kw = dict(warp_thr=(a.warp_thr if a.warp_thr > 0 else None), amp_thr=a.amp_thr, resid_thr=0.5)
     lab = anchor_link(frags, byc, seeds=seeds, score=score, floor=floor, rel=rel, nspk=nspk,
