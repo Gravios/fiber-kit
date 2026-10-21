@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.48.0] — whitening without a .fil; `.nst`; amplitude-dependent low-pass
+- `fiber-session --whiten-source` (`FK_SESSION_WHITEN_SOURCE`): `nst` = the `.nst.<variant>.<group>`
+  neurosuite-3's `ndm_extractspikes` now writes beside the `.spk` (noise in the `.spk`'s own transform,
+  spike-free windows, outliers rejected; one whitener per session); `spk` = per chunk, the snippets'
+  pre-peak samples (stationary block-Toeplitz; no file, any variant); `fil` as in 0.47.1; `auto` (default)
+  = `nst` when the opened `.spk`'s `.nst` exists, else `fil`.  The `.fil` is opened, and the variant's
+  `.fil` transform required, only when the `.fil` source is used.
+- `neuro_io.read_nst` / `write_nst` (NSTE v1, byte-identical to neurosuite-3); `nst` is a
+  MethodSpecific custody type; `contract.yaml` lists `nst` and moves to contract 2 with neurosuite-3;
+  `custody_vectors.tsv` is neurosuite-3's new copy.
+- `fiber-adlp`: amplitude-dependent zero-phase low-pass of the snippets, `fc = clip(fc_ref (A/A_ref)^gamma,
+  fc_min, fc_max)` (filtfilt of a digital Butterworth per spike), written as a new variant with its own
+  `.pca` and a per-spike cutoff sidecar; sort it with `--whiten-source spk`.
+- `fiber-anchor-link` prints the anchor-vs-null AUC and TPR at 1 % FPR of its own score.
+
 ## [0.47.1] — the chunk whitener's noise model follows the .spk
 - The chunk whitener built its noise model in the all-pairs stderiv space for every session, so a
   `stderiv_C5` session was whitened in the wrong space (on the reference session 80% of the whitened
