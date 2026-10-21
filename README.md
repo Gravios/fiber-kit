@@ -105,8 +105,11 @@ fine, geoms = fk.cluster_chunk_fine(
 The pipeline runs per chunk, then links chunks:
 
 1. **Whitener** — a per-chunk noise whitener from occupancy-masked off-spike
-   `.fil` baseline, in stderiv space (`fil → ALLPAIRS common-mode reject →
-   temporal first-difference`).
+   `.fil` baseline, in the waveform space of the `.spk` being sorted: the same
+   transform the extractor applied (all-pairs, a plain spatial order or the
+   group's `sdiffPairs` pattern, then the temporal first-difference; the raw
+   window for `.spk.standard`).  A `stderiv_C<n>` session needs its
+   `sdiffPairs` (session YAML or `--sdiff-pairs`).
 2. **Coarse fibers** — mean-shift clustering for stable cross-chunk anchors.
 3. **Fine split** — within each coarse fiber: `rkk` (standalone KlustaKwik CEM),
    `gmm` (BIC mixture), `fiber` (mean-shift), or `none`; then an optional

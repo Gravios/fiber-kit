@@ -5,6 +5,33 @@ These live in `fiber_geometry` (shape/warp) and `fiber_ccg` (spike-train refract
 shared by the linkers (`fiber-backbone-link`, `fiber-xcorr-merge`) and the within-chunk merger
 (`fiber-intrachunk`).  See [stages.md](stages.md) for the CLI parameters that expose them.
 
+## The chunk whitener's noise model (`fiber_lib`, 0.47.1)
+
+`fil_chunk_whitener` fits a Ledoit-Wolf noise covariance on ~6,000 off-spike `.fil` snippets in the
+feature mask and whitens with its inverse square root.  The snippets go through
+`fiber_stderiv.space_transform(token, sdiffPairs)` of the `.spk` the stage opened
+(`neuro_io.spk_variant`): the extractor's own transform, so the noise and the spikes are in one space.
+
+Until 0.47.0 the snippets were always all-pairs stderiv.  That is right for a `stderiv` `.spk` only.
+All-pairs noise has no per-sample common mode, so the whitener inflated exactly the common-mode-like
+directions a `stderiv_C5` waveform keeps; a `.spk.standard` session got a derivative noise model for
+raw spikes.  On the reference session (group 7, minutes 180-210, C5):
+
+| | all-pairs model | C5 model |
+|---|---|---|
+| C5 noise, top / median whitened eigenvalue | ~58 | 1.7 |
+| C5 noise energy in the 15 largest directions | 80% | 25% |
+| spike whitened energy in those directions | 88-96% | 23-32% |
+| whiteness assignment to template-fit neurons | 0.856 | 0.948 |
+| share of a neuron in its main coarse fiber | 0.42 | 0.61 |
+| coarse fibers / 30 min | 49 | 35 |
+| cluster_chunk_fine atoms / purity (minutes 180-190) | 142 / 0.845 | 132 / 0.879 |
+
+The README's design note that a derivative re-encoding is an orthogonal rotation after re-whitening
+holds only with a matched noise model, which is what this restores.  `stderiv` sessions are unchanged
+bit for bit.  `fil_chunk_whitener` has no default space (`transform=` is required); the lower-level
+`chunk_whitener` / `chunk_whitener_mm` keep the all-pairs default.
+
 ## Waveform shape & matching
 
 ### `band_overlap(med_a, sd_a, med_b, sd_b, chans=None, *, z=1.0, win=8, slide=4, iou_thr=0.5)`
@@ -692,7 +719,8 @@ off-spike stretches of the transformed signal, `e_t = x_t − Σ A_i x_{t−i}`,
 The filter is causal and time-invariant, so the whitened signal is still a sum of whitened templates.
 The allpairs transform sums to zero across channels: the residual has rank C − 1 and the null direction
 is zeroed, not floored.  Templates come from the same transformed continuous signal (allpairs stderiv of
-the `.fil`, the space the chunk whitener uses), averaged over up to 400 median-aligned spikes per fiber.
+the `.fil`, whatever the session's variant -- unlike the chunk whitener, which follows the `.spk`),
+averaged over up to 400 median-aligned spikes per fiber.
 
 ### Stopping, anchoring, equivalence
 
