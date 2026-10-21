@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.47.1] — the chunk whitener's noise model follows the .spk
+- The chunk whitener built its noise model in the all-pairs stderiv space for every session, so a
+  `stderiv_C5` session was whitened in the wrong space (on the reference session 80% of the whitened
+  noise and ~93% of each spike's whitened energy sat in 15 common-mode-like directions) and a
+  `.spk.standard` session got a derivative noise model.  The model is now built with
+  `fiber_stderiv.space_transform` of the `.spk` each stage opens (`neuro_io.spk_variant`): fiber-session,
+  fiber-stochastic, fiber-refine, fiber-stats, fiber-position, fiber-view, fiber-raw-vs-stderiv.
+  Reference session, minutes 180-210: whiteness assignment 0.856 -> 0.948, coarse fibers 49 -> 35.
+  **Sorts of C5 and standard sessions change: rerun fiber-session.**  `stderiv` sessions are unchanged.
+- A `stderiv_C<n>` `.spk` needs the group's `sdiffPairs`: from the session YAML, or the new
+  `--sdiff-pairs` on those stages.  Without it they refuse up front.  Stage logs name the noise model.
+- `fiber_stderiv.space_transform` / `space_label` are the one definition of a variant's waveform
+  transform (fiber-envelope / fiber-consensus delegate to it and now accept `_S` tokens);
+  `fil_chunk_whitener` requires `transform=`.
+
 ## [0.47.0] — fiber-session re-sorts around kept units
 - `fiber-session --in-stage <stage> --exclude-units 3,7,12-15`: the listed clusters of the input clu
   (`<base>.clu.<in-method>.<elec>.<stage>`; `--in-method` defaults to `--method`) never enter a chunk.
