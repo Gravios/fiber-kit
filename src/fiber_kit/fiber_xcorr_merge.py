@@ -57,6 +57,9 @@ _KNOBS = {
     "FK_XCM_BAND_THR": ("band_thr", float, 0.5),
     "FK_XCM_OFF_THR": ("off_thr", float, 0.0),
     "FK_XCM_OFF_AMP_FRAC": ("off_amp_frac", float, 0.3),
+    # how a cluster's spikes are aligned before its template is taken, at the start and after every
+    # merge: peak = each spike to its own peak; klusters = Klusters' realign (xcorr to the cluster template)
+    "FK_XCM_MERGE_ALIGN": ("merge_align", str, "peak"),
     # drift transform emitted from this stage's own cross-chunk merges (see the --emit-drift block in
     # main): 1 = fit + write <base>.fibers.<method>.<group>.<out-stage> for fiber-backbone-link
     # --drift-fibers, 0 = off.  drift_k is the transform dimensionality; drift_chunk_min must match the
@@ -74,12 +77,34 @@ def _knob_default(name, typ, fb, gcfg):
     return fb if v in (None, "") else typ(v)
 
 
-def _tmpl(spk, idx, *, cap, ref_sample, rng):
+def _klusters_align(w, ref_sample):
+    """Klusters' per-cluster realign of a spike sample (fiber_realign.klusters_offsets: iterative
+    normalised xcorr to the cluster's own truncated-mean template, pre-rolled to peakSampleIndex - 1,
+    threshold 0.70, 2 passes), applied as the circular roll Klusters' working copy uses.  In memory only:
+    a template is built from it, nothing is written."""
+    try:
+        from . import fiber_realign as fr
+    except ImportError:
+        import fiber_realign as fr
+    w = np.asarray(w)
+    if len(w) < 2:
+        return w.astype(float)
+    _off, ioff = fr.klusters_offsets(w, np.full(len(w), 2), int(ref_sample) - 1, min_n=1)
+    return fr.roll_spikes(w, ioff).astype(float)
+
+
+def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak"):
     """Realigned median template of a cluster (STANDARD spk).  Called for every cluster
-    and again after every merge -- this is the 'realignment after each merger'."""
+    and again after every merge -- this is the 'realignment after each merger'.
+
+    align='peak': each spike to its own peak (fiber_lib.realign); align='klusters': the sample is
+    aligned as Klusters' realign aligns a cluster -- every spike to the cluster's template by xcorr --
+    so a merged cluster whose fragments sat at different offsets gets one consistent alignment."""
     if idx.size > cap:
         idx = rng.choice(idx, cap, replace=False)
-    w = fg.mutual_center_spikes(fg.denoise(fl.realign(np.asarray(spk[np.sort(idx)], float))), ref_sample=ref_sample)
+    raw = np.asarray(spk[np.sort(idx)])
+    al = _klusters_align(raw, ref_sample) if align == "klusters" else fl.realign(np.asarray(raw, float))
+    w = fg.mutual_center_spikes(fg.denoise(al), ref_sample=ref_sample)
     return np.median(w, 0), w.std(0)                       # median template + per-sample sigma (for the band co-gate)
 
 
@@ -111,7 +136,7 @@ def roll_cos_row(t, T, shift):
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
                 refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0,
-                off_thr=0.0, off_amp_frac=0.3):
+                off_thr=0.0, off_amp_frac=0.3, align="peak"):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
     If cx_scale>0 the required cosine is raised for LOW-complexity (shift-insensitive) pairs, whose
     high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto).
@@ -125,7 +150,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
     are recomputed after each merge, like the template.  Scale note: this uses the "xcorr" method,
     so off_thr is on that lag scale (~0.2-0.3), NOT the trough scale (~1.0).  0 = off (unchanged)."""
     m = len(ids)
-    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng) for k in range(m)]
+    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align) for k in range(m)]
     T = np.stack([t for t, _ in _ms]); SD = np.stack([sd for _, sd in _ms])
     C = roll_cos_matrix(T, shift)
     np.fill_diagonal(C, -np.inf)
@@ -160,7 +185,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
                 C[i, j] = C[j, i] = -np.inf; continue
         # merge j into i, then RE-ALIGN the combined spikes and recompute the template
         idx[i] = np.concatenate([idx[i], idx[j]])
-        T[i], SD[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng)
+        T[i], SD[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng, align=align)
         tt[i] = np.sort(np.concatenate([tt[i], tt[j]]))
         alive[j] = False; parent[j] = i; n_merge += 1
         if cx is not None:
@@ -213,6 +238,8 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
     a = ap.parse_args()
+    if a.merge_align not in ("peak", "klusters"):
+        raise SystemExit(f"{_LP} · --merge-align must be peak or klusters, not {a.merge_align!r}")
     rng = np.random.default_rng(a.seed)
 
     cfg = sy.resolve_session_params(a.session, a.elec)
@@ -233,7 +260,7 @@ def main():
     ids0, cnt = np.unique(clu[clu > 1], return_counts=True)
     big = [int(u) for u, c in zip(ids0, cnt) if c >= a.min_n]
     print(f"{_LP} · {base} elec {elec} | {a.spk_variant} .spk | {len(big)}/{len(ids0)} clusters >= {a.min_n} spk"
-          f" | roll-cos>={a.cos_thr} shift+/-{a.shift} refrac={a.refrac_ms}ms realign-after-merge")
+          f" | roll-cos>={a.cos_thr} shift+/-{a.shift} refrac={a.refrac_ms}ms realign-after-merge ({a.merge_align})")
     if len(big) < 2:
         raise SystemExit(f"{_LP} · too few clusters to merge")
 
@@ -243,7 +270,7 @@ def main():
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
                                            censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
                                            cx_scale=a.complexity_scale, band_thr=a.band_thr,
-                                           off_thr=a.off_thr, off_amp_frac=a.off_amp_frac)
+                                           off_thr=a.off_thr, off_amp_frac=a.off_amp_frac, align=a.merge_align)
     new = clu.copy().astype(np.int64)
     for u in big:
         if mapping[u] != u:

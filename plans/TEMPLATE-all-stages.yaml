@@ -542,6 +542,7 @@ pipeline:
   #       band-thr: 0.5                   # FK_XCM_BAND_THR (default 0.5)
   #       off-thr: 0.0                    # FK_XCM_OFF_THR (default 0.0)
   #       off-amp-frac: 0.3               # FK_XCM_OFF_AMP_FRAC (default 0.3)
+  #       merge-align: peak               # FK_XCM_MERGE_ALIGN (default peak)
   #       emit-drift: 1                   # FK_XCM_EMIT_DRIFT (default 1)
   #       drift-k: 6                      # FK_XCM_DRIFT_K (default 6)
   #       drift-chunk-min: 12.0           # FK_XCM_DRIFT_CHUNK_MIN (default 12.0)
