@@ -74,7 +74,7 @@ def fil_extractor(filmm, res, col_idx, peak=16, nsamp=32, sample_offset=0):
 
 
 def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=0, amp_method="pc1",
-                      templates=True, amp_basis="auto", basis=None):
+                      templates=True, amp_basis="auto", basis=None, max_spikes=20000):
     """Localize each cluster's median raw template.  `extract(idx)` maps spike INDICES
     (positions in .res order) to raw waveforms.  Returns {clu_id: localize_unit dict (+ n,
     and 'template' = realigned median raw waveform when templates=True -- the shape
@@ -83,24 +83,36 @@ def localize_clusters(extract, clu, xy, *, min_spikes=15, dipole=True, nboot=0, 
     `basis` (pre-resolved, e.g. loc.load_pca_basis's .pca.standard eigenvectors) is used as-is.
     Otherwise amp_basis in ('auto','fit') fits ONE group-wide raw basis from `extract`, so the
     positions the depth/offset gates and the linker read are stable at any spike count (no
-    per-cluster SVD tail).  amp_basis='none' (or None) reverts to per-cluster SVD."""
-    ids = np.unique(clu[clu >= 0])
+    per-cluster SVD tail).  amp_basis='none' (or None) reverts to per-cluster SVD.
+
+    `max_spikes` caps the spikes a cluster's template and position are taken from (a seeded random
+    sample, in .res order; 0 = all).  A median template and its position do not need every spike, and
+    loading one 380k-spike cluster as float64 (plus its realigned copy) is several GB -- enough to kill
+    the stage on an 8 GB machine.  `n` still reports the cluster's full spike count."""
+    clu = np.asarray(clu)
+    ok = np.flatnonzero(clu >= 0)
+    order = ok[np.argsort(clu[ok], kind="stable")]             # one sort instead of a clu == c scan per cluster
+    ids, starts = np.unique(clu[order], return_index=True)
+    by = {int(c): order[a:b] for c, a, b in zip(ids, starts, np.r_[starts[1:], order.size])}
     rng = np.random.default_rng(0)
     if basis is None and amp_method == "pc1" and amp_basis in ("auto", "fit"):
         class _Extr:                                       # adapt extract(idx) to fit_amp_basis's spk[idx]
             def __getitem__(self, idx): return np.asarray(extract(idx), np.float32)
-        by = {int(c): np.flatnonzero(clu == c) for c in ids}
         basis = loc.fit_amp_basis(_Extr(), by, rng)
+    srng = np.random.default_rng(1)
     per = {}
     for cid in ids:
-        idx = np.flatnonzero(clu == cid)
+        idx = by[int(cid)]
         if len(idx) < min_spikes:
             continue
+        n_all = len(idx)
+        if max_spikes and n_all > max_spikes:
+            idx = np.sort(srng.choice(idx, max_spikes, replace=False))
         W = np.asarray(extract(idx), float)
         if len(W) < min_spikes:
             continue
         r = loc.localize_unit(W, xy, dipole=dipole, nboot=nboot, amp_method=amp_method, basis=basis)
-        r["n"] = int(len(W))
+        r["n"] = int(len(W)) if n_all == len(idx) else n_all
         if templates:
             tmpl = np.median(fl.realign(W), 0)
             r["template"] = tmpl.astype(np.float32)
@@ -118,10 +130,14 @@ def spike_table(nspk, clu, per):
     (too small / noise / off-.fil) get NaN position and one_flank=1 (treat as degenerate)."""
     T = np.full((nspk, len(CPOS_COLS)), np.nan, np.float32)
     T[:, CPOS_COLS.index("one_flank")] = 1.0
-    for cid, r in per.items():
-        m = clu == cid
-        for j, k in enumerate(CPOS_COLS):
-            T[m, j] = float(r[k])
+    if not per:
+        return T
+    clu = np.asarray(clu)
+    cids = np.array(sorted(per), np.int64)
+    V = np.array([[float(per[int(c)][k]) for k in CPOS_COLS] for c in cids], np.float32)
+    pos = np.searchsorted(cids, clu)                       # one lookup instead of a clu == cid scan per cluster
+    hit = (pos < cids.size) & (cids[np.minimum(pos, cids.size - 1)] == clu)
+    T[hit] = V[pos[hit]]
     return T
 
 
@@ -177,6 +193,9 @@ def main():
     ap.add_argument("--out-method", default=None, help="cpos method BEFORE the group (default: mirror --clu-method)")
     ap.add_argument("--out-stage", default=None, help="cpos fiber STAGE AFTER the group (default: mirror --clu-stage)")
     ap.add_argument("--min-spikes", type=int, default=15)
+    ap.add_argument("--max-spikes", type=int, default=20000,
+                    help="spikes per cluster its template and position are taken from (seeded random sample; "
+                         "0 = all).  Bounds memory: a 380k-spike cluster in float64 alone is ~1.3 GB")
     ap.add_argument("--no-dipole", action="store_true")
     ap.add_argument("--no-templates", action="store_true", help="skip per-cluster median templates in the .clusters.npz")
     ap.add_argument("--amp-algo", "--amp-method", dest="amp_method", choices=("pc1", "wave", "ptp"), default="pc1",
@@ -247,10 +266,14 @@ def main():
                 raise
     per = localize_clusters(extract, clu, xy, min_spikes=a.min_spikes, dipole=not a.no_dipole,
                             nboot=a.nboot, amp_method=a.amp_method, templates=not a.no_templates,
-                            amp_basis=amp_basis, basis=pca_basis)
+                            amp_basis=amp_basis, basis=pca_basis, max_spikes=a.max_spikes)
     sr = cfg.get("sr") or 32552.0                          # stamp each fragment's time (s) for drift/linking
+    _c = np.asarray(clu); _o = np.argsort(_c, kind="stable")
+    _u, _s = np.unique(_c[_o], return_index=True)
+    _span = {int(u): (a0, b0) for u, a0, b0 in zip(_u, _s, np.r_[_s[1:], _o.size])}
     for cid, r in per.items():
-        t = res[clu == cid]
+        a0, b0 = _span[int(cid)]
+        t = res[np.sort(_o[a0:b0])]
         r["t_min"] = float(t.min() / sr); r["t_max"] = float(t.max() / sr)
         r["t_mid"] = float(np.median(t) / sr)
     T = spike_table(len(res), clu, per)

@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.51.1] — fiber-cpos on large clusters
+- `fiber-cpos --max-spikes` (default 20000): a cluster's template and position come from a seeded random
+  sample of at most this many spikes.  It loaded every spike as float64 before; one 380k-spike cluster
+  (group 7 of the reference session) took several GB and the stage was killed on an 8 GB machine.
+  Positions move by < 0.1 um; `n` still reports the full count; `--max-spikes 0` is the old behaviour
+  (byte-identical output).
+- Clusters are grouped once by a sort instead of a `clu == c` scan of every spike per cluster (three
+  places), so the stage scales with the spike count, not spikes x clusters.
+
 ## [0.51.0] — realign commits on their target; fiber-session out of the reserve ids
 - **fiber-realign cuts committed windows where it aligned them**: the spike time at `peakSampleIndex - 1`,
   neurosuite-3's window and the klusters target (`timestamp_index`).  Until now a `--reextract` commit

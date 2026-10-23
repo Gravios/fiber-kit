@@ -411,6 +411,7 @@ Positional: `session`, `group`
 | `--out-method` | — | cpos method BEFORE the group (default: mirror --clu-method) |
 | `--out-stage` | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
 | `--min-spikes` | `15` |  |
+| `--max-spikes` | `20000` | spikes per cluster its template and position are taken from (seeded random sample; 0 = all). Bounds memory: a 380k-spike cluster in float64 alone is ~1.3 GB |
 | `--no-dipole` | flag (off) |  |
 | `--no-templates` | flag (off) | skip per-cluster median templates in the .clusters.npz |
 | `--amp-algo` (`--amp-method`) | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
@@ -861,6 +862,7 @@ Positional: `session`, `group`
 | `--out-method` | — | cpos method BEFORE the group (default: mirror --clu-method) |
 | `--out-stage` | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
 | `--min-spikes` | `15` |  |
+| `--max-spikes` | `20000` | spikes per cluster its template and position are taken from (seeded random sample; 0 = all). Bounds memory: a 380k-spike cluster in float64 alone is ~1.3 GB |
 | `--no-dipole` | flag (off) |  |
 | `--no-templates` | flag (off) | skip per-cluster median templates in the .clusters.npz |
 | `--amp-algo` (`--amp-method`) | `pc1` | per-channel amplitude profile for the position inverse: pc1=rank-1 denoised template (default, sharpest footprint + most precise), wave=median-waveform ptp, ptp=median per-spike ptp (legacy; ~4-sigma noise floor on far channels flattens the footprint). — choices: `pc1`, `wave`, `ptp` |
