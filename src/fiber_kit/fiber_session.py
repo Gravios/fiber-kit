@@ -642,7 +642,8 @@ def _offset_edge_filter(edges, fine, waves_std, off_thr, amp_frac=0.3):
 
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15, coarse_seed_density=0.0,
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
-                       n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
+                       n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, keep_small=False, keep_small_min=5,
+                       assign_unsorted=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
                        energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
                        var_split=0.0, var_split_depth=4,
                        dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
@@ -781,10 +782,28 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 else:
                     newg.append(grp)                             # reject: no improvement
             groups = newg
+        def _keep_whole(gidx, why, cf=cf):
+            """keep_small: a group the size gates would shed becomes a fiber of its own (all its
+            spikes, no inclusion gate) instead of noise.  Returns True if kept."""
+            nonlocal nid
+            if not keep_small or len(gidx) < keep_small_min:
+                return False
+            try:
+                g = fiber_geom(waves[gidx], res_abs[gidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+            except Exception:                                    # too small / degenerate: left to assign_unsorted
+                return False
+            fine[gidx] = nid
+            g['coarse'] = int(cf); g['radius_incl'] = float('nan'); g['n_rejected'] = 0
+            g['n_adapt_rejected'] = 0; g['small'] = why
+            geoms.append(g); nid += 1
+            if shed is not None: shed['small_kept'] = shed.get('small_kept', 0) + len(gidx)
+            return True
+
         for grp in groups:
             g0 = len(grp)
             if g0 < fine_mg:
-                if shed is not None: shed['small_group'] = shed.get('small_group', 0) + g0
+                if not _keep_whole(cidx[grp], 'group') and shed is not None:
+                    shed['small_group'] = shed.get('small_group', 0) + g0
                 continue
             sidx = cidx[grp]; rad = float('nan'); rej = 0; rej_incl = 0; incl_rej = None
             if incl_k > 0 and len(sidx) >= 20:
@@ -822,7 +841,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     incl_rej = base[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
                 sidx = base[keep]
                 if len(sidx) < fine_mg:
-                    if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                    if not _keep_whole(cidx[grp], 'core') and shed is not None:
+                        shed['small_core'] = shed.get('small_core', 0) + g0
                     continue
             if cone_channel_k > 0 and len(sidx) >= 40:
                 # tighten the cone PER CHANNEL: drop spikes that are residual outliers
@@ -837,7 +857,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     rcone = int((~keep2).sum()); rej += rcone; sidx = sidx[keep2]
                     if shed is not None: shed['cone'] = shed.get('cone', 0) + rcone
                     if len(sidx) < fine_mg:
-                        if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                        if not _keep_whole(cidx[grp], 'core') and shed is not None:
+                            shed['small_core'] = shed.get('small_core', 0) + g0
                         continue
             arej = 0
             if adapt_clean and len(sidx) >= 40:
@@ -855,7 +876,8 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     arej = int((~akeep).sum()); sidx = sidx[akeep]
                     if shed is not None: shed['adapt'] = shed.get('adapt', 0) + arej
                     if len(sidx) < fine_mg:
-                        if shed is not None: shed['small_core'] = shed.get('small_core', 0) + g0
+                        if not _keep_whole(cidx[grp], 'core') and shed is not None:
+                            shed['small_core'] = shed.get('small_core', 0) + g0
                         continue
             fine[sidx] = nid
             if shed is not None and rej_incl:
@@ -1039,6 +1061,65 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     fine[np.array(coll)] = len(geoms); geoms.append(g)
                 except Exception:
                     pass                                   # leave as noise if geom build fails
+    # ── assign-unsorted: every spike still unsorted (coarse-unassigned, groups too small to keep,
+    #    inclusion tails when not kept) is placed, in the whitened, realigned feature space the chunk was
+    #    clustered in (amplitude counts): a spike within its nearest fiber's own spread (median +
+    #    incl_k * MAD of that fiber's distances to its centre -- the inclusion rule) joins it; the spikes outside every fiber's spread are
+    #    GMM-split among themselves first (with keep_small), each group >= keep_small_min becoming a fiber
+    #    of its own -- a sparse cell that never made a fiber is not forced into a neighbour -- and only
+    #    the remainder goes to the nearest fiber.  Collision / undefined fibers never receive.  Artifacts are removed BEFORE clustering (fiber-flag-artifacts
+    #    -> --exclude-clu), so nothing real is left for the noise cluster.  A chunk with no fiber at
+    #    all becomes one fiber.  Off by default. ──
+    if assign_unsorted:
+        un = np.flatnonzero(fine < 0)
+        tgt = [l for l, g in enumerate(geoms) if not (g.get('collision') or g.get('undefined'))]
+        n_asg = 0
+        if un.size and tgt:
+            Xall = (fl.realign(waves)[:, mask, :].reshape(len(waves), -1) - nmean) @ W
+            cen = np.stack([np.median(Xall[fine == l], 0) for l in tgt])
+            def _radius(dl):                                # the fiber's own inclusion rule: median + k*MAD
+                med = float(np.median(dl)); mad = 1.4826 * float(np.median(np.abs(dl - med)))
+                return med + (incl_k if incl_k > 0 else 3.0) * mad
+            rad = np.array([_radius(np.linalg.norm(Xall[fine == l] - cen[q], axis=1)) for q, l in enumerate(tgt)])
+            near = np.empty(un.size, int); dist = np.empty(un.size)
+            for b0 in range(0, un.size, 4096):
+                xb = Xall[un[b0:b0 + 4096]]
+                d2 = np.maximum((xb * xb).sum(1)[:, None] - 2.0 * xb @ cen.T + (cen * cen).sum(1)[None, :], 0.0)
+                q = np.argmin(d2, 1); near[b0:b0 + 4096] = q; dist[b0:b0 + 4096] = np.sqrt(d2[np.arange(len(q)), q])
+            inside = dist <= rad[near]                     # within the nearest fiber's own spread: its spike
+            fine[un[inside]] = np.asarray(tgt)[near[inside]]; n_asg += int(inside.sum())
+            far = un[~inside]; far_near = near[~inside]
+            # spikes outside every fiber's spread: their own groups first (a sparse cell that never
+            # made a fiber), only the rest to the nearest fiber
+            if keep_small and far.size >= 2 * keep_small_min:
+                try:
+                    sub = gmm_split(waves[far], pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
+                except Exception:
+                    sub = np.zeros(far.size, int)
+                for u in np.unique(sub):
+                    m = sub == u
+                    if m.sum() >= keep_small_min:
+                        try:
+                            g = fiber_geom(waves[far[m]], res_abs[far[m]], W, nmean, mask, sr, n_grid,
+                                           chunk_t0=ct0, chunk_t1=ct1)
+                        except Exception:
+                            continue
+                        g['coarse'] = -1; g['radius_incl'] = float('nan'); g['n_rejected'] = 0
+                        g['n_merged'] = 0; g['small'] = 'unsorted'
+                        fine[far[m]] = len(geoms); geoms.append(g)
+                        if shed is not None: shed['small_kept'] = shed.get('small_kept', 0) + int(m.sum())
+                rest = fine[far] < 0
+            else:
+                rest = np.ones(far.size, bool)
+            fine[far[rest]] = np.asarray(tgt)[far_near[rest]]; n_asg += int(rest.sum())
+        elif un.size and not geoms:
+            try:
+                g = fiber_geom(waves[un], res_abs[un], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                g['coarse'] = -1; g['radius_incl'] = float('nan'); g['n_rejected'] = 0; g['n_merged'] = 0
+                fine[un] = len(geoms); geoms.append(g); n_asg += int(un.size)
+            except Exception:
+                pass
+        if shed is not None and n_asg: shed['assigned'] = shed.get('assigned', 0) + n_asg
     # ── no-noise: sweep every REMAINING noise spike into ONE undefined fiber (a real cluster, not the
     #    noise cluster).  Heterogeneous by construction (rejected inclusion tails / coarse rejects / junk);
     #    kept in the sort so it is cleaned in subsequent steps rather than dropped.  Off by default. ──
@@ -1605,6 +1686,19 @@ def add_core_arguments(ap):
                     help="sweep every remaining noise spike (below the inclusion radius / rejected / collision junk) into a "
                          "single UNDEFINED FIBER (one real cluster, not the noise cluster) rather than dropping it. For clean "
                          "stderiv data; the undefined fiber is cleaned/re-split in later steps.")
+    ap.add_argument("--keep-small-groups", dest="keep_small", action="store_true", default=False,
+                    help="a fine group below --fine-min-group (or whose inclusion core falls below it) becomes a fiber "
+                         "of its own -- all its spikes -- instead of going to the noise cluster.  Over-split is "
+                         "recoverable downstream; a dropped unit is not.  Groups below --keep-small-min are left "
+                         "to --assign-unsorted")
+    ap.add_argument("--keep-small-min", dest="keep_small_min", type=int, default=5,
+                    help="smallest group --keep-small-groups keeps as its own fiber (default 5)")
+    ap.add_argument("--assign-unsorted", dest="assign_unsorted", action="store_true", default=False,
+                    help="place every spike still unsorted at the end of a chunk (coarse-unassigned, groups too "
+                         "small to keep): within its nearest fiber's own spread -> that fiber; outside every fiber's "
+                         "spread -> GMM groups of their own (with --keep-small-groups), the remainder -> nearest fiber "
+                         "(whitened, realigned features: shape and amplitude).  With fiber-flag-artifacts -> --exclude-clu, only flagged artifacts reach "
+                         "cluster 0")
     ap.add_argument("--incl-assign-rejected", dest="incl_assign", action="store_true", default=False,
                     help="assign spikes beyond the per-fiber inclusion radius to that fiber (kept in the sort) instead "
                          "of dropping them to the unsorted bin.  Geometry/templates still use the pure core; this only "
@@ -1738,6 +1832,7 @@ def build_cf(a, meth, cluster_basis):
     return dict(method=meth, coarse_dr=a.coarse_dr, coarse_seed_density=a.seed_density, reseed_residual_thr=a.reseed_residual_thr, reseed_min_reduction=a.reseed_min_reduction, refit_iters=a.refit_iters, fine_kappa=a.fine_kappa, fine_dedup=a.fine_dedup_deg,
         fine_mg=a.fine_min_group, pca_k=a.pca_k, max_sub=a.max_sub, n_grid=a.n_grid, basis=cluster_basis,
         incl_k=a.inclusion_k, incl_assign=a.incl_assign, no_noise=a.no_noise, cone_channel_k=a.cone_channel_k,
+        keep_small=a.keep_small, keep_small_min=a.keep_small_min, assign_unsorted=a.assign_unsorted,
         energy_band=a.energy_band, eband_width=a.eband_width, eband_overlap=a.eband_overlap,
         eband_confound=a.eband_confound, eband_min_span=a.eband_min_span, eband_min_band=a.eband_min_band,
         eband_low_assign=a.eband_low_assign,
@@ -2183,21 +2278,28 @@ def main():
         itk = shed_total.get('incl_tail_kept', 0); itd = shed_total.get('incl_tail_dropped', 0)
         co = shed_total.get('cone', 0); ad = shed_total.get('adapt', 0)
         uns = shed_total.get('_unsorted_ext', 0)
-        coarse = max(0, uns - (sg + sc + itd + co + ad))
+        kept = shed_total.get('small_kept', 0); asg = shed_total.get('assigned', 0)
+        coarse = max(0, uns - (sg + sc + itd + co + ad) + asg)
+        if kept:
+            log(f"small groups kept as their own fibers: {kept:,} spikes")
+        if asg:
+            log(f"unsorted spikes assigned to their nearest fiber: {asg:,} (counted below by cause; total left: {uns:,})")
         rows = [("small-group skip", sg), ("small-core skip", sc)]
         if itd: rows.append(("inclusion tail dropped", itd))
         if co:  rows.append(("cone", co))
         if ad:  rows.append(("adapt", ad))
         rows.append(("coarse-unassigned", coarse))
-        lw = max(len(n) for n, _ in rows + [("total", 0)])
-        nw = max(len(f"{v:,}") for _, v in rows + [("", uns)])
+        lw = max(len(n) for n, _ in rows + [("left unsorted", 0)])
+        nw = max(len(f"{v:,}") for _, v in rows + [("", uns + asg)])
         if itk:
             log(f"inclusion tail kept in sort: {itk:,}")
-        log("unsorted spikes by cause")
+        log("unsorted spikes by cause" + (" (before --assign-unsorted)" if asg else ""))
         for name, val in rows:
             det(name, f"{val:>{nw},}", lw)
         print(f"{IND}{'─' * (lw + 1 + nw)}")
-        det("total", f"{uns:>{nw},}", lw)
+        det("total", f"{uns + asg:>{nw},}", lw)
+        if asg:
+            det("left unsorted", f"{uns:>{nw},}", lw)
 
     # anchor_links ALWAYS holds one (possibly empty) list per adjacent chunk pair -- the
     # shape link_chunks returns.  The no-link branch used to leave it [] outright, which

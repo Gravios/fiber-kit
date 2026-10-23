@@ -270,6 +270,9 @@ SESSION_LINK="${FK_SESSION_LINK:-1}"                     # 1 = assemble a fiber'
 SESSION_CFIBER_GATE="${FK_SESSION_CFIBER_GATE:-1}"       # 1 = cfiber affine-invariant shape veto on coarse fragment merges
 SESSION_DIPSPLIT="${FK_SESSION_DIPSPLIT:-1}"             # 1 = dip-bimodal split within fibers (over-cluster welds early)
 SESSION_NO_NOISE="${FK_SESSION_NO_NOISE:-0}"           # 1 = sweep remaining noise into one undefined fiber (not the noise cluster)
+SESSION_KEEP_SMALL="${FK_SESSION_KEEP_SMALL:-0}"       # 1 = a fine group below the size gates becomes its own fiber, not noise
+SESSION_KEEP_SMALL_MIN="${FK_SESSION_KEEP_SMALL_MIN:-5}" # smallest group KEEP_SMALL keeps as a fiber (smaller -> ASSIGN_UNSORTED)
+SESSION_ASSIGN_UNSORTED="${FK_SESSION_ASSIGN_UNSORTED:-0}" # 1 = every still-unsorted spike -> nearest fiber of its chunk
 SESSION_INCL_ASSIGN="${FK_SESSION_INCL_ASSIGN:-1}"      # 1 = keep spikes beyond the per-fiber inclusion radius (assign
                                                          #   them to that fiber) instead of dropping them to the unsorted
                                                          #   bin.  The radius (FK_SESSION_INCLUSION_K) still defines the pure core
@@ -483,6 +486,8 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     [ "$SESSION_DIPSPLIT" = "1" ]   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
     [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     [ "$SESSION_NO_NOISE" = "1" ]    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
+    [ "$SESSION_KEEP_SMALL" = "1" ]  && sess_args+=(--keep-small-groups --keep-small-min "$SESSION_KEEP_SMALL_MIN")
+    [ "$SESSION_ASSIGN_UNSORTED" = "1" ] && sess_args+=(--assign-unsorted)    # unsorted -> nearest fiber
     [ "$SESSION_DECONV" = "1" ]      && sess_args+=(--deconv)                 # deconv_agree QC + .deconv.tsv manifest
     [ "$SESSION_DECONV_ASSIGN" = "1" ] && sess_args+=(--deconv-assign)        # park attributed noise spikes
     local excl_args=()

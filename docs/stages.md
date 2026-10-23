@@ -138,6 +138,9 @@ Positional: `session`, `group`
 | `--max-sub` | `8` |  |
 | `--inclusion-k` | `3.0` | per-fiber radius = median+k*MAD of residuals; 0 disables |
 | `--no-noise` | flag (off) | sweep every remaining noise spike (below the inclusion radius / rejected / collision junk) into a single UNDEFINED FIBER (one real cluster, not the noise cluster) rather than dropping it. For clean stderiv data; the undefined fiber is cleaned/re-split in later steps. |
+| `--keep-small-groups` | flag (off) | a fine group below --fine-min-group (or whose inclusion core falls below it) becomes a fiber of its own -- all its spikes -- instead of going to the noise cluster. Over-split is recoverable downstream; a dropped unit is not. Groups below --keep-small-min are left to --assign-unsorted |
+| `--keep-small-min` | `5` | smallest group --keep-small-groups keeps as its own fiber (default 5) |
+| `--assign-unsorted` | flag (off) | place every spike still unsorted at the end of a chunk (coarse-unassigned, groups too small to keep): within its nearest fiber's own spread -> that fiber; outside every fiber's spread -> GMM groups of their own (with --keep-small-groups), the remainder -> nearest fiber (whitened, realigned features: shape and amplitude). With fiber-flag-artifacts -> --exclude-clu, only flagged artifacts reach cluster 0 |
 | `--incl-assign-rejected` | flag (off) | assign spikes beyond the per-fiber inclusion radius to that fiber (kept in the sort) instead of dropping them to the unsorted bin. Geometry/templates still use the pure core; this only rescues the good high-amplitude tail spikes the radius would otherwise discard. |
 | `--energy-band` | flag (off) | energy-band split: partition each ENERGY-CONFOUNDED coarse fiber into overlapping log10-energy bands, BIC-GMM per band (global features), relink by overlap-anchor; surfaces shape sub-units the drift axis masks |
 | `--eband-width` | `0.45` | energy-band width in decades (default 0.45) |
