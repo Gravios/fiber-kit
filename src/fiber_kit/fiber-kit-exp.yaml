@@ -22,9 +22,10 @@
 #  they define the file-naming contract, not tuning.
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
-#  Plan order (the embedded pipeline below):
-#    fiber-session(+realign) -> fiber-consensus(quarantine-only) -> cpos -> fiber-intrachunk -> realign
-#                            -> cpos -> fiber-anchor-link -> fiber-xcorr-merge -> fiber-backbone-link(drift) -> realign
+#  Plan order (the embedded pipeline below, since 0.52.0):
+#    fiber-flag-artifacts -> fiber-session(+realign) -> fiber-xcorr-merge -> realign
+#  (the previous plan -- consensus, intrachunk, anchor-link, xcorr-merge, backbone-link -- is kept, commented,
+#  under the pipeline section)
 #
 #  LAYOUT -- knob sections follow the plan order:
 #    [1] fiber-session   [2] fiber-realign   [3] fiber-cpos   [4] fiber-intrachunk
@@ -98,19 +99,41 @@
 #      lab chain: ARI 0.433 -> 0.524, cmp 0.608 -> 0.694, purity -0.3pp.  The last
 #      realign re-extracts exp_final for curation.
 # ============================================================================
+#  SINCE 0.52.0 -- tuned on sirotaA-jg-000005-20120312 group 7 against the 29 clean units of the old
+#  manual curation (see plans/10-session-xcorr.yaml for the scoring), and built so that NO real spike ends
+#  in cluster 0 or 1: only a spike whose unwhitened derivative is an artifact (fiber-flag-artifacts) does.
+#    * flag     : fiber-flag-artifacts -> the .clu.<spk>.<group>.artifact mask; FK_SESSION_EXCLUDE=1 hands it
+#                 to fiber-session, so flagged spikes never enter a chunk and are written as cluster 0.
+#    * session  : fiber-session with FK_SESSION_KEEP_SMALL + FK_SESSION_ASSIGN_UNSORTED: groups below the size
+#                 gates become fibers of their own, every other unsorted spike is placed (its nearest fiber's
+#                 own spread, else a group of its own, else the nearest fiber).  Fiber ids start at 2.
+#    * merge    : fiber-xcorr-merge on the fibers (cos 0.96, min-n 15) with the per-channel residual-variance
+#                 test (FK_XCM_RVU_*): a candidate merge whose residual variance is non-uniform on any channel
+#                 within +/-12 samples of the peak is first waveform-knn-split (each part against the other and
+#                 its neighbours), then retried once.  On minutes 168-204 of that group, from the same
+#                 fiber-session sort: accuracy 0.293 -> 0.365, merges between truth units 4 -> 0, 15 units
+#                 better / 4 worse; the cost is fragmentation (clusters per 80% of a unit 4.3 -> 7.9).
+#    * realign  : re-extract the final sort for curation.
+#  Dropped from the previous plan because they move real spikes to cluster 0/1 or lowered the score on that
+#  ground truth: consensus quarantine (6.6% of group 6's clean-unit spikes to cluster 1), intrachunk (recut
+#  sheds to reserve; lowers the perfect-linker ceiling 0.49 -> 0.44), anchor-link, backbone-link after the
+#  merge (0.372 -> 0.353).
 pipeline:
+  - {stage: fiber-flag-artifacts, name: flag}
   - {stage: fiber-session,        name: session,         out: fiber_session}
-  # clean before any merge (section [C]): quarantined spikes -> noise, the hierarchy carried, island / rim
-  # clusters in .fs_clean_qreview + the .qrn table for review.  Needs `pip install fiber-kit[consensus]`.
-  - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
-  - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
-  - {stage: fiber-intrachunk,     name: chunk,           in: fs_clean, out: exp_chunk}
-  - {stage: fiber-realign,        name: realign-chunk,   in: exp_chunk}
-  - {stage: fiber-cpos,           name: cpos-chunk,      in: exp_chunk, out: exp_chunk, spk: standard}
-  - {stage: fiber-anchor-link,    name: link,            in: exp_chunk, out: exp_linked, params: {frag-layer: units}}
-  - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
-  - {stage: fiber-backbone-link,  name: backbone,        in: exp_xcm, out: exp_final, drift: exp_xcm}
-  - {stage: fiber-realign,        name: realign-final,   in: exp_final}
+  - {stage: fiber-xcorr-merge,    name: merge,           in: fiber_session, out: exp_xcm}
+  - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
+  # previous plan (before 0.52.0):
+  # - {stage: fiber-session,        name: session,         out: fiber_session}
+  # - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
+  # - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
+  # - {stage: fiber-intrachunk,     name: chunk,           in: fs_clean, out: exp_chunk}
+  # - {stage: fiber-realign,        name: realign-chunk,   in: exp_chunk}
+  # - {stage: fiber-cpos,           name: cpos-chunk,      in: exp_chunk, out: exp_chunk, spk: standard}
+  # - {stage: fiber-anchor-link,    name: link,            in: exp_chunk, out: exp_linked, params: {frag-layer: units}}
+  # - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
+  # - {stage: fiber-backbone-link,  name: backbone,        in: exp_xcm, out: exp_final, drift: exp_xcm}
+  # - {stage: fiber-realign,        name: realign-final,   in: exp_final}
   # optional late review pass in merge mode (cells from the consensus, both quarantine clusters kept):
   # - {stage: fiber-consensus,      name: review,          in: exp_final, out: consensus}
   # optional low-amplitude mixture split (section [D]; opt-in -- GT-neutral on g6, see docs/methods.md):
@@ -185,9 +208,12 @@ FK_SESSION_DECONV: 1                 # 0 | 1.  Detection-anchored sub-sample tem
                                  #   spikes the pursuit explains with its own (or an indistinguishable) template, a
                                  #   contamination measure -- and a .deconv.tsv manifest of labels, collision partners
                                  #   and undetected spikes.  Changes no label by itself.
-FK_SESSION_DECONV_ASSIGN: 0      # 0 | 1.  With DECONV: park noise / collision-cluster spikes the pursuit attributes to
+FK_SESSION_DECONV_ASSIGN: 1      # 0 | 1.  With DECONV: park noise / collision-cluster spikes the pursuit attributes to
                                  #   a corroborated fiber with a calibrated margin as a new child atom of that fiber.
-                                 #   0: its precision fell to 70-90 percent on synthetic sessions with look-alike cells.
+                                 #   ON here (0.52.0) so nothing it can attribute stays in cluster 0.  With
+                                 #   FK_SESSION_ASSIGN_UNSORTED=1 the chunk has already placed its unsorted spikes, so
+                                 #   this sees only what is left (normally nothing).  Caveat: its precision fell to
+                                 #   70-90 percent on synthetic sessions with look-alike cells.
                                  #   >0 draws ridge seeds toward CONCENTRATED modes of the waveform space
                                  #   (p ~ local_density**this), concentrating the seed budget on isolated,
                                  #   reproducible modes (isolation, not firing rate).  1 = fully density-weighted.
@@ -235,6 +261,18 @@ FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fib
                                   #   that fiber (kept in the sort) instead of dropping them to the unsorted/artifact bin.
                                   #   FK_SESSION_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
                                   #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
+FK_SESSION_KEEP_SMALL:   1       # 0 | 0/1.  1 = a fine group below FK_SESSION_FINE_MIN_GROUP (or whose inclusion
+                                  #   core falls below it) becomes a fiber of its own -- all its spikes -- instead of
+                                  #   going to cluster 0.  These skips are where sparse cells were lost (any cell with
+                                  #   < 40 spikes in a 12-min chunk).  Over-split is recoverable downstream; a dropped
+                                  #   unit is not.
+FK_SESSION_KEEP_SMALL_MIN: 5     # 5.  Smallest group KEEP_SMALL keeps as a fiber; smaller ones go to ASSIGN_UNSORTED.
+FK_SESSION_ASSIGN_UNSORTED: 1    # 0 | 0/1.  1 = place every spike still unsorted at the end of a chunk (coarse-
+                                  #   unassigned, groups too small to keep), in the chunk's whitened realigned features:
+                                  #   inside its nearest fiber's own spread (median + INCLUSION_K x MAD) -> that fiber;
+                                  #   outside every fiber's spread -> GMM groups of their own (>= KEEP_SMALL_MIN); the
+                                  #   rest -> the nearest fiber.  With FK_SESSION_EXCLUDE=1 only flagged artifacts
+                                  #   reach cluster 0.
 FK_SESSION_NO_NOISE:     0        # 0 | 0/1.  1 = sweep every remaining noise spike (below the inclusion radius /
                                   #   rejected / collision junk) into a single UNDEFINED FIBER -- a real cluster, not the
                                   #   noise cluster -- instead of dropping it.  For clean stderiv data; the undefined fiber
@@ -960,7 +998,11 @@ FK_PEEL_BURST_FOOT_LO:   0.80     # 0 | 0.75-0.88.  BURST pass after the anneal:
 # CCG veto.  Default cos-thr is a conservative 0.99: scored on a curated g5 sort, lower floors fused co-located
 # same-site fragments (near-identical footprints; the refractory gate is powerless on sparse g5).  That GT is
 # INCOMPLETE, so treat the reported purity as a lower bound and tune cos-thr on your own review.  Knobs FK_XCM_*.
-FK_XCM_COS_THR:          0.98     # 0.99 | 0.975-0.999.  Min roll-shift cosine to merge.  0.98 measured
+FK_XCM_COS_THR:          0.96     # 0.99 | 0.93-0.999.  Min roll-shift cosine to merge.  0.96 since 0.52.0, where the
+                                  #   merge runs on fiber-session's fibers: tuned on group 7 of the reference session
+                                  #   against 29 clean units of the old curation (plans/10-session-xcorr.yaml: 0.97 /
+                                  #   0.96 / 0.95 / 0.94 / 0.93 -> 0.377 / 0.405 / 0.396 / 0.350 / 0.343).  Earlier, as
+                                  #   the step after anchor-link, 0.98 was measured
                                   #   on the lab session's recovered chain (2026-09-30): after anchor-link,
                                   #   cosine grid 0.995/0.99/0.985/0.98/0.975 gave cmp 0.51/0.55/0.58/0.61/0.61
                                   #   at purity 0.734/0.734/0.733/0.731/0.724 -- 0.98 is the knee (ARI 0.433,
@@ -970,10 +1012,41 @@ FK_XCM_SHIFT:            4        # 4 | 2-6 (samples).  +/- circular-shift half-
 FK_XCM_REFRAC_MS:        2.0      # 2.0 | 1.5-3.0.  Refractory window; 0 disables the CCG veto.
 FK_XCM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powered pair is vetoed as two cells.
 FK_XCM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
-FK_XCM_MIN_N:            40       # 40 | 30-100.  Min spikes for a cluster to participate (else carried as-is).
+FK_XCM_MIN_N:            15       # 40 | 8-100.  Min spikes for a cluster to participate (else carried as-is).  15 since
+                                  #   0.52.0 (on the fibers: min-n 8 / 15 / 25 / 40 -> 0.387 / 0.405 / 0.389 / 0.372).
 FK_XCM_SPK_CAP:          300      # 300.  Spikes per cluster used to build/realign the template.
 FK_XCM_BAND_THR:         0.5      # 0.5 | 0.0-0.8.  Median+/-sigma BAND-OVERLAP co-gate (fiber-backbone-link's method), ON:
                                   #   a candidate merge must also have band-overlap IoU >= this.  0=off (roll-cosine only).
+FK_XCM_RVU_THR:          0.5      # 0 | 0.45-0.6 (0 = off).  Per-channel RESIDUAL-VARIANCE uniformity: residual = each
+                                  #   aligned spike minus the merged candidate's template, within +/- FK_XCM_RVU_WIN
+                                  #   samples of the peak; on each channel the residual variance across those samples
+                                  #   should be flat (noise).  Two co-shaped cells of different amplitude leave a
+                                  #   residual that peaks with the spike.  Non-uniformity = std/mean of that profile;
+                                  #   ANY channel above this fails the candidate (each channel has its own veto).  This
+                                  #   absolute test also catches a fragment that is ALREADY mixed.  Measured: pure
+                                  #   single clusters 0.21 / 0.29 / 0.53 (p10/50/90), same-unit merged pairs
+                                  #   <= 0.41 (p90); the merged look-alike pairs on group 7: 0.43-0.70.
+FK_XCM_RVU_RISE:         0.05     # 0 | 0.03-0.10 (0 = off).  The same test relative to the parts: fail if any channel's
+                                  #   non-uniformity rises above the larger of the two clusters' by more than this.
+                                  #   Same-unit pairs: rise <= 0.045 (p90, median 0.001); look-alike pairs 0.10-0.43.
+FK_XCM_RVU_WIN:          12       # 12 (samples).  Half-window around the peak for the residual-variance profile.
+FK_XCM_RVU_KNN:          1        # 0 | 0/1.  1 = a candidate failing RVU is not simply vetoed: each of its two clusters is
+                                  #   WAVEFORM-KNN-SPLIT (fiber_consolidate.knn_pass, Klusters' split-by-knn-vs-references)
+                                  #   against the other and its nearest clusters; spike buckets that vote for a reference
+                                  #   fold into it when they match it in shape AND amplitude, else become new clusters;
+                                  #   the merge is retried once, then vetoed.  0 = plain veto.  On minutes 168-204 of
+                                  #   group 7 (fiber-session fibers, cos 0.96, min-n 15): no test 0.293 / 4 merges,
+                                  #   rise-veto only 0.310 / 2, RVU_THR 0.45 + knn 0.358 / 3, RVU_THR 0.5 + knn
+                                  #   0.365 / 0 (this setting), rise-only + knn 0.343 / 2.
+FK_XCM_RVU_KNN_K:        10       # 10.  Neighbours per spike in the vote (Klusters default).
+FK_XCM_RVU_KNN_VOTE:     0.6      # 0.6.  Fraction of the K that must agree (Klusters default).
+FK_XCM_RVU_KNN_REFS:     8        # 8.  Reference clusters per split: the partner + the nearest by roll cosine.
+FK_XCM_RVU_KNN_FOLD:     0.9      # 0.9.  Amplitude-sensitive template match a bucket needs to fold into its winner.
+FK_XCM_RVU_KNN_MAX:      20000    # 20000.  Clusters larger than this are not knn-split (memory); the pair is vetoed.
+FK_XCM_GIQR_THR:         0        # 0 = off | 0.2-0.4.  Own-gain IQR veto (Klusters strip gain, raw waveforms).  Off: on
+                                  #   the same data 0.3 gave 0.370 / 2 merges but 7.4 clusters per unit; the RVU test
+                                  #   with knn gets there without vetoing as much.
+FK_XCM_GIQR_RISE:        0        # 0 = off.  The gain-IQR test relative to the parts.
 FK_XCM_CX_SCALE:         0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling: raise the required cosine for LOW-complexity
                                   #   (shift-insensitive) pairs -- their high roll-shift cosine is weak evidence (the best
                                   #   circular shift inflates it).  0=off.  Moderate signal on g5 (AUC 0.73 correct-vs-
@@ -1061,9 +1134,11 @@ FK_FLAG_SAT_ADU:         32000    # 32000 | 0 = off.  Saturation is unambiguous,
 FK_FLAG_BATCH:           50000    # 50000.  Spikes per pass over the .spk memmap.
 FK_FLAG_STAGE:           artifact # stage tag of the emitted mask .clu (0 = keep, 1 = artifact).
 FK_FLAG_SPK:             standard # waveform axis the flagger measures; the mask is named for it.
-FK_SESSION_EXCLUDE:      0        # 0 | 0/1.  1 = fiber-session passes --exclude-clu <mask>, so masked spikes
+FK_SESSION_EXCLUDE:      1        # 0 | 0/1.  1 = fiber-session passes --exclude-clu <mask>, so masked spikes
                                   #   never enter a chunk and are emitted as cluster 0.  Opt-in: the coupling is
-                                  #   explicit rather than inferred from a file existing.
+                                  #   explicit rather than inferred from a file existing.  ON here (0.52.0): the plan
+                                  #   runs fiber-flag-artifacts first, and a flagged derivative is the ONLY way a spike
+                                  #   reaches cluster 0.
 FK_ALINK_ARTIFACT:       0        # 0 | 0/1.  1 = fiber-anchor-link passes --artifact-clu <mask>, withholding the
                                   #   masked spikes from --promote-noise so a promoted cell is the genuine
                                   #   unassigned population only.  Set together with FK_SESSION_EXCLUDE.

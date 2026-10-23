@@ -4,6 +4,32 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.52.0] — no real spike in cluster 0; amplitude-aware merging
+- fiber-session `--keep-small-groups` (`FK_SESSION_KEEP_SMALL`, `--keep-small-min`, default 5): a fine
+  group below `--fine-min-group`, or whose inclusion core falls below it, becomes a fiber of its own
+  instead of going to cluster 0 -- the skips that dropped every cell with < 40 spikes in a chunk.
+- fiber-session `--assign-unsorted` (`FK_SESSION_ASSIGN_UNSORTED`): every spike still unsorted at the end
+  of a chunk is placed in the chunk's whitened, realigned features: within its nearest fiber's own
+  spread (median + inclusion-k x MAD) -> that fiber; outside every fiber's spread -> GMM groups of their
+  own; the rest -> the nearest fiber.  The "unsorted spikes by cause" table reports what was kept and
+  assigned.  With fiber-flag-artifacts -> `--exclude-clu`, cluster 0 holds exactly the flagged artifacts.
+- fiber-xcorr-merge, amplitude-aware gates (all off by default): the roll cosine is scale-invariant, so
+  two co-shaped cells of different amplitude merged.
+  - `--rvu-thr` / `--rvu-rise` (`FK_XCM_RVU_*`): per-channel residual-variance uniformity within
+    +/- `--rvu-win` (12) samples of the peak; any channel failing fails the candidate merge.
+  - `--rvu-knn 1`: a failing candidate is first waveform-knn-split (fiber_consolidate.knn_pass, Klusters'
+    split-by-knn-vs-references), each of its two clusters against the other and its nearest clusters,
+    then retried once; spikes moved this way become new child atoms in the carried `.clc`/`.clp`.
+  - `--giqr-thr` / `--giqr-rise`: own-gain IQR veto (Klusters strip gain on the raw waveforms).
+  Measured on minutes 168-204 of the reference session's group 7 (29 clean units of the old curation,
+  fiber-session fibers, cos 0.96, min-n 15): accuracy 0.293 -> 0.365, merges between truth units 4 -> 0
+  with `--rvu-thr 0.5 --rvu-rise 0.05 --rvu-knn 1`; clusters per 80% of a unit 4.3 -> 7.9.
+- fiber-xcorr-merge `--merge-align klusters` (`FK_XCM_MERGE_ALIGN`); plans/10-session-xcorr.yaml.
+- fiber-kit-exp.yaml: the embedded plan is now fiber-flag-artifacts -> fiber-session -> fiber-xcorr-merge
+  -> fiber-realign (the previous plan is kept, commented), with `FK_SESSION_EXCLUDE`, `KEEP_SMALL`,
+  `ASSIGN_UNSORTED`, `DECONV_ASSIGN` on and the merge at cos 0.96, min-n 15 with the RVU test + knn split.
+  Consensus quarantine and intrachunk, which move clean-unit spikes to cluster 0/1, are out of the plan.
+
 ## [0.51.1] — fiber-cpos on large clusters
 - `fiber-cpos --max-spikes` (default 20000): a cluster's template and position come from a seeded random
   sample of at most this many spikes.  It loaded every spike as float64 before; one 380k-spike cluster
