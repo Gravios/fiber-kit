@@ -20,6 +20,7 @@ own `.clu.stderiv.<elec>.<ns>_*` and `.units.npz` files under a per-branch prefi
 | `05-chunk-coarse` | `c24_` | `c24_linked` | 24-min chunks — steadier templates, coarser drift |
 | `06-link-cfiber` | `lc_` | `lc_linked` | cfiber co-gate + stricter cosine on the cross-chunk link |
 | `07-curated-refit` | `cur_` | `cur_refit.units.npz` | post manual-curation: re-localize + refit (template) |
+| `10-session-xcorr` | `session_xcm` | `session_xcm` | fiber-session fibers -> one roll-cosine merge (cos 0.96, min-n 15); tuned on g7 of the reference session, scores in the file |
 
 No two clu-producing or units-producing stages share a tag, so nothing overwrites anything (verified).
 

@@ -1,0 +1,40 @@
+# ============================================================================
+#  10-session-xcorr : fiber-session, then ONE confidence-ordered roll-cosine merge
+#  of its fibers (fiber-xcorr-merge, realign after each merge) -- no intrachunk,
+#  no anchor-link, no backbone-link.  Starts from the EXISTING fiber-session sort
+#  (fiber_session tag; the session step is commented out) and does not overwrite it.
+#
+#  Tuned 2026-10-23 on sirotaA-jg-000005-20120312 group 7 against the 29 clean units
+#  of the old manual curation (units 2-32 without 7 and 18; refractory-checked),
+#  scored on the spikes both detections share: per unit, the accuracy of its best
+#  single cluster, n_uc / (n_u + n_c - n_uc).  Tuned on minutes 168-352, checked
+#  on 0-168:
+#
+#                                    168-352 min          0-168 min
+#                                    acc   merges         acc   merges
+#    fiber-session fibers            0.213   14           0.296    8
+#    fiber-kit-exp plan *            0.306   11           0.330   17
+#    this plan                       0.405    5           0.382    9
+#    (* without consensus and realign: they need the .fil, which was not available)
+#
+#  merges = clusters holding >= 20% (and >= 50 spikes) of a second truth unit.
+#  Per unit, this plan beat the exp plan for 20 units (5 worse) on 168-352 and 14
+#  (7 worse) on 0-168.  What was tried and dropped, all on 168-352:
+#    * intrachunk lowers the ceiling a perfect linker could reach (0.49 -> 0.44)
+#      and adds merges (14 -> 33); anchor-link then cannot recover it;
+#    * backbone-link after this merge: 0.372 -> 0.353;
+#    * cos-thr 0.97 / 0.95 / 0.94 / 0.93: 0.377 / 0.396 / 0.350 / 0.343
+#      (0.95 has 4 merges and 518 clusters -- the conservative alternative);
+#    * min-n 8 / 25 / 40: 0.387 / 0.389 / 0.372;  band-thr 0.3 / 0.7: 0.366 / 0.314;
+#    * spk-cap 1000, refrac-thr 0.2, shift 6: no gain;  a second pass: no gain;
+#    * merging fiber-session's atoms (.clc) instead of its fibers: 0.380, 4,028 clusters;
+#    * --merge-align klusters: 0.401 with 11 merges at 0.96, worse at every threshold.
+#  Every unit still spans ~5 clusters (80% of its spikes); the fiber-session atoms
+#  cap what any merge can reach (0.54 with a perfect linker), so the next gain is
+#  upstream, in fiber-session itself.
+#
+#  Run:  fiber-pipeline <elec> --plan plans/10-session-xcorr.yaml
+# ============================================================================
+pipeline:
+  # - {stage: fiber-session,     name: session, out: fiber_session}
+  - {stage: fiber-xcorr-merge,   name: merge,   in: fiber_session, out: session_xcm, params: {cos-thr: 0.96, min-n: 15}}
