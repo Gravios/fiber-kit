@@ -37,10 +37,12 @@ from collections import defaultdict
 try:
     from . import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy, fiber_ccg as cg
     from . import fiber_link_core as flc
+    from . import fiber_consolidate as _fc
     from . import config as cfgmod
 except ImportError:
     import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy, fiber_ccg as cg
     import fiber_link_core as flc
+    import fiber_consolidate as _fc
     import config as cfgmod
 
 _LP = "\u25b8 fiber-xcorr-merge"
@@ -60,6 +62,35 @@ _KNOBS = {
     # how a cluster's spikes are aligned before its template is taken, at the start and after every
     # merge: peak = each spike to its own peak; klusters = Klusters' realign (xcorr to the cluster template)
     "FK_XCM_MERGE_ALIGN": ("merge_align", str, "peak"),
+    # own-gain spread veto (raw/standard waveforms): g = sum(w*x*T)/sum(w*T^2), w=|T| -- the Klusters strip
+    # gain of each spike against its cluster's median template.  Two co-shaped cells at different amplitudes
+    # widen the IQR of g.  giqr_thr>0: refuse a merge whose merged IQR exceeds it; giqr_rise>0: refuse a
+    # merge whose merged IQR exceeds the larger of the two parts' by more than this.  0 = off.
+    "FK_XCM_GIQR_THR": ("giqr_thr", float, 0.0),
+    "FK_XCM_GIQR_RISE": ("giqr_rise", float, 0.0),
+    # per-channel RESIDUAL-VARIANCE UNIFORMITY veto: residual = aligned spike - merged template, within
+    # +/- rvu_win samples of the peak; per channel c the residual variance v_c(t) over the window should be
+    # ~flat (noise).  Two co-shaped cells at different amplitudes leave a residual that scales with the
+    # waveform, so v_c(t) peaks with the spike.  Non-uniformity = std(v_c)/mean(v_c) over the window.
+    # rvu_thr>0: refuse a merge if ANY channel's non-uniformity exceeds it (each channel has its own veto);
+    # rvu_rise>0: refuse if any channel exceeds the larger of the two parts' on that channel by more than
+    # this.  0 = off.
+    "FK_XCM_RVU_THR": ("rvu_thr", float, 0.0),
+    "FK_XCM_RVU_RISE": ("rvu_rise", float, 0.0),
+    "FK_XCM_RVU_WIN": ("rvu_win", int, 12),
+    # rvu_knn=1: instead of vetoing a candidate merge that fails the residual-variance test, run a
+    # WAVEFORM KNN SPLIT on each of the two candidate clusters (fiber_consolidate.knn_pass -- Klusters'
+    # split-by-knn-vs-references with own-cluster exclusion) against the other one and its nearest
+    # clusters by roll cosine (rvu_knn_refs references in all):
+    # spike buckets that vote (>= rvu_knn_vote of rvu_knn_k neighbours) for a reference fold into it when
+    # their median matches it in shape AND amplitude, else become a new cluster.  The two parts are rebuilt
+    # from what stays, and the merge is retried once; if it still fails, the pair is vetoed.
+    "FK_XCM_RVU_KNN": ("rvu_knn", int, 0),
+    "FK_XCM_RVU_KNN_K": ("rvu_knn_k", int, 10),
+    "FK_XCM_RVU_KNN_VOTE": ("rvu_knn_vote", float, 0.6),
+    "FK_XCM_RVU_KNN_REFS": ("rvu_knn_refs", int, 8),
+    "FK_XCM_RVU_KNN_FOLD": ("rvu_knn_fold", float, 0.9),
+    "FK_XCM_RVU_KNN_MAX": ("rvu_knn_max", int, 20000),   # candidates larger than this are vetoed, not split (memory)
     # drift transform emitted from this stage's own cross-chunk merges (see the --emit-drift block in
     # main): 1 = fit + write <base>.fibers.<method>.<group>.<out-stage> for fiber-backbone-link
     # --drift-fibers, 0 = off.  drift_k is the transform dimensionality; drift_chunk_min must match the
@@ -93,7 +124,7 @@ def _klusters_align(w, ref_sample):
     return fr.roll_spikes(w, ioff).astype(float)
 
 
-def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak"):
+def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12):
     """Realigned median template of a cluster (STANDARD spk).  Called for every cluster
     and again after every merge -- this is the 'realignment after each merger'.
 
@@ -105,7 +136,26 @@ def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak"):
     raw = np.asarray(spk[np.sort(idx)])
     al = _klusters_align(raw, ref_sample) if align == "klusters" else fl.realign(np.asarray(raw, float))
     w = fg.mutual_center_spikes(fg.denoise(al), ref_sample=ref_sample)
-    return np.median(w, 0), w.std(0)                       # median template + per-sample sigma (for the band co-gate)
+    T = np.median(w, 0)
+    # median template, per-sample sigma (band co-gate), own-gain IQR, per-channel residual-variance non-uniformity
+    return T, w.std(0), _gain_iqr(w, T), _resid_var_nonuniformity(w, T, ref_sample, rvu_win)
+
+
+def _resid_var_nonuniformity(w, T, ref_sample, win):
+    """Per channel: std/mean over samples ref_sample +/- win of the residual variance var_spikes(w - T)."""
+    lo, hi = max(0, ref_sample - win), min(T.shape[0], ref_sample + win + 1)
+    v = np.var(np.asarray(w, float)[:, lo:hi, :] - T[None, lo:hi, :], axis=0)     # (window, nch)
+    return v.std(0) / np.maximum(v.mean(0), 1e-12)
+
+
+def _gain_iqr(w, T):
+    """IQR of the Klusters strip gain g = sum(w*x*T)/sum(w*T^2), w=|T|, of the aligned spikes `w` against T."""
+    t = _fc._tpl_terms(T)
+    if t is None or len(w) < 4:
+        return float("nan")
+    g = _fc._score_block(np.asarray(w, float).reshape(len(w), -1), t)[1]
+    q1, q3 = np.quantile(g, [0.25, 0.75])
+    return float(q3 - q1)
 
 
 def _unit_flat(Tc):
@@ -136,7 +186,9 @@ def roll_cos_row(t, T, shift):
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
                 refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0,
-                off_thr=0.0, off_amp_frac=0.3, align="peak"):
+                off_thr=0.0, off_amp_frac=0.3, align="peak", giqr_thr=0.0, giqr_rise=0.0, rvu_thr=0.0, rvu_rise=0.0, rvu_win=12,
+                rvu_knn=0, res=None, knn_k=10, knn_vote=0.6, knn_refs=8, knn_fold=0.9, knn_max=20000, min_n=15,
+                next_id=None, stats=None):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
     If cx_scale>0 the required cosine is raised for LOW-complexity (shift-insensitive) pairs, whose
     high roll-shift cosine is weak evidence.  Returns (mapping id->group id, n_merge, n_veto).
@@ -149,18 +201,87 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
     templates (which this module builds), because the stderiv trough timing is noisy; the offsets
     are recomputed after each merge, like the template.  Scale note: this uses the "xcorr" method,
     so off_thr is on that lag scale (~0.2-0.3), NOT the trough scale (~1.0).  0 = off (unchanged)."""
-    m = len(ids)
-    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align) for k in range(m)]
-    T = np.stack([t for t, _ in _ms]); SD = np.stack([sd for _, sd in _ms])
-    C = roll_cos_matrix(T, shift)
+    m0 = len(ids)
+    m = m0 + (max(64, m0) if rvu_knn else 0)               # spare slots for clusters the knn split creates
+    if rvu_knn and res is None:
+        raise ValueError("rvu_knn needs the spike times (res)")
+    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win)
+           for k in range(m0)]
+    T = np.zeros((m,) + _ms[0][0].shape); SD = np.zeros_like(T)
+    GI = np.full(m, np.nan); RV = np.zeros((m, T.shape[2]))
+    for k, x in enumerate(_ms):
+        T[k], SD[k], GI[k], RV[k] = x
+    n_gveto = n_rveto = 0
+    C = np.full((m, m), -np.inf); C[:m0, :m0] = roll_cos_matrix(T[:m0], shift)
     np.fill_diagonal(C, -np.inf)
-    cx = np.array([fg.waveform_complexity(T[k]) for k in range(m)]) if cx_scale > 0 else None
-    cx_ref = (float(np.median(cx)) + 1e-9) if cx is not None else 1.0
-    off = ([fg.interchannel_offsets(T[k], amp_frac=off_amp_frac, method="xcorr") for k in range(m)]
+    cx = np.zeros(m) if cx_scale > 0 else None
+    if cx is not None:
+        cx[:m0] = [fg.waveform_complexity(T[k]) for k in range(m0)]
+    cx_ref = (float(np.median(cx[:m0])) + 1e-9) if cx is not None else 1.0
+    off = ([fg.interchannel_offsets(T[k], amp_frac=off_amp_frac, method="xcorr") for k in range(m0)] + [None] * (m - m0)
            if off_thr > 0 else None)
-    parent = list(range(m)); alive = np.ones(m, bool)
-    idx = [idx0[k].copy() for k in range(m)]; tt = [times0[k] for k in range(m)]
+    sid = list(ids) + [None] * (m - m0)                   # output id of every slot
+    nid = int(next_id if next_id is not None else max(ids) + 1)
+    parent = list(range(m)); alive = np.zeros(m, bool); alive[:m0] = True; used = m0
+    idx = [idx0[k].copy() for k in range(m0)] + [np.zeros(0, np.int64)] * (m - m0)
+    tt = [times0[k] for k in range(m0)] + [np.zeros(0)] * (m - m0)
     vetoed = set(); n_merge = n_veto = 0
+    knn_tried = set(); n_knn = n_knn_moved = n_knn_new = 0
+
+    def _refresh(k):
+        """Rebuild slot k's template / stats / cosine row from idx[k] (drops it if too small)."""
+        if idx[k].size < 4:
+            alive[k] = False; C[k, :] = -np.inf; C[:, k] = -np.inf; return
+        T[k], SD[k], GI[k], RV[k] = _tmpl(spk, idx[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align,
+                                          rvu_win=rvu_win)
+        tt[k] = np.sort(res[idx[k]]) if res is not None else tt[k]
+        if cx is not None:
+            cx[k] = fg.waveform_complexity(T[k])
+        if off is not None:
+            off[k] = fg.interchannel_offsets(T[k], amp_frac=off_amp_frac, method="xcorr")
+        ck = roll_cos_row(T[k], T, shift); ck[~alive] = -np.inf; ck[k] = -np.inf
+        C[k, :] = ck; C[:, k] = ck
+
+    def _knn_split_one(src_k, partner):
+        """Waveform knn split of cluster src_k against its partner and its nearest other clusters
+        (Klusters' split-by-knn-vs-references: the source is one cluster, the others are references)."""
+        nonlocal used, nid, n_knn_moved, n_knn_new
+        src = idx[src_k]
+        if src.size > knn_max or src.size < 2 * min_n:
+            return 0
+        row = C[src_k].copy(); row[[src_k, partner]] = -np.inf; row[~alive] = -np.inf
+        refs = [partner] + [int(r) for r in np.argsort(-row)[:max(knn_refs - 1, 0)] if np.isfinite(row[r])]
+        pool = [rng.choice(idx[r], min(idx[r].size, cap), replace=False) for r in refs]
+        loc = np.concatenate([src] + pool)
+        lab = np.concatenate([np.zeros(src.size, int)] + [np.full(p.size, q + 1) for q, p in enumerate(pool)])
+        new, _, _, _ = _fc.knn_pass(lambda ix: np.asarray(spk[loc[np.asarray(ix)]], np.float32), lab,
+                                    np.arange(loc.size), k=knn_k, thr=knn_vote, minref=min(min_n, 15),
+                                    minnew=min_n, fold_thr=knn_fold, scorr=1.0, exclude=(), next_id=len(refs) + 1)
+        ns = new[:src.size]
+        moved = ns != 0
+        if not moved.any():
+            return 0
+        for v in np.unique(ns[moved]):
+            sp = src[ns == v]
+            if 1 <= v <= len(refs):                        # folds into an existing reference cluster
+                r = refs[v - 1]; idx[r] = np.concatenate([idx[r], sp]); _refresh(r)
+            elif used < m:                                 # a distinct bucket: a new cluster
+                k = used; used += 1; idx[k] = sp; sid[k] = nid; nid += 1; alive[k] = True; n_knn_new += 1
+                _refresh(k)
+            else:                                          # out of spare slots: leave the bucket in place
+                moved[ns == v] = False
+        idx[src_k] = src[~moved]; _refresh(src_k)
+        n_knn_moved += int(moved.sum())
+        return int(moved.sum())
+
+    def _knn_split(i, j):
+        """Split each part of the candidate i+j against the other part and its neighbours."""
+        n = _knn_split_one(i, j)
+        if alive[j] and alive[i]:
+            n += _knn_split_one(j, i)
+        elif alive[j]:
+            n += _knn_split_one(j, int(np.argmax(C[j])))
+        return n
     while True:
         k = int(np.argmax(C)); val = float(C.flat[k])
         if val < cos_thr:
@@ -184,10 +305,21 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
             if not np.isfinite(bov) or bov < band_thr:
                 C[i, j] = C[j, i] = -np.inf; continue
         # merge j into i, then RE-ALIGN the combined spikes and recompute the template
-        idx[i] = np.concatenate([idx[i], idx[j]])
-        T[i], SD[i] = _tmpl(spk, idx[i], cap=cap, ref_sample=ref_sample, rng=rng, align=align)
+        ij = np.concatenate([idx[i], idx[j]])
+        Tm, SDm, Gm, RVm = _tmpl(spk, ij, cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win)
+        if (giqr_thr > 0 and Gm > giqr_thr) or (giqr_rise > 0 and Gm > np.nanmax([GI[i], GI[j]]) + giqr_rise):
+            C[i, j] = C[j, i] = -np.inf; n_gveto += 1; continue   # amplitude-mixed: two co-shaped cells
+        if (rvu_thr > 0 and np.any(RVm > rvu_thr)) or \
+           (rvu_rise > 0 and np.any(RVm > np.maximum(RV[i], RV[j]) + rvu_rise)):
+            if rvu_knn and (i, j) not in knn_tried:        # split the candidate by waveform knn, then retry once
+                knn_tried.add((i, j)); n_knn += 1
+                if _knn_split(i, j):
+                    continue
+            C[i, j] = C[j, i] = -np.inf; n_rveto += 1; continue   # some channel's residual variance peaks with the spike
+        idx[i] = ij
+        T[i], SD[i], GI[i], RV[i] = Tm, SDm, Gm, RVm
         tt[i] = np.sort(np.concatenate([tt[i], tt[j]]))
-        alive[j] = False; parent[j] = i; n_merge += 1
+        alive[j] = False; parent[j] = i; idx[j] = np.zeros(0, np.int64); n_merge += 1
         if cx is not None:
             cx[i] = fg.waveform_complexity(T[i])
         if off is not None:
@@ -199,7 +331,11 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         while parent[x] != x:
             x = parent[x]
         return x
-    return {ids[k]: ids[root(k)] for k in range(m)}, n_merge, n_veto
+    if stats is not None:
+        stats["gain_vetoes"] = n_gveto; stats["rvu_vetoes"] = n_rveto
+        stats.update(knn_splits=n_knn, knn_moved=n_knn_moved, knn_new=n_knn_new)
+        stats["members"] = {sid[k]: idx[k] for k in range(used) if parent[k] == k and idx[k].size}
+    return {ids[k]: ids[root(k)] for k in range(m0)}, n_merge, n_veto
 
 
 def _score(new, gt, keep):
@@ -266,17 +402,32 @@ def main():
 
     idx0 = [np.flatnonzero(clu == u) for u in big]
     times0 = [np.sort(res[ix]) for ix in idx0]
+    _st = {}
     mapping, n_merge, n_veto = agglomerate(spk, big, idx0, times0, duration, cos_thr=a.cos_thr, shift=a.shift,
                                            refrac=refrac, refrac_thr=a.refrac_thr, refrac_min_exp=a.refrac_min_exp,
                                            censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
                                            cx_scale=a.complexity_scale, band_thr=a.band_thr,
-                                           off_thr=a.off_thr, off_amp_frac=a.off_amp_frac, align=a.merge_align)
+                                           off_thr=a.off_thr, off_amp_frac=a.off_amp_frac, align=a.merge_align,
+                                           giqr_thr=a.giqr_thr, giqr_rise=a.giqr_rise,
+                                           rvu_thr=a.rvu_thr, rvu_rise=a.rvu_rise, rvu_win=a.rvu_win,
+                                           rvu_knn=a.rvu_knn, res=res, knn_k=a.rvu_knn_k, knn_vote=a.rvu_knn_vote,
+                                           knn_refs=a.rvu_knn_refs, knn_fold=a.rvu_knn_fold, knn_max=a.rvu_knn_max, min_n=a.min_n,
+                                           next_id=int(clu.max()) + 1, stats=_st)
     new = clu.copy().astype(np.int64)
-    for u in big:
-        if mapping[u] != u:
-            new[clu == u] = mapping[u]
+    knn_moved = _st.get("knn_moved", 0) > 0
+    if knn_moved:                                          # per-spike moves: rebuild from the final members
+        for u, ix in _st["members"].items():
+            new[ix] = u
+    else:
+        for u in big:
+            if mapping[u] != u:
+                new[clu == u] = mapping[u]
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
-    print(f"{_LP} · merged {n_in - n_out} clusters ({n_in} -> {n_out}); merges {n_merge}, refractory vetoes {n_veto}")
+    print(f"{_LP} · merged {n_in - n_out} clusters ({n_in} -> {n_out}); merges {n_merge}, refractory vetoes {n_veto}"
+          + (f", gain-IQR vetoes {_st.get('gain_vetoes', 0)}" if (a.giqr_thr > 0 or a.giqr_rise > 0) else "")
+          + (f", residual-variance vetoes {_st.get('rvu_vetoes', 0)}" if (a.rvu_thr > 0 or a.rvu_rise > 0) else "")
+          + (f"; knn splits {_st.get('knn_splits', 0)}: {_st.get('knn_moved', 0)} spikes moved, "
+             f"{_st.get('knn_new', 0)} new clusters" if a.rvu_knn else ""))
     nio.write_clu(base, elec, new, variant=a.clu_method, tag=a.out_tag)
     print(f"{_LP} · wrote {os.path.basename(nio.session_path(base, 'clu', elec, variant=a.clu_method, tag=a.out_tag))}")
 
@@ -292,9 +443,20 @@ def main():
         _hier = None
         print(f"{_LP} · no .clc/.clp at .{a.clu_stage} - wrote .clu only (no hierarchy to carry)")
     if _hier is not None:
+        _child = np.asarray(_hier.child, np.int64).copy()
         _newpar = {c: int(mapping.get(int(f), int(f))) for c, f in _hier.parent.items()}
-        _FH(_hier.child, _newpar).save(base, elec, variant=a.clu_method, tag=a.out_tag,
-                                       renumber=False, backup=False)
+        if knn_moved:                                      # per-spike moves: each (atom -> new cluster) bucket
+            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # becomes a child atom of its own, parented to
+            mv = np.flatnonzero((_child > 0) & (new != np.array([_newpar.get(int(c), 0) for c in _child])))
+            key = {}                                       # the cluster it moved to (Klusters-inspectable)
+            for i in mv:
+                kk = (int(_child[i]), int(new[i]))
+                if kk not in key:
+                    key[kk] = nxt_c; _newpar[nxt_c] = kk[1]; nxt_c += 1
+                _child[i] = key[kk]
+            print(f"{_LP} · knn moves parked as {len(key):,} new child atoms")
+        _FH(_child, _newpar).save(base, elec, variant=a.clu_method, tag=a.out_tag,
+                                  renumber=False, backup=False)
         print(f"{_LP} · hierarchy carried: {len(_newpar):,} children -> "
               f"{len(set(_newpar.values())):,} fibers (.clc unchanged, .clp remapped)")
 
