@@ -1196,6 +1196,41 @@ Positional: `session`, `group`
 | `--out` | — | write the ranked table to this TSV path |
 | `--split` | flag (off) | write a new staged .clu (tag '<variant>.csplit') with each flagged two-cell cluster recursively QC-split into sub-ids on its bimodal axis |
 | `--max-split` | `6` | max sub-clusters a single flagged cluster may be split into (default 6) |
+### `fiber-rdr`
+
+Per-cluster contamination score from the RMS of the residual's temporal derivative, against the clean amplitude line (a QC table; moves no spike).
+
+Each cluster's raw windows are aligned as Klusters' realign does (threshold 0.10), a median template is
+taken per `--chunk-min` chunk, and D = RMS over the window of diff(spike − template) is computed per spike
+and channel, in units of the noise's derivative RMS (exact from the group's `.nst`, else from the
+windows' lead-in).  A clean cell's D still grows with the channel's amplitude A, as
+median D² = D0² + k·A² (g6 0316: 1.105 + 0.00153·A²; g7 0312: 1.009 + 0.00173·A²; the line is fitted
+on all clusters with a 3-MAD clip, or fixed with `--line`).  The score is the largest
+observed/expected excess, √(D² − D0²) / (√k·A), over channels of at least `--min-amp` SD; clean
+clusters sit near 1.  Measured: g6 0316, dirty units 1.77–2.57 against clean ≤ 1.65; g7 0312 minutes
+168–204, AUC 0.87 for fiber-session clusters below 90% purity against the old curation (pure median 1.04,
+mixed 2.51; `--thr 1.7` flags 73% of the mixed and 17% of the pure).  Writes
+`<base>.rdr.<clu-method>.<group>[.<stage>].tsv`: cluster, n, largest amplitude, score, its channel, flag,
+and per-channel amplitude and median D.
+
+Positional: `session`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` |  |
+| `--clu-stage` | `""` | post-fiber stage tag of the .clu to score |
+| `--in-clu` | — | explicit .clu path (overrides --clu-method/--clu-stage) |
+| `--spk-method` | `standard` | waveform axis (raw windows; default standard) |
+| `--nst` | — | .nst path (default <base>.nst.<spk-method>.<elec> if present) |
+| `--chunk-min` | `12.0` | one template per chunk of this length (0: one per cluster) |
+| `--min-n` | `40` | clusters with fewer spikes are skipped |
+| `--cap` | `4000` | spikes sampled per cluster |
+| `--min-amp` | `4.0` | channels below this amplitude (noise SD) are not scored |
+| `--align-min-score` | `0.1` | Klusters realign threshold (Klusters' own: 0.70) |
+| `--thr` | `1.7` | flag clusters whose ratio reaches this |
+| `--line` | — | fixed clean line D0SQ,K instead of fitting it |
+| `--out` | — | output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv) |
+| `--seed` | `0` |  |
 ### `fiber-envelope`
 
 Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table (with the cell layer: amplitude-dependent shape, adaptation law, spike width / burst / rate), the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. `--merge THETA` also merges units on envelope d' with merge inflation as a cannot-link and writes a `.envmerge` clu stage plus the per-pair evidence. See docs/methods.md, "Collision-robust envelope" and "Cell layer".

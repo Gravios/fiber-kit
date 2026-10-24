@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.53.0] — residual-derivative contamination score; merge-align threshold 0.10
+- `fiber-rdr` (new, QC only): per-cluster contamination from the RMS of the residual's temporal
+  derivative (aligned spike − per-chunk median template, in units of the noise derivative RMS from the
+  `.nst`, or from the windows' lead-in when there is none), scored against the clean line
+  median D² = D0² + k·A² fitted on all clusters (3-MAD clip) or fixed with `--line`.  Score = largest
+  observed/expected excess over channels ≥ `--min-amp` (4) SD; `--thr` (1.7) flags.  Writes
+  `<base>.rdr.<clu-method>.<group>[.<stage>].tsv`.  From the g6 0316 residual-derivative report (dirty
+  units 1.77–2.57, clean ≤ 1.65 with per-chunk templates); replicated on g7 0312 minutes 168–204 against
+  the old curation: AUC 0.87 for clusters below 90% purity, the same level as the gain IQR (0.86) and
+  RVU (0.85), and a line slope of 0.041/SD fitted without labels against g6's 0.039–0.042.
+- fiber-xcorr-merge `--merge-align-min-score` (`FK_XCM_MERGE_ALIGN_MIN_SCORE`, default 0.10):
+  `--merge-align klusters` used Klusters' realign threshold 0.70.  The template is pre-rolled to
+  peakSampleIndex − 1 while raw troughs sit 2–3 samples later, so every spike below 0.70 stayed 2–3
+  samples behind the rest of its cluster (g6 0316: 26–94% of the spikes of large or dirty units),
+  widening the template.  At 0.10 at most 2.4% stay; `--merge-align-min-score 0.70` restores the old
+  behaviour.  The default alignment (`peak`) is unchanged.
+
 ## [0.52.0] — no real spike in cluster 0; amplitude-aware merging
 - fiber-session `--keep-small-groups` (`FK_SESSION_KEEP_SMALL`, `--keep-small-min`, default 5): a fine
   group below `--fine-min-group`, or whose inclusion core falls below it, becomes a fiber of its own
