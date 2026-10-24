@@ -62,6 +62,13 @@ _KNOBS = {
     # how a cluster's spikes are aligned before its template is taken, at the start and after every
     # merge: peak = each spike to its own peak; klusters = Klusters' realign (xcorr to the cluster template)
     "FK_XCM_MERGE_ALIGN": ("merge_align", str, "peak"),
+    # --merge-align klusters only: a spike is moved to its best lag only if its normalised xcorr with the
+    # template reaches this.  Klusters' own default is 0.70; with the template pre-rolled to
+    # peakSampleIndex - 1 while the raw trough sits 2-3 samples later, every spike below the threshold
+    # stays 2-3 samples behind the rest of its cluster (g6 0316: 35-94% of the spikes of dirty units),
+    # which widens the template and makes a false second mode.  0.10 -- the curator's Klusters setting and
+    # fiber-realign's FK_REALIGN_MIN_SCORE in the exp plan -- moves all but <= 2.4% of them.
+    "FK_XCM_MERGE_ALIGN_MIN_SCORE": ("merge_align_min_score", float, 0.10),
     # own-gain spread veto (raw/standard waveforms): g = sum(w*x*T)/sum(w*T^2), w=|T| -- the Klusters strip
     # gain of each spike against its cluster's median template.  Two co-shaped cells at different amplitudes
     # widen the IQR of g.  giqr_thr>0: refuse a merge whose merged IQR exceeds it; giqr_rise>0: refuse a
@@ -108,10 +115,10 @@ def _knob_default(name, typ, fb, gcfg):
     return fb if v in (None, "") else typ(v)
 
 
-def _klusters_align(w, ref_sample):
+def _klusters_align(w, ref_sample, min_score=0.10):
     """Klusters' per-cluster realign of a spike sample (fiber_realign.klusters_offsets: iterative
     normalised xcorr to the cluster's own truncated-mean template, pre-rolled to peakSampleIndex - 1,
-    threshold 0.70, 2 passes), applied as the circular roll Klusters' working copy uses.  In memory only:
+    threshold `min_score` (Klusters' default is 0.70; see FK_XCM_MERGE_ALIGN_MIN_SCORE), 2 passes), applied as the circular roll Klusters' working copy uses.  In memory only:
     a template is built from it, nothing is written."""
     try:
         from . import fiber_realign as fr
@@ -120,11 +127,12 @@ def _klusters_align(w, ref_sample):
     w = np.asarray(w)
     if len(w) < 2:
         return w.astype(float)
-    _off, ioff = fr.klusters_offsets(w, np.full(len(w), 2), int(ref_sample) - 1, min_n=1)
+    _off, ioff = fr.klusters_offsets(w, np.full(len(w), 2), int(ref_sample) - 1, min_n=1,
+                                    min_score=min_score)
     return fr.roll_spikes(w, ioff).astype(float)
 
 
-def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12):
+def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12, align_min_score=0.10):
     """Realigned median template of a cluster (STANDARD spk).  Called for every cluster
     and again after every merge -- this is the 'realignment after each merger'.
 
@@ -134,7 +142,7 @@ def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12):
     if idx.size > cap:
         idx = rng.choice(idx, cap, replace=False)
     raw = np.asarray(spk[np.sort(idx)])
-    al = _klusters_align(raw, ref_sample) if align == "klusters" else fl.realign(np.asarray(raw, float))
+    al = _klusters_align(raw, ref_sample, align_min_score) if align == "klusters" else fl.realign(np.asarray(raw, float))
     w = fg.mutual_center_spikes(fg.denoise(al), ref_sample=ref_sample)
     T = np.median(w, 0)
     # median template, per-sample sigma (band co-gate), own-gain IQR, per-channel residual-variance non-uniformity
@@ -186,7 +194,7 @@ def roll_cos_row(t, T, shift):
 
 def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, refrac_thr,
                 refrac_min_exp, censor, cap, ref_sample, rng, cx_scale=0.0, band_thr=0.0,
-                off_thr=0.0, off_amp_frac=0.3, align="peak", giqr_thr=0.0, giqr_rise=0.0, rvu_thr=0.0, rvu_rise=0.0, rvu_win=12,
+                off_thr=0.0, off_amp_frac=0.3, align="peak", align_min_score=0.10, giqr_thr=0.0, giqr_rise=0.0, rvu_thr=0.0, rvu_rise=0.0, rvu_win=12,
                 rvu_knn=0, res=None, knn_k=10, knn_vote=0.6, knn_refs=8, knn_fold=0.9, knn_max=20000, min_n=15,
                 next_id=None, stats=None):
     """Confidence-ordered roll-cosine agglomeration with realign-after-merge + refractory veto.
@@ -205,7 +213,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
     m = m0 + (max(64, m0) if rvu_knn else 0)               # spare slots for clusters the knn split creates
     if rvu_knn and res is None:
         raise ValueError("rvu_knn needs the spike times (res)")
-    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win)
+    _ms = [_tmpl(spk, idx0[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win,
+                 align_min_score=align_min_score)
            for k in range(m0)]
     T = np.zeros((m,) + _ms[0][0].shape); SD = np.zeros_like(T)
     GI = np.full(m, np.nan); RV = np.zeros((m, T.shape[2]))
@@ -233,7 +242,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         if idx[k].size < 4:
             alive[k] = False; C[k, :] = -np.inf; C[:, k] = -np.inf; return
         T[k], SD[k], GI[k], RV[k] = _tmpl(spk, idx[k], cap=cap, ref_sample=ref_sample, rng=rng, align=align,
-                                          rvu_win=rvu_win)
+                                          rvu_win=rvu_win, align_min_score=align_min_score)
         tt[k] = np.sort(res[idx[k]]) if res is not None else tt[k]
         if cx is not None:
             cx[k] = fg.waveform_complexity(T[k])
@@ -306,7 +315,8 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
                 C[i, j] = C[j, i] = -np.inf; continue
         # merge j into i, then RE-ALIGN the combined spikes and recompute the template
         ij = np.concatenate([idx[i], idx[j]])
-        Tm, SDm, Gm, RVm = _tmpl(spk, ij, cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win)
+        Tm, SDm, Gm, RVm = _tmpl(spk, ij, cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win,
+                 align_min_score=align_min_score)
         if (giqr_thr > 0 and Gm > giqr_thr) or (giqr_rise > 0 and Gm > np.nanmax([GI[i], GI[j]]) + giqr_rise):
             C[i, j] = C[j, i] = -np.inf; n_gveto += 1; continue   # amplitude-mixed: two co-shaped cells
         if (rvu_thr > 0 and np.any(RVm > rvu_thr)) or \
@@ -408,6 +418,7 @@ def main():
                                            censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
                                            cx_scale=a.complexity_scale, band_thr=a.band_thr,
                                            off_thr=a.off_thr, off_amp_frac=a.off_amp_frac, align=a.merge_align,
+                                           align_min_score=a.merge_align_min_score,
                                            giqr_thr=a.giqr_thr, giqr_rise=a.giqr_rise,
                                            rvu_thr=a.rvu_thr, rvu_rise=a.rvu_rise, rvu_win=a.rvu_win,
                                            rvu_knn=a.rvu_knn, res=res, knn_k=a.rvu_knn_k, knn_vote=a.rvu_knn_vote,

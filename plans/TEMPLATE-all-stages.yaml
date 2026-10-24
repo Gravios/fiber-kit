@@ -546,6 +546,7 @@ pipeline:
   #       off-thr: 0.0                    # FK_XCM_OFF_THR (default 0.0)
   #       off-amp-frac: 0.3               # FK_XCM_OFF_AMP_FRAC (default 0.3)
   #       merge-align: peak               # FK_XCM_MERGE_ALIGN (default peak)
+  #       merge-align-min-score: 0.1      # FK_XCM_MERGE_ALIGN_MIN_SCORE (default 0.1)
   #       giqr-thr: 0.0                   # FK_XCM_GIQR_THR (default 0.0)
   #       giqr-rise: 0.0                  # FK_XCM_GIQR_RISE (default 0.0)
   #       rvu-thr: 0.0                    # FK_XCM_RVU_THR (default 0.0)
