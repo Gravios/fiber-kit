@@ -111,10 +111,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fb, gcfg):
-    v = gcfg.get(name)
-    if v in (None, ""):
-        v = os.environ.get(name, "")
-    return fb if v in (None, "") else typ(v)
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fb, gcfg)
 
 
 def _klusters_align(w, ref_sample, min_score=0.10):
@@ -386,6 +385,7 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
     _fch.add_argument(ap, gcfg)
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     if a.merge_align not in ("peak", "klusters"):
         raise SystemExit(f"{_LP} · --merge-align must be peak or klusters, not {a.merge_align!r}")

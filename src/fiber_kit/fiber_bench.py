@@ -55,6 +55,10 @@ try:
     from . import neuro_io as nio, session_yaml as sy, fiber_chunks as _fch
 except ImportError:                                              # script / direct execution
     import neuro_io as nio, session_yaml as sy, fiber_chunks as _fch
+try:
+    from .config import yaml_load as _yaml_load                  # YAML 1.2 booleans: `off` stays "off"
+except ImportError:                                              # script / direct execution
+    from config import yaml_load as _yaml_load
 
 _LP = "▸ fiber-bench"
 
@@ -80,9 +84,8 @@ GLOBAL_KEYS = ("FK_REALIGN_VARIANT", "FK_CHUNKS", "FK_SESSION_CHUNK_MIN")   # ev
 
 # ───────────────────────────── config, hashes, plans ─────────────────────────────
 def load_config(path):
-    import yaml
     with open(path) as fh:
-        return yaml.safe_load(fh) or {}
+        return _yaml_load(fh) or {}
 
 
 def stage_params(stage, cfg):
@@ -156,18 +159,17 @@ def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False):
 def parse_overrides(sets, grids, sweep_file):
     """[{}] -> list of override dicts: --set applied to all, the cartesian product of --grid, and the
     entries of a sweep file (a list of dicts, or a dict of lists = another grid)."""
-    import yaml
     base = {}
     for kv in sets or []:
-        k, v = kv.split("=", 1); base[k.strip()] = yaml.safe_load(v) if v.strip() != "" else ""
+        k, v = kv.split("=", 1); base[k.strip()] = _yaml_load(v) if v.strip() != "" else ""
     axes = []
     for kv in grids or []:
         k, vs = kv.split("=", 1)
-        axes.append([(k.strip(), yaml.safe_load(v) if v.strip() != "" else "") for v in vs.split(",")])
+        axes.append([(k.strip(), _yaml_load(v) if v.strip() != "" else "") for v in vs.split(",")])
     combos = [dict(c) for c in itertools.product(*axes)] if axes else [{}]
     if sweep_file:
         with open(sweep_file) as fh:
-            sw = yaml.safe_load(fh)
+            sw = _yaml_load(fh)
         if isinstance(sw, dict):
             sw = [dict(c) for c in itertools.product(*[[(k, v) for v in (vs if isinstance(vs, list) else [vs])]
                                                       for k, vs in sw.items()])]

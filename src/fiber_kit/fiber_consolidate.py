@@ -83,8 +83,12 @@
 #  Knobs read FK_CONS_* (CLI > FK_CONS_* env > global yaml where the caller
 #  passes one > default).
 # ════════════════════════════════════════════════════════════════════════════
-import os
 import numpy as np
+
+try:
+    from . import config as cfgmod
+except ImportError:                      # run as a script from src/fiber_kit
+    import config as cfgmod
 
 try:
     from . import fiber_chunks as _fch
@@ -135,18 +139,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    for src in (os.environ.get(name), (gcfg or {}).get(name)):
-        if isinstance(src, bool):
-            # YAML parses a bare off/on as a boolean -- read it as the mode it
-            # spelled (off -> "off", on -> "both") rather than str(False).
-            return ("both" if src else "off") if typ is str else typ(src)
-        if src is None or str(src).strip() == "":
-            continue
-        try:
-            return typ(src)
-        except (TypeError, ValueError):
-            pass
-    return fallback
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def add_consolidate_args(ap, gcfg=None, stage=None):
@@ -169,6 +164,9 @@ def add_consolidate_args(ap, gcfg=None, stage=None):
             if stage:
                 label = f"FK_{stage}_CONS_MODE > {name}"
                 d = _knob_default(f"FK_{stage}_CONS_MODE", typ, d, gcfg)
+            if str(d).strip().lower() in ("on", "true", "yes", "1"):
+                d = "both"                                 # "on" = every pass (as YAML's boolean on used to mean)
+            d = cfgmod.coerce_knob(label, d, str, ("off", "strip", "knn", "both", "shed"))
             g.add_argument("--cons-mode", dest=dest, choices=("off", "strip", "knn", "both", "shed"),
                            default=d, help=f"{label}: which consolidation passes run (default {d})")
         else:

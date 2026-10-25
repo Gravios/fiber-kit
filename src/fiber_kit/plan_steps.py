@@ -27,6 +27,11 @@ import shutil
 import subprocess
 import sys
 
+try:
+    from .config import yaml_load as _yaml_load                  # YAML 1.2 booleans: `off` stays "off"
+except ImportError:                                              # script / direct execution
+    from config import yaml_load as _yaml_load
+
 TAG_FIELDS = ("in", "out", "units", "spk", "cpos", "drift")
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -39,13 +44,12 @@ def load_steps(path):
     """The plan's steps, in order: a list of dicts with stage, the tag fields, params, args and name
     (all present, '' / {} / [] when absent).  Accepts a plan file or a fiber-kit.yaml whose
     `pipeline:` section is the plan."""
-    try:
-        import yaml
-    except ImportError:
-        raise PlanError("reading a plan needs PyYAML (pip install pyyaml)") from None
+    import importlib.util
+    if importlib.util.find_spec("yaml") is None:
+        raise PlanError("reading a plan needs PyYAML (pip install pyyaml)")
     try:
         with open(path) as fh:
-            doc = yaml.safe_load(fh) or {}
+            doc = _yaml_load(fh) or {}
     except OSError as e:
         raise PlanError(f"cannot read plan {path}: {e}") from None
     except Exception as e:                                   # noqa: BLE001 - any YAML error

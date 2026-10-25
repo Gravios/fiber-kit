@@ -64,14 +64,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    for src in (os.environ.get(name), (gcfg or {}).get(name)):      # env BEFORE yaml, per the documented order
-        if src is None or str(src).strip() == "":
-            continue
-        try:
-            return typ(src)
-        except (TypeError, ValueError):
-            pass
-    return fallback
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def spike_features(spk, n, nsamp, nchan, batch=50000):
@@ -115,6 +110,7 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ,
                         default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
 
     if os.environ.get("FK_DIR"):

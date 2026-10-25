@@ -257,12 +257,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    v = os.environ.get(name, "")
-    if v in (None, ""):
-        v = gcfg.get(name)
-    if v in (None, ""):
-        return fallback
-    return typ(v)
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def write_output(base, elec, method, in_stage, out_stage, clu, new, child_moves, log=print):
@@ -314,6 +311,7 @@ def main(argv=None):
         d = _knob_default(name, typ, fb, gcfg)
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d, help=f"{hlp} [{name}; default {d}]")
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_lowmix)")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     if a.novel not in ("noise", "keep"):
         ap.error("--novel must be noise or keep")

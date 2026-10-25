@@ -43,10 +43,12 @@ def _det(k, v, w=10): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 try:
     from . import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     from . import fiber_consolidate as fcons
+    from . import config as cfgmod
     from .config import IntrachunkConfig, load_global_config as _load_gcfg
 except ImportError:
     import fiber_geometry as fg, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     import fiber_consolidate as fcons
+    import config as cfgmod
     from config import IntrachunkConfig, load_global_config as _load_gcfg
 
 try:
@@ -1231,6 +1233,7 @@ def main():
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
                     help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))

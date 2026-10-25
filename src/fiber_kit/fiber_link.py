@@ -42,10 +42,12 @@ try:
     from . import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
     from . import fiber_methods as fm
     from . import fiber_localize as loc
+    from . import config as cfgmod
 except ImportError:
     import fiber_lib as fl, fiber_geometry as fg, neuro_io as nio, session_yaml as sy, fiber_score as fsc, fiber_ccg as cg
     import fiber_methods as fm
     import fiber_localize as loc
+    import config as cfgmod
 
 try:
     from .fiber_cfiber import channel_angles as _cf_angles, complex_loop as _cf_loop, shape_descriptor as _cf_shape
@@ -777,6 +779,7 @@ def main():
                     help="spatial field model for off-probe completion (1/r^2 default)")
     ap.add_argument("--complete-edge-frac", type=float, default=0.5,
                     help="array-end amplitude fraction above which a footprint counts as truncated")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     import os as _os
     if _os.environ.get("FK_LINK_DR_CANDIDATES", "").strip() not in ("", "0"):

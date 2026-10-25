@@ -71,10 +71,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fb, gcfg):
-    v = gcfg.get(name)
-    if v in (None, ""):
-        v = os.environ.get(name, "")
-    return fb if v in (None, "") else typ(v)
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fb, gcfg)
 
 
 def _mad(x):
@@ -208,6 +207,7 @@ def main(argv=None):
     ap.add_argument("--out", default=None, help="output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv)")
     ap.add_argument("--seed", type=int, default=0)
     _fch.add_argument(ap, gcfg, length=False)          # counts in --chunk-min, like fiber-session
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     rng = np.random.default_rng(a.seed)
 

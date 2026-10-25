@@ -4,6 +4,27 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.2] — FK_* knobs: one precedence, YAML 1.2 booleans, validated values
+- **`off` is off.** PyYAML read a bare `off` as False, which reached the stages as "0" (fiber-pipeline) or
+  "False" (a direct call).  So `FK_SESSION_REALIGN: off` ran the realign and rewrote the shared .res/.spk,
+  and `FK_INTRA_RECUT: off` ran the `all` recut.  `config.yaml_load` now reads every FK config, plan and
+  fiber-bench `--set` value with YAML 1.2 booleans: only true/false are booleans.  fiber-pipeline's config
+  reader does the same.
+- **Values are validated.**  `config.knob_value` / `coerce_knob` convert a knob and stop the stage with its
+  name and source when the value is not one of the choices, not a number, or not an integer.  An off/on
+  spelling (False, "0", "no", ...) maps onto the choice that means it.  `check_choice_defaults` does the same
+  for every argparse default that comes from a knob, before parsing; argparse itself never checks defaults.
+  The cases this stops: `FK_INTRA_GATE=Band` silently ran the cosine gate; `FK_CONS_MAX_DIST=0,4` silently
+  became 0.5; an int knob of 6.7 in the yaml was truncated to 6.
+- **One precedence: env over yaml.**  Every stage's `_knob_default` delegates to `config.knob_value`
+  (CLI > FK_* env > $FK_CONFIG > default).  fiber-xcorr-merge, fiber-rdr, fiber-backbone-link, fiber-session's
+  chunk/overlap/off-thr/whiten-source knobs and `fiber_chunks.config_value` read the yaml first, so an
+  exported one-off value was ignored whenever the yaml set the key.
+- A `$FK_CONFIG` that exists but does not parse is an error.  It used to read as an empty config, which ran
+  every stage on built-in defaults.
+- test_knobs (new).  On 0.56.1 the dry run showed `--realign 0` for `FK_SESSION_REALIGN: off`, and
+  fiber-xcorr-merge read 0.96 from the yaml over 0.995 from the environment.
+
 ## [0.56.1] — shared files are never left cut short, half-written or half-deduped
 - `neuro_io.atomic_write` (new): every writer goes to a temporary file beside the target and moves it in with
   `os.replace`.  This covers .res/.clu/.fet/.spk/.nst/.wti/.wtl/.eap/.tcl, plus .pca, .cpos, .position,

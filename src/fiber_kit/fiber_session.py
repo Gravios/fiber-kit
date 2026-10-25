@@ -1532,11 +1532,8 @@ def add_core_arguments(ap):
     Shared by main() and the stochastic harness so both expose an identical clusterer."""
     _gcfg = cfgmod.load_global_config()
     def _fk_default(name, fb):
-        """CLI default = global fiber-kit.yaml (FK_SESSION_*) if set, else FK_* env, else fallback."""
-        v = _gcfg.get(name)
-        if v in (None, ""):
-            v = os.environ.get(name, "")
-        return fb if v in (None, "") else float(v)
+        """CLI default = FK_* env, else the global fiber-kit.yaml, else fallback (config.knob_value)."""
+        return cfgmod.knob_value(name, float, fb, _gcfg)
     ap.add_argument("--chunk-min", "--chunk-minutes", type=float, default=_fk_default("FK_SESSION_CHUNK_MIN", 12.0)); ap.add_argument("--overlap-min", type=float, default=_fk_default("FK_SESSION_OVERLAP_MIN", 4.0))
     ap.add_argument("--min-group", type=int, default=200, help="COARSE min spikes/fiber (for linking)")
     ap.add_argument("--fine-algo", "--fine-method", dest="fine_method", choices=["gmm","rkk","fiber","none"], default="rkk",
@@ -1580,8 +1577,8 @@ def add_core_arguments(ap):
                          "fibers (amplitude-distinct cells stay separate for the fine splitter); higher -> fewer, "
                          "fatter coarse groups.  Default 0.15.")
     ap.add_argument("--whiten-source", dest="whiten_source", choices=["auto", "nst", "fil", "spk"],
-                    default=(str(_gcfg.get("FK_SESSION_WHITEN_SOURCE") or os.environ.get("FK_SESSION_WHITEN_SOURCE")
-                                 or "auto")),
+                    default=cfgmod.knob_value("FK_SESSION_WHITEN_SOURCE", str, "auto", _gcfg,
+                                              ("auto", "nst", "fil", "spk")),
                     help="FK_SESSION_WHITEN_SOURCE.  Where the noise whitener comes from.  nst = the "
                          ".nst.<variant>.<group> ndm_extractspikes writes beside the .spk: noise measured in the "
                          ".spk's own transform on spike-free windows, outliers rejected (one whitener for the "
@@ -2036,18 +2033,16 @@ def _write_deconv_manifest(path, rows, final_of, res_now):
     return path
 
 
-def _knob(name, fallback):
-    """An FK_* knob: exported env var > $FK_CONFIG yaml > fallback (the pipeline's precedence)."""
-    v = os.environ.get(name)
-    if v in (None, ""):
-        v = (cfgmod.load_global_config() or {}).get(name)
-    return fallback if v in (None, "") else str(v)
+def _knob(name, fallback, choices=None):
+    """An FK_* knob: exported env var > $FK_CONFIG yaml > fallback (the pipeline's precedence), checked
+    against `choices` when given (an off/on spelling maps onto "off")."""
+    return cfgmod.knob_value(name, str, fallback, None, choices)
 
 
 def add_realign_arguments(ap):
     """The end-of-run commit: fiber-realign's in-place commit on the sort this run just wrote."""
     ap.add_argument("--realign", choices=["auto", "reextract", "shift-spk", "off"],
-                    default=_knob("FK_SESSION_REALIGN", "auto"),
+                    default=_knob("FK_SESSION_REALIGN", "auto", ("auto", "reextract", "shift-spk", "off")),
                     help="FK_SESSION_REALIGN.  At the end of the run, align every spike to its fiber's template "
                          "(fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the "
                          "shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY "
@@ -2057,7 +2052,7 @@ def add_realign_arguments(ap):
                          "circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil "
                          "exists, else shift-spk; off = leave .res/.spk/.fet as extracted.")
     ap.add_argument("--realign-algo", dest="realign_algo", choices=["klusters", "template", "centroid"],
-                    default=_knob("FK_REALIGN_ALGO", "klusters"),
+                    default=_knob("FK_REALIGN_ALGO", "klusters", ("klusters", "template", "centroid")),
                     help="FK_REALIGN_ALGO.  fiber-realign --align-algo for the end-of-run commit; its other knobs "
                          "(FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there")
     ap.add_argument("--realign-fil", dest="realign_fil", default=None,
@@ -2073,6 +2068,7 @@ def main():
     add_core_arguments(ap)
     add_realign_arguments(ap)
     _fch.add_argument(ap, cfgmod.load_global_config(), length=False)    # --chunks (FK_CHUNKS); counts in --chunk-min
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
     def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)

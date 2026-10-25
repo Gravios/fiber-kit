@@ -20,6 +20,10 @@ try:
     import yaml
 except ImportError:                                              # pragma: no cover
     yaml = None
+try:
+    from .config import yaml_load as _yaml_load                  # YAML 1.2 booleans: `off` stays "off"
+except ImportError:                                              # script / direct execution
+    from config import yaml_load as _yaml_load
 
 TAG_FIELDS = ("in", "out", "units", "cpos", "spk")
 
@@ -314,7 +318,7 @@ def load_plan(path):
     if yaml is None:
         raise RuntimeError("PyYAML required to read plans (pip install pyyaml)")
     with open(path) as fh:
-        doc = yaml.safe_load(fh) or {}
+        doc = _yaml_load(fh) or {}
     steps_raw = doc.get("pipeline") if isinstance(doc, dict) else doc
     if not isinstance(steps_raw, list):
         raise ValueError("plan has no 'pipeline:' list of steps")

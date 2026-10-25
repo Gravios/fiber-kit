@@ -853,6 +853,7 @@ def main(argv=None):
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     _fch.add_argument(ap, _g)
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     if a.recut and a.check:
         raise SystemExit("[realign] --recut writes, --check does not: pick one")

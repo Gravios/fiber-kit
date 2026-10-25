@@ -52,9 +52,16 @@ try:
     import yaml
 except ImportError:
     sys.stderr.write("fiber-pipeline: PyYAML not installed; ignoring %s\n" % sys.argv[1]); sys.exit(0)
+import re
+class _FKLoader(yaml.SafeLoader):     # YAML 1.2 booleans (config.yaml_loader): only true/false are booleans,
+    pass                              # so `off`/`on`/`yes`/`no` reach the stages as the words written
+_FKLoader.yaml_implicit_resolvers = {k: [(t, r) for t, r in v if t != "tag:yaml.org,2002:bool"]
+                                     for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+_FKLoader.add_implicit_resolver("tag:yaml.org,2002:bool",
+                                re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
 try:
     with open(sys.argv[1]) as fh:
-        d = yaml.safe_load(fh) or {}
+        d = yaml.load(fh, Loader=_FKLoader) or {}
 except Exception as e:
     sys.stderr.write("fiber-pipeline: cannot read %s: %s\n" % (sys.argv[1], e)); sys.exit(1)
 if not isinstance(d, dict):

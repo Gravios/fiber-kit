@@ -542,13 +542,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    """FK_CONSENSUS_* env if set, else the global fiber-kit.yaml, else the built-in default."""
-    v = os.environ.get(name, "")
-    if v in (None, ""):
-        v = gcfg.get(name)
-    if v in (None, ""):
-        return fallback
-    return typ(v)
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def main(argv=None):
@@ -574,6 +570,7 @@ def main(argv=None):
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
                         help=f"{hlp} [{name}; default {d}]")
     ap.add_argument("--out-tag", default=None, help="stage tag of the output .clu (default: <clu-stage>.consensus)")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     try:
         from . import session_yaml as sy

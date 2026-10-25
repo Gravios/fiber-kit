@@ -18,28 +18,155 @@
 #  available for one-off sweeps.
 # ─────────────────────────────────────────────────────────────────────────────
 import argparse
+import os
+import re
 from dataclasses import dataclass, field, fields as _dc_fields
 
 
 _UNSET = object()
 
 
+# ── reading FK_* knobs ───────────────────────────────────────────────────────
+# One precedence everywhere:  CLI flag / plan params  >  FK_* environment variable  >  $FK_CONFIG yaml
+# >  built-in default.  knob_value() is the single implementation; the stages' _knob_default helpers
+# delegate to it.
+#
+# YAML 1.1 (PyYAML's default) reads a bare  off / on / yes / no  as a boolean, so `FK_SESSION_REALIGN:
+# off` used to arrive as False -> "0" (pipeline) or "False" (direct call), neither of which is "off", and
+# the realign ran.  yaml_load() reads FK configs with YAML 1.2 booleans: only true/false are booleans,
+# off/on/yes/no stay the words that were written.
+
+_OFF_WORDS = ("off", "0", "false", "no", "none")
+_ON_WORDS = ("on", "1", "true", "yes")
+
+
+class KnobError(SystemExit):
+    """A knob value that cannot be used (not one of the choices, not a number).  A SystemExit so a stage
+    stops with the message instead of a traceback, before it reads or writes anything."""
+
+    def __init__(self, msg):
+        super().__init__(f"fiber-kit: {msg}")
+
+
+def yaml_loader():
+    """A SafeLoader with YAML 1.2 booleans (true/false only)."""
+    import yaml
+
+    class _FKLoader(yaml.SafeLoader):
+        pass
+    _FKLoader.yaml_implicit_resolvers = {
+        k: [(tag, rx) for tag, rx in v if tag != "tag:yaml.org,2002:bool"]
+        for k, v in yaml.SafeLoader.yaml_implicit_resolvers.items()}
+    _FKLoader.add_implicit_resolver("tag:yaml.org,2002:bool",
+                                    re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF"))
+    return _FKLoader
+
+
+def yaml_load(stream):
+    """yaml.safe_load with YAML 1.2 booleans -- for every FK config, plan and --set value."""
+    import yaml
+    return yaml.load(stream, Loader=yaml_loader())  # noqa: S506 -- a SafeLoader subclass
+
+
+def normalize_choice(v, choices):
+    """Map an off/on spelling (False, "0", "no", ...) onto the choice that means it: "off" when the
+    choices have it, else "" (several knobs spell off as the empty string), and "on" for on-words.
+    Other values are returned as strings, unchanged."""
+    if isinstance(v, bool):
+        v = "true" if v else "false"
+    s = str(v).strip()
+    if s in choices:
+        return s
+    low = s.lower()
+    if low in _OFF_WORDS:
+        if "off" in choices:
+            return "off"
+        if "" in choices:
+            return ""
+    if low in _ON_WORDS and "on" in choices:
+        return "on"
+    return s
+
+
+def coerce_knob(name, v, typ=str, choices=None, where=""):
+    """Convert one knob value to `typ`, validating it.  Raises KnobError naming the knob, the value and
+    where it came from, instead of a stage silently running something else."""
+    src = f" (from {where})" if where else ""
+    if choices is not None:
+        s = normalize_choice(v, choices)
+        if s not in choices:
+            raise KnobError(f"{name}={v!r}{src} is not one of: " + ", ".join(repr(c) for c in choices))
+        return s
+    if isinstance(v, bool):
+        v = int(v)
+    if typ is int:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            raise KnobError(f"{name}={v!r}{src} is not an integer") from None
+        if f != int(f):
+            raise KnobError(f"{name}={v!r}{src} is not an integer")
+        return int(f)
+    if typ is str:
+        return str(v)
+    try:
+        return typ(v)
+    except (TypeError, ValueError):
+        tn = getattr(typ, "__name__", str(typ))
+        raise KnobError(f"{name}={v!r}{src} cannot be read as {tn}") from None
+
+
+def _blank(v):
+    return v is None or (isinstance(v, str) and v.strip() == "")
+
+
+def knob_value(name, typ=str, fallback=None, gcfg=None, choices=None, env=None):
+    """An FK_* knob's value: the environment variable, then the $FK_CONFIG yaml (`gcfg`; loaded when
+    None), then `fallback`.  A blank value means "not set" at that level.  The value is converted and
+    validated by coerce_knob; `fallback` is returned as given."""
+    env = os.environ if env is None else env
+    v = env.get(name)
+    if not _blank(v):
+        return coerce_knob(name, v, typ, choices, "the environment")
+    gcfg = load_global_config() if gcfg is None else gcfg
+    v = (gcfg or {}).get(name)
+    if not _blank(v):
+        return coerce_knob(name, v, typ, choices, "$FK_CONFIG")
+    return fallback
+
+
+def check_choice_defaults(ap):
+    """argparse never checks a `default=` against `choices=`, and these defaults come from FK_* knobs.
+    Normalise an off/on spelling and refuse any other value outside the choices, before parsing."""
+    for act in ap._actions:
+        if not act.choices or act.default in (None, argparse.SUPPRESS):
+            continue
+        d = normalize_choice(act.default, tuple(act.choices))
+        if d not in act.choices:
+            ap.error(f"{'/'.join(act.option_strings)}: default {act.default!r} (from an FK_* knob) is not one "
+                     "of: " + ", ".join(repr(c) for c in act.choices))
+        act.default = d
+
+
 def load_global_config(path=None):
     """Load the global fiber-kit.yaml (a FLAT FK_* mapping) that OVERRIDES per-session
     tuning when present.  Search order: explicit `path`, then $FK_CONFIG, then
     ./fiber-kit.yaml in the working directory (the same file scripts/fiber-pipeline reads).
-    Returns {} when absent or unreadable, so it is a no-op unless a file is there."""
-    import os
+    Returns {} when there is no file.  A file that exists but cannot be parsed is an error
+    (KnobError): ignoring it would run every stage on built-in defaults without a word."""
     p = path or os.environ.get("FK_CONFIG") or os.path.join(os.getcwd(), "fiber-kit.yaml")
     if not (p and os.path.isfile(p)):
         return {}
     try:
         import yaml
-        with open(p) as fh:
-            d = yaml.safe_load(fh) or {}
-        return d if isinstance(d, dict) else {}
-    except Exception:
+    except ImportError:
         return {}
+    try:
+        with open(p) as fh:
+            d = yaml_load(fh) or {}
+    except (OSError, yaml.YAMLError) as e:
+        raise KnobError(f"cannot read the config {p}: {e}") from None
+    return d if isinstance(d, dict) else {}
 
 
 def knob(default, help="", *, env=None, choices=None, type=float, cli=None, recommended=_UNSET):
@@ -70,10 +197,9 @@ class StageConfig:
     def _coerce(f, v):
         if v is None or v == "":
             return f.default                       # empty in env/yaml => fall back to the built-in default
-        if f.metadata.get("choices"):
-            return str(v)
-        t = f.metadata.get("type", float)
-        return t(v)
+        ch = f.metadata.get("choices")
+        return coerce_knob(f.metadata.get("env") or f.name, v, f.metadata.get("type", float),
+                           tuple(ch) if ch else None)
 
     @classmethod
     def resolve(cls, args=None, env=None, section=None, profile="default", global_cfg=None):

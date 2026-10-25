@@ -83,13 +83,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    """CLI default = global fiber-kit.yaml (FK_BBLINK_*) if set, else FK_* env, else fallback."""
-    v = gcfg.get(name)
-    if v in (None, ""):
-        v = os.environ.get(name, "")
-    if v in (None, ""):
-        return fallback
-    return typ(v)
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def rms_center(mu):
@@ -152,6 +148,7 @@ def main():
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 
@@ -159,7 +156,7 @@ def main():
     base = cfg["base"]; elec = a.elec; NS, NC, PK, SR = cfg["nsamp"], cfg["nchan"], cfg["peak"], cfg["sr"]
     gch = list(cfg["channels"])
     pinned = np.array([gch.index(int(x)) for x in a.channels.split(",")]) if a.channels else None
-    chunk_min = a.chunk_min if a.chunk_min else float(gcfg.get("FK_SESSION_CHUNK_MIN") or os.environ.get("FK_SESSION_CHUNK_MIN") or 12.0)
+    chunk_min = a.chunk_min if a.chunk_min else float(os.environ.get("FK_SESSION_CHUNK_MIN") or gcfg.get("FK_SESSION_CHUNK_MIN") or 12.0)
     print(f"[backbone-link] knobs (CLI/param > FK_BBLINK_* env > $FK_CONFIG > default): "
           f"z={a.z} win={a.win} slide={a.slide} iou-thr={a.iou_thr} floor={a.floor} prim-frac={a.prim_frac} "
           f"warp/amp/resid={a.warp_thr}/{a.amp_thr}/{a.resid_thr} min-frag={a.min_frag} max-gap={a.max_gap} "

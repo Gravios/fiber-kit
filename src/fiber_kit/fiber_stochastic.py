@@ -40,10 +40,12 @@ try:
     from . import neuro_io as nio
     from . import fiber_lib as fl
     from . import fiber_session as fsess
+    from . import config as cfgmod
 except ImportError:
     import neuro_io as nio
     import fiber_lib as fl
     import fiber_session as fsess
+    import config as cfgmod
 
 _POOL_CFG = None                     # stashed chunk-worker cfg so parallel draws can init pool workers
 
@@ -788,6 +790,7 @@ def main():
     sy.add_session_args(ap, sdiff=True)   # same session/group/channels resolution as fiber_session
     fsess.add_core_arguments(ap)       # identical clusterer knobs
     add_arguments(ap)                  # the --stochastic-* diagnostic knobs
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     run_stochastic(a)
 

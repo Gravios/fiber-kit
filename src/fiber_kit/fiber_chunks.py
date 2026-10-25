@@ -22,9 +22,13 @@ cluster, so its output still has one label per spike of the shared .res and open
 the reserved clusters show which part of the recording was left out.  Stages treat reserved clusters as
 "not sorted here": never merged, realigned, scored or split.
 """
-import os
 
 import numpy as np
+
+try:
+    from . import config as cfgmod
+except ImportError:                      # run as a script from src/fiber_kit
+    import config as cfgmod
 
 RESERVED_N = 100
 RESERVED_HI = 2 ** 24 - 1                         # 16,777,215: the highest id a float32 holds exactly
@@ -115,11 +119,9 @@ def mark_inactive(labels, res, sr, chunks, chunk_min=DEFAULT_CHUNK_MIN):
 
 
 def config_value(gcfg, name, default=""):
-    """$FK_CONFIG value, then the environment, then the default (the precedence of every FK_* knob)."""
-    v = (gcfg or {}).get(name) if gcfg is not None else None
-    if v in (None, ""):
-        v = os.environ.get(name, "")
-    return default if v in (None, "") else v
+    """The environment, then the $FK_CONFIG values `gcfg`, then the default -- the precedence of every
+    FK_* knob (config.knob_value)."""
+    return cfgmod.knob_value(name, str, default, gcfg if gcfg is not None else {})
 
 
 def add_argument(ap, gcfg=None, length=True):

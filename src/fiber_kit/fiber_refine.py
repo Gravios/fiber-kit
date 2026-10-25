@@ -36,8 +36,10 @@ import numpy as np
 from sklearn.cluster import KMeans
 try:
     from . import fiber_split as _fsplit
+    from . import config as cfgmod
 except ImportError:
     import fiber_split as _fsplit
+    import config as cfgmod
 
 _LP = "\u25b8 fiber-refine"
 _IND = " " * (len(_LP) + 3)
@@ -1423,6 +1425,7 @@ def main():
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     if a.feature_align:
         os.environ["FIBER_ALIGN"] = a.feature_align    # reach any spawned workers

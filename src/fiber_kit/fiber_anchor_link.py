@@ -95,14 +95,9 @@ _KNOBS = {
 
 
 def _knob_default(name, typ, fallback, gcfg):
-    for src in (os.environ.get(name), (gcfg or {}).get(name)):
-        if src is None or str(src).strip() == "":
-            continue
-        try:
-            return typ(src)
-        except (TypeError, ValueError):
-            pass
-    return fallback
+    """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
+    and one validation for every stage)."""
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
 
 
 def read_anchor_pairs(path):
@@ -441,6 +436,7 @@ def main():
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
     fcons.add_consolidate_args(ap, gcfg, stage="ALINK")   # per-spike strip+knn cleanup of the linked
                                               # cells (default off; FK_ALINK_CONS_MODE scopes the mode)
+    cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 
