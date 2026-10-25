@@ -1468,7 +1468,12 @@ def main():
                          f"group's sdiffPairs in the session YAML or --sdiff-pairs") from None
     waves = np.asarray(spk[:], dtype=float)
     init = None
-    if a.in_clu is not None and os.path.exists(a.in_clu):
+    if a.in_clu is not None:
+        # an --in-clu that names nothing is an error: falling back to whatever canonical .clu sits in the
+        # folder (or a fresh sort) refined another sort without a word -- e.g. a plan step whose input
+        # stage was never produced
+        if not os.path.exists(a.in_clu):
+            raise SystemExit(f"fiber-refine: --in-clu {a.in_clu} does not exist")
         _, ids = nio.read_clu_file(a.in_clu, n_spikes=len(res))
         init = ids.astype(int) - 1                     # NeuroSuite 1-based -> 0-based, 0/noise -> -1
         init[init < 0] = -1
@@ -1478,6 +1483,8 @@ def main():
             init = ids.astype(int) - 1; init[init < 0] = -1
         except FileNotFoundError:
             init = None
+        except ValueError as e:                        # several stderiv clus: name the one to refine
+            raise SystemExit(f"fiber-refine: {e} -- pass --in-clu") from None
     _log(f"group {elec} · {len(res):,} spikes")
     _det("source", spkpath)
     _det("noise model", fst.space_label(space, sdiff))

@@ -287,8 +287,9 @@ FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike a
                                   #   centres on the POPULATION centroid rather than the unit template -- prefer klusters/
                                   #   template if you rely on the re-roll.
 FK_REALIGN_PARK_DUPS:    1        # 1 | 0/1.  After the shift, the later spike of every same-unit pair the alignment put on
-                                  #   one sample (two detections of one spike; identical windows) goes to cluster 0 -- one
-                                  #   child atom under 0 when the clu has its .clc/.clp.  No row is removed.  0 = only list
+                                  #   one sample (two detections of one spike; identical windows) goes to a new duplicates
+                                  #   cluster (the next free id, never 0) -- one child atom under it when the clu has its
+                                  #   .clc/.clp.  No row is removed.  0 = only list
                                   #   the pairs (<base>.realign.<variant>.<group>[.<stage>].tsv, cross-unit pairs always
                                   #   listed).  fiber-session's own commit always parks; a side-by-side commit (--out-tag)
                                   #   parks only in the clu it emits.  sirotaA-jg-000005-20120316 g6 after one commit:

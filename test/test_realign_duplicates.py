@@ -4,8 +4,8 @@ A unit where 40 spikes were detected twice (3 samples apart, the second crossing
 klusters alignment puts both detections of each on the spike's true time: 40 same-unit pairs on one
 sample with identical windows -- the spike counted twice.
 
-  * --park-duplicates moves the later of each pair to cluster 0, as ONE child atom under 0 in the
-    .clc/.clp; every other label is unchanged, no row is removed, the hierarchy reproduces its .clu and
+  * --park-duplicates moves the later of each pair to a new duplicates cluster (the next free id, never
+    0: only a derivative outlier goes to the artifact cluster), as ONE child atom under it in the .clc/.clp; every other label is unchanged, no row is removed, the hierarchy reproduces its .clu and
     reloads without orphans; <base>.realign.<variant>.<group>.tsv lists the 40 pairs as parked;
   * without it the labels are untouched and the pairs are only listed;
   * a clu named without a variant token (<base>.clu.<group>.<stage>) is parked with its own .clc/.clp,
@@ -142,13 +142,15 @@ def main():
         check("the commit stacks the 40 double detections on one sample each", len(same) == 40, out)
         _, lab = nio.read_clu_file(base + ".clu.standard.1.st")
         moved = np.flatnonzero(lab != lab0)
-        check("--park-duplicates: exactly the later spike of each pair goes to cluster 0",
-              np.array_equal(np.sort(moved), np.sort(same[:, 1])) and (lab[moved] == 0).all(), out)
+        dup = frl.duplicates_cluster(lab0)
+        check(f"--park-duplicates: exactly the later spike of each pair goes to the duplicates cluster {dup}",
+              np.array_equal(np.sort(moved), np.sort(same[:, 1])) and (lab[moved] == dup).all()
+              and dup > int(lab0.max()), out)
         check("no row removed", lab.size == det.size and res.size == det.size)
         h = FiberHierarchy.load(base, 1, variant="standard", tag="st")
         new = np.unique(h.child[moved])
-        check("the parked spikes are one new child atom under 0",
-              new.size == 1 and h.parent.get(int(new[0])) == 0 and int(new[0]) not in (2, 3))
+        check("the parked spikes are one new child atom under the duplicates cluster",
+              new.size == 1 and h.parent.get(int(new[0])) == dup and int(new[0]) not in (2, 3))
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rebuilt = h.refiberize(renumber=False)[0]
@@ -194,8 +196,9 @@ def main():
         _, lab = nio.read_clu_file(base + ".clu.1.st")
         h = FiberHierarchy.load(base, 1, clc=base + ".clc.1.st", clp=base + ".clp.1.st")
         new = np.unique(h.child[lab != lab0])
-        check("a variant-less clu is parked with its own .clc/.clp (40 rows, one new atom under 0)",
-              int((lab != lab0).sum()) == 40 and new.size == 1 and h.parent.get(int(new[0])) == 0, buf.getvalue())
+        check("a variant-less clu is parked with its own .clc/.clp (40 rows, one new atom under the duplicates "
+              "cluster)", int((lab != lab0).sum()) == 40 and new.size == 1
+              and h.parent.get(int(new[0])) == frl.duplicates_cluster(lab0), buf.getvalue())
         check("... and no other sort is touched or created",
               _bytes(base + ".clu.stderiv.1.st") == sentinel
               and not os.path.exists(base + ".clc.stderiv.1.st"), buf.getvalue())
@@ -219,7 +222,8 @@ def main():
         with open(p) as fh:
             rows = [ln.split("\t") for ln in fh.read().splitlines()[1:]]
         check("... the clu emitted under the tag carries the 40 parked spikes, and the pair list is named "
-              "after the tag", int((lab_side == 0).sum()) == 40 and sum(r[6] == "True" for r in rows) == 40, out)
+              "after the tag", int((lab_side == frl.duplicates_cluster(nio.read_clu_file(base + ".clu.standard.1.st")[1]))
+                                .sum()) == 40 and sum(r[6] == "True" for r in rows) == 40, out)
 
     # fiber-session --out-variant: the alias is a copy of the sort, written before the commit
     env = {k: v for k, v in os.environ.items() if not k.startswith("FK_")}

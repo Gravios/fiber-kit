@@ -901,20 +901,21 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # ── Block A: consolidate fragments by template / sliding-direction correlation.
     #    'template' = mean-template correlation (fast); 'sliding' = direction profile
     #    in a sliding radius window (energy-resolved).  merge_corr ~0.95 / ~0.90. ──
+    vetoes = dict(cfiber_gate=cfiber_gate, cfiber_q=cfiber_q, off_thr=off_thr, off_amp_frac=off_amp_frac,
+                  waves_std=waves_std, refrac_ms=refrac_ms, refrac_thr=refrac_thr, refrac_min_exp=refrac_min_exp,
+                  refrac_censor_ms=refrac_censor_ms)
     if resplit_passes == 0 and merge_corr and merge_method in ("template", "sliding") and len(geoms) > 1:
         Kg = len(geoms)
         if merge_method == "sliding":
             Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
                   for u in range(Kg)]
-            edges = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=merge_corr)
+            scores = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=merge_corr, return_scores=True)
         else:
             T = np.array([g['template'].ravel() for g in geoms]); T = T - T.mean(1, keepdims=True)
             T = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-12); C = T @ T.T
-            edges = list(zip(*np.where(np.triu(C, 1) > merge_corr)))
-        if cfiber_gate:
-            edges = _cfiber_edge_filter(edges, fine, waves, mask, q=cfiber_q)
-        if off_thr > 0 and waves_std is not None:                # inter-channel-TIMING co-veto (raw templates)
-            edges = _offset_edge_filter(edges, fine, waves_std, off_thr, amp_frac=off_amp_frac)
+            scores = {(int(i), int(j)): float(C[i, j]) for i, j in zip(*np.where(np.triu(C, 1) > merge_corr))}
+        edges = _merge_vetoes(list(scores), fine, waves, mask, res_abs, sr, **vetoes)
+        edges = _complete_link(edges, scores)
         fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
     # ── Block B: same-neuron grouping by energy-resolved DIRECTION PROFILE d(r).
     #    Direction is the validated same-neuron signal (AUC ~0.98 same-fiber-halves
@@ -944,24 +945,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         if candidates_out is not None:
             candidates_out.extend((ai, bi, d, thr_p) for ai, bi, d in cand)
         if merge_method == "profile" and not emit_candidates:
-            edges = [(ai, bi) for ai, bi, _ in cand]
-            if refrac_ms and refrac_ms > 0 and edges:
-                # curation-INDEPENDENT veto: a profile-merge is PERMANENT (relink/defrag
-                # only ever merge), so block one whose two in-chunk trains coincide at
-                # chance level (two neurons, no refractory dip).  Power-aware: abstains
-                # at low rate, so it only ever removes a false merge.
-                refr = cg.refrac_samples(refrac_ms, sr)
-                cens = cg.refrac_samples(refrac_censor_ms, sr)
-                dur = float(res_abs.max() - res_abs.min()) if len(res_abs) else 0.0
-
-                def _two_cells(ai, bi):
-                    ta = np.sort(res_abs[np.flatnonzero(fine == ai)].astype(np.int64))
-                    tb = np.sort(res_abs[np.flatnonzero(fine == bi)].astype(np.int64))
-                    g = cg.refractory_gate(ta, tb, dur, refr, thr=refrac_thr,
-                                           min_exp=refrac_min_exp, censor=cens)
-                    return g["verdict"] == "veto"
-
-                edges = [(ai, bi) for ai, bi in edges if not _two_cells(ai, bi)]
+            # a profile-merge is PERMANENT (relink/defrag only ever merge): every veto applies
+            # (the refractory one is power-aware, so it only ever removes a false merge)
+            scores = {(ai, bi): -d for ai, bi, d in cand}
+            edges = _merge_vetoes([(ai, bi) for ai, bi, _ in cand], fine, waves, mask, res_abs, sr, **vetoes)
+            edges = _complete_link(edges, scores)
             fine, geoms = _apply_edges(fine, geoms, edges,
                                        waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
     # ── nearest-neighbour isolation in the validated direction-profile space:
@@ -1031,7 +1019,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             if len(geoms) > 1:
                 Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
                       for u in range(len(geoms))]
-                edges = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=resplit_merge_corr)
+                # the same vetoes as Blocks A/B (until 0.56 this merge had none), and complete linkage:
+                # A~B and B~C no longer weld A to C when A and C are not themselves a pair
+                scores = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=resplit_merge_corr, return_scores=True)
+                edges = _merge_vetoes(list(scores), fine, waves, mask, res_abs, sr, **vetoes)
+                edges = _complete_link(edges, scores)
                 nmerge = len(edges)
                 fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
             if nsplit == 0 and nmerge == 0:
@@ -1140,6 +1132,71 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     return fine, geoms
 
 
+def _chunk_hi(c, t_min, chunk_s, nchunks):
+    """The exclusive end of chunk c's core.  The last chunk has no end: nchunks = ceil(span / chunk), so when
+    the span is an exact multiple of the chunk length the last spike sits ON t_min + nchunks*chunk_s and a
+    `res < hi` test left it out of every chunk (it was written to cluster 0)."""
+    return t_min + (c + 1) * chunk_s if c < nchunks - 1 else np.inf
+
+
+def _merge_vetoes(edges, fine, waves, mask, res_abs, sr, *, cfiber_gate=False, cfiber_q=0.90, off_thr=0.0,
+                  off_amp_frac=0.3, waves_std=None, refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0,
+                  refrac_censor_ms=0.0):
+    """Every veto a within-chunk fragment merge must pass, in one place (Blocks A, B and C):
+      * cfiber SHAPE (cfiber_gate; calibrated per chunk, abstains on small fragments);
+      * inter-channel TIMING (off_thr > 0, needs the raw templates waves_std);
+      * REFRACTORY (refrac_ms > 0): two trains that coincide at chance level are two cells
+        (power-aware: abstains at low rate, so it only ever removes a false merge).
+    Returns the edges that survive."""
+    edges = [(int(a), int(b)) for a, b in edges]
+    if not edges:
+        return edges
+    if cfiber_gate:
+        edges = [(int(a), int(b)) for a, b in _cfiber_edge_filter(edges, fine, waves, mask, q=cfiber_q)]
+    if edges and off_thr > 0 and waves_std is not None:
+        edges = [(int(a), int(b)) for a, b in _offset_edge_filter(edges, fine, waves_std, off_thr,
+                                                                  amp_frac=off_amp_frac)]
+    if edges and refrac_ms and refrac_ms > 0:
+        refr = cg.refrac_samples(refrac_ms, sr)
+        cens = cg.refrac_samples(refrac_censor_ms, sr)
+        dur = float(res_abs.max() - res_abs.min()) if len(res_abs) else 0.0
+
+        def _two_cells(ai, bi):
+            ta = np.sort(res_abs[np.flatnonzero(fine == ai)].astype(np.int64))
+            tb = np.sort(res_abs[np.flatnonzero(fine == bi)].astype(np.int64))
+            g = cg.refractory_gate(ta, tb, dur, refr, thr=refrac_thr, min_exp=refrac_min_exp, censor=cens)
+            return g["verdict"] == "veto"
+        edges = [(a, b) for a, b in edges if not _two_cells(a, b)]
+    return edges
+
+
+def _complete_link(edges, scores=None):
+    """The merges `edges` allow under COMPLETE linkage: edges are taken best-first (by `scores`, higher =
+    more similar) and two groups join only when EVERY cross pair is itself an edge.  Union-find on the raw
+    edges chained A~B, B~C into A+B+C even when A and C fail the threshold or a veto -- a false merge,
+    which the pipeline must never prefer to an over-split.  Returns the edges to union (one per join)."""
+    E = {(min(int(a), int(b)), max(int(a), int(b))) for a, b in edges}
+    if not E:
+        return []
+    sc = {(min(a, b), max(a, b)): v for (a, b), v in (scores or {}).items()}
+    order = sorted(E, key=lambda e: (-sc.get(e, 0.0), e))
+    group = {}
+
+    def members(x):
+        return group.get(x, frozenset((x,)))
+    out = []
+    for a, b in order:
+        A, B = members(a), members(b)
+        if b in A:
+            continue
+        if all((min(x, y), max(x, y)) in E for x in A for y in B):
+            M = A | B
+            for x in M:
+                group[x] = M
+            out.append((a, b))
+    return out
+
+
 def _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0=None, ct1=None):
     """Union-find merge of fiber `edges`, rebuilding fine labels + per-unit geometry."""
     if not edges:
@@ -1204,11 +1261,12 @@ def _same_fiber_floor(Xs, pct=90.0, min_n=120, default=0.18, seed=0):
     return float(np.percentile(ds, pct)) if len(ds) >= 3 else default
 
 
-def _sliding_pairs(Xs, n_win=14, min_spikes=15, min_shared=2, min_cos=0.90):
+def _sliding_pairs(Xs, n_win=14, min_spikes=15, min_shared=2, min_cos=0.90, return_scores=False):
     """Sliding window over radius: per-fragment mean direction in each radius
     window, compared window-by-window weighted by spike count x angular
     concentration (down-weights noisy low-energy windows). Returns (i,j) pairs
-    whose weighted mean cosine over shared windows exceeds min_cos."""
+    whose weighted mean cosine over shared windows exceeds min_cos -- or, with
+    return_scores, {(i, j): cosine} for those pairs."""
     K = len(Xs); p = Xs[0].shape[1]
     rs = [np.linalg.norm(X, axis=1) for X in Xs]; ds = [X / (r[:, None] + 1e-12) for X, r in zip(Xs, rs)]
     allr = np.concatenate(rs); edges = np.linspace(np.percentile(allr, 1), np.percentile(allr, 99), n_win + 1)
@@ -1228,8 +1286,11 @@ def _sliding_pairs(Xs, n_win=14, min_spikes=15, min_shared=2, min_cos=0.90):
             wts = np.minimum(cnt[i], cnt[j])[sh] * conc[i][sh] * conc[j][sh]
             if wts.sum() < 1e-9: continue
             coss = (prof[i][sh] * prof[j][sh]).sum(1)
-            if (wts * coss).sum() / wts.sum() > min_cos: pairs.append((i, j))
-    return pairs
+            sc = float((wts * coss).sum() / wts.sum())
+            if sc > min_cos: pairs.append((i, j, sc))
+    if return_scores:
+        return {(i, j): sc for i, j, sc in pairs}
+    return [(i, j) for i, j, _ in pairs]
 
 
 def geoms_from_labels(waves, res_abs, lab, W, nmean, mask, sr, n_grid=40):
@@ -1982,7 +2043,7 @@ def _apply_deconv(a, res, clu, child, parent, next_atom, chunk_deconv, ext_idx, 
             n_err += 1
             det("deconv", f"chunk {c + 1}: skipped ({d['error']})")
             continue
-        lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
+        lo_s = t_min + c * chunk_s; hi_s = _chunk_hi(c, t_min, chunk_s, nchunks)
         ext = ext_idx[c]
         mthr.append(d["m_thr"])
         for j in np.flatnonzero((res[ext] >= lo_s) & (res[ext] < hi_s)):
@@ -2227,6 +2288,17 @@ def main():
             log(f"fine-split shape features: global basis '{cluster_basis.get('_variant') or a.method}' "
                 f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
     cf = build_cf(a, meth, cluster_basis)
+    if float(cf.get("off_thr", 0.0)) > 0:                   # the timing veto reads the RAW .spk.standard
+        try:
+            _sstd, _sr_ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan, prefer=nio.prefer_standard())
+        except FileNotFoundError:
+            det("timing veto", f"OFF: --off-thr {cf['off_thr']:g} is set but there is no .spk.standard to time "
+                               "the templates on")
+        else:
+            if _sstd.shape[0] != nspk:
+                raise SystemExit(f"{_sr_.path}: {_sstd.shape[0]:,} spikes, the .res has {nspk:,} -- the timing "
+                                 "veto would compare the wrong spikes' templates")
+            del _sstd
     cfg = dict(base=a.base, elec=a.elec, fil=f"{a.base}.fil", ntotal=a.ntotal,
                nsamp=a.nsamp, nchan=a.nchan, sr=a.sr, min_group=a.min_group,
                gch=gch, mask=mask, cf=cf, gpu=a.gpu, no_whiten=getattr(a, "no_whiten", False),
@@ -2248,7 +2320,7 @@ def main():
                              "clusters exist; use a longer --chunk-min")
     tasks = []; ncore_of = {}
     for c in range(nchunks):
-        lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
+        lo_s = t_min + c * chunk_s; hi_s = _chunk_hi(c, t_min, chunk_s, nchunks)
         chunk_tmin[c] = (lo_s - t_min) / a.sr / 60.0
         if chunks_sel is not None and c not in chunks_sel:   # not computed: its spikes go to a reserved cluster
             ncore_of[c] = int(((res >= lo_s) & (res < hi_s)).sum())
@@ -2340,7 +2412,7 @@ def main():
     parent = {}; atom_of = {}; next_atom = FIBER0         # (chunk,local)->atom ; atom->fiber
     for c in range(nchunks):
         if len(ext_idx[c]) == 0: continue
-        lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
+        lo_s = t_min + c * chunk_s; hi_s = _chunk_hi(c, t_min, chunk_s, nchunks)
         emap = {int(g): int(l) for g, l in zip(ext_idx[c], ext_lab[c])}
         for g in np.flatnonzero((res >= lo_s) & (res < hi_s)):
             l = emap.get(int(g), -1)
@@ -2376,6 +2448,27 @@ def main():
             log=log, tag="consolidate")
         clu, next_atom = _park_consolidated(clu, new_clu, child, parent, next_atom,
                                             park_min=getattr(a, "cons_park_min", 0))
+
+    # ── spikes still in cluster 0 that the artifact mask did not put there -- unplaced by the sort (a chunk
+    #    too small to sort, a fiber whose geometry failed, a rejection --assign-unsorted did not cover) and
+    #    not rescued by deconvolution -- are NOT noise: only fiber-flag-artifacts' derivative test sends a
+    #    spike to cluster 0.  They go to one "unsorted" fiber per chunk -- a real cluster, one atom, visible
+    #    and curatable in Klusters.  Excluded spikes and the chunks a chunk run did not compute are not
+    #    touched here. ──
+    _ci = np.minimum(((res - t_min) // chunk_s).astype(np.int64), nchunks - 1)
+    _computed = np.ones(nspk, bool) if chunks_sel is None else np.isin(_ci, np.asarray(chunks_sel, np.int64))
+    _left = (np.asarray(clu) == 0) & keep & _computed
+    if _left.any():
+        clu = np.asarray(clu, np.int64).copy()
+        next_fiber = max(_fch.next_free_id(clu), FIBER0 + nglob)
+        _ch = np.unique(_ci[_left])
+        for k in _ch:
+            rows = _left & (_ci == k)
+            aid = next_atom; next_atom += 1
+            parent[aid] = next_fiber
+            child[rows] = aid; clu[rows] = next_fiber; next_fiber += 1
+        det("unsorted", f"{int(_left.sum()):,} spikes the sort could not place -> {len(_ch)} unsorted fiber(s), "
+                        "one per chunk (not cluster 0)")
 
     carried = {}
     if in_clu is not None and excl_units and a.exclude_as == "carry":
@@ -2507,7 +2600,7 @@ def main():
                       | {(c + 1, g) for c in range(nP) for f, g in anchor_links[c]})
         rt = {}
         for (c, f) in keys:
-            lo_c = t_min + c * chunk_s; hi_c = t_min + (c + 1) * chunk_s
+            lo_c = t_min + c * chunk_s; hi_c = _chunk_hi(c, t_min, chunk_s, nchunks)
             gi = ext_idx[c][ext_lab[c] == f]
             gi = gi[(res[gi] >= lo_c) & (res[gi] < hi_c)]        # CORE spikes only: adjacent-chunk templates then
             if gi.size == 0: continue                            #   share NO spikes, so the fit sees the true drift

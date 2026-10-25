@@ -271,7 +271,7 @@ FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fib
                                   #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
 FK_SESSION_KEEP_SMALL:   1       # 0 | 0/1.  1 = a fine group below FK_SESSION_FINE_MIN_GROUP (or whose inclusion
                                   #   core falls below it) becomes a fiber of its own -- all its spikes -- instead of
-                                  #   going to cluster 0.  These skips are where sparse cells were lost (any cell with
+                                  #   going to the chunk's unsorted fiber (cluster 0 until 0.56.3).  These skips are where sparse cells were lost (any cell with
                                   #   < 40 spikes in a 12-min chunk).  Over-split is recoverable downstream; a dropped
                                   #   unit is not.
 FK_SESSION_KEEP_SMALL_MIN: 5     # 5.  Smallest group KEEP_SMALL keeps as a fiber; smaller ones go to ASSIGN_UNSORTED.
@@ -284,7 +284,8 @@ FK_SESSION_ASSIGN_UNSORTED: 1    # 0 | 0/1.  1 = place every spike still unsorte
 FK_SESSION_NO_NOISE:     0        # 0 | 0/1.  1 = sweep every remaining noise spike (below the inclusion radius /
                                   #   rejected / collision junk) into a single UNDEFINED FIBER -- a real cluster, not the
                                   #   noise cluster -- instead of dropping it.  For clean stderiv data; the undefined fiber
-                                  #   is heterogeneous and gets cleaned/re-split in later steps.  0 = leave in the noise cluster.
+                                  #   is heterogeneous and gets cleaned/re-split in later steps.  0 = what the sort leaves
+                                  #   unplaced goes to the chunk's unsorted fiber (never cluster 0, since 0.56.3).
 FK_SESSION_CFIBER_Q:             0.90     # 0.90 | 0.85-0.95.  Within-fiber shape veto: reject a candidate whose cfiber
                                   #   (affine-invariant Fourier descriptor) distance exceeds the Q-quantile of the
                                   #   fiber's OWN split-half null.  0.90 = tolerate up to the 90th-pct self-jitter.
@@ -385,8 +386,9 @@ FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the 
 FK_REALIGN_ITERS:        2        # 2.  Klusters --iterations: template / xcorr passes; shifts accumulate across passes.
 FK_REALIGN_MAX_SHIFT:    ""       # "" = Klusters' max(1, (peakSampleIndex-1) // 2) (10 on a 42-sample window) | N.
 FK_REALIGN_PARK_DUPS:    1        # 1 | 0/1.  After the shift, the later spike of every same-unit pair the alignment put on
-                                  #   one sample (two detections of one spike; identical windows) goes to cluster 0 -- one
-                                  #   child atom under 0 when the clu has its .clc/.clp.  No row is removed.  0 = only list
+                                  #   one sample (two detections of one spike; identical windows) goes to a new duplicates
+                                  #   cluster (the next free id, never 0) -- one child atom under it when the clu has its
+                                  #   .clc/.clp.  No row is removed.  0 = only list
                                   #   the pairs (<base>.realign.<variant>.<group>[.<stage>].tsv, cross-unit pairs always
                                   #   listed).  fiber-session's own commit always parks; a side-by-side commit (--out-tag)
                                   #   parks only in the clu it emits.  sirotaA-jg-000005-20120316 g6 after one commit:

@@ -800,8 +800,12 @@ def main():
     try:                                  # consume the .clu/.clc/.clp triple if the source sort emitted one
         from .fiber_refiberize import FiberHierarchy
         hier = FiberHierarchy.load(base, elec, variant=clu_method, tag=clu_stage)
-    except Exception:
+    except FileNotFoundError:
         hier = None                       # flat .clu source (legacy) -> output stays flat
+    except Exception as e:  # noqa: BLE001 -- reported, then flat: the sort itself is still usable
+        hier = None
+        _log(f"WARNING: the source .clc/.clp cannot be read ({e}); the output is a FLAT .clu and the "
+             "atom hierarchy of the source is not carried")
 
     # overlap-refractory gate (default off): build per-source-id spike trains from .res once
     ov_refrac = None; ov_censor = 0; times_by_id = None

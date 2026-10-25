@@ -4,6 +4,38 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.3] — no merge without its vetoes, no chaining, and cluster 0 only for derivative outliers
+- **fiber-session merges through every veto, with complete linkage.**  The re-split loop's merge (Block C,
+  on in the exp plan via `FK_SESSION_RESPLIT_PASSES: 3`) used no veto at all.  Because resplit replaces
+  Blocks A/B, the yaml's `FK_SESSION_CFIBER_GATE` and `FK_SESSION_OFF_THR` did nothing.  Blocks A, B and C
+  now go through one `_merge_vetoes`: the cfiber shape veto, inter-channel timing, and the refractory gate
+  when `--refrac-ms` is set.  The resulting edges are joined by `_complete_link`: best pair first, and a
+  group joins only if every cross pair is itself an edge.  Union-find had chained A~B and B~C into A+B+C
+  (the reviewer's case had cos(A,C) = 0.978).
+- **fiber-xcorr-merge's knn split folds only through the merge tests.**  When a candidate failed the RVU
+  test, the knn split folded buckets into neighbours chosen by cosine rank, with no threshold, no
+  refractory, timing or band check, and the twin guard off.  A bucket now folds into a reference only if
+  the pair passes the roll cosine (complexity-scaled), the refractory gate, the timing gate and the band
+  overlap.  Otherwise it becomes a new cluster.  The log counts the refusals.
+- **fiber-session never writes an unplaced spike to cluster 0.**  Spikes still in 0 after deconvolution
+  that the artifact mask did not put there go to one "unsorted" fiber per chunk, a real cluster with one
+  atom.  This covers a chunk too small to sort, a failed fiber geometry and rejections
+  `--assign-unsorted` did not cover.  The last spike of a session whose span is an exact multiple of the
+  chunk length is now in the last chunk; `res < hi` used to leave it out of every chunk.
+- **fiber-realign's duplicate parking** (`FK_REALIGN_PARK_DUPS`, and fiber-session's own commit) puts the
+  second detection of a spike in a new duplicates cluster (the next free id) instead of cluster 0.
+- **fiber-relink** numbers units from 2.  Until now they started at 1, so the first real unit landed in
+  Klusters' noise cluster.  Clusters 0/1 and reserved chunk ids pass through unchanged.
+- **fiber-refine** stops when `--in-clu` names a missing file.  It used to refine whatever canonical .clu
+  was in the folder, or ran a fresh sort.  It also stops with a message when two stderiv clus make the
+  fallback ambiguous.
+- fiber-intrachunk / fiber-link log it when the source .clc/.clp cannot be read, before writing a flat sort.
+  fiber-session reports a timing veto that has no .spk.standard to work on, and refuses a .spk.standard
+  of another length.
+- test_merge_rules (new).  On 0.56.2 the knn fold moved all 120 spikes into the dissimilar cluster, and
+  the session put 33 spikes in cluster 0.  test_session_no_shed's control, test_session_deconv ("from
+  noise" is now "from the unsorted fiber"), test_realign_duplicates and test_relink_ids are updated.
+
 ## [0.56.2] — FK_* knobs: one precedence, YAML 1.2 booleans, validated values
 - **`off` is off.** PyYAML read a bare `off` as False, which reached the stages as "0" (fiber-pipeline) or
   "False" (a direct call).  So `FK_SESSION_REALIGN: off` ran the realign and rewrote the shared .res/.spk,

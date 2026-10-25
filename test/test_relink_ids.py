@@ -47,6 +47,14 @@ def main():
         out = np.asarray(out)
         check("rewrite_clu merges clusters 2 and 5 (gids 0 and 2) and keeps 3 apart",
               out[1] == out[4] and out[1] != out[3] and out[0] == 0)
+        check("units are numbered from 2: none lands in the noise cluster 1", out[1:7].min() >= 2)
+        src2 = os.path.join(td, "in2.clu"); dst2 = os.path.join(td, "out2.clu")
+        nio.write_clu_file(src2, np.array([5, 1, 5, 7, 1, 0]))
+        with contextlib.redirect_stdout(io.StringIO()):
+            frk.rewrite_clu(src2, dst2, {})
+        _, o2 = nio.read_clu_file(dst2)
+        check("the noise (1) and artifact (0) bins pass through; units 5 and 7 become 2 and 3",
+              list(np.asarray(o2)) == [2, 1, 2, 3, 1, 0])
         frk.rewrite_clu(src, dst, oldgid2unit)             # the pre-0.51 reading: gid = cluster - 1
         _, wrong = nio.read_clu_file(dst)
         wrong = np.asarray(wrong)

@@ -133,8 +133,13 @@ def main():
         with open(f"{base}.deconv.stderiv.1.dca.tsv") as fh:
             mrows = [ln.split("\t") for ln in fh.read().splitlines()[1:]]
         flagged = {int(r_[0]) for r_ in mrows if r_[9] == "1"}
-        check(f"--deconv-assign moves exactly the {len(flagged)} spikes the manifest marks rescued, all from noise",
-              set(moved.tolist()) == flagged and (clu[moved] == 0).all())
+        # "noise" = what the sort left unplaced: since 0.56.3 that is the unsorted fiber (a cluster with no
+        # .fibers row), not cluster 0
+        unsorted = set(np.unique(clu).tolist()) - {int(c) for c in fib["clu_id"]} - {0}
+        check(f"--deconv-assign moves exactly the {len(flagged)} spikes the manifest marks rescued, all from the "
+              f"unsorted fiber {sorted(unsorted)}",
+              set(moved.tolist()) == flagged and np.isin(clu[moved], sorted(unsorted)).all())
+        check("the sort writes nothing to cluster 0 (no artifact mask given)", not np.any(clu == 0))
         maj = {int(g): np.bincount(tl[clu == g], minlength=len(units)).argmax() for g in np.unique(clu[clu > 0])}
         prec = np.mean([maj[int(clu3[i])] == tl[i] for i in moved]) if moved.size else 1.0
         check(f"rescued spikes land on their own cell's fiber ({prec:.3f} >= 0.95)", prec >= 0.95)

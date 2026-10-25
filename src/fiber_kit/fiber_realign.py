@@ -677,14 +677,21 @@ def _hierarchy_siblings(clu_path, base):
     return os.path.join(d, f"{bn}.clc.{rest}"), os.path.join(d, f"{bn}.clp.{rest}")
 
 
+def duplicates_cluster(labels):
+    """The cluster parked duplicates go to: the next free id (below the reserved chunk block).  Not 0:
+    only a derivative outlier (fiber-flag-artifacts) sends a spike to the artifact cluster, and a second
+    detection of a spike is not one -- it is kept, as its own cluster, for the curator to delete."""
+    return _fch.next_free_id(np.asarray(labels, np.int64))
+
+
 def park_duplicates(base, group, clu_path, rows):
-    """Move `rows` -- the later spike of each same-unit pair a commit put on one sample -- to cluster 0
-    in the clu at `clu_path`, in place, and return how many moved.  The row count never changes, so every
-    stage stays aligned with the shared .res.  When the clu has its .clc/.clp siblings (the same name
-    with the type swapped), the parked spikes become ONE new child atom whose parent is 0 (reviewable and
-    revertible in Klusters) and every other label is checked to come back unchanged; the three files are
-    rewritten where they are.  A hierarchy that does not reproduce its own .clu is left alone and only
-    the flat .clu is edited."""
+    """Move `rows` -- the later spike of each same-unit pair a commit put on one sample -- to a new
+    duplicates cluster (duplicates_cluster) in the clu at `clu_path`, in place, and return how many moved.
+    The row count never changes, so every stage stays aligned with the shared .res.  When the clu has its
+    .clc/.clp siblings (the same name with the type swapped), the parked spikes become ONE new child atom
+    whose parent is that cluster (reviewable and revertible in Klusters) and every other label is checked
+    to come back unchanged; the three files are rewritten where they are.  A hierarchy that does not
+    reproduce its own .clu is left alone and only the flat .clu is edited."""
     rows = np.unique(np.asarray(rows, np.int64))
     if rows.size == 0:
         return 0
@@ -694,7 +701,8 @@ def park_duplicates(base, group, clu_path, rows):
         from fiber_refiberize import FiberHierarchy
     hdr, labels = nio.read_clu_file(clu_path)
     labels = np.asarray(labels, np.int64)
-    want = labels.copy(); want[rows] = 0
+    dup = duplicates_cluster(labels)
+    want = labels.copy(); want[rows] = dup
     sib = _hierarchy_siblings(clu_path, base)
     if sib and os.path.exists(sib[0]) and os.path.exists(sib[1]):
         clc, clp = sib
@@ -703,17 +711,17 @@ def park_duplicates(base, group, clu_path, rows):
             child = h.child.copy()
             new = int(child.max()) + 1
             child[rows] = new
-            parent = dict(h.parent); parent[new] = 0
+            parent = dict(h.parent); parent[new] = dup
             clu_b, clc_b, clp_b = FiberHierarchy(child, parent).refiberize(renumber=False)
             if np.array_equal(clu_b, want):
                 for path, arr in ((clu_path, clu_b), (clc, clc_b), (clp, clp_b)):
                     nio.write_clu_file(path, arr)
-                _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster 0, child atom {new} "
+                _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster {dup} (duplicates), child atom {new} "
                                f"({os.path.basename(clu_path)} + .clc/.clp)")
                 return int(rows.size)
         _det("parked", "the .clc/.clp do not reproduce the .clu; editing the flat .clu only")
-    nio.write_clu_file(clu_path, want, n_clusters=int(hdr))
-    _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster 0 ({os.path.basename(clu_path)})")
+    nio.write_clu_file(clu_path, want, n_clusters=max(int(hdr), int(want.max()) + 1))
+    _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster {dup} (duplicates) ({os.path.basename(clu_path)})")
     return int(rows.size)
 
 
@@ -844,8 +852,9 @@ def main(argv=None):
     ap.add_argument("--park-duplicates", dest="park_duplicates", action=argparse.BooleanOptionalAction,
                     default=bool(_kd("FK_REALIGN_PARK_DUPS", int, 0)),
                     help="after the shift, move the later spike of every same-unit pair that landed on one "
-                         "sample (two detections of one spike; identical windows) to cluster 0 in the --clu, "
-                         "in place, as one child atom under 0 when the clu has its .clc/.clp; with --out-tag "
+                         "sample (two detections of one spike; identical windows) to a new duplicates cluster (the "
+                         "next free id; never 0) in the --clu, in place, as one child atom under it when the clu "
+                         "has its .clc/.clp; with --out-tag "
                          "(the canonical .res is left alone) only in the clu emitted under the tag.  Rows are "
                          "never removed.  Cross-unit pairs are only listed (<base>.realign.<variant>.<group>"
                          "[.<tag>].tsv).  fiber-session's own commit parks; a stand-alone run only lists "
@@ -946,11 +955,13 @@ def main(argv=None):
         elif parked.size:
             # a side-by-side commit leaves the canonical .res, and so the input sort, alone: the parking
             # goes only into the clu it emits under the tag
-            _det("parked", f"{parked.size:,} duplicate spike(s) -> cluster 0 in the clu emitted under "
+            _det("parked", f"{parked.size:,} duplicate spike(s) -> cluster {duplicates_cluster(labels)} "
+                           "(duplicates) in the clu emitted under "
                            f"tag {a.out_tag} (the input clu is left as it is)")
         listed = labels
         if parked.size:
-            labels = np.asarray(labels).copy(); labels[parked] = 0   # an emitted clu carries the parking
+            _dup = duplicates_cluster(labels)
+            labels = np.asarray(labels).copy(); labels[parked] = _dup   # an emitted clu carries the parking
         if len(same) or len(cross):
             # rows and times are those of the .res this run writes: the stage's, or the tagged copy's
             tsv = nio.session_path(base, "realign", group, variant=cv or out_variant,

@@ -29,9 +29,11 @@ from collections import defaultdict
 try:
     from . import neuro_io as nio
     from . import fiber_ccg as cg
+    from . import fiber_chunks as _fch
 except ImportError:
     import neuro_io as nio
     import fiber_ccg as cg
+    import fiber_chunks as _fch
 
 
 def gid_clu_maps(z):
@@ -342,17 +344,20 @@ def _load_res(path):
 
 
 def rewrite_clu(clu_in, clu_out, oldgid2unit, clu2gid=None):
-    """Remap an existing binary .clu (int32 nClusters header + ids; 0=noise) onto merged unit ids,
-    renumbered contiguously from 1.  `clu2gid` maps a cluster id to its fiber gid (gid_clu_maps);
-    without it the pre-0.51 assumption gid = id - 1 is used."""
-    _, ids = nio.read_clu_file(clu_in)                  # per-spike cluster ids; 0 = noise
-    # map old id -> new id (noise stays 0); units renumbered 1..K in first-seen order
-    nxt = 1; out = np.empty_like(ids)
+    """Remap an existing binary .clu (int32 nClusters header + ids) onto merged unit ids, renumbered
+    contiguously from 2.  Clusters 0 (artifact) and 1 (noise) are the reserve bins every other stage
+    keeps: they pass through unchanged and no unit is ever numbered 0 or 1 (until 0.56 units were
+    numbered from 1, so the first real unit landed in Klusters' noise cluster).  Reserved chunk clusters
+    (fiber_chunks) keep their ids.  `clu2gid` maps a cluster id to its fiber gid (gid_clu_maps); without
+    it the pre-0.51 assumption gid = id - 1 is used."""
+    _, ids = nio.read_clu_file(clu_in)                  # per-spike cluster ids
+    # map old id -> new id (0/1 and reserved ids stay); units renumbered 2..K+1 in first-seen order
+    nxt = 2; out = np.empty_like(ids)
     seen = {}
     for i, v in enumerate(ids):
         v = int(v)
-        if v == 0:
-            out[i] = 0; continue
+        if v in (0, 1) or _fch.is_reserved(v):
+            out[i] = v; continue
         u = oldgid2unit.get(clu2gid.get(v, -1) if clu2gid is not None else v - 1, None)
         if u is None:                               # gid absent from .fibers: keep distinct
             key = ('g', v)
@@ -361,8 +366,8 @@ def rewrite_clu(clu_in, clu_out, oldgid2unit, clu2gid=None):
         if key not in seen:
             seen[key] = nxt; nxt += 1
         out[i] = seen[key]
-    n_units = nxt - 1
-    nio.write_clu_file(clu_out, out.astype(np.int32), n_clusters=n_units + 1)
+    n_units = nxt - 2
+    nio.write_clu_file(clu_out, out.astype(np.int32))
     return n_units, len(ids)
 
 

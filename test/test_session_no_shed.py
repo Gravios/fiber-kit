@@ -3,7 +3,8 @@
 A synthetic one-group session (.fil + .spk.stderiv extracted from it): three dense units and one SPARSE
 unit (25 spikes, below --fine-min-group 40), plus a mask from "fiber-flag-artifacts" marking 12 spikes.
 
-  * control (no new flags): the sparse unit's spikes go to cluster 0 (the shedding being fixed);
+  * control (no new flags): the sparse unit's spikes are shed by the sort -- and since 0.56.3 land in an
+    "unsorted" fiber (a real cluster >= 2), not cluster 0 (until 0.56.2 they went to cluster 0);
   * no output ever uses cluster 1 (global fiber 0 used to be written as cluster 1, Klusters' noise
     cluster): every real fiber id is >= 2;
   * --keep-small-groups --assign-unsorted: nothing is shed -- cluster 0 is empty;
@@ -100,8 +101,9 @@ def main():
 
         rc, out, c0 = session(fresh("control"))
         check("control run exits 0", rc == 0, out)
-        check(f"control: the sparse unit is shed to cluster 0 ({np.sum((c0 == 0) & (unit == 3))}/25)",
-              np.sum((c0 == 0) & (unit == 3)) >= 20, out)
+        check(f"control: the shed sparse unit is in a real cluster, not 0 ({np.sum((c0 == 0) & (unit == 3))}/25 "
+              "in 0)", np.sum((c0 == 0) & (unit == 3)) == 0 and (c0[unit == 3] >= 2).all(), out)
+        check("control: and the log names the unsorted fiber", "unsorted fiber" in out, out)
         check(f"control: no spike in cluster 1, real ids start at 2 (min {c0[c0 > 0].min()})",
               not np.any(c0 == 1) and c0[c0 > 0].min() >= 2, out)
 

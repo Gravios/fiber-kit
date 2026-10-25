@@ -236,7 +236,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
     idx = [idx0[k].copy() for k in range(m0)] + [np.zeros(0, np.int64)] * (m - m0)
     tt = [times0[k] for k in range(m0)] + [np.zeros(0)] * (m - m0)
     vetoed = set(); n_merge = n_veto = 0
-    knn_tried = set(); n_knn = n_knn_moved = n_knn_new = 0
+    knn_tried = set(); n_knn = n_knn_moved = n_knn_new = n_knn_fold_veto = 0
 
     def _refresh(k):
         """Rebuild slot k's template / stats / cosine row from idx[k] (drops it if too small)."""
@@ -252,10 +252,38 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         ck = roll_cos_row(T[k], T, shift); ck[~alive] = -np.inf; ck[k] = -np.inf
         C[k, :] = ck; C[:, k] = ck
 
+    def _fold_ok(sp, r):
+        """May the knn bucket `sp` fold into cluster r?  Only through the merge's own tests: the roll cosine
+        (complexity-scaled), the refractory gate, the inter-channel timing and the band overlap.  The knn
+        references are picked by cosine RANK, with no threshold, so without this a bucket -- or a whole
+        source cluster -- could join a neighbour no merge would have joined it to."""
+        if sp.size < 4:
+            return False
+        Tb, SDb, _, _ = _tmpl(spk, sp, cap=cap, ref_sample=ref_sample, rng=rng, align=align, rvu_win=rvu_win,
+                              align_min_score=align_min_score)
+        val = float(roll_cos_row(Tb, T[r:r + 1], shift)[0])
+        thr = cos_thr
+        if cx is not None:
+            cb = fg.waveform_complexity(Tb)
+            thr = cos_thr + cx_scale * (1.0 - cos_thr) * max(0.0, 1.0 - min(cb, cx[r]) / cx_ref)
+        if val < thr:
+            return False
+        if refrac > 0 and cg.refractory_gate(np.sort(res[sp]), tt[r], duration, refrac, thr=refrac_thr,
+                                              min_exp=refrac_min_exp, censor=censor)["verdict"] == "veto":
+            return False
+        if off is not None and fg.offset_distance(
+                fg.interchannel_offsets(Tb, amp_frac=off_amp_frac, method="xcorr"), off[r]) > off_thr:
+            return False
+        if band_thr > 0:
+            bov = fg.band_overlap(Tb, SDb, T[r], SD[r])
+            if not np.isfinite(bov) or bov < band_thr:
+                return False
+        return True
+
     def _knn_split_one(src_k, partner):
         """Waveform knn split of cluster src_k against its partner and its nearest other clusters
         (Klusters' split-by-knn-vs-references: the source is one cluster, the others are references)."""
-        nonlocal used, nid, n_knn_moved, n_knn_new
+        nonlocal used, nid, n_knn_moved, n_knn_new, n_knn_fold_veto
         src = idx[src_k]
         if src.size > knn_max or src.size < 2 * min_n:
             return 0
@@ -273,7 +301,10 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
             return 0
         for v in np.unique(ns[moved]):
             sp = src[ns == v]
-            if 1 <= v <= len(refs):                        # folds into an existing reference cluster
+            fold = 1 <= v <= len(refs)
+            if fold and not _fold_ok(sp, refs[v - 1]):     # fails a merge test: a new cluster instead
+                fold = False; n_knn_fold_veto += 1
+            if fold:                                       # folds into an existing reference cluster
                 r = refs[v - 1]; idx[r] = np.concatenate([idx[r], sp]); _refresh(r)
             elif used < m:                                 # a distinct bucket: a new cluster
                 k = used; used += 1; idx[k] = sp; sid[k] = nid; nid += 1; alive[k] = True; n_knn_new += 1
@@ -344,7 +375,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
         return x
     if stats is not None:
         stats["gain_vetoes"] = n_gveto; stats["rvu_vetoes"] = n_rveto
-        stats.update(knn_splits=n_knn, knn_moved=n_knn_moved, knn_new=n_knn_new)
+        stats.update(knn_splits=n_knn, knn_moved=n_knn_moved, knn_new=n_knn_new, knn_fold_vetoes=n_knn_fold_veto)
         stats["members"] = {sid[k]: idx[k] for k in range(used) if parent[k] == k and idx[k].size}
     return {ids[k]: ids[root(k)] for k in range(m0)}, n_merge, n_veto
 
@@ -446,7 +477,8 @@ def main():
           + (f", gain-IQR vetoes {_st.get('gain_vetoes', 0)}" if (a.giqr_thr > 0 or a.giqr_rise > 0) else "")
           + (f", residual-variance vetoes {_st.get('rvu_vetoes', 0)}" if (a.rvu_thr > 0 or a.rvu_rise > 0) else "")
           + (f"; knn splits {_st.get('knn_splits', 0)}: {_st.get('knn_moved', 0)} spikes moved, "
-             f"{_st.get('knn_new', 0)} new clusters" if a.rvu_knn else ""))
+             f"{_st.get('knn_new', 0)} new clusters, {_st.get('knn_fold_vetoes', 0)} folds refused by the merge "
+             "tests" if a.rvu_knn else ""))
     nio.write_clu(base, elec, new, variant=a.clu_method, tag=a.out_tag)
     print(f"{_LP} · wrote {os.path.basename(nio.session_path(base, 'clu', elec, variant=a.clu_method, tag=a.out_tag))}")
 
