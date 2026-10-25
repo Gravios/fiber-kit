@@ -415,8 +415,8 @@ def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
 # rkk parity knobs.  klustakwik.py is now in parity with kiloklustakwik's classic branch, whose
 # default penalty is AIC (PenaltyMix=0); the pre-parity rkk used BIC.  FK_SESSION_RKK_PENALTY_MIX=1
 # restores BIC if a session needs the old cluster counts.
-_RKK_PENALTY_MIX = float(os.environ.get("FK_SESSION_RKK_PENALTY_MIX", "0.0"))
-_RKK_SPLITS      = int(os.environ.get("FK_SESSION_RKK_SPLITS", "1"))
+_RKK_PENALTY_MIX = cfgmod.knob_value("FK_SESSION_RKK_PENALTY_MIX", float, 0.0)   # env > $FK_CONFIG > default (the
+_RKK_SPLITS      = cfgmod.knob_value("FK_SESSION_RKK_SPLITS", int, 1)            # yaml was ignored on a direct call)
 
 
 def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):

@@ -350,7 +350,9 @@ if __name__ == "__main__":
     ap.add_argument("--no-splits", action="store_true")
     ap.add_argument("--seed", type=int, default=RANDOM_SEED)
     ap.add_argument("--realign", action="store_true")
-    ap.add_argument("--out", default=None)
+    ap.add_argument("--out", default=None,
+                    help="output .clu (default <base>.clu.<method>.<elec>.kk -- never the canonical <base>.clu.<elec>, "
+                         "which other stages resolve as the session's sort)")
     a = ap.parse_args()
     mm, _ = nio.open_spkD(a.base, a.elec, a.nsamp, a.nchan)   # $FK_SPK_VARIANT names the exact spk when the family is ambiguous
     spk = np.asarray(mm, float)
@@ -364,6 +366,6 @@ if __name__ == "__main__":
     lab = klustakwik(F, max_clusters=a.max_clusters, min_clusters=a.min_clusters,
                      penalty_mix=a.penalty_mix, n_starts=a.n_starts,
                      splits=not a.no_splits, seed=a.seed, verbose=True)
-    out = a.out or f"{a.base}.clu.{a.elec}"
+    out = a.out or nio.session_path(a.base, "clu", a.elec, variant=a.method, tag="kk")
     nio.write_clu_file(out, (lab + 1).astype(np.int32))
     print(f"{len(np.unique(lab))} clusters (label 0 = noise) -> {out}")

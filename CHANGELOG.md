@@ -4,6 +4,33 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.4] — docs/config.md generated from the yaml; README and config drift
+- **docs/config.md is generated** by the new `tools/gen_config_doc.py` from fiber-kit-exp.yaml's own
+  comments: one section per `[X]` banner and `-----` sub-header, each knob with its value in both shipped
+  yamls.  run_all runs `--check`.  The handwritten page had drifted:
+  - it documented 23 knob names no code reads (e.g. FK_ALIGN_LAG, FK_DIP_ALPHA);
+  - it missed about 170 knobs the exp yaml sets (FK_RDR_*, FK_FLAG_*, FK_LOWMIX_*, FK_CONSENSUS_*, ...);
+  - it quoted 12 defaults the yaml no longer had (chunk length 18 vs 12, FK_XCM_COS_THR 0.99 vs 0.96, ...).
+- The check also fails when the code reads an FK_* knob that neither shipped yaml lists.  Added to
+  fiber-kit-exp.yaml with their code defaults: FK_XCM_MERGE_ALIGN(_MIN_SCORE), FK_SESSION_RKK_SPLITS /
+  _PENALTY_MIX, FK_CONS_SHED_K / _MIN, FK_ALINK_FEAT_LAG, FK_BBLINK_DRIFT_RECENTER, FK_LOWMIX_SIGNAL.
+  FK_SESSION_FINE_METHOD, deleted from the exp yaml by accident in 1f896f1 (its description stayed
+  behind as stray comment lines), is restored.
+- fiber-session reads FK_SESSION_RKK_SPLITS / _PENALTY_MIX through `config.knob_value`; they were read from
+  the environment only, so a yaml value was ignored on a direct call.
+- The exp yaml's section banners name the current plan steps; they still described the pre-0.52 plan.
+  FK_REALIGN_AFTER / _AFTER_MODE / _FINAL_MODE are marked "canonical mode only" in both yamls: a plan's
+  own fiber-realign steps decide, and these three knobs are not read.
+- README:
+  - the version badge said 0.21.0;
+  - the CLI reference now lists all 52 commands (it covered 10, and its fiber-session table gave `--fine-algo`
+    a default of gmm where the parser says rkk) and points to the generated stages.md / config.md;
+  - the project layout describes the directories instead of 18 of 83 modules.
+  test_readme (new) keeps the badge and the command table current.
+- Removed `klustakwik_classic.py` (328 lines, referenced nowhere).  `python -m fiber_kit.klustakwik`
+  writes `<base>.clu.<method>.<elec>.kk` by default, no longer the canonical `<base>.clu.<elec>`.
+  `tools/hier_diag.py --help` prints its usage and exits 0.
+
 ## [0.56.3] — no merge without its vetoes, no chaining, and cluster 0 only for derivative outliers
 - **fiber-session merges through every veto, with complete linkage.**  The re-split loop's merge (Block C,
   on in the exp plan via `FK_SESSION_RESPLIT_PASSES: 3`) used no veto at all.  Because resplit replaces

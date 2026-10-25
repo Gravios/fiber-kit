@@ -145,7 +145,7 @@ pipeline:
 
 
 # ============================================================================
-#  [1] FIBER-SESSION -- initial over-clustering  (plan step 1 -> .fiber_session)
+#  [1] FIBER-SESSION -- initial over-clustering  (plan step `session` -> .fiber_session)
 # ============================================================================
 # Deliberately OVER-clusters (many small, clean fragments) so the downstream merge
 # (intrachunk + link, or fiber-defrag) can reassemble units; over-split is recoverable,
@@ -157,7 +157,8 @@ FK_SESSION_SKIP_EXTANT:  1        # 0 | 0/1.  1 = fiber-session checks the exact
                                   #   RESUMES at the later stages instead of regenerating hours of sort over the
                                   #   top of them.  Delete the destination .clu, or run with
                                   #   FK_SESSION_SKIP_EXTANT=0 (env overrides this yaml), to force a rebuild.
-                                  #   KlustaKwik with per-cluster realign + BIC model selection (robust to unequal
+FK_SESSION_FINE_METHOD:  rkk      # rkk | gmm | fiber | none.  Per-fiber fine clusterer.  rkk (default) = masked-EM
+                                  #   KlustaKwik with per-cluster realign + AIC model selection (FK_SESSION_RKK_PENALTY_MIX; robust to unequal
                                   #   covariances); gmm = Gaussian-mixture split; fiber = fiber-kit's native cluster_chunk;
                                   #   none = no fine split (keep the coarse cluster whole).  Categorical.
 FK_CHUNKS:               ""       # "" = every chunk | e.g. 14-16 or 3,7,10-12 (0-based, FK_SESSION_CHUNK_MIN long, counted
@@ -177,6 +178,10 @@ FK_SESSION_OVERLAP_MIN:  4        # 4 | 0 or 3-8 (min).  Overlap between adjacen
 FK_SESSION_RKK_DELETE:   0        # 0 | 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters
                                   #   so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old
                                   #   behaviour; sheds fragments into the artifact bin -- not what session is for).
+FK_SESSION_RKK_SPLITS:   1        # 1 | 0/1.  rkk (klustakwik.py) tries split moves in its EM loop, as kiloklustakwik's
+                                  #   classic branch does.  0 = no split moves.
+FK_SESSION_RKK_PENALTY_MIX: 0.0   # 0.0 | 0-1.  rkk model-selection penalty: 0 = AIC (kiloklustakwik parity), 1 = BIC
+                                  #   (the pre-parity rkk; fewer clusters).
 FK_SESSION_MERGE_METHOD: sliding  # sliding | template | profile.  Coarse merge method; INERT when MERGE_CORR=0.
 FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk
                                   #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session
@@ -339,7 +344,7 @@ FK_SESSION_FEAT_LAG:     0        # 0 = classic (PC1,PC2,PC3) | 2-4 (samples).  
 
 
 # ============================================================================
-#  [2] FIBER-REALIGN -- per-spike align + in-place commit  (plan steps 2, 5, 8)
+#  [2] FIBER-REALIGN -- per-spike align + in-place commit  (plan step `realign-final`)
 # ============================================================================
 # No tuning knobs: Klusters-style per-spike alignment, then re-extract raw+stderiv from the .fil and
 # re-featurize, committed in place (reads the INPUT .spk of the variant, so NO --out-variant).
@@ -349,12 +354,12 @@ FK_REALIGN_AFTER:        "fiber-intrachunk fiber-anchor-link fiber-link"  # stag
                                   #   drift leaves a group's troughs spread; a per-unit realign re-tightens them.  Set ""
                                   #   to disable.  CANONICAL (stage-list) mode only: the embedded plan above carries its
                                   #   own explicit fiber-realign steps.  (fiber-session commits its own: FK_SESSION_REALIGN.)
-FK_REALIGN_AFTER_MODE:   reextract  # reextract | shift-spk.  Every realign changes ONLY the .res times; each waveform
+FK_REALIGN_AFTER_MODE:   reextract  # canonical mode only.  reextract | shift-spk.  Every realign changes ONLY the .res times; each waveform
                                   #   variant (--variants all: every .spk on disk) is then re-extracted from the .fil at
                                   #   the corrected times and its .fet regenerated from its .pca (_D aliases re-projected
                                   #   from their waveform token).  shift-spk circular-rolls the existing .spk instead (no
                                   #   .fil read, faster, exact only up to the filtered window edges).
-FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the artefacts that go to curation): reextract
+FK_REALIGN_FINAL_MODE:   reextract  # canonical mode only.  Mode for the LAST realign of the run (the artefacts that go to curation): reextract
                                   #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).
 FK_REALIGN_VARIANT:      stderiv_C5_D34  # "" | e.g. stderiv_C5.  SET for the g6 reference run (sirotaA-jg-000005-
@@ -402,7 +407,7 @@ FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike a
 
 
 # ============================================================================
-#  [3] FIBER-CPOS -- cluster localization (plan steps 3 and 6; no FK_* knobs)
+#  [3] FIBER-CPOS -- cluster localization (not in the embedded plan; no FK_* knobs)
 # ============================================================================
 # Localizes each cluster from the raw .spk.standard on the probe geometry and writes
 # <base>.cpos.<method>.<elec>.<stage>(.clusters.npz) -- the positions fiber-intrachunk's
@@ -412,7 +417,7 @@ FK_REALIGN_ALGO:         klusters # klusters | template | centroid.  Per-spike a
 
 
 # ============================================================================
-#  [4] FIBER-INTRACHUNK -- within-chunk merge  (plan step 4: .fiber_session -> .exp_chunk)
+#  [4] FIBER-INTRACHUNK -- within-chunk merge  (not in the embedded plan since 0.52.0)
 # ============================================================================
 # These FK_INTRA_* keys are the typed
 # IntrachunkConfig (config.py).  Set here, they OVERRIDE the <session>.yaml fiber_kit.intrachunk
@@ -567,7 +572,7 @@ FK_INTRA_BACKBONE_WARP:        0.3      # 0.3 | 0.2-0.5 ("" = off).  Group-delay
 
 
 # ============================================================================
-#  [5] FIBER-ANCHOR-LINK -- THE LINKER  (plan step 7: .exp_chunk -> .exp_linked)
+#  [5] FIBER-ANCHOR-LINK -- linker  (not in the embedded plan since 0.52.0)
 # ============================================================================
 # Sibling to fiber-backbone-link, same inputs (fiber-session hierarchy + standard .spk), three differences:
 # it SEEDS with the .fibers overlap anchors (links made from the same physical spikes -- correct by
@@ -786,6 +791,10 @@ FK_CONS_FOLD_THR:        0.9      # 0.9 | 0.8-0.95.  knn pass: fold-back thresho
 FK_CONS_SCORR:           0.93     # 0.93 | 0.90-1.0.  knn pass: fiber-refine's shape-distinctness twin guard.
                                   #   1.0 disables it and measured 32,843 relabels vs 488 at 0.93 -- keep it.
 FK_CONS_OFF_THR:         0        # 0 | 0 or 0.2-0.3.  knn pass: inter-channel-timing co-veto (0 = off).
+FK_CONS_SHED_K:          3.0      # 3.0.  shed pass (FK_CONS_MODE shed, opt-in): a cluster's own spikes whose distance
+                                  #   to its template exceeds median + K x 1.4826 x MAD of the cluster's own distances
+                                  #   are parked in the reserve (cluster 1).  Terminal-curation dial only.
+FK_CONS_SHED_MIN:        40       # 40.  shed pass: clusters below this many spikes are not shed.
 
 
 # ============================================================================
@@ -879,7 +888,7 @@ FK_LINK_VAR_ALLOW:       ""       # "" = self-calibrate at link time from the hi
 
 
 # ============================================================================
-#  [B] STAGES NOT IN THE EMBEDDED PLAN  (direct CLI runs / other plans read these)
+#  [B] OTHER STAGES  (fiber-flag-artifacts = plan step `flag`, fiber-xcorr-merge = `merge`; the rest: CLI/other plans)
 # ============================================================================
 # ----- fiber-refine : split + fold gates + merge-back ----------------------
 FK_REFINE_LARGE:         100      # 150 | 100-300.  Split only clusters with >= this many spikes (need enough to
@@ -1061,6 +1070,12 @@ FK_XCM_CX_SCALE:         0.0      # 0.0 | 0.0-1.0.  COMPLEXITY scaling: raise th
                                   #   (shift-insensitive) pairs -- their high roll-shift cosine is weak evidence (the best
                                   #   circular shift inflates it).  0=off.  Moderate signal on g5 (AUC 0.73 correct-vs-
                                   #   over-merge) but a MILD practical effect; opt-in and tune on review.
+FK_XCM_MERGE_ALIGN:      peak     # peak | klusters.  How each cluster's template sample is aligned: peak = every
+                                  #   spike to its own peak; klusters = every spike to the cluster template by xcorr, as
+                                  #   Klusters' realign does (a merged cluster gets one consistent alignment).
+FK_XCM_MERGE_ALIGN_MIN_SCORE: 0.10 # 0.10 | 0.10-0.70.  xcorr threshold of --merge-align klusters: a spike below it
+                                  #   stays put.  0.70 is Klusters' factory value, at which 26-94% of the spikes of large
+                                  #   or dirty g6 units stayed 2-3 samples behind (0.53.0).
 #  BACKBONE-LINK route (direct-CLI; the pipeline runner does not yet dispatch fiber-backbone-link):
 #    fiber-session -> fiber-realign -> fiber-cpos (spk: standard) -> fiber-backbone-link
 #    FK_CONFIG=fiber-kit-exp.yaml fiber-backbone-link <sess> <elec> --gt-clu <curated>   # -> .clu...backbone_linked
@@ -1108,6 +1123,9 @@ FK_BBLINK_DRIFT:         1        # 1 | 0/1.  Consume fiber-session's OVERLAP-AN
                                   #   Unlike the precision gates this is a RECALL mechanism, so watch for OVER-merges: check
                                   #   drift_resid / drift_nanchor in the .fibers (few chunk-pairs / high residual = the
                                   #   transform is weak -- do not trust it) and score against a curated .clu.  Set 0 to disable.
+FK_BBLINK_DRIFT_RECENTER: 1       # 1 | 0/1.  Re-center the anchored atom templates to a shared sub-sample frame
+                                  #   before the drift fit (needs >= 3 anchored atoms): a per-cluster centering offset
+                                  #   would otherwise read as drift.  0 = fit on the templates as centred per cluster.
 
 # ----- fiber-stochastic : ensemble/consensus DIAGNOSTIC (fiberens.npz) -----------
 FK_STOCH_DRAWS: 20            # resampled draws per chunk
@@ -1152,6 +1170,9 @@ FK_SESSION_EXCLUDE:      1        # 0 | 0/1.  1 = fiber-session passes --exclude
 FK_ALINK_ARTIFACT:       0        # 0 | 0/1.  1 = fiber-anchor-link passes --artifact-clu <mask>, withholding the
                                   #   masked spikes from --promote-noise so a promoted cell is the genuine
                                   #   unassigned population only.  Set together with FK_SESSION_EXCLUDE.
+FK_ALINK_FEAT_LAG:       0        # 0 | 3.  fiber-anchor-link: score the cosine term in the lagged-PC1 feature space at
+                                  #   this lag (global .pca basis) instead of on the raw template.  0 = raw template.
+                                  #   Lag 3 on the reference session: AUC 0.931 -> 0.990 against its overlap anchors.
 
 # ============================================================================
 #  [C] FIBER-CONSENSUS -- clean before merging (.fiber_session -> .fs_clean, quarantine-only), or review
@@ -1272,6 +1293,8 @@ FK_LOWMIX_REFRAC_MIN_EXP: 3.0     # 3.0.  Expected coincidences needed for the t
 FK_LOWMIX_COPY_ON_ABSTAIN: 0      # 0 | 1.  1 = shape alone returns an underpowered copy (g6: half are not the same neuron).
 FK_LOWMIX_NOVEL:         noise    # noise | keep.  noise = novel groups to cluster 1, each a reviewable .clc child.
 FK_LOWMIX_SEED:          0
+FK_LOWMIX_SIGNAL:        ""       # "" = <session>.fil | path.  The continuous filtered int16 file fiber-lowmix measures
+                                  #   the noise on (fiber-pipeline passes it as --signal).
 
 # ============================================================================
 #  [E] FIBER-RDR -- contamination QC from the residual's temporal derivative  (plan step `rdr`, last)

@@ -12,6 +12,7 @@ follow: exit non-zero on failure.
 
 Also runs the checks that are not test files:
   * tools/gen_stages_doc.py --check --template  (docs/plans match the parsers)
+  * tools/gen_config_doc.py --check  (docs/config.md matches the yaml; every knob read is listed)
   * ruff, when installed, using the config already in pyproject.toml
 
 Usage:
@@ -84,6 +85,9 @@ def main():
     if os.path.exists(gen) and not (a.fast and "gen_stages_doc --check" in SLOW_EXTRA):
         checks.append(("gen_stages_doc --check",
                        [sys.executable, gen, "--check", "--template"]))
+    gcd = os.path.join(ROOT, "tools", "gen_config_doc.py")
+    if os.path.exists(gcd):
+        checks.append(("gen_config_doc --check", [sys.executable, gcd, "--check"]))
 
     if subprocess.run(["which", "ruff"], capture_output=True).returncode == 0:
         # Advisory unless --strict-lint.  There are ~90 findings after the config

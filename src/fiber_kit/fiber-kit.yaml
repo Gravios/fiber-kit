@@ -75,7 +75,7 @@ FK_SESSION_SKIP_EXTANT:  0        # 0 | 0/1.  1 = fiber-session checks the exact
                                   #   one.  Delete the file, or FK_SESSION_SKIP_EXTANT=0 (env overrides this yaml),
                                   #   to force a rebuild.  0 = always rebuild (historical behaviour).
 FK_SESSION_FINE_METHOD:  rkk      # rkk | gmm | fiber | none.  Per-fiber fine clusterer.  rkk (default) = masked-EM
-                                  #   KlustaKwik with per-cluster realign + BIC model selection (robust to unequal
+                                  #   KlustaKwik with per-cluster realign + AIC model selection (FK_SESSION_RKK_PENALTY_MIX; robust to unequal
                                   #   covariances); gmm = Gaussian-mixture split; fiber = fiber-kit's native cluster_chunk;
                                   #   none = no fine split (keep the coarse cluster whole).  Categorical.
 FK_CHUNKS:               ""       # "" = every chunk | e.g. 14-16 or 3,7,10-12 (0-based, FK_SESSION_CHUNK_MIN long, counted
@@ -266,11 +266,13 @@ FK_REFINE_MERGE_BUDGET:  1.0      # 1.0 | 0.5-1.0.  Merge-back refractory budget
 FK_REALIGN_AFTER:        "fiber-refine fiber-peel fiber-intrachunk fiber-link"  # stages after which to re-roll each
                                   #   new group's spikes onto its unit template (Klusters method).  A split/merge across
                                   #   drift leaves a group's troughs spread; a per-unit realign re-tightens them.  Set ""
-                                  #   to disable.  (fiber-session commits its own at the end of its run: FK_SESSION_REALIGN.)
-FK_REALIGN_AFTER_MODE:   shift-spk  # shift-spk | reextract.  shift-spk circular-rolls the existing .spk (no .fil, fast,
+                                  #   to disable.  CANONICAL (stage-list) mode only -- with the embedded plan above, its own
+                                  #   fiber-realign steps decide, and these three knobs are not read.  (fiber-session
+                                  #   commits its own at the end of its run: FK_SESSION_REALIGN.)
+FK_REALIGN_AFTER_MODE:   shift-spk  # canonical mode only.  shift-spk | reextract.  shift-spk circular-rolls the existing .spk (no .fil, fast,
                                   #   validated trough-std 2.00->1.05); reextract re-reads the .fil (recovers samples that
                                   #   drifted out of the extraction window, at the cost of .fil I/O each step).
-FK_REALIGN_FINAL_MODE:   reextract  # mode for the LAST realign of the run (the artefacts that go to curation): reextract
+FK_REALIGN_FINAL_MODE:   reextract  # canonical mode only.  Mode for the LAST realign of the run (the artefacts that go to curation): reextract
                                   #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).
 FK_REALIGN_VARIANT:      ""       # "" | e.g. stderiv_C5.  THE session method token: what fiber-realign aligns and

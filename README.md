@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.21.0-orange)
+![version](https://img.shields.io/badge/version-0.56.4-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -380,51 +380,66 @@ chunks shade by time. Writes `.gif`, or `.mp4` if ffmpeg is present.*
 
 ## CLI reference
 
-`fiber-session <base> <elec>` (key flags; see `--help` for all):
+Every command's flags and defaults are in **[docs/stages.md](docs/stages.md)**, generated from the
+argument parsers (`tools/gen_stages_doc.py`; run_all checks it).  `fiber-<stage> --help` prints the same.
+The `FK_*` knobs that set those defaults are in **[docs/config.md](docs/config.md)**, generated from the
+shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<stage> ...]`
+([docs/pipeline.md](docs/pipeline.md)).
 
-| Flag | Default | Purpose |
-|------|---------|---------|
-| `<session>` `<group>` | — | positional: session (finds `<session>.yaml`) and 1-based group |
-| `--channels` / `--ntotal` / `--nchan` / `--nsamp` / `--sr` | from YAML | override the YAML-derived probe geometry & sampling |
-| `--chunk-min` / `--overlap-min` | 12 / 4 | chunk length & overlap (minutes) |
-| `--min-group` | 200 | coarse min spikes/fiber (linking anchors) |
-| `--fine-algo` (`--fine-method`) | `gmm` | `rkk` \| `gmm` \| `fiber` \| `none` |
-| `--inclusion-k` | 3.0 | per-fiber radius = `median + k·MAD`; `0` disables |
-| `--merge-algo` (`--merge-method`) | `template` | `template` \| `sliding` \| `profile` |
-| `--merge-corr` | 0.0 | consolidation threshold (`0`=off; ~0.95 template / ~0.90 sliding) |
-| `--profile-thr` / `--profile-floor-pct` / `--profile-min-n` | auto / 90 / 120 | profile-merge threshold, auto-floor percentile, min spikes to be a merge anchor |
-| `--emit-merge-candidates` | off | write proposals, don't merge (curation) |
-| `--collision-flag` | off | route recoverable collisions to a dedicated cluster |
-| `--quality-metrics` / `--quality-dims` | off / 10 | L-ratio + isolation distance (O(N·K)) |
-| `--adapt-clean` | off | reject high-energy-at-short-ISI on real fast adapters |
-| `--no-link` / `--no-fine` / `--no-dipsplit` | off | disable linking / refinement / DipSplit |
-| `--jobs` / `-j` | 1 | parallel worker processes over chunks (chunks are independent; output is identical to serial) |
-| `--gpu` | off | run the realign / whiten / tracer-residual kernels on GPU via CuPy (needs the `[gpu]` extra; falls back to CPU if unavailable) |
-
-For **every** stage's full parameter list (~36 `fiber-*` commands, ~700 parameters), see
-**[docs/stages.md](docs/stages.md)** or run `fiber-<stage> --help`.  Stages added since the table above:
-
-| Stage | Purpose | Key flags |
-|-------|---------|-----------|
-| `fiber-backbone-link` | link the over-split `fiber_session` output across chunks on the invariant backbone by median±σ **band overlap** + Omlor–Giese warp veto, starting from high-SNR clusters (no refine/intrachunk/cpos needed) | `--min-snr-q` `--z` `--warp-thr` `--amp-thr` `--channels` |
-| `fiber-xcorr-merge` | confidence-ordered Klusters roll-shift-cosine merge, **realign after each merge**, refractory + band-overlap co-gates | `--cos-thr` `--band-thr` `--refrac-ms` `--min-n` |
-| `fiber-intrachunk` | within-chunk merge; shape gate defaults to `--gate band` (median±σ overlap), with `cfiber`/`cosine`/`mmd`/`kcov` alternatives | `--gate` `--band-thr` `--cos-thr` `--off-thr` |
-| `fiber-session --no-noise` | sweep rejected/noise spikes into one **undefined fiber** instead of the noise cluster (`FK_SESSION_NO_NOISE`) | `--no-noise` `--inclusion-k` |
-
-Run stages in the pipeline with `fiber-pipeline <elec> <stage> [args…]`; see
-[docs/pipeline.md](docs/pipeline.md).
-
-Other tools: `fiber-validate-merges <base> <elec>`, `fiber-raw-vs-stderiv <base>
-<elec> --channels ... --ntotal ...`, `fiber-chan-svd <session> <group>`
-(per-channel SVD of the cluster templates — ranks which channels are invariant
-vs vary across clusters, a merge/curation aid; plots the first few components of
-each channel; `--within <clu>` instead examines a single unit, splitting its
-spikes into time-ordered sub-templates, and `--local-frac` restricts that to a
-drift-minimal window so the residual per-channel variation is physiological),
-and the visualization front-ends `fiber-view` (static figures),
-`fiber-view-gui` (rotatable bundle table), and `fiber-view-tour`
-(interesting-projection tour video) — see
-[Visualization](#visualization-fiber-view).
+| command | what it does |
+|---|---|
+| `fiber-session` | Cluster a session group into fibers. |
+| `fiber-stochastic` | Ensemble fibering by resampling: a diagnostic of how stable a sort is (not a pipeline stage). |
+| `fiber-raw-vs-stderiv` | Raw .fil vs stderiv discrimination of the original fibers. |
+| `fiber-chan-svd` | Per-channel SVD/PCA of cluster mean templates: which channels are invariant vs vary across the clusters (a merge/curation aid). |
+| `fiber-validate-merges` | Full-session evidence for proposed same-neuron merges. |
+| `fiber-refiber` | Re-fiber microfiber atoms (.clc) into fibers by raw position + template shape. |
+| `fiber-microfiberize` | Lift a flat .clu fiber sort into the microfiber triple (.clc atom layer + .clp child->parent map) so it opens in the Klusters hierarchical / ... |
+| `fiber-relink` | Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed). |
+| `fiber-realign` | Per-spike Klusters-style realignment + corrected .res spike times, with optional re-extraction from .fil and re-featurisation (commit-and-reextract ... |
+| `fiber-localize` | Localize fibers (distance + depth + orientation) from raw waveform spread. |
+| `fiber-cpos` | Write a per-spike cluster-position sidecar (.cpos) by localizing each cluster's median RAW template (monopole+dipole). |
+| `fiber-decollide` | Write collisions resolved by matching pursuit back to a derived stage. |
+| `fiber-envelope` | Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision ... |
+| `fiber-consensus` | Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in ... |
+| `fiber-lowmix` | Split low-amplitude units that are mixtures of sources; return the parts that copy existing units. |
+| `fiber-template` | Linked per-unit median templates (one .wtf per variant, indexed by .wti) along time or energy. |
+| `fiber-link` | Link per-chunk fragments into tracked units (position fingerprint + A anchor + template co-gate). |
+| `fiber-backbone-link` | Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. |
+| `fiber-anchor-link` | Link fiber-session fragments across chunks, SEEDED by the overlap anchors (links established from the same physical spikes in the chunk overlap, ... |
+| `fiber-adlp` | Amplitude-dependent low-pass of the spike snippets, written as a new waveform variant: every spike gets a zero-phase low-pass whose cutoff is a power ... |
+| `fiber-flag-artifacts` | Flag acquisition artifacts before clustering from the unwhitened temporal derivative (an exclusion mask .clu). |
+| `fiber-xcorr-merge` | Confidence-ordered Klusters roll-shift cosine merge (realign after each merge). |
+| `fiber-cfiber` | Complex-fiber drift/identity test: per curated unit, bin by time and report whether the affine-invariant loop SHAPE stays flat (identity) while the ... |
+| `fiber-intrachunk` | Collapse over-split fragments within each chunk into units (stderiv cosine + offset + depth). |
+| `fiber-pca` | neurosuite-3 .pca/.pcaD basis: fit a per-channel PCA basis from .spk+.clu and write the binary, or inspect one. |
+| `fiber-branch` | Flag units whose spikes branch off the single fiber d(r) (a second, energy-independent, depth-coherent waveform class). |
+| `fiber-drift` | Track probe drift over time from the fiber files of a probe's groups. |
+| `fiber-position` | Per-spike drift-independent position along the fiber manifold (from a .fibers file). |
+| `fiber-refine` | Dedup at the imposed refractory, then iteratively split/peel a fine sort into clean units. |
+| `fiber-peel` | Consolidate over-split refine fragments by footprint cosine gated by the refractory cross-CCG. |
+| `fiber-reject` | Reassign per-cluster outlier spikes to a better-fitting cluster or to noise. |
+| `fiber-stats` | Extract per-(chunk,cluster) fiber statistics from an existing sort (no re-clustering). |
+| `fiber-contam` | Contamination QC for an existing sort: flag two-cell mixtures that ISI checks miss, via the per-channel derivative-distribution bimodality of the ... |
+| `fiber-rdr` | Per-cluster contamination score from the RMS of the residual's temporal derivative (a QC table). |
+| `fiber-bench` | Run, score and compare pipeline-parameter variants under a config hash. |
+| `fiber-defrag` | De-fragment an over-clustered sort: reunite a neuron's drift/amplitude fragments by mutual-nearest-neighbour template merging, gated by cosine AND ... |
+| `fiber-calibrate` | Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`. |
+| `fiber-score` | Score a candidate .clu against a ground-truth .clu (ARI, V-measure, pairwise precision/recall, per-unit and split/merge diagnostics). |
+| `fiber-ccg` | Refractory QC for a group's clustering: per-cluster ISI-violation fraction, and the cluster pairs whose refractory cross-correlogram shows a dip ... |
+| `fiber-refit` | Refit the fiber model (per-unit, per-chunk templates / positions / signatures) to a MANUALLY CURATED .clu, taking the curator's grouping as final (no ... |
+| `fiber-refiberize` | Edit the fiber<-microfiber hierarchy and regenerate the aligned .clu/.clc/.clp from the child->parent map. |
+| `fiber-qc` | Per-group QC report (rate, ISI violation, SNR, amplitude, presence) rendered as an interactive HoloViz/Bokeh HTML, with a metrics CSV. |
+| `fiber-plan-lint` | Statically check plans: stage names, tag wiring, cycles, unknown or mistyped param flags. |
+| `fk` | Plan steps by name: `fk list` / `fk run <elec> <step>...` over the plan fiber-pipeline would run. |
+| `fiber-view` | Visualise fibers: template montages, a 3-D manifold of local fiber curves, and ISI/geometry panels. |
+| `fiber-view-gui` | A standalone, rotatable bundle viewer. |
+| `fiber-view-tour` | Interesting-projection tour video of the fibers. |
+| `fiber-plan-edit` | Qt editor for pipeline plans. |
+| `fiber-kit-init` | Copy the template fiber-kit.yaml (fiber-pipeline tuning config) into the current directory. |
+| `fiber-morpho` | Morphology modelling experiments (sub-commands; each writes an .npz beside its report). |
+| `fiber-morpho-fetch` | Acquire, validate and record the provenance of neuron reconstructions. |
+| `ndm_fiber-kit` | The ndmanager plugin entry: runs fiber-kit steps from NDManager (`--ndm-version` prints the format versions). |
 
 ## Python API
 
@@ -470,34 +485,18 @@ aren't re-attempted:
 ## Project layout
 
 ```
-src/fiber_kit/
-  neuro_io.py         neurosuite-3 on-disk I/O: variant resolution, .res/.clu/.fet/.spk readers+writers
-  backend.py          optional CuPy GPU shim for the realign/whiten kernels (numpy default)
-  fiber_lib.py        primitives: whitener, realign, features, constants
-  fiber_tracer.py     trajectory(), predict(), assign, temperature calibration
-  klustakwik.py       standalone KlustaKwik CEM (the "rkk" split)
-  fiber_adapt.py      EWMA adaptation fit / residual / de-adapt
-  fiber_collision.py  collision templates, matching-pursuit decompose/detect
-  fiber_deconv.py     detection-anchored sub-sample template deconvolution (fiber-session --deconv)
-  laplacian_link.py   curve-continuity fragment linking; energy-banding report
-  fiber_session.py    pipeline + CLI (cluster_chunk_fine, link, I/O, main)
-  fiber_localize.py   monopole+dipole physical localization from raw waveform spread
-  fiber_drift.py      probe drift tracking from fiber depth trajectories
-  fiber_position.py   drift-independent per-spike normalized position along the fiber manifold
-  fiber_refine.py     iterative split/merge/refit refinement + drift-aware chunked mode + geometry/bundle export
-  fiber_view.py       visualization data layer + matplotlib figures (templates, manifold, bundles, isosurfaces, tour)
-  fiber_view_gui.py   PySide6 + pyqtgraph: selectable bundle table -> rotatable 3-D view, mix sliders, tour button
-  raw_vs_stderiv.py   raw .fil vs stderiv discrimination test
-  validate_merge_candidates.py  full-session evidence for merge candidates
-  WORKFLOW.md         end-to-end recipe (also shipped as package data)
-test/
-  run_all.py          every check: test_*.py (discovered), the stage-doc drift
-                      check, ruff (advisory)
-  test_*.py           one check each; exit non-zero on failure
-  *_vectors.tsv       tables shared byte for byte with neurosuite-3
-  verify_optimizations.py  regression + rig verification (equality, parallel,
-                           GPU) for the vectorized/parallel kernels; `--bench`
-                           prints speedups, `--gpu` checks the CuPy path
+src/fiber_kit/         the package: one module per command (fiber_<stage>.py; see the table above),
+                       plus the shared layers --
+                         neuro_io.py   neurosuite-3 on-disk formats (atomic writers, variant resolution)
+                         config.py     FK_* knobs: precedence, YAML 1.2 loading, validation
+                         fiber_lib.py, fiber_geometry.py, fiber_tracer.py   primitives
+                         fiber-kit.yaml, fiber-kit-exp.yaml   the shipped configs (with their plans)
+scripts/               fiber-pipeline (the runner), fiber-pipeline-editor
+plans/                 example plans; TEMPLATE-all-stages.yaml lists every stage's defaults (generated)
+docs/                  stages.md and config.md (generated), pipeline.md, methods.md, bench.md, ...
+tools/                 gen_stages_doc.py, gen_config_doc.py, and one-off analysis scripts
+test/                  run_all.py, test_*.py (one check each), the *_vectors.tsv tables shared with
+                       neurosuite-3, verify_optimizations.py (kernel equality / GPU / --bench)
 ```
 
 ## Tests
