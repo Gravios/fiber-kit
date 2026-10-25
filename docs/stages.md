@@ -1234,6 +1234,18 @@ Positional: `session`, `elec`
 | `--line` | `""` | FK_RDR_LINE: fixed clean line D0SQ,K instead of fitting it |
 | `--out` | — | output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv) |
 | `--seed` | `0` |  |
+### `fiber-bench`
+
+Run, score and compare pipeline-parameter variants under a config hash.  Sub-commands `run` (the config's
+plan up to `--upto`, one run per `--set`/`--grid`/`--sweep` variant, every clustering step's output tagged
+`<out>_<hash>`; fiber-session's in-place realign forced off), `score` (truth metrics per truth unit, typed
+pyramidal / interneuron, and truth-free per-cluster measures), `report` (HTML) and `list`.  See
+[bench.md](bench.md).
+
+Positional: `cmd`
+
+| flag | default | description |
+|---|---|---|
 ### `fiber-envelope`
 
 Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table (with the cell layer: amplitude-dependent shape, adaptation law, spike width / burst / rate), the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. `--merge THETA` also merges units on envelope d' with merge inflation as a cannot-link and writes a `.envmerge` clu stage plus the per-pair evidence. See docs/methods.md, "Collision-robust envelope" and "Cell layer".

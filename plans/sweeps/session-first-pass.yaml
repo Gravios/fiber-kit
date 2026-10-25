@@ -1,0 +1,19 @@
+# fiber-bench sweep: a first, one-knob-at-a-time pass over fiber-session.
+#   fiber-bench run <session> <elec> --config src/fiber_kit/fiber-kit-exp.yaml --sweep plans/sweeps/session-first-pass.yaml
+# Each entry is one variant (overrides on top of the base config); the base config itself is the
+# reference, so every variant below changes ONE knob from its fiber-kit-exp.yaml value.  A dict of
+# lists here instead would be a cartesian grid.
+- {}                                        # the base config (reference)
+- {FK_SESSION_COARSE_DR: 0.10}              # base 0.15: narrower amplitude bands -> more, tighter coarse fibers
+- {FK_SESSION_COARSE_DR: 0.20}
+- {FK_SESSION_INCLUSION_K: 2.5}             # base 2.0: wider per-fiber core
+- {FK_SESSION_INCLUSION_K: 3.0}
+- {FK_SESSION_DIP_ALPHA: 0.01}              # base 0.02: fewer dip bisections
+- {FK_SESSION_DIP_ALPHA: 0.03}
+- {FK_SESSION_DIP_DIM: 6}                   # base 4
+- {FK_SESSION_RESPLIT_PASSES: 0}            # base 3: no residual-gated re-split
+- {FK_SESSION_RESPLIT_PASSES: 5}
+- {FK_EBAND: 0}                             # base 1: no energy-band split
+- {FK_SESSION_CHUNK_MIN: 8}                 # base 12: shorter chunks (less drift inside one)
+- {FK_SESSION_CHUNK_MIN: 16}
+- {FK_SESSION_RKK_PENALTY_MIX: 1}           # base AIC (0): BIC in the per-fiber KlustaKwik

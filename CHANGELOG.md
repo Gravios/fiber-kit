@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.55.0] — fiber-bench: parameter variants under a config hash
+- `fiber-bench` (new; docs/bench.md).  `run` executes a config's plan (default: up to fiber-session) for
+  every `--set` / `--grid` / `--sweep` variant; each clustering step writes under `<out>_<hash>`, the hash
+  covering the FK_* knobs that stage reads, its plan params, the method token and the hash of its input
+  step -- so equal parameters reuse the cached output, a downstream knob leaves upstream outputs alone,
+  and an upstream knob re-tags everything after it.  Each run gets its own config and log under
+  `fk-bench/runs/<hash>/`, runs with FK_* stripped from the environment, and is registered in
+  `fk-bench/runs.jsonl` with its overrides, timing and fiber-kit version.  fiber-session's end-of-run
+  realign (which rewrites the shared .res/.spk in place) is forced off unless `--keep-realign`.
+- `score`: against a curation, per truth unit the best cluster's accuracy, recall, precision, frag80
+  and the merges, typed pyramidal / interneuron (rate >= 5 Hz or `--interneurons`); truth-free per
+  cluster: size, ISI violations, fiber-rdr score, gain IQR, RVU -- and their AUC for impure clusters.
+  On the reference g7 data it reproduces the tuning scorer (accuracy 0.3651 vs 0.3655; 11 of 150,243
+  spikes matched differently) and types units 6 and 22 as the interneurons.
+- `report`: sortable table, pyramidal accuracy vs false pyramidal merges, per-parameter effects, a
+  per-unit accuracy heatmap and the truth-free measures against purity, in one HTML file.
+- plans/sweeps/session-first-pass.yaml: a one-knob-at-a-time first pass over fiber-session.
+
 ## [0.54.0] — fiber-rdr: lower-envelope line, in the exp plan
 - fiber-rdr fits the clean line as the 0.25 QUANTILE REGRESSION of median D² on A² (`--fit quantile`,
   `--fit-quantile`), the lower envelope: contamination only raises D.  The 0.53.0 least-squares fit with a
