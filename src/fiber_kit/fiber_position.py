@@ -44,8 +44,10 @@ import numpy as np
 
 try:
     from . import fiber_lib as fl
+    from . import fiber_chunks as _fch
 except ImportError:
     import fiber_lib as fl
+    import fiber_chunks as _fch
 try:
     from . import fiber_relink as frl
 except ImportError:
@@ -205,7 +207,7 @@ def run(base, elec, fibers_file, nsamp, nchan, ntotal, gch, sr, clu_path=None,
     t0, t1 = int(res.min()), int(res.max())
     nchunks = max(1, int(np.ceil((t1 - t0) / chunk_s)))
     for c in range(nchunks):
-        lo = t0 + c * chunk_s; hi = t0 + (c + 1) * chunk_s
+        lo = t0 + c * chunk_s; hi = _fch.chunk_hi(c, t0, chunk_s, nchunks)
         sel = np.flatnonzero((res >= lo) & (res < hi))
         if len(sel) < min_n:
             continue

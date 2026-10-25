@@ -41,11 +41,13 @@ try:
     from . import fiber_lib as fl
     from . import fiber_session as fsess
     from . import config as cfgmod
+    from . import fiber_chunks as _fch
 except ImportError:
     import neuro_io as nio
     import fiber_lib as fl
     import fiber_session as fsess
     import config as cfgmod
+    import fiber_chunks as _fch
 
 _POOL_CFG = None                     # stashed chunk-worker cfg so parallel draws can init pool workers
 
@@ -358,7 +360,7 @@ def run_stochastic(a):
 
     for ci, c in enumerate(chunks):
         _tc = _time.time()
-        lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
+        lo_s = t_min + c * chunk_s; hi_s = _fch.chunk_hi(c, t_min, chunk_s, nchunks)
         ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s))
         if len(ext) < 2 * a.min_group:
             _plog(f"  [{ci + 1:>3}/{len(chunks)}] chunk {c:>3}: {len(ext):>6} ext spikes — skipped (< {2 * a.min_group})")

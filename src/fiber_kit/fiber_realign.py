@@ -746,6 +746,48 @@ def write_outputs(base, elec, off, res_corr, out_res=None, out_off=None):
     return out_res, out_off
 
 
+# ── commit journal ──────────────────────────────────────────────────────────
+# A commit rewrites every waveform variant and then the shared .res.  A run that dies in between leaves
+# windows that already moved beside the old .res -- and with --shift-spk (a relative roll) a re-run cannot
+# tell: it measures ~0 shift on the moved windows and leaves them moved.  So the commit keeps a journal
+# (<base>.realign[.<variant>].<group>[.<tag>].pending.npz: the corrected times, the offsets, the mode, the
+# variants planned and done).  A run that finds one first finishes THAT commit -- the variants not yet
+# written, the lag-alias .fet, then the .res -- and then runs the alignment it was asked for.
+
+def _journal_path(base, group, tag):
+    return nio.session_path(base, "realign", group, tag=tag or "") + ".pending.npz"
+
+
+def _journal_save(path, res_corr, off, ioff, **meta):
+    import json
+    with nio.atomic_write(path) as fh:
+        np.savez(fh, res_corr=np.asarray(res_corr, np.int64), off=np.asarray(off, np.float32),
+                 ioff=np.asarray(ioff, np.int32), meta=np.array(json.dumps(meta)))
+
+
+def _with_done(refreshed, R, base, group, nsamp, nch):
+    """On a resumed commit the variants written before the interruption are on disk, already moved: read
+    them back so the lag-alias .fet refresh sees every committed variant."""
+    if R is None:
+        return refreshed
+    out = dict(refreshed)
+    for v in R["done"]:
+        if v not in out:
+            try:
+                out[v] = np.asarray(open_waveforms(base, group, nsamp, nch, v)[0])
+            except Exception:  # noqa: BLE001 -- a variant without a .spk has no alias to refresh
+                pass
+    return out
+
+
+def _journal_load(path):
+    import json
+    with np.load(path, allow_pickle=False) as z:
+        st = dict(res_corr=z["res_corr"], off=z["off"], ioff=z["ioff"])
+        st.update(json.loads(str(z["meta"])))
+    return st
+
+
 def main(argv=None):
     """CLI entry point.  `argv` (default sys.argv[1:]) lets fiber-session run the same commit
     in-process at the end of a sort (fiber_session --realign), flag for flag."""
@@ -915,7 +957,23 @@ def main(argv=None):
                     f"aligned at {wi.index}; --shift-spk keeps that geometry (re-cut with --reextract or --recut)")
             win_note = (f".spk.{wi.variant}: the spike time at index {wi.index}, NOT the group's {tp} "
                         f"({wi.frac:.0%} of {wi.n} sampled windows re-cut identically): {what}")
-    if a.recut:
+    J = _journal_path(base, group, a.out_tag)
+    R = _journal_load(J) if (os.path.exists(J) and not a.check) else None
+    if R is not None:
+        # finish the interrupted commit exactly as it was planned, with its own offsets; no new alignment
+        res_corr, off, ioff = R["res_corr"], R["off"], R["ioff"]
+        res = res_corr
+        if nio.read_res(base, group).size != res_corr.size:
+            raise SystemExit(f"[realign] {J}: an interrupted commit of {res_corr.size:,} spikes, but the .res "
+                             "now has another count -- remove the journal only if you know the group is consistent")
+        labels = None
+        a.emit_clu = False
+        a.shift_spk, a.reextract = R["mode"] == "shift", R["mode"] == "reextract"
+        a.refeaturize = bool(R["refeaturize"])
+        left = [v for v in R["want"] if v not in R["done"]]
+        _log(f"finishing an interrupted commit ({os.path.basename(J)}): {len(R['done'])} variant(s) already "
+             f"written, {len(left)} left ({', '.join(left) or 'none'}), then the .res")
+    elif a.recut:
         res = np.asarray(nio.read_res(base, group), np.int64)
         off = np.zeros(res.size, np.float32); ioff = np.zeros(res.size, np.int32); res_corr = res.copy()
         labels = nio.read_clu_file(a.clu, n_spikes=res.size)[1] if a.clu else None
@@ -994,7 +1052,11 @@ def main(argv=None):
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
         refreshed = {}                                     # resolved token -> committed waveform
         want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
+        want, done = (list(R["want"]), list(R["done"])) if R is not None else (want, [])
+        _journal_save(J, res_corr, off, ioff, mode="shift", want=want, done=done, refeaturize=bool(a.refeaturize))
         for v in want:
+            if v in done:
+                continue
             try:
                 spk_v, _r = open_waveforms(base, group, nsamp, nch, v)
             except Exception:
@@ -1016,12 +1078,17 @@ def main(argv=None):
                     basis = fpca.read_pca(base, group, prefer=[vout, "standard", ""]
                                           if nio.variant_family(vout) == "standard" else [vout, "D"])
                 except FileNotFoundError:
-                    _det("fet", f"no .pca basis for {vout}; .fet not written"); continue
-                fet = refeaturize(wav, res_corr, basis)
-                fet_out = nio.write_fet(base, group, fet, variant=vout, tag=a.out_tag)
-                _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+                    basis = None
+                    _det("fet", f"no .pca basis for {vout}; .fet not written")
+                if basis is not None:
+                    fet = refeaturize(wav, res_corr, basis)
+                    fet_out = nio.write_fet(base, group, fet, variant=vout, tag=a.out_tag)
+                    _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+            done.append(v)
+            _journal_save(J, res_corr, off, ioff, mode="shift", want=want, done=done, refeaturize=bool(a.refeaturize))
         if a.refeaturize:
-            _refresh_lag_alias_fets(base, group, refreshed, res_corr, a.out_tag)
+            _refresh_lag_alias_fets(base, group, _with_done(refreshed, R, base, group, nsamp, nch), res_corr,
+                                    a.out_tag)
     elif a.reextract or a.refeaturize:
         fil = a.fil or f"{base}.fil"
         filmm = nio.open_signal(fil, cfg["ntotal"])
@@ -1045,7 +1112,12 @@ def main(argv=None):
         # what makes the refusal below reachable at all.
         want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
         refreshed = {}                                     # resolved token -> committed waveform
+        want, done = (list(R["want"]), list(R["done"])) if R is not None else (want, [])
+        _journal_save(J, res_corr, off, ioff, mode="reextract", want=want, done=done,
+                      refeaturize=bool(a.refeaturize))
         for v in want:
+            if v in done:
+                continue
             wav = _derive_from_fil(v, raw_ext, cfg, group)
             if wav is not None:
                 how = f"re-extracted {len(wav):,} {v} spikes from {fil}"
@@ -1068,17 +1140,23 @@ def main(argv=None):
                     basis = fpca.read_pca(base, group, prefer=[v, "standard", ""] if v == "standard"
                                           else [v, "D"])
                 except FileNotFoundError:
-                    _det("fet", f"no .pca basis for {v}; .fet not written"); continue
-                fet = refeaturize(wav, res_corr, basis)
-                fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
-                _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+                    basis = None
+                    _det("fet", f"no .pca basis for {v}; .fet not written")
+                if basis is not None:
+                    fet = refeaturize(wav, res_corr, basis)
+                    fet_out = nio.write_fet(base, group, fet, variant=v, tag=a.out_tag)
+                    _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
+            done.append(v)
+            _journal_save(J, res_corr, off, ioff, mode="reextract", want=want, done=done,
+                          refeaturize=bool(a.refeaturize))
         if a.refeaturize:
-            _refresh_lag_alias_fets(base, group, refreshed, res_corr, a.out_tag)
+            _refresh_lag_alias_fets(base, group, _with_done(refreshed, R, base, group, nsamp, nch), res_corr,
+                                    a.out_tag)
 
-    # COMMIT POINT -- written LAST, after every .spk/.fet/.clu above.  A run that dies earlier leaves
-    # windows that already sit at the corrected times beside the old .res: a re-run measures ~0 shift on
-    # them and re-cuts them at the old times, so the group is consistent again.  Writing the .res first
-    # (as up to 0.56) left shifted times beside the old windows, and the re-run shifted them twice.
+    # COMMIT POINT -- written LAST, after every .spk/.fet/.clu above, and then the journal is removed.  A
+    # run that dies earlier leaves the journal; the next run finishes this commit from it (see
+    # _journal_path).  Writing the .res first (as up to 0.56) left shifted times beside the old windows,
+    # and a re-run shifted them twice.
     # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
     # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose
     # res is .res.stderiv.N under a stderiv_C5 clu (out_variant=stderiv_C5) spawns a SECOND .res.stderiv_C5.N
@@ -1089,9 +1167,14 @@ def main(argv=None):
     np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
     if a.out_res:                                          # optional extra explicit copy
         nio.write_res_file(a.out_res, res_corr)
+    if os.path.exists(J):
+        os.remove(J)                                       # the commit is complete
     _log("committed timestamps")
     _det("res", f"{res_out}   (variant {out_variant or 'canonical'}, "
                 f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
+    if R is not None:                                      # the interrupted commit is finished: now the run
+        _log("interrupted commit finished; running the requested alignment")   # that was asked for
+        main(argv)
 
 
 if __name__ == "__main__":

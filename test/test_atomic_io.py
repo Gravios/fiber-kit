@@ -113,6 +113,21 @@ def main():
         after = {f: read_bytes(os.path.join(d, f)) for f in files(d)}
         check(raised, "raises")
         check(after == before, f"every file unchanged, none quarantined, no temp left ({files(d)})")
+        real_replace = os.replace
+        def flaky(src, dst):                               # the .spk cannot be moved in (Windows: mapped)
+            if str(src).endswith(".dedup.tmp") and str(dst).endswith(".spk.standard.1"):
+                raise PermissionError(13, "The process cannot access the file")
+            return real_replace(src, dst)
+        nio.os.replace = flaky
+        try:
+            nio.apply_spike_keep(b, 1, keep, res.size, T, C, verbose=False); raised = False
+        except RuntimeError:
+            raised = True
+        finally:
+            nio.os.replace = real_replace
+        after = {f: read_bytes(os.path.join(d, f)) for f in files(d)}
+        check(raised and after == before,
+              f"a rename that fails mid-commit is rolled back: every file as it was, nothing left over ({files(d)})")
         nio.apply_spike_keep(b, 1, keep, res.size, T, C, verbose=False)
         check(nio.read_res_file(f"{b}.res.1").size == keep.sum()
               and nio.open_spk_file(f"{b}.spk.standard.1", T, C).shape[0] == keep.sum()
@@ -155,6 +170,41 @@ def main():
         frl.main(realign_args(b, clu))
         again = int(np.count_nonzero(nio.read_res_file(f"{b}.res.1") != res1))
         check(again == 0, f"and a second run moves none ({again})")
+        print("fiber-realign: an interrupted --shift-spk commit is finished from its journal")
+        for f in files(d):
+            os.remove(os.path.join(d, f))
+        b, res, spk = session(d)
+        nio.write_spk_file(f"{b}.spk.stderiv.1", spk // 2)                # a second variant to roll
+        ref = os.path.join(d, "ref"); os.mkdir(ref)
+        for f in ("S.res.1", "S.spk.standard.1", "S.spk.stderiv.1", "S.clu.standard.1"):
+            shutil.copy(os.path.join(d, f), ref)
+        rb = os.path.join(ref, "S")
+        frl.main(realign_args(rb, rb + ".clu.standard.1"))                 # the uninterrupted commit
+        calls = {"n": 0}
+        real = nio.write_spk
+
+        def second_fails(*a, **k):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError(28, "No space left on device")
+            return real(*a, **k)
+        nio.write_spk = second_fails
+        try:
+            frl.main(realign_args(b, b + ".clu.standard.1")); died = False
+        except OSError:
+            died = True
+        finally:
+            nio.write_spk = real
+        jn = [f for f in files(d) if f.endswith(".pending.npz")]
+        check(died and len(jn) == 1, f"the interrupted commit leaves its journal ({jn})")
+        check(np.array_equal(nio.read_res_file(f"{b}.res.1"), res), "and the .res is not written")
+        frl.main(realign_args(b, b + ".clu.standard.1"))                  # finishes it, then aligns again
+        same = (np.array_equal(nio.read_res_file(f"{b}.res.1"), nio.read_res_file(rb + ".res.1"))
+                and all(np.array_equal(np.asarray(nio.open_spk_file(f"{b}.spk.{v}.1", T, C)),
+                                       np.asarray(nio.open_spk_file(f"{rb}.spk.{v}.1", T, C)))
+                        for v in ("standard", "stderiv")))
+        check(same, "the re-run ends where the uninterrupted commit did: same .res, same windows in both variants")
+        check(not any(f.endswith(".pending.npz") for f in files(d)), "and removes the journal")
     finally:
         shutil.rmtree(d, ignore_errors=True)
     print(f"test_atomic_io: {'PASS' if not fails else 'FAIL'} ({fails} failed)")

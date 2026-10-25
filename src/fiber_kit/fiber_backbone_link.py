@@ -328,8 +328,13 @@ def main():
           f"({n_chains} multi-fragment chains) | wrote {os.path.basename(outp)}")
 
     if a.gt_clu:
-        _, gt = (nio.read_clu_file(a.gt_clu, n_spikes=res.size) if os.path.sep in a.gt_clu or a.gt_clu.endswith(".clu")
-                 else nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.gt_clu, n_spikes=res.size))
+        try:                                               # a diagnostic after the output is written: a GT of
+            _, gt = (nio.read_clu_file(a.gt_clu, n_spikes=res.size)    # another spike set is reported, not fatal
+                     if os.path.sep in a.gt_clu or a.gt_clu.endswith(".clu")
+                     else nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.gt_clu, n_spikes=res.size))
+        except ValueError as e:
+            print(f"[backbone-link] GT not scored: {e}")
+            return
         keep = np.isin(fs, ids)
         pur, comp = _score_gt(new, np.asarray(gt), keep)
         print(f"[backbone-link] vs GT: spike-weighted purity {pur:.3f} | per-parent completeness {comp:.3f}")

@@ -107,6 +107,20 @@ def main():
     check("--realign off" in out, "fiber-pipeline passes --realign off from the yaml"
           + ("" if "--realign off" in out else f"  [{[ln for ln in out.splitlines() if '--realign' in ln][:1]}]"))
 
+    print("fiber-pipeline 0/1 switches accept on/off words")
+    sw = write(d, "sw.yaml", "FK_SESSION_LINK: off\nFK_SESSION_CFIBER_GATE: yes\n")
+    e["FK_CONFIG"] = sw
+    r = subprocess.run(["bash", PIPE, "5", "fiber-session", "--dry-run"], cwd=d, capture_output=True,
+                       text=True, env=e, timeout=300)
+    out = r.stdout + r.stderr
+    check(r.returncode == 0 and "--no-link" in out and "--cfiber-gate" in out,
+          "FK_SESSION_LINK: off -> --no-link, FK_SESSION_CFIBER_GATE: yes -> --cfiber-gate")
+    e["FK_CONFIG"] = write(d, "bad_sw.yaml", "FK_SESSION_LINK: maybe\n")
+    r = subprocess.run(["bash", PIPE, "5", "fiber-session", "--dry-run"], cwd=d, capture_output=True,
+                       text=True, env=e, timeout=300)
+    check(r.returncode != 0 and "not a 0/1 switch" in r.stdout + r.stderr,
+          "FK_SESSION_LINK: maybe stops the run")
+
     print("environment over yaml")
     cfg = write(d, "k.yaml", "FK_XCM_COS_THR: 0.96\nFK_RDR_THR: 2.0\nFK_SESSION_OVERLAP_MIN: 4\n"
                              "FK_SESSION_WHITEN_SOURCE: nst\nFK_CHUNKS: '1'\n")

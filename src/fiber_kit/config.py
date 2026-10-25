@@ -104,7 +104,7 @@ def coerce_knob(name, v, typ=str, choices=None, where=""):
             f = float(v)
         except (TypeError, ValueError):
             raise KnobError(f"{name}={v!r}{src} is not an integer") from None
-        if f != int(f):
+        if f != f or f in (float("inf"), float("-inf")) or f != int(f):   # nan, inf, 6.7
             raise KnobError(f"{name}={v!r}{src} is not an integer")
         return int(f)
     if typ is str:

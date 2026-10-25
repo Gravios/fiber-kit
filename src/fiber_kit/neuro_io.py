@@ -224,7 +224,9 @@ def atomic_write(path, mode="wb"):
     `path` with os.replace (atomic on POSIX and Windows).  If the block raises, the
     temporary file is removed and `path` is left as it was.  So a crash, a full disk
     or Ctrl-C never leaves a truncated .res/.clu/.spk/.fet for Klusters or the next
-    stage to read.  A reader holding a memmap of the old file keeps the old data."""
+    stage to read.  On POSIX a reader holding a memmap of the old file keeps the old data; on
+    Windows the replace of a file another handle has open fails, and the old file stays.  The new
+    file gets default permissions, and a symlinked target is replaced by a regular file."""
     path = os.fspath(path)
     d = os.path.dirname(os.path.abspath(path))
     tmp = os.path.join(d, f".{os.path.basename(path)}.tmp{os.getpid()}")
@@ -1311,7 +1313,7 @@ def _is_live_perspike(stage):
             return False
         if tok == "part":                 # byte-split fragment (.part.aa)
             return False
-        if tok == "tmp":                  # a dedup copy left by an interrupted run (.dedup.tmp)
+        if tok in ("tmp", "old"):         # dedup copies left by an interrupted run (.dedup.tmp / .dedup.old)
             return False
         if tok.endswith("bkp"):           # explicit backup (refine_linked_bkp)
             return False
@@ -1485,15 +1487,42 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                 pending.append((off + ".dedup.tmp", off)); rewritten.append(off)
         except Exception as e:  # noqa: BLE001
             failed.append((off, e))
-    if failed:
+    def _drop_pending():
         for tmp, _ in pending:
             with contextlib.suppress(OSError):
                 os.remove(tmp)
+    if failed:
+        _drop_pending()
         names = "; ".join(f"{os.path.basename(p)}: {e}" for p, e in failed)
         raise RuntimeError(f"dedup: group {elec} left unchanged -- could not write the deduped copy of "
                            f"{len(failed)} file(s): {names}")
-    for tmp, path in pending:                              # commit: all subsets exist, move them in
-        os.replace(tmp, path)
+    if orphans and policy == "error":                      # refuse BEFORE anything is committed
+        _drop_pending()
+        names = ", ".join(os.path.basename(p) for p, _ in orphans)
+        raise RuntimeError(
+            f"dedup: {len(orphans)} live per-spike file(s) of group {elec} are misaligned "
+            f"(rows != {n_orig} and != {nkeep}) and cannot be subset by the keep-mask: {names}. "
+            f"These are stale from an earlier run -- regenerate, remove, or quarantine them and re-run "
+            f"(--dedup-stale quarantine moves them aside as <file>.stalebkp; --no-dedup-strict skips them).")
+    # commit with rollback: move every live file aside (<file>.dedup.old), then the subsets in, then drop
+    # the old copies.  A rename that fails (on Windows a file another handle maps cannot be renamed) puts
+    # every file back, so the group is never left half-deduped.
+    aside = []
+    try:
+        for tmp, path in pending:
+            os.replace(path, path + ".dedup.old"); aside.append(path)
+        for tmp, path in pending:
+            os.replace(tmp, path)
+    except OSError as e:
+        for path in aside:
+            with contextlib.suppress(OSError):
+                os.replace(path + ".dedup.old", path)
+        _drop_pending()
+        raise RuntimeError(f"dedup: group {elec} left unchanged -- could not move the deduped files in "
+                           f"({e}); close other programs holding them (Klusters, a memmap) and re-run") from None
+    for path in aside:
+        with contextlib.suppress(OSError):                 # a mapped old copy stays; it is never read
+            os.remove(path + ".dedup.old")
     if base_changed:
         for kind, how in (("deconv", "re-run fiber-session --deconv to regenerate"),
                           ("realign", "fiber-realign --check lists the pairs again")):
@@ -1534,13 +1563,6 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     elif verbose:
         for p, c in orphans:
             print(f"dedup: STALE/misaligned {os.path.basename(p)} (rows={c}, expected {n_orig} or {nkeep})")
-    if orphans and policy == "error":
-        names = ", ".join(os.path.basename(p) for p, _ in orphans)
-        raise RuntimeError(
-            f"dedup: {len(orphans)} live per-spike file(s) of group {elec} are misaligned "
-            f"(rows != {n_orig} and != {nkeep}) and cannot be subset by the keep-mask: {names}. "
-            f"These are stale from an earlier run -- regenerate, remove, or quarantine them and re-run "
-            f"(--dedup-stale quarantine moves them aside as <file>.stalebkp; --no-dedup-strict skips them).")
     return rewritten, done + orphans
 
 

@@ -37,9 +37,11 @@ from sklearn.cluster import KMeans
 try:
     from . import fiber_split as _fsplit
     from . import config as cfgmod
+    from . import fiber_chunks as _fch
 except ImportError:
     import fiber_split as _fsplit
     import config as cfgmod
+    import fiber_chunks as _fch
 
 _LP = "\u25b8 fiber-refine"
 _IND = " " * (len(_LP) + 3)
@@ -925,7 +927,7 @@ def _chunk_bounds(res, sr, chunk_min, overlap_min):
     nchunks = max(1, int(np.ceil((t_max - t_min) / chunk_s)))
     chunks = []
     for c in range(nchunks):
-        lo = t_min + c * chunk_s; hi = t_min + (c + 1) * chunk_s
+        lo = t_min + c * chunk_s; hi = _fch.chunk_hi(c, t_min, chunk_s, nchunks)
         ext = np.flatnonzero((res >= lo - ov_s) & (res < hi + ov_s))
         core = np.flatnonzero((res >= lo) & (res < hi))
         chunks.append(dict(c=c, lo=lo, hi=hi, ext=ext, core=core,

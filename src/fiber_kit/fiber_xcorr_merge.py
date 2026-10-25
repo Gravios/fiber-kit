@@ -579,8 +579,13 @@ def main():
                       f"{len(rt)} templates; need >= {K + 2} templates and >= 1 pair)")
 
     if a.gt_clu:
-        _, gt = (nio.read_clu_file(a.gt_clu, n_spikes=res.size) if (os.path.sep in a.gt_clu or a.gt_clu.endswith(".clu"))
-                 else nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.gt_clu, n_spikes=res.size))
+        try:                                               # a diagnostic, after the output is written: a GT of
+            _, gt = (nio.read_clu_file(a.gt_clu, n_spikes=res.size)    # another spike set is reported, not fatal
+                     if (os.path.sep in a.gt_clu or a.gt_clu.endswith(".clu"))
+                     else nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.gt_clu, n_spikes=res.size))
+        except ValueError as e:
+            print(f"{_LP} · GT not scored: {e}")
+            return
         keep = np.isin(clu, np.array(big))
         for tag, lab in (("before", clu.astype(np.int64)), ("after ", new)):
             pur, comp = _score(lab, np.asarray(gt), keep)

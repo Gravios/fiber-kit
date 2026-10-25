@@ -4,6 +4,30 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.5] — review fixes to 0.56.1–0.56.4
+An independent review of the four previous releases found these; each now has a test.
+- **fiber-realign keeps a commit journal.**  Writing the .res last (0.56.1) was not enough for `--shift-spk`.
+  A roll is relative, so after an interruption a re-run measured ~0 shift on the already-rolled windows
+  and left them shifted beside an uncorrected .res.  A commit now records the corrected times, the
+  offsets, the mode and the variants written in `<base>.realign.<group>[.<tag>].pending.npz`.  A run that
+  finds the journal first finishes that commit (the remaining variants, the lag-alias .fet, the .res),
+  removes the journal, and then runs the alignment it was asked for.  Interrupted then re-run now ends
+  byte-identical to an uninterrupted commit (test_atomic_io).
+- **fiber-pipeline's 0/1 switches accept on/off.**  With YAML 1.2 loading (0.56.2), `FK_SESSION_LINK: off`
+  reached bash as "off", which the `= "0"` tests ignored, so linking ran.  Every switch test now goes
+  through `_on`/`_off`: they take 1/on/yes/true and 0/off/no/false in any case, and stop the run on
+  anything else.
+- **The dedup commit rolls back.**  Every live file is moved aside before the subsets go in.  A rename
+  that fails puts all of them back; on Windows that happens when another handle maps the file.
+  `stale='error'` now refuses before anything is committed.
+- The last spike of an exact-multiple span is in the last chunk in fiber-refine, fiber-stochastic,
+  fiber-stats and fiber-position too (`fiber_chunks.chunk_hi`); 0.56.3 fixed only fiber-session.
+- A GT .clu of another length is reported ("GT not scored") by fiber-xcorr-merge and fiber-backbone-link,
+  not a traceback after their output is written.  fiber-session's `--exclude-clu` length error is a
+  message again.
+- The deconvolution manifest names the unsorted fiber for spikes the sweep moved there; it used to say 0.
+- An integer knob of nan/inf is a KnobError.
+
 ## [0.56.4] — docs/config.md generated from the yaml; README and config drift
 - **docs/config.md is generated** by the new `tools/gen_config_doc.py` from fiber-kit-exp.yaml's own
   comments: one section per `[X]` banner and `-----` sub-header, each knob with its value in both shipped

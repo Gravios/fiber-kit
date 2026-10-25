@@ -110,6 +110,9 @@ def knn_fold():
           "a bucket sent to a same-shape partner still folds into it")
     check(fs._chunk_hi(1, 0, 100.0, 2) == np.inf and fs._chunk_hi(0, 0, 100.0, 2) == 100.0,
           "the last chunk's core has no end (a spike on t_min + nchunks*chunk is in it)")
+    from fiber_kit import fiber_refine as frf
+    ch, _ = frf._chunk_bounds(np.array([0, 30000, 60000, 120000]), 1000, 1.0, 0.0)
+    check(sum(len(c["core"]) for c in ch) == 4, "fiber-refine's chunks cover the last spike of an exact-multiple span")
 
 
 def session_leftovers():

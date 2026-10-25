@@ -99,6 +99,14 @@ def chunk_index(res, sr, chunk_min=DEFAULT_CHUNK_MIN, origin=None):
     return np.minimum(((res - o) // L).astype(np.int64), n - 1)
 
 
+def chunk_hi(c, t_min, chunk_len, nchunks):
+    """The exclusive end of chunk c's core window.  The last chunk has none: nchunks = ceil(span / length),
+    so when the span is an exact multiple of the length the last spike sits ON t_min + nchunks * length,
+    and a `res < hi` test left it out of every chunk (chunk_index clamps it into the last chunk the same
+    way)."""
+    return t_min + (c + 1) * chunk_len if c < nchunks - 1 else np.inf
+
+
 def active_mask(res, sr, chunks, chunk_min=DEFAULT_CHUNK_MIN):
     """True for the spikes of the selected chunks (all True when chunks is None)."""
     if chunks is None:

@@ -23,9 +23,11 @@ import numpy as np
 try:
     from . import fiber_session as fs, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     from . import fiber_stderiv as fst
+    from . import fiber_chunks as _fch
 except ImportError:
     import fiber_session as fs, fiber_lib as fl, neuro_io as nio, session_yaml as sy
     import fiber_stderiv as fst
+    import fiber_chunks as _fch
 
 
 def resid_frame_med(waves, mask):
@@ -111,7 +113,7 @@ def main():
         chunk_s = a.chunk_min * 60.0 * sr; ov_s = a.overlap_min * 60.0 * sr
         nchunks = int(np.ceil((t_max - t_min) / chunk_s)); windows = []
         for c in range(nchunks):
-            lo, hi = t_min + c * chunk_s, t_min + (c + 1) * chunk_s
+            lo, hi = t_min + c * chunk_s, _fch.chunk_hi(c, t_min, chunk_s, nchunks)
             ext = np.flatnonzero((res >= lo - ov_s) & (res < hi + ov_s))
             if len(ext) == 0:
                 continue

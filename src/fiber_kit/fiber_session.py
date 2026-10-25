@@ -1133,10 +1133,9 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
 
 
 def _chunk_hi(c, t_min, chunk_s, nchunks):
-    """The exclusive end of chunk c's core.  The last chunk has no end: nchunks = ceil(span / chunk), so when
-    the span is an exact multiple of the chunk length the last spike sits ON t_min + nchunks*chunk_s and a
-    `res < hi` test left it out of every chunk (it was written to cluster 0)."""
-    return t_min + (c + 1) * chunk_s if c < nchunks - 1 else np.inf
+    """fiber_chunks.chunk_hi: the last chunk's core has no end (the last spike of an exact-multiple span
+    used to fall in no chunk and was written to cluster 0)."""
+    return _fch.chunk_hi(c, t_min, chunk_s, nchunks)
 
 
 def _merge_vetoes(edges, fine, waves, mask, res_abs, sr, *, cfiber_gate=False, cfiber_q=0.90, off_thr=0.0,
@@ -2176,10 +2175,11 @@ def main():
     res = read_res(a.base, a.elec); nspk = len(res)
     keep = np.ones(nspk, bool)
     if a.exclude_clu:
-        _, _ex = nio.read_clu_file(a.exclude_clu, n_spikes=nspk)
+        try:
+            _, _ex = nio.read_clu_file(a.exclude_clu, n_spikes=nspk)
+        except ValueError as e:
+            raise SystemExit(f"--exclude-clu: {e}") from None
         _ex = np.asarray(_ex)
-        if _ex.size != nspk:
-            raise SystemExit(f"--exclude-clu has {_ex.size} labels, .res has {nspk}")
         keep = (_ex == 0) | _fch.is_reserved(_ex)       # a reserved id = a chunk the mask did not evaluate
     # ── input stage + unit exclusions ──
     in_clu = None; excl_units = []
@@ -2469,6 +2469,9 @@ def main():
             child[rows] = aid; clu[rows] = next_fiber; next_fiber += 1
         det("unsorted", f"{int(_left.sum()):,} spikes the sort could not place -> {len(_ch)} unsorted fiber(s), "
                         "one per chunk (not cluster 0)")
+        if deconv_rows is not None:                        # the manifest names the cluster a spike is IN
+            deconv_rows = [r if not _left[r[0]] else (r[0], r[1], r[2], int(clu[r[0]])) + tuple(r[4:])
+                           for r in deconv_rows]
 
     carried = {}
     if in_clu is not None and excl_units and a.exclude_as == "carry":

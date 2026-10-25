@@ -84,6 +84,18 @@ PYCFG
     eval "$_cfg"
 fi
 
+# 0/1 switches.  The config is read with YAML 1.2 booleans, so `FK_SESSION_LINK: off` arrives as the word
+# "off", not "0": every switch test goes through _on/_off, which accept 1/on/yes/true and 0/off/no/false
+# (any case) and stop the run on anything else instead of silently taking one branch.
+_on() {
+    case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+        1|on|yes|true) return 0 ;;
+        0|off|no|false|"") return 1 ;;
+        *) echo "fiber-pipeline: $2=$1 is not a 0/1 switch (1/on/yes/true or 0/off/no/false)" >&2; exit 2 ;;
+    esac
+}
+_off() { if _on "$1" "$2"; then return 1; else return 0; fi; }
+
 # ===================== algorithm knobs (all env-overridable) ===========
 CFIBER_Q="${FK_SESSION_CFIBER_Q:-0.90}"          # 0079 fiber-session : within-fiber cfiber-null quantile (shape veto)
 FOLD_OFF_THR="${FK_REFINE_FOLD_OFF_THR:-0.22}"  # 0078 fiber-refine  : timing veto on the contaminant fold (0.20-0.25)
@@ -96,8 +108,8 @@ SPLIT_VAR_MULT="${FK_REFINE_SPLIT_VAR_MULT:-1.5}" # 0081 fiber-refine : split on
 # run) that a fresh dedup cannot subset.  quarantine (default) renames each aside as <file>.stalebkp and
 # proceeds (re-runnable, non-destructive); error blocks; skip leaves them.  Legacy FK_REFINE_DEDUP_STRICT: 1->error, 0->skip.
 if [ -n "${FK_REFINE_DEDUP_STALE:-}" ]; then DEDUP_STALE="$FK_REFINE_DEDUP_STALE"
-elif [ "${FK_REFINE_DEDUP_STRICT:-}" = "1" ]; then DEDUP_STALE="error"
-elif [ "${FK_REFINE_DEDUP_STRICT:-}" = "0" ]; then DEDUP_STALE="skip"
+elif [ -n "${FK_REFINE_DEDUP_STRICT:-}" ] && _on "$FK_REFINE_DEDUP_STRICT" FK_REFINE_DEDUP_STRICT; then DEDUP_STALE="error"
+elif [ -n "${FK_REFINE_DEDUP_STRICT:-}" ]; then DEDUP_STALE="skip"
 else DEDUP_STALE="quarantine"; fi
 
 # ===================== warp knobs 0083-0086 (empty = off) ==============
@@ -243,7 +255,7 @@ SESSION_RESEED_MIN_REDUCTION="${FK_SESSION_RESEED_MIN_REDUCTION:-0.05}"
 SESSION_DECONV="${FK_SESSION_DECONV:-0}"                               # 1 = sub-sample template deconvolution QC + manifest
 SESSION_DECONV_ASSIGN="${FK_SESSION_DECONV_ASSIGN:-0}"                 # 1 = also park attributed noise spikes as child atoms
 SESSION_REFIT_ITERS="${FK_SESSION_REFIT_ITERS:-0}"                     # extra realign->refit->rejudge passes at inclusion (0=single)
-if [ "$SESSION_NO_WHITEN" = "1" ]; then SESSION_WHITEN_FLAG="--no-whiten"; else SESSION_WHITEN_FLAG=""; fi
+if _on "$SESSION_NO_WHITEN" SESSION_NO_WHITEN; then SESSION_WHITEN_FLAG="--no-whiten"; else SESSION_WHITEN_FLAG=""; fi
 SESSION_REALIGN="${FK_SESSION_REALIGN:-auto}"                         # end-of-run realign commit: auto|reextract|shift-spk|off
 # fiber-stochastic (diagnostic; ensemble/consensus fibering over resampled draws — writes a fiber-space
 # dump, does NOT alter the sort). All default-off / conservative.
@@ -256,7 +268,7 @@ STOCH_SEED="${FK_STOCH_SEED:-0}"
 STOCH_LINK="${FK_STOCH_LINK:-average}"                # consensus grouping: average | complete | single
 STOCH_JOBS="${FK_STOCH_JOBS:-1}"                     # parallelise resampling draws across N processes (1=serial)
 STOCH_WRITE_CLU="${FK_STOCH_WRITE_CLU:-0}"          # 1 = also write clu/clc/clp triplet for Klusters
-if [ "$STOCH_WRITE_CLU" = "1" ]; then STOCH_CLU_FLAG="--stochastic-write-clu"; else STOCH_CLU_FLAG=""; fi
+if _on "$STOCH_WRITE_CLU" STOCH_WRITE_CLU; then STOCH_CLU_FLAG="--stochastic-write-clu"; else STOCH_CLU_FLAG=""; fi
 SESSION_RESPLIT_RESIDUAL_THR="${FK_SESSION_RESPLIT_RESIDUAL_THR:-0.08}"
 SESSION_RESPLIT_TOPCH="${FK_SESSION_RESPLIT_TOPCH:-3}"
 SESSION_RESPLIT_MIN_REDUCTION="${FK_SESSION_RESPLIT_MIN_REDUCTION:-0.20}"
@@ -264,7 +276,7 @@ SESSION_RESPLIT_MERGE_CORR="${FK_SESSION_RESPLIT_MERGE_CORR:-0.99}"
 SESSION_RESPLIT_DETREND_EPISODE="${FK_SESSION_RESPLIT_DETREND_EPISODE:-0}"   # 1 = strip the episode-position axis
 SESSION_RESPLIT_DETREND_WIN="${FK_SESSION_RESPLIT_DETREND_WIN:-90.0}"
 SESSION_RESPLIT_DETREND_MIN_N="${FK_SESSION_RESPLIT_DETREND_MIN_N:-100}"
-if [ "$SESSION_RESPLIT_DETREND_EPISODE" = "1" ]; then
+if _on "$SESSION_RESPLIT_DETREND_EPISODE" SESSION_RESPLIT_DETREND_EPISODE; then
     SESSION_DETREND_FLAG="--resplit-detrend-episode"
 else
     SESSION_DETREND_FLAG=""
@@ -485,20 +497,20 @@ fiber_flag_artifacts() {   # PREPROCESSING: flag acquisition artifacts -> per-sp
 fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> (+ .spk.stderiv)
     echo "== fiber-session  (-> $(clu_path "${STEP_OUT:-fiber_session}")) =="
     local eband_args=()
-    [ "$EBAND" = "1" ] && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
+    _on "$EBAND" EBAND && eband_args+=(--energy-band --eband-width "$EBAND_WIDTH" --eband-overlap "$EBAND_OVERLAP" --eband-confound "$EBAND_CONFOUND" --eband-min-span "$EBAND_MIN_SPAN" --eband-low-assign "$EBAND_LOW_ASSIGN")
     local sess_args=()
-    [ "$SESSION_RKK_DELETE" = "0" ] && sess_args+=(--no-rkk-delete)        # over-cluster: don't cull (refine's job)
-    [ "$SESSION_LINK" = "0" ]       && sess_args+=(--no-link)
-    [ "$SESSION_CFIBER_GATE" = "1" ] && sess_args+=(--cfiber-gate --cfiber-q "$CFIBER_Q")
-    [ "$SESSION_DIPSPLIT" = "1" ]   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
-    [ "$SESSION_INCL_ASSIGN" = "1" ] && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
-    [ "$SESSION_NO_NOISE" = "1" ]    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
-    [ "$SESSION_KEEP_SMALL" = "1" ]  && sess_args+=(--keep-small-groups --keep-small-min "$SESSION_KEEP_SMALL_MIN")
-    [ "$SESSION_ASSIGN_UNSORTED" = "1" ] && sess_args+=(--assign-unsorted)    # unsorted -> nearest fiber
-    [ "$SESSION_DECONV" = "1" ]      && sess_args+=(--deconv)                 # deconv_agree QC + .deconv.tsv manifest
-    [ "$SESSION_DECONV_ASSIGN" = "1" ] && sess_args+=(--deconv-assign)        # park attributed noise spikes
+    _off "$SESSION_RKK_DELETE" SESSION_RKK_DELETE && sess_args+=(--no-rkk-delete)        # over-cluster: don't cull (refine's job)
+    _off "$SESSION_LINK" SESSION_LINK       && sess_args+=(--no-link)
+    _on "$SESSION_CFIBER_GATE" SESSION_CFIBER_GATE && sess_args+=(--cfiber-gate --cfiber-q "$CFIBER_Q")
+    _on "$SESSION_DIPSPLIT" SESSION_DIPSPLIT   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
+    _on "$SESSION_INCL_ASSIGN" SESSION_INCL_ASSIGN && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
+    _on "$SESSION_NO_NOISE" SESSION_NO_NOISE    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
+    _on "$SESSION_KEEP_SMALL" SESSION_KEEP_SMALL  && sess_args+=(--keep-small-groups --keep-small-min "$SESSION_KEEP_SMALL_MIN")
+    _on "$SESSION_ASSIGN_UNSORTED" SESSION_ASSIGN_UNSORTED && sess_args+=(--assign-unsorted)    # unsorted -> nearest fiber
+    _on "$SESSION_DECONV" SESSION_DECONV      && sess_args+=(--deconv)                 # deconv_agree QC + .deconv.tsv manifest
+    _on "$SESSION_DECONV_ASSIGN" SESSION_DECONV_ASSIGN && sess_args+=(--deconv-assign)        # park attributed noise spikes
     local excl_args=()
-    [ "$SESSION_EXCLUDE" = "1" ] && excl_args+=(--exclude-clu "$(mask_path)")
+    _on "$SESSION_EXCLUDE" SESSION_EXCLUDE && excl_args+=(--exclude-clu "$(mask_path)")
     # a plan step's in: names fiber-session's input stage (the clu --exclude-units refers to);
     # the unit list itself rides the step's params, e.g. params: {exclude-units: "3,7,12-15"}
     [ -n "${STEP_IN:-}" ] && excl_args+=(--in-stage "$STEP_IN")
@@ -517,7 +529,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
 fiber_stochastic() {  # DIAGNOSTIC: ensemble/consensus fibering over resampled draws -> <SESS>.fiberens.<ELEC>.npz
     echo "== fiber-stochastic  (diagnostic -> $SESS.fiberens.$ELEC.npz) =="
     local st_args=()
-    [ "${STOCH_VERBOSE:-0}" = "1" ] && st_args+=(--stochastic-verbose)
+    _on "${STOCH_VERBOSE:-0}" STOCH_VERBOSE && st_args+=(--stochastic-verbose)
     _run fiber-stochastic "$SESS" "$ELEC" \
         --method "$(clu_variant)" --fine-algo "$SESSION_FINE_METHOD" \
         --chunk-minutes "$SESSION_CHUNK_MIN" --merge-algo "$SESSION_MERGE_METHOD" --merge-corr "$SESSION_MERGE_CORR" \
@@ -577,11 +589,11 @@ fiber_refine() {      # 3. split + fold gates + merge-back (optional warp recall
     [ -n "$MERGE_WARP_RESID_THR_INT" ] && warp_args+=(--merge-warp-resid-thr-int "$MERGE_WARP_RESID_THR_INT")
     [ -n "$MERGE_WARP_RESID_THR_PYR" ] && warp_args+=(--merge-warp-resid-thr-pyr "$MERGE_WARP_RESID_THR_PYR")
     local rkk_args=()
-    [ "$RKK_DELETE" = "0" ] && rkk_args+=(--no-rkk-delete)
+    _off "$RKK_DELETE" RKK_DELETE && rkk_args+=(--no-rkk-delete)
     local dedup_args=()
-    [ "$REFINE_DEDUP" = "1" ] && dedup_args+=(--dedup)      # default off: keep clu aligned to .res for round-trip
+    _on "$REFINE_DEDUP" REFINE_DEDUP && dedup_args+=(--dedup)      # default off: keep clu aligned to .res for round-trip
     local ab_args=()
-    [ "$AB_RECLAIM" = "1" ] && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN" --ab-sigcap "$AB_SIGCAP" --ab-jobs "$AB_JOBS")  # opt-in contamination reclaim
+    _on "$AB_RECLAIM" AB_RECLAIM && ab_args+=(--ab-reclaim --ab-distinct "$AB_DISTINCT" --ab-abs "$AB_ABS" --ab-margin "$AB_MARGIN" --ab-min "$AB_MIN" --ab-sigcap "$AB_SIGCAP" --ab-jobs "$AB_JOBS")  # opt-in contamination reclaim
     _run fiber-refine "$SESS" "$ELEC" \
         --in-clu "$(clu_path "${STEP_IN:-fiber_session}")" \
         --out-method "$(clu_variant)" --out-stage "${STEP_OUT:-refine}" \
@@ -642,7 +654,7 @@ fiber_link() {        # 6. cross-chunk link -> .refine_linked
         [ -n "$LINK_VAR_ALLOW" ] && bundle_args+=(--var-allow "$LINK_VAR_ALLOW")
     fi
     local dr_args=()
-    if [ "$LINK_DR_CANDIDATES" = 1 ]; then
+    if _on "$LINK_DR_CANDIDATES" LINK_DR_CANDIDATES; then
         dr_args+=(--dr-candidates --dr-k "$LINK_DR_K")
         [ -n "$LINK_DR_THR" ] && dr_args+=(--dr-thr "$LINK_DR_THR")
     fi
@@ -719,7 +731,7 @@ fiber_anchor_link() {   # link fiber-session fragments seeded by the overlap anc
     # FK_ALINK_* knobs come from $FK_CONFIG / the exported env; per-step plan `params:` override last-wins.
     echo "== fiber-anchor-link  (.${STEP_IN:-fiber_session} -> .${STEP_OUT:-anchor_linked}) =="
     local art_args=()
-    [ "$ALINK_ARTIFACT" = "1" ] && art_args+=(--artifact-clu "$(mask_path)")
+    _on "$ALINK_ARTIFACT" ALINK_ARTIFACT && art_args+=(--artifact-clu "$(mask_path)")
     _run fiber-anchor-link "$SESS" "$ELEC" \
         "${art_args[@]+"${art_args[@]}"}" \
         --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-fiber_session}" \
