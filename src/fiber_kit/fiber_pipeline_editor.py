@@ -138,6 +138,12 @@ CATALOG = {
         _p("novel", "str", "noise", "noise = novel groups to noise (kept as .clc children); keep = own units"),
         _p("copy-on-abstain", "int", 0, "1 = return a shape copy even when the refractory test has no power"),
         _p("res-variant", "str", "", "pin the .res variant (e.g. stderiv_S3); empty = shared resolve")]),
+    "fiber-rdr": dict(input=True, tags=["in"], params=[  # post-sort QC table; writes no .clu; not in `all`
+        _p("thr", "float", 2.0, "flag clusters whose residual-derivative excess ratio reaches this"),
+        _p("min-amp", "float", 4.0, "channels below this amplitude (noise SD) are not scored"),
+        _p("min-n", "int", 40, "clusters with fewer spikes are skipped"),
+        _p("fit-quantile", "float", 0.25, "clean line = this quantile regression of D^2 on A^2 (lower envelope)"),
+        _p("line", "str", "", "fixed clean line D0SQ,K instead of fitting it (empty = fit)")]),
 }
 STAGES = list(CATALOG)
 
@@ -156,6 +162,7 @@ STAGE_MODULES = {
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
     "fiber-consensus": "fiber_kit.fiber_consensus",
     "fiber-lowmix": "fiber_kit.fiber_lowmix",
+    "fiber-rdr": "fiber_kit.fiber_rdr",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning

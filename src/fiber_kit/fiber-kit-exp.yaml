@@ -22,8 +22,8 @@
 #  they define the file-naming contract, not tuning.
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
-#  Plan order (the embedded pipeline below, since 0.52.0):
-#    fiber-flag-artifacts -> fiber-session(+realign) -> fiber-xcorr-merge -> realign
+#  Plan order (the embedded pipeline below, since 0.52.0; fiber-rdr since 0.54.0):
+#    fiber-flag-artifacts -> fiber-session(+realign) -> fiber-xcorr-merge -> realign -> fiber-rdr (QC table)
 #  (the previous plan -- consensus, intrachunk, anchor-link, xcorr-merge, backbone-link -- is kept, commented,
 #  under the pipeline section)
 #
@@ -36,6 +36,7 @@
 #    [C] fiber-consensus: CLEANING right after fiber-session (quarantine-only, in the plan) or a late
 #        merge-mode review pass (not in `all`)
 #    [D] fiber-lowmix: post-sort split of low-amplitude MIXTURE units (opt-in plan step, not in `all`)
+#    [E] fiber-rdr: post-sort contamination QC table (in the plan, last; writes no .clu)
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -123,6 +124,7 @@ pipeline:
   - {stage: fiber-session,        name: session,         out: fiber_session}
   - {stage: fiber-xcorr-merge,    name: merge,           in: fiber_session, out: exp_xcm}
   - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
+  - {stage: fiber-rdr,            name: rdr,             in: exp_xcm}      # QC table only: <SESS>.rdr.<method>.<group>.exp_xcm.tsv
   # previous plan (before 0.52.0):
   # - {stage: fiber-session,        name: session,         out: fiber_session}
   # - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
@@ -1262,6 +1264,32 @@ FK_LOWMIX_REFRAC_MIN_EXP: 3.0     # 3.0.  Expected coincidences needed for the t
 FK_LOWMIX_COPY_ON_ABSTAIN: 0      # 0 | 1.  1 = shape alone returns an underpowered copy (g6: half are not the same neuron).
 FK_LOWMIX_NOVEL:         noise    # noise | keep.  noise = novel groups to cluster 1, each a reviewable .clc child.
 FK_LOWMIX_SEED:          0
+
+# ============================================================================
+#  [E] FIBER-RDR -- contamination QC from the residual's temporal derivative  (plan step `rdr`, last)
+#  Per cluster: Klusters alignment (0.10), one median template per chunk, D = RMS of diff(spike - template)
+#  per spike and channel in units of the noise derivative RMS (.nst, else the windows' lead-in).  A clean
+#  cell's median D^2 = D0^2 + k A^2 (A = channel amplitude in noise SD); the score is the largest
+#  observed/expected excess over channels >= MIN_AMP SD, ~1 for a clean cluster.  Writes
+#  <SESS>.rdr.<method>.<group>.<in>.tsv (cluster, n, score, its channel, flag, per-channel amplitude and D);
+#  moves no spike.  Measured on g7 0312 against the old curation (clusters < 90% vs >= 90% pure): AUC
+#  0.87 / 0.79 / 0.85 on the fiber-session sort, the merged sort of minutes 168-204 and the merged sort of
+#  minutes 168-352.  A cluster-level measure: per spike it is weak (within-cluster AUC 0.69).
+# ============================================================================
+FK_RDR_THR:              2.0      # 2.0 | 1.5-2.5.  Flag clusters whose score reaches this.  At 2.0 on the three g7
+                                  #   sorts: 50-78% of the mixed clusters flagged, 9-22% of the pure ones.
+FK_RDR_MIN_AMP:          4.0      # 4.0 | 4-8 (noise SD).  Channels below this are not scored: their expected excess
+                                  #   is about the size of a 1-2% error in the noise estimate.
+FK_RDR_MIN_N:            40       # 40.  Smaller clusters are skipped (they also drag a least-squares line up).
+FK_RDR_CHUNK_MIN:        12.0     # 12.0 (minutes) | 0 = one template per cluster.  Per-chunk templates remove
+                                  #   drift (g6 0316: clean maximum 2.89 -> 1.65 with them).
+FK_RDR_FIT:              quantile # quantile | clip.  quantile = lower-envelope quantile regression of D^2 on A^2
+                                  #   (0.036-0.046/SD on every g7 sort); clip = least squares with a 3-MAD clip
+                                  #   (0.53.0), dragged to 0.074/SD when most clusters are dirty or small.
+FK_RDR_FIT_QUANTILE:     0.25     # 0.25 | 0.15-0.35.  Lower = more clusters flagged.
+FK_RDR_LINE:             ""       # "" = fit.  D0SQ,K fixes the line (e.g. from a clean session).
+FK_RDR_ALIGN_MIN_SCORE:  0.10     # 0.10.  Klusters realign threshold; 0.70 leaves low-correlation spikes behind.
+FK_RDR_CAP:              4000     # 4000.  Spikes sampled per cluster.
 
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by

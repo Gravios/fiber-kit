@@ -14,19 +14,26 @@ A clean cell's D still grows with the channel's amplitude A (in noise SD): integ
 the cell's own gain spread scale with the template.  Noise and mismatch add in variance, so over clean
 channels
 
-    median D^2 = D0^2 + k A^2      (g6 0316: 1.105 + 0.00153 A^2; g7 0312: 1.009 + 0.00173 A^2)
+    median D^2 = D0^2 + k A^2      (g6 0316 clean units: 1.105 + 0.00153 A^2; g7 0312 truth-pure
+                                    clusters: 0.949 + 0.00106 A^2)
 
 and a cluster's score on channel c is the observed excess over the noise floor against the line's:
 
     ratio(c) = sqrt(max(med D^2 - D0^2, 0)) / (sqrt(k) A),   on channels with A >= --min-amp (4 SD)
 
-The cluster's score is the maximum over those channels.  A clean cluster sits near 1.  The line is fitted
-on every cluster's channels with a 3-MAD clip (no curation needed), or fixed with --line D0SQ,K.
+The cluster's score is the maximum over those channels.  A clean cluster sits near 1.
 
-Validated (docs/stages.md, fiber-rdr): g6 0316 exp_final, ACG-labelled units -- dirty 1.77-2.57, clean <= 1.65 with
-per-chunk templates; g7 0312 minutes 168-204, fiber-session clusters against the old curation -- AUC
-0.87 for clusters < 90% pure (pure median 1.04, mixed 2.51; at 1.7 it flags 73% of the mixed and 17% of
-the pure ones).
+The line needs no curation: it is the --fit-quantile (0.25) QUANTILE REGRESSION of median D^2 on A^2 over
+every cluster's channels -- the lower envelope, because contamination only ever raises D.  A least-squares
+fit with a symmetric 3-MAD clip (--fit clip, the 0.53.0 behaviour) follows the bulk instead, so it is
+dragged up when most clusters are dirty or small (g7 0312 merged sort of minutes 168-352 with clusters
+down to 15 spikes: excess 0.074/SD, against 0.041 on the fiber-session sort) and then stops flagging.
+Or fix the line with --line D0SQ,K.
+
+Validated (docs/stages.md, fiber-rdr): g6 0316 exp_final, ACG-labelled units -- dirty 1.77-2.57, clean <=
+1.65 with per-chunk templates; g7 0312 against the old curation (clusters < 90% vs >= 90% pure) -- AUC
+0.87 / 0.79 / 0.85 on the fiber-session sort of minutes 168-204, its merged sort, and the merged sort of
+minutes 168-352.
 
 Noise: sigma(c) and sigma_d(c) come from the group's .nst (exact, from its covariance) when present,
 else from the first 8 samples of a random sample of windows (robust MAD).  This is a QC report: it
@@ -42,8 +49,32 @@ try:
     from . import neuro_io as nio, session_yaml as sy, fiber_realign as fr
 except ImportError:                                              # script / direct execution
     import neuro_io as nio, session_yaml as sy, fiber_realign as fr
+try:
+    from . import config as cfgmod
+except ImportError:
+    import config as cfgmod
 
 _LP = "▸ fiber-rdr"
+
+# FK_RDR_* knobs ($FK_CONFIG, then the environment, then these defaults); a CLI flag wins.
+_KNOBS = {
+    "FK_RDR_CHUNK_MIN": ("chunk_min", float, 12.0),
+    "FK_RDR_MIN_N": ("min_n", int, 40),
+    "FK_RDR_CAP": ("cap", int, 4000),
+    "FK_RDR_MIN_AMP": ("min_amp", float, 4.0),
+    "FK_RDR_ALIGN_MIN_SCORE": ("align_min_score", float, 0.10),
+    "FK_RDR_FIT": ("fit", str, "quantile"),
+    "FK_RDR_FIT_QUANTILE": ("fit_quantile", float, 0.25),
+    "FK_RDR_THR": ("thr", float, 2.0),
+    "FK_RDR_LINE": ("line", str, ""),
+}
+
+
+def _knob_default(name, typ, fb, gcfg):
+    v = gcfg.get(name)
+    if v in (None, ""):
+        v = os.environ.get(name, "")
+    return fb if v in (None, "") else typ(v)
 
 
 def _mad(x):
@@ -115,13 +146,23 @@ def cluster_profile(spk, idx, *, peak, sigma, sigma_d, chunk=None, cap=4000, min
     return amp / np.asarray(sigma), np.median(D, 0) / np.asarray(sigma_d), int(idx.size)
 
 
-def fit_clean_line(A, M, *, clip=3.0, iters=3):
-    """Robust fit of median D^2 = d0 + k A^2 over channels (rows of A/M flattened): least squares, then
-    drop points beyond `clip` MADs of the residual and refit.  Contaminated channels sit above the line
-    and are clipped.  Returns (d0, k)."""
+def fit_clean_line(A, M, *, method="quantile", quantile=0.25, clip=3.0, iters=3):
+    """Fit median D^2 = d0 + k A^2 over channels (rows of A/M flattened), without labels.
+
+    method='quantile' (default): linear quantile regression at `quantile` -- the LOWER envelope.
+    Contamination only raises D, so the clean channels are the lower part of the cloud whatever share
+    of the clusters is dirty.  method='clip': least squares, then drop points beyond `clip` MADs of the
+    residual and refit (the 0.53.0 fit; it follows the bulk and is dragged up when most clusters are
+    dirty).  Returns (d0, k)."""
     x = np.asarray(A, float).ravel() ** 2
     y = np.asarray(M, float).ravel() ** 2
     keep = np.isfinite(x) & np.isfinite(y)
+    if method == "quantile":
+        from sklearn.linear_model import QuantileRegressor
+        m = QuantileRegressor(quantile=float(quantile), alpha=0.0, solver="highs").fit(x[keep, None], y[keep])
+        return float(m.intercept_), float(max(m.coef_[0], 1e-12))
+    if method != "clip":
+        raise ValueError(f"fit method must be quantile or clip, not {method!r}")
     k, d0 = np.polyfit(x[keep], y[keep], 1)
     for _ in range(iters):
         r = y - (d0 + k * x)
@@ -148,13 +189,22 @@ def main(argv=None):
     ap.add_argument("--in-clu", default=None, help="explicit .clu path (overrides --clu-method/--clu-stage)")
     ap.add_argument("--spk-method", default="standard", help="waveform axis (raw windows; default standard)")
     ap.add_argument("--nst", default=None, help=".nst path (default <base>.nst.<spk-method>.<elec> if present)")
-    ap.add_argument("--chunk-min", type=float, default=12.0, help="one template per chunk of this length (0: one per cluster)")
-    ap.add_argument("--min-n", type=int, default=40, help="clusters with fewer spikes are skipped")
-    ap.add_argument("--cap", type=int, default=4000, help="spikes sampled per cluster")
-    ap.add_argument("--min-amp", type=float, default=4.0, help="channels below this amplitude (noise SD) are not scored")
-    ap.add_argument("--align-min-score", type=float, default=0.10, help="Klusters realign threshold (Klusters' own: 0.70)")
-    ap.add_argument("--thr", type=float, default=1.7, help="flag clusters whose ratio reaches this")
-    ap.add_argument("--line", default=None, help="fixed clean line D0SQ,K instead of fitting it")
+    gcfg = cfgmod.load_global_config()
+    kd = {n: _knob_default(n, t, fb, gcfg) for n, (_, t, fb) in _KNOBS.items()}
+    ap.add_argument("--chunk-min", type=float, default=kd["FK_RDR_CHUNK_MIN"],
+                    help="FK_RDR_CHUNK_MIN: one template per chunk of this length, minutes (0: one per cluster)")
+    ap.add_argument("--min-n", type=int, default=kd["FK_RDR_MIN_N"], help="FK_RDR_MIN_N: clusters with fewer spikes are skipped")
+    ap.add_argument("--cap", type=int, default=kd["FK_RDR_CAP"], help="FK_RDR_CAP: spikes sampled per cluster")
+    ap.add_argument("--min-amp", type=float, default=kd["FK_RDR_MIN_AMP"],
+                    help="FK_RDR_MIN_AMP: channels below this amplitude (noise SD) are not scored")
+    ap.add_argument("--align-min-score", type=float, default=kd["FK_RDR_ALIGN_MIN_SCORE"],
+                    help="FK_RDR_ALIGN_MIN_SCORE: Klusters realign threshold (Klusters' own: 0.70)")
+    ap.add_argument("--fit", choices=["quantile", "clip"], default=kd["FK_RDR_FIT"],
+                    help="FK_RDR_FIT: clean-line fit -- quantile (lower envelope) or clip (least squares, 3-MAD clip)")
+    ap.add_argument("--fit-quantile", type=float, default=kd["FK_RDR_FIT_QUANTILE"],
+                    help="FK_RDR_FIT_QUANTILE: quantile of the quantile-regression fit")
+    ap.add_argument("--thr", type=float, default=kd["FK_RDR_THR"], help="FK_RDR_THR: flag clusters whose ratio reaches this")
+    ap.add_argument("--line", default=kd["FK_RDR_LINE"], help="FK_RDR_LINE: fixed clean line D0SQ,K instead of fitting it")
     ap.add_argument("--out", default=None, help="output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv)")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args(argv)
@@ -199,8 +249,9 @@ def main(argv=None):
         d0, k = (float(v) for v in a.line.split(","))
         how = "fixed"
     else:
-        d0, k = fit_clean_line(AA, MM)
-        how = f"fitted on {AA.size} channels of {len(rows)} clusters"
+        d0, k = fit_clean_line(AA, MM, method=a.fit, quantile=a.fit_quantile)
+        how = (f"quantile {a.fit_quantile:g} regression" if a.fit == "quantile" else "3-MAD clip") \
+            + f" on {AA.size} channels of {len(rows)} clusters"
     print(f"{_LP} · clean line ({how}): median D^2 = {d0:.3f} + {k:.5f} A^2 (excess {np.sqrt(k):.4f} per SD)")
     Q = excess_ratio(AA, MM, d0, k, min_amp=a.min_amp)
     out = a.out or (nio.session_path(base, "rdr", a.elec, variant=a.clu_method, tag=a.clu_stage) + ".tsv")

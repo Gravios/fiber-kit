@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.54.0] — fiber-rdr: lower-envelope line, in the exp plan
+- fiber-rdr fits the clean line as the 0.25 QUANTILE REGRESSION of median D² on A² (`--fit quantile`,
+  `--fit-quantile`), the lower envelope: contamination only raises D.  The 0.53.0 least-squares fit with a
+  symmetric 3-MAD clip (`--fit clip`) followed the bulk, so on a sort where most clusters are dirty or small
+  it was dragged up (g7 0312 merged sort of minutes 168–352, clusters down to 15 spikes: excess 0.074/SD
+  against 0.041) and stopped flagging (24% of the mixed clusters).  The quantile line gives 0.036–0.046/SD
+  on all three g7 sorts and at both size floors; AUC equal or better (0.87 / 0.79 / 0.85).
+- `--thr` default 1.7 -> 2.0 (the lower line raises every score): 50–78% of mixed and 9–22% of pure
+  clusters flagged on those sorts.
+- Knobs `FK_RDR_*` (THR, MIN_AMP, MIN_N, CHUNK_MIN, FIT, FIT_QUANTILE, LINE, ALIGN_MIN_SCORE, CAP) from
+  `$FK_CONFIG` / the environment; section [E] of fiber-kit-exp.yaml.
+- fiber-pipeline knows the `fiber-rdr` stage (post-sort, not in `all`; writes the table, no `.clu`), and
+  fiber-plan-edit lists it.  The embedded exp plan ends with `{stage: fiber-rdr, name: rdr, in: exp_xcm}`.
+
 ## [0.53.0] — residual-derivative contamination score; merge-align threshold 0.10
 - `fiber-rdr` (new, QC only): per-cluster contamination from the RMS of the residual's temporal
   derivative (aligned spike − per-chunk median template, in units of the noise derivative RMS from the

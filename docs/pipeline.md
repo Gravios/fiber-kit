@@ -120,6 +120,7 @@ The embedded plan of `fiber-kit-exp.yaml`, in order:
 | 9 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
 | 10 | fiber-realign | exp_final (in place) | final re-extraction for curation |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
+| (QC) | fiber-rdr | the final stage's clu -> `.rdr.<method>.<group>.<in>.tsv` | per-cluster contamination score from the residual's temporal derivative; flags only, no `.clu` (in the 0.54.0 exp plan as step `rdr`, after realign-final) |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
 (`FK_REALIGN_VARIANT: stderiv_C5_D34`, the reference session's lag feature space -- inference never

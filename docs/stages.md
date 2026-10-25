@@ -1204,12 +1204,13 @@ Each cluster's raw windows are aligned as Klusters' realign does (threshold 0.10
 taken per `--chunk-min` chunk, and D = RMS over the window of diff(spike − template) is computed per spike
 and channel, in units of the noise's derivative RMS (exact from the group's `.nst`, else from the
 windows' lead-in).  A clean cell's D still grows with the channel's amplitude A, as
-median D² = D0² + k·A² (g6 0316: 1.105 + 0.00153·A²; g7 0312: 1.009 + 0.00173·A²; the line is fitted
-on all clusters with a 3-MAD clip, or fixed with `--line`).  The score is the largest
+median D² = D0² + k·A² (g6 0316 clean units: 1.105 + 0.00153·A²).  The line is the lower envelope of every
+cluster's channels, a quantile regression at `--fit-quantile` (0.25), so it needs no labels and holds when
+most clusters are dirty (`--fit clip` is the 0.53.0 least-squares fit; `--line` fixes it).  The score is the largest
 observed/expected excess, √(D² − D0²) / (√k·A), over channels of at least `--min-amp` SD; clean
-clusters sit near 1.  Measured: g6 0316, dirty units 1.77–2.57 against clean ≤ 1.65; g7 0312 minutes
-168–204, AUC 0.87 for fiber-session clusters below 90% purity against the old curation (pure median 1.04,
-mixed 2.51; `--thr 1.7` flags 73% of the mixed and 17% of the pure).  Writes
+clusters sit near 1.  Measured: g6 0316, dirty units 1.77–2.57 against clean ≤ 1.65; g7 0312 against the
+old curation (below vs at least 90% purity), AUC 0.87 / 0.79 / 0.85 on three sorts, and `--thr 2.0` flags
+50–78% of the mixed and 9–22% of the pure clusters.  Knobs `FK_RDR_*`; step `rdr` of the exp plan.  Writes
 `<base>.rdr.<clu-method>.<group>[.<stage>].tsv`: cluster, n, largest amplitude, score, its channel, flag,
 and per-channel amplitude and median D.
 
@@ -1222,13 +1223,15 @@ Positional: `session`, `elec`
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` | `standard` | waveform axis (raw windows; default standard) |
 | `--nst` | — | .nst path (default <base>.nst.<spk-method>.<elec> if present) |
-| `--chunk-min` | `12.0` | one template per chunk of this length (0: one per cluster) |
-| `--min-n` | `40` | clusters with fewer spikes are skipped |
-| `--cap` | `4000` | spikes sampled per cluster |
-| `--min-amp` | `4.0` | channels below this amplitude (noise SD) are not scored |
-| `--align-min-score` | `0.1` | Klusters realign threshold (Klusters' own: 0.70) |
-| `--thr` | `1.7` | flag clusters whose ratio reaches this |
-| `--line` | — | fixed clean line D0SQ,K instead of fitting it |
+| `--chunk-min` | `12.0` | FK_RDR_CHUNK_MIN: one template per chunk of this length, minutes (0: one per cluster) |
+| `--min-n` | `40` | FK_RDR_MIN_N: clusters with fewer spikes are skipped |
+| `--cap` | `4000` | FK_RDR_CAP: spikes sampled per cluster |
+| `--min-amp` | `4.0` | FK_RDR_MIN_AMP: channels below this amplitude (noise SD) are not scored |
+| `--align-min-score` | `0.1` | FK_RDR_ALIGN_MIN_SCORE: Klusters realign threshold (Klusters' own: 0.70) |
+| `--fit` | `quantile` | FK_RDR_FIT: clean-line fit -- quantile (lower envelope) or clip (least squares, 3-MAD clip) — choices: `quantile`, `clip` |
+| `--fit-quantile` | `0.25` | FK_RDR_FIT_QUANTILE: quantile of the quantile-regression fit |
+| `--thr` | `2.0` | FK_RDR_THR: flag clusters whose ratio reaches this |
+| `--line` | `""` | FK_RDR_LINE: fixed clean line D0SQ,K instead of fitting it |
 | `--out` | — | output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv) |
 | `--seed` | `0` |  |
 ### `fiber-envelope`

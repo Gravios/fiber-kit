@@ -332,7 +332,7 @@ STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-int
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
 PRE_STAGES=(fiber-flag-artifacts)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
 ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
-POST_STAGES=(fiber-consensus fiber-lowmix)                # post-sort review: runs AFTER the plan's final stage; plannable, not in `all`
+POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr)                # post-sort review: runs AFTER the plan's final stage; plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}" "${POST_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
@@ -749,6 +749,16 @@ fiber_lowmix() {   # post-sort: split low-amplitude mixture units -> .<in>_lowmi
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
+fiber_rdr() {   # post-sort QC: residual-derivative contamination score per cluster -> <SESS>.rdr.<method>.<elec>.<in>.tsv
+    # Reads the clu at STEP_IN, the standard .spk and the group's .nst (or the windows' lead-in when there is
+    # none).  Writes a table only -- no .clu, nothing moves.  FK_RDR_* knobs come from $FK_CONFIG / the env;
+    # per-step plan `params:` override last-wins.
+    echo "== fiber-rdr  (.${STEP_IN:-exp_final} -> $SESS.rdr.$(clu_variant).$ELEC.${STEP_IN:-exp_final}.tsv) =="
+    _run fiber-rdr "$SESS" "$ELEC" \
+        --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-exp_final}" \
+        "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 run_stage() {
     # forward the command-line override args (set in main) to the selected stage only; argparse is
     # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
@@ -771,6 +781,7 @@ run_stage() {
         fiber-stochastic) fiber_stochastic "${ov[@]}" ;;
         fiber-consensus)  fiber_consensus  "${ov[@]}" ;;
         fiber-lowmix)     fiber_lowmix     "${ov[@]}" ;;
+        fiber-rdr)        fiber_rdr        "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -793,6 +804,7 @@ run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling
         fiber-xcorr-merge) fiber_xcorr_merge ;;
         fiber-consensus)  fiber_consensus  ;;
         fiber-lowmix)     fiber_lowmix     ;;
+        fiber-rdr)        fiber_rdr        ;;
         *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
     esac
 }
@@ -811,7 +823,7 @@ except ImportError:                                   # a source checkout run wi
     from fiber_kit import plan_steps
 KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
          "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge",
-         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix"}
+         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix", "fiber-rdr"}
 sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN
 }
