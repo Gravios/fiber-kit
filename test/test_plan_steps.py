@@ -80,7 +80,8 @@ def main():
     print("ids and names:")
     steps = ps.load_steps(EXP)
     ids = [s["id"] for s in steps]
-    check(ids == ["fiber-flag-artifacts-1", "fiber-session-1", "fiber-xcorr-merge-1", "fiber-realign-1"],
+    check(ids == ["fiber-flag-artifacts-1", "fiber-session-1", "fiber-xcorr-merge-1", "fiber-realign-1",
+                   "fiber-rdr-1"],
           "fiber-kit-exp.yaml: <stage>-<k> ids (" + ", ".join(ids[:3]) + ", ...)")
     check(len(set(ids)) == len(ids), "every id unique")
     for f, rname in (("fiber-kit.yaml", "realign-chunk"), ("fiber-kit-exp.yaml", "realign-final")):
