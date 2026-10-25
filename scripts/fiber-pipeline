@@ -759,7 +759,20 @@ fiber_rdr() {   # post-sort QC: residual-derivative contamination score per clus
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
+# Chunk runs (FK_CHUNKS, fiber_chunks): spikes of the chunks not selected are in RESERVED clusters
+# (16777116 + chunk).  Only the stages below know to leave those clusters alone; any other stage would take
+# a reserved cluster for a unit, so it refuses to run while FK_CHUNKS is set.
+CHUNK_STAGES=" fiber-flag-artifacts fiber-session fiber-xcorr-merge fiber-realign fiber-rdr "
+_chunks_guard() {
+    case "${FK_CHUNKS:-}" in ""|all|ALL|none) return 0 ;; esac
+    case "$CHUNK_STAGES" in *" $1 "*) return 0 ;; esac
+    echo "fiber-pipeline: FK_CHUNKS=$FK_CHUNKS is set, but $1 does not support chunk runs" \
+         "(supported:$CHUNK_STAGES) -- unset FK_CHUNKS, or end the plan before $1" >&2
+    exit 2
+}
+
 run_stage() {
+    _chunks_guard "$1"
     # forward the command-line override args (set in main) to the selected stage only; argparse is
     # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
     local -a ov=()
@@ -787,6 +800,7 @@ run_stage() {
 }
 
 run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling subshell)
+    _chunks_guard "$1"
     case "$1" in
         fiber-session)    fiber_session    ;;
         fiber-realign)    fiber_realign    ;;

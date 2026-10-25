@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.0] — chunk runs (`FK_CHUNKS`) and reserved cluster ids
+- `FK_CHUNKS` (global; `--chunks` on each supporting stage) runs only some chunks, e.g. `14-16`.
+  Chunks are fiber-session's own `FK_SESSION_CHUNK_MIN` chunks, 0-based.  Every spike of a chunk that
+  was not run goes to that chunk's reserved cluster, 16777116+chunk.  These are the top 100 ids a
+  float32 holds exactly (2^24-100 .. 2^24-1), so a partial sort still opens in Klusters (docs/pipeline.md,
+  Chunk runs).
+- Supported by fiber-flag-artifacts, fiber-session, fiber-xcorr-merge, fiber-realign and fiber-rdr.
+  These stages never merge, realign, score or flag a reserved cluster.  fiber-session's .clp gives each
+  reserved chunk one atom.  fiber-pipeline refuses every other stage while FK_CHUNKS is set.
+- `fiber_chunks` (new): the constants, chunk indexing and `next_free_id`.  fiber-session's unit carry,
+  fiber-xcorr-merge and fiber-consolidate allocate below the reserved block.  `refiberize` keeps reserved
+  ids fixed and no longer builds a lookup table as large as the largest id.
+- fiber-bench: `run --chunks`.  `FK_CHUNKS` and `FK_SESSION_CHUNK_MIN` are in every step's hash.  `score`
+  leaves reserved spikes out, drops truth units with no spikes in the chunks run, and records
+  `units_scored` and `chunks_left_out`.
+- test_shared_contract checks the reserved ids against neurosuite-3's types.h when NS3_ROOT is set
+  (neurosuite-3 0889, which makes Klusters' id allocators skip the block).
+- test_chunks (new): 22 checks.
+
 ## [0.55.0] — fiber-bench: parameter variants under a config hash
 - `fiber-bench` (new; docs/bench.md).  `run` executes a config's plan (default: up to fiber-session) for
   every `--set` / `--grid` / `--sweep` variant; each clustering step writes under `<out>_<hash>`, the hash

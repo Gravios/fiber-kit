@@ -52,9 +52,9 @@ import time
 import numpy as np
 
 try:
-    from . import neuro_io as nio, session_yaml as sy
+    from . import neuro_io as nio, session_yaml as sy, fiber_chunks as _fch
 except ImportError:                                              # script / direct execution
-    import neuro_io as nio, session_yaml as sy
+    import neuro_io as nio, session_yaml as sy, fiber_chunks as _fch
 
 _LP = "▸ fiber-bench"
 
@@ -75,7 +75,7 @@ STAGE_PREFIXES = {
     "fiber-stochastic": ("FK_STOCH_",),
 }
 _FOREIGN_TO_SESSION = tuple(p for st, ps in STAGE_PREFIXES.items() if st != "fiber-realign" for p in ps)
-GLOBAL_KEYS = ("FK_REALIGN_VARIANT",)
+GLOBAL_KEYS = ("FK_REALIGN_VARIANT", "FK_CHUNKS", "FK_SESSION_CHUNK_MIN")   # every stage's hash carries these
 
 
 # ───────────────────────────── config, hashes, plans ─────────────────────────────
@@ -221,6 +221,9 @@ def cmd_run(a):
     base = cfg_session["base"]
     method = cfg0.get("FK_REALIGN_VARIANT") or a.clu_method
     combos = parse_overrides(a.set, a.grid, a.sweep)
+    if a.chunks is not None:                                        # --chunks: one more override, in the hash
+        _fch.parse(a.chunks)                                        # validate early
+        combos = [dict(c, FK_CHUNKS=str(a.chunks)) for c in combos]
     print(f"{_LP} · {len(combos)} variant(s) of {os.path.basename(a.config)} up to step {a.upto or 'fiber-session'}")
     for ov in combos:
         cfg = dict(cfg0); cfg.update(ov)
@@ -328,8 +331,13 @@ def type_units(gt_res, gt_lab, units, sr, int_rate=5.0, interneurons=None):
 
 
 def truth_metrics(clu, gt, units, types, merge_min=50, merge_frac=0.2):
-    """score.py semantics: per truth unit, the best single cluster by accuracy (clusters 0/1 unassigned)."""
-    clu = np.asarray(clu); lab = gt >= 0
+    """score.py semantics: per truth unit, the best single cluster by accuracy (clusters 0/1 unassigned).
+    Units with no truth spike among the scored spikes (e.g. outside the chunks of a chunk run) are left out."""
+    clu = np.asarray(clu); gt = np.asarray(gt)
+    present = {int(x) for x in np.unique(gt[gt >= 0])}
+    units = [u for u in units if int(u) in present]
+    gt = np.where(np.isin(gt, units), gt, -1)
+    lab = gt >= 0
     c = np.where(clu >= 2, clu, -1)[lab]; u = gt[lab]
     C, ci = np.unique(c, return_inverse=True)
     U = np.asarray(units); ui = np.searchsorted(U, u)
@@ -361,6 +369,7 @@ def truth_metrics(clu, gt, units, types, merge_min=50, merge_frac=0.2):
         fr = [r["frag80"] for r in R if r["frag80"] > 0]
         S[f"{grp}_frag80"] = float(np.mean(fr)) if fr else float("nan")
     ty = {r["unit"]: r["type"] for r in rows}
+    S["units_scored"] = len(rows)
     S["merges"] = len(merges)
     S["merges_pyr_pyr"] = sum(1 for m in merges if ty[m[1]] == "pyr" and ty[m[2]] == "pyr")
     S["merges_with_int"] = S["merges"] - S["merges_pyr_pyr"]
@@ -387,8 +396,10 @@ def free_metrics(clu, res, spk, sr, peak, nsamp, nchan, *, base=None, elec=None,
         import fiber_rdr as rdr, fiber_xcorr_merge as xm
     clu = np.asarray(clu); res = np.asarray(res)
     rng = np.random.default_rng(seed)
-    ids, cnt = np.unique(clu[clu >= 2], return_counts=True)
-    S = dict(n_spikes=int(clu.size), n_clusters=int(ids.size), frac_c0=float(np.mean(clu == 0)), frac_c1=float(np.mean(clu == 1)),
+    ev = ~_fch.is_reserved(clu)                                    # spikes this sort computed (fiber_chunks)
+    ids, cnt = np.unique(clu[(clu >= 2) & ev], return_counts=True)
+    S = dict(n_spikes=int(ev.sum()), n_clusters=int(ids.size), frac_c0=float(np.mean(clu[ev] == 0)) if ev.any() else 0.0,
+             frac_c1=float(np.mean(clu[ev] == 1)) if ev.any() else 0.0,
              median_size=float(np.median(cnt)) if cnt.size else 0.0, frac_small=float(np.mean(cnt < min_n)) if cnt.size else 0.0)
     r = int(round(refrac_ms * 1e-3 * sr))
     order = np.argsort(clu, kind="stable"); bounds = np.searchsorted(clu[order], ids)
@@ -510,14 +521,17 @@ def cmd_score(a):
             print(f"  {tag}: cannot read ({e})"); continue
         t0 = time.time()
         S = dict(tag=tag, hash=h, method=meth, overrides=json.dumps(ov, sort_keys=True), gt_sig=gsig)
+        rsv = _fch.is_reserved(clu)
+        S["chunks_left_out"] = int(len(np.unique(clu[rsv])))
         F, crow = free_metrics(clu, res, spk, SR, PK, NS, NC, base=base, elec=a.elec, do_waveform=not a.no_waveform)
         S.update(F)
         if gt is not None:
-            T, urows = truth_metrics(clu, gt, units, types)
+            gt_ev = np.where(rsv, -1, gt)                         # truth spikes in chunks not computed: not scored
+            T, urows = truth_metrics(clu, gt_ev, units, types)
             S.update(T)
             for r in urows:
                 unit_rows.append(dict(tag=tag, **r))
-            pur = cluster_purity(clu, gt)
+            pur = cluster_purity(clu, gt_ev)
             for r in crow:
                 if r["cluster"] in pur:
                     r["truth_unit"], r["purity"] = pur[r["cluster"]]
@@ -698,6 +712,8 @@ def main(argv=None):
     p.add_argument("--force", action="store_true", help="re-run steps whose output exists")
     p.add_argument("--keep-going", action="store_true", help="continue the sweep after a failed run")
     p.add_argument("--dry-run", action="store_true", help="print the stage commands only")
+    p.add_argument("--chunks", default=None, help="run only these 0-based chunks (FK_CHUNKS, e.g. 14-16); the "
+                                                  "other chunks' spikes go to reserved clusters and are not scored")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("score", help="metrics for every registered run (and --stages baselines)")
     common(p)

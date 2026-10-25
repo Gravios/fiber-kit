@@ -60,6 +60,10 @@ try:
 except ImportError:
     import config as cfgmod
 try:
+    from . import fiber_chunks as _fch
+except ImportError:
+    import fiber_chunks as _fch
+try:
     from . import fiber_consolidate as fcons
 except ImportError:
     import fiber_consolidate as fcons
@@ -1942,11 +1946,12 @@ def _carry_units(clu, child, parent, next_atom, in_clu, units):
     {unit: provisional fiber id}); the hierarchy save renumbers, so final ids
     are read back from the written clu."""
     clu = np.asarray(clu).copy()
-    nxt = int(max([int(clu.max()) if clu.size else 0] + [int(v) for v in parent.values()])) + 1
+    nxt = _fch.next_free_id(np.concatenate([np.asarray(clu, np.int64).ravel(),
+                                            np.asarray(list(parent.values()) or [0], np.int64)]))
     prov = {}
     for u in units:
         m = in_clu == u
-        if u in (0, 1) or not m.any():
+        if u in (0, 1) or _fch.is_reserved(u) or not m.any():
             continue
         clu[m] = nxt
         child[m] = next_atom
@@ -2067,6 +2072,7 @@ def main():
     sy.add_session_args(ap, sdiff=True)
     add_core_arguments(ap)
     add_realign_arguments(ap)
+    _fch.add_argument(ap, cfgmod.load_global_config(), length=False)    # --chunks (FK_CHUNKS); counts in --chunk-min
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
     def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)
@@ -2117,7 +2123,7 @@ def main():
         _ex = np.asarray(_ex)
         if _ex.size != nspk:
             raise SystemExit(f"--exclude-clu has {_ex.size} labels, .res has {nspk}")
-        keep = _ex == 0
+        keep = (_ex == 0) | _fch.is_reserved(_ex)       # a reserved id = a chunk the mask did not evaluate
     # ── input stage + unit exclusions ──
     in_clu = None; excl_units = []
     if a.exclude_units is not None and a.in_stage is None:
@@ -2236,10 +2242,21 @@ def main():
                             equiv_cos=a.deconv_equiv_cos, fiber_agree=a.deconv_fiber_agree)
                        if a.deconv else None))
 
+    chunks_sel = _fch.parse(a.chunks)
+    if chunks_sel is not None:
+        beyond = [k for k in chunks_sel if k >= nchunks]
+        det("chunks", _fch.describe(chunks_sel, a.chunk_min) + (f"; {beyond} beyond the last chunk ({nchunks - 1})"
+                                                               if beyond else ""))
+        if nchunks > _fch.RESERVED_N:
+            raise SystemExit(f"--chunks: the session has {nchunks} chunks but only {_fch.RESERVED_N} reserved "
+                             "clusters exist; use a longer --chunk-min")
     tasks = []; ncore_of = {}
     for c in range(nchunks):
         lo_s = t_min + c * chunk_s; hi_s = t_min + (c + 1) * chunk_s
         chunk_tmin[c] = (lo_s - t_min) / a.sr / 60.0
+        if chunks_sel is not None and c not in chunks_sel:   # not computed: its spikes go to a reserved cluster
+            ncore_of[c] = int(((res >= lo_s) & (res < hi_s)).sum())
+            continue
         ext = np.flatnonzero((res >= lo_s - ov_s) & (res < hi_s + ov_s) & keep)   # excluded spikes never enter a chunk
         ncore = int(((res[ext] >= lo_s) & (res[ext] < hi_s)).sum()); ncore_of[c] = ncore
         if len(ext) < 2 * a.min_group:
@@ -2367,6 +2384,21 @@ def main():
     carried = {}
     if in_clu is not None and excl_units and a.exclude_as == "carry":
         clu, next_atom, carried = _carry_units(clu, child, parent, next_atom, in_clu, excl_units)
+
+    # ── chunks not computed (--chunks / FK_CHUNKS): every core spike of such a chunk goes to that chunk's
+    #    reserved cluster (fiber_chunks.RESERVED_LO + chunk), through ONE ordinary atom per chunk whose
+    #    parent is the reserved id -- so the .clc/.clp stay small and Klusters shows the left-out chunks ──
+    if chunks_sel is not None:
+        ci = np.minimum(((res - t_min) // chunk_s).astype(np.int64), nchunks - 1)
+        off = ~np.isin(ci, np.asarray(chunks_sel, np.int64))
+        clu = np.asarray(clu, np.int64).copy()
+        for k in np.unique(ci[off]):
+            rows = off & (ci == k)
+            aid = next_atom; next_atom += 1
+            parent[aid] = int(_fch.reserved_id(int(k)))
+            child[rows] = aid; clu[rows] = parent[aid]
+        det("reserved", f"{int(off.sum()):,} spikes of {len(np.unique(ci[off]))} chunk(s) not computed -> clusters "
+                        f"{_fch.RESERVED_LO}+chunk")
 
     if a.out:
         clu_out = a.out

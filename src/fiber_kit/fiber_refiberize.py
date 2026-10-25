@@ -41,9 +41,9 @@ import shutil
 import numpy as np
 
 try:
-    from . import neuro_io as nio
+    from . import neuro_io as nio, fiber_chunks as _fch
 except ImportError:                       # running as a loose script
-    import neuro_io as nio
+    import neuro_io as nio, fiber_chunks as _fch
 
 
 # ── core model ───────────────────────────────────────────────────────────────
@@ -206,15 +206,19 @@ class FiberHierarchy:
 
         parent_out = dict(self.parent)
         if renumber:
-            survivors = sorted(set(int(x) for x in np.unique(clu)) - {0, 1})
+            # The reserved clusters (fiber_chunks: spikes of chunks a stage did not compute) keep their ids;
+            # the rest are compacted from 2.  Mapped through the sorted unique ids rather than a table
+            # indexed by id, which would be 2**24 entries long once a reserved id is present.
+            ids = np.unique(clu)
+            survivors = [int(x) for x in ids if int(x) not in (0, 1) and not _fch.is_reserved(int(x))]
             remap = {0: 0, 1: 1}
             for nxt, f in enumerate(survivors, start=2):
                 remap[f] = nxt
-            rlut = np.zeros(int(clu.max()) + 1, dtype=np.int64)
-            for f, g in remap.items():
-                if f <= clu.max():
-                    rlut[f] = g
-            clu = rlut[clu]
+            for x in ids:
+                if _fch.is_reserved(int(x)):
+                    remap[int(x)] = int(x)
+            new_of = np.array([remap.get(int(x), 0) for x in ids], dtype=np.int64)
+            clu = new_of[np.searchsorted(ids, clu)] if ids.size else clu
             # A fiber with no spikes left has no place in the compacted ids: its (empty) children go to
             # 0.  Keeping the old id would alias whichever live fiber was renumbered onto it.
             gone = sorted({int(f) for f in self.parent.values()} - set(remap))

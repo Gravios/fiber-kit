@@ -50,9 +50,9 @@ try:
 except ImportError:                                              # script / direct execution
     import neuro_io as nio, session_yaml as sy, fiber_realign as fr
 try:
-    from . import config as cfgmod
+    from . import config as cfgmod, fiber_chunks as _fch
 except ImportError:
-    import config as cfgmod
+    import config as cfgmod, fiber_chunks as _fch
 
 _LP = "▸ fiber-rdr"
 
@@ -207,6 +207,7 @@ def main(argv=None):
     ap.add_argument("--line", default=kd["FK_RDR_LINE"], help="FK_RDR_LINE: fixed clean line D0SQ,K instead of fitting it")
     ap.add_argument("--out", default=None, help="output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv)")
     ap.add_argument("--seed", type=int, default=0)
+    _fch.add_argument(ap, gcfg, length=False)          # counts in --chunk-min, like fiber-session
     a = ap.parse_args(argv)
     rng = np.random.default_rng(a.seed)
 
@@ -233,6 +234,11 @@ def main(argv=None):
     print(f"{_LP} · {base} elec {a.elec} | noise from {src}: sigma_d {np.round(sigma_d, 1).tolist()}")
 
     chunk = ((res - res.min()) // (a.chunk_min * 60.0 * SR)).astype(int) if a.chunk_min > 0 else None
+    chunks = _fch.parse(a.chunks)
+    clu = _fch.mark_inactive(clu, res, SR, chunks, a.chunk_min if a.chunk_min > 0 else _fch.DEFAULT_CHUNK_MIN)
+    if chunks is not None:
+        print(f"{_LP} \u00b7 {_fch.describe(chunks, a.chunk_min)}: other chunks' spikes not scored")
+    clu = np.where(_fch.is_reserved(clu), 0, clu)          # reserved clusters are not units: never scored
     ids, cnt = np.unique(clu[clu > 1], return_counts=True)
     order = np.argsort(clu, kind="stable"); bounds = np.searchsorted(clu[order], ids)
     rows = []

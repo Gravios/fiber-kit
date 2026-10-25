@@ -19,7 +19,10 @@ With NS3_ROOT pointing at a neurosuite-3 checkout, also:
   - each table is byte-identical to neurosuite-3's copy;
   - the two contract.yaml files agree: the same contract number, plugin
     protocol, session schema and table hashes, and for every format both
-    list, each side reads the version the other writes.
+    list, each side reads the version the other writes;
+  - the reserved cluster ids of chunk runs (fiber_chunks.RESERVED_LO/HI) are
+    the ones Klusters skips (kReservedClusterLo/Hi in libklustersshared's
+    types.h, neurosuite-3 0889).
 
     NS3_ROOT=/path/to/neurosuite-3 python3 test/test_shared_contract.py
 
@@ -47,6 +50,9 @@ SHARED = {
 # golden_formats_test.cpp).
 for _g in ['fk.wti.1', 'fk.wti.2', 'fk.wtl.1', 'golden.eap.1', 'golden.tcl.1', 'golden.wtf.standard.1', 'golden.wti.1', 'golden.wti.2', 'golden.wtl.1']:
     SHARED["golden/" + _g] = "src/libneurosuite-core/test/golden/" + _g
+
+# The reserved cluster ids (fiber_chunks.py) as Klusters declares them.
+TYPES_H = "src/libklustersshared/src/klustersshared/types.h"
 
 bad = 0
 
@@ -139,9 +145,24 @@ def main():
                 (mr, mw), (tr, tw) = mine["formats"][name], theirs["formats"][name]
                 report(tr >= mw, f"{name}: neurosuite-3 reads up to v{tr}, fiber-kit writes v{mw}")
                 report(mr >= tw, f"{name}: fiber-kit reads up to v{mr}, neurosuite-3 writes v{tw}")
+        check_reserved_ids(os.path.join(fk, TYPES_H))
 
     print(f"\n{'FAIL' if bad else 'PASS'}: {bad} problem(s)")
     return 1 if bad else 0
+
+
+def check_reserved_ids(types_h):
+    sys.path.insert(0, os.path.join(ROOT, "src"))
+    from fiber_kit import fiber_chunks as fch
+    if not os.path.exists(types_h):
+        report(False, f"reserved cluster ids: no {types_h}")
+        return
+    with open(types_h) as f:
+        text = f.read()
+    got = {k: int(v) for k, v in re.findall(r"\b(kReservedCluster(?:Lo|Hi))\s*=\s*(\d+)", text)}
+    for key, want in (("kReservedClusterLo", fch.RESERVED_LO), ("kReservedClusterHi", fch.RESERVED_HI)):
+        report(got.get(key) == want, f"reserved cluster ids: {key} = {got.get(key)} in neurosuite-3, "
+                                     f"{want} in fiber_chunks.py")
 
 
 if __name__ == "__main__":

@@ -39,11 +39,13 @@ try:
     from . import fiber_link_core as flc
     from . import fiber_consolidate as _fc
     from . import config as cfgmod
+    from . import fiber_chunks as _fch
 except ImportError:
     import neuro_io as nio, fiber_geometry as fg, fiber_lib as fl, session_yaml as sy, fiber_ccg as cg
     import fiber_link_core as flc
     import fiber_consolidate as _fc
     import config as cfgmod
+    import fiber_chunks as _fch
 
 _LP = "\u25b8 fiber-xcorr-merge"
 
@@ -383,6 +385,7 @@ def main():
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    _fch.add_argument(ap, gcfg)
     a = ap.parse_args()
     if a.merge_align not in ("peak", "klusters"):
         raise SystemExit(f"{_LP} · --merge-align must be peak or klusters, not {a.merge_align!r}")
@@ -400,10 +403,14 @@ def main():
         _, clu = nio.read_clu_at(base, elec, variant=a.clu_method, tag=a.clu_stage, n_spikes=res.size)
     spk = nio.open_spk_file(nio.session_path(base, "spk", elec, variant=a.spk_variant), NS, NC)
     assert res.size == clu.size == spk.shape[0], "res/clu/spk length mismatch"
+    chunks = _fch.parse(a.chunks)
+    clu = _fch.mark_inactive(clu, res, SR, chunks, a.chunk_length)   # other chunks -> reserved clusters
+    if chunks is not None:
+        print(f"{_LP} · {_fch.describe(chunks, a.chunk_length)}")
     duration = float(res.max()) if res.size else 1.0
     refrac = cg.refrac_samples(a.refrac_ms, SR); censor = cg.refrac_samples(a.refrac_censor_ms, SR)
 
-    ids0, cnt = np.unique(clu[clu > 1], return_counts=True)
+    ids0, cnt = np.unique(clu[(clu > 1) & ~_fch.is_reserved(clu)], return_counts=True)   # reserved: never merged
     big = [int(u) for u, c in zip(ids0, cnt) if c >= a.min_n]
     print(f"{_LP} · {base} elec {elec} | {a.spk_variant} .spk | {len(big)}/{len(ids0)} clusters >= {a.min_n} spk"
           f" | roll-cos>={a.cos_thr} shift+/-{a.shift} refrac={a.refrac_ms}ms realign-after-merge ({a.merge_align})")
@@ -423,7 +430,7 @@ def main():
                                            rvu_thr=a.rvu_thr, rvu_rise=a.rvu_rise, rvu_win=a.rvu_win,
                                            rvu_knn=a.rvu_knn, res=res, knn_k=a.rvu_knn_k, knn_vote=a.rvu_knn_vote,
                                            knn_refs=a.rvu_knn_refs, knn_fold=a.rvu_knn_fold, knn_max=a.rvu_knn_max, min_n=a.min_n,
-                                           next_id=int(clu.max()) + 1, stats=_st)
+                                           next_id=_fch.next_free_id(clu), stats=_st)
     new = clu.copy().astype(np.int64)
     knn_moved = _st.get("knn_moved", 0) > 0
     if knn_moved:                                          # per-spike moves: rebuild from the final members
@@ -433,7 +440,8 @@ def main():
         for u in big:
             if mapping[u] != u:
                 new[clu == u] = mapping[u]
-    n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
+    _real = lambda x: x[(x > 1) & ~_fch.is_reserved(x)]   # noqa: E731
+    n_in = len(np.unique(_real(clu))); n_out = len(np.unique(_real(new)))
     print(f"{_LP} · merged {n_in - n_out} clusters ({n_in} -> {n_out}); merges {n_merge}, refractory vetoes {n_veto}"
           + (f", gain-IQR vetoes {_st.get('gain_vetoes', 0)}" if (a.giqr_thr > 0 or a.giqr_rise > 0) else "")
           + (f", residual-variance vetoes {_st.get('rvu_vetoes', 0)}" if (a.rvu_thr > 0 or a.rvu_rise > 0) else "")
@@ -466,6 +474,16 @@ def main():
                     key[kk] = nxt_c; _newpar[nxt_c] = kk[1]; nxt_c += 1
                 _child[i] = key[kk]
             print(f"{_LP} · knn moves parked as {len(key):,} new child atoms")
+        if chunks is not None:                             # spikes of chunks not merged here: one atom per
+            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # chunk under its reserved cluster, as fiber-session
+            lut = np.zeros(max(int(_child.max()), max(_newpar, default=0)) + 1, np.int64)
+            for c_, f_ in _newpar.items():
+                lut[c_] = f_
+            pc = lut[np.clip(_child, 0, lut.size - 1)]         # each spike's current parent
+            for rid in np.unique(new[_fch.is_reserved(new)]):
+                rows = (new == rid) & (pc != rid)
+                if rows.any():
+                    _child[rows] = nxt_c; _newpar[nxt_c] = int(rid); nxt_c += 1
         _FH(_child, _newpar).save(base, elec, variant=a.clu_method, tag=a.out_tag,
                                   renumber=False, backup=False)
         print(f"{_LP} · hierarchy carried: {len(_newpar):,} children -> "

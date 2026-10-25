@@ -87,6 +87,10 @@ import os
 import numpy as np
 
 try:
+    from . import fiber_chunks as _fch
+except ImportError:
+    import fiber_chunks as _fch
+try:
     from . import fiber_lib as fl
     from .fiber_refine import _knn_apply, _ncorr
 except ImportError:                                   # script / flat-layout fallback
@@ -493,7 +497,7 @@ def knn_pass(get_waves, labels, idx, *, k=20, thr=0.3, minref=50, minnew=30,
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     if next_id is None:
-        next_id = int(labels.max()) + 1
+        next_id = _fch.next_free_id(labels)                 # below the reserved block (fiber_chunks)
     excl = {int(e) for e in exclude}
     inc = np.flatnonzero(~np.isin(labels[idx], list(excl)))
     if inc.size <= max(2 * k, minref):
@@ -544,7 +548,7 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     chunk_ids = np.asarray(chunk_ids)
-    next_id = int(labels.max()) + 1
+    next_id = _fch.next_free_id(labels)                     # below the reserved block (fiber_chunks)
     tot = dict(strip=0, knn=0, new=0)
     strip_kw = dict(strip_kw or {})
     # The curator's strip is ITERATIVE: strip, re-template on the result,

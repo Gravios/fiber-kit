@@ -46,10 +46,10 @@ import numpy as np
 
 try:
     from . import neuro_io as nio, session_yaml as sy
-    from . import config as cfgmod
+    from . import config as cfgmod, fiber_chunks as _fch
 except ImportError:
     import neuro_io as nio, session_yaml as sy
-    import config as cfgmod
+    import config as cfgmod, fiber_chunks as _fch
 
 _LP = "\u25b8 fiber-flag-artifacts"
 def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
@@ -110,6 +110,7 @@ def main():
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="artifact",
                     help="stage tag of the emitted mask .clu")
     ap.add_argument("--dry-run", action="store_true", help="report the flagged count, write nothing")
+    _fch.add_argument(ap, gcfg)
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ,
                         default=_knob_default(name, typ, fb, gcfg),
@@ -138,25 +139,42 @@ def main():
     nio.check_spk_count(n, spk, spkp, NS, NC)
     _log(f"group {elec} \u00b7 {n:,} spikes \u00b7 {os.path.basename(spkp)}")
 
-    hf, dc, pk = spike_features(spk, n, NS, NC, batch=a.batch)
+    chunks = _fch.parse(a.chunks)
+    act = _fch.active_mask(res, cfg["sr"], chunks, a.chunk_length)
+    if chunks is None:
+        hf, dc, pk = spike_features(spk, n, NS, NC, batch=a.batch)
+    else:                                             # measure only the selected chunks (contiguous runs of the .res)
+        _det("chunks", _fch.describe(chunks, a.chunk_length) + f": {int(act.sum()):,} spikes measured")
+        hf = np.zeros(n, np.float32); dc = np.zeros(n, np.float32); pk = np.zeros(n, np.float32)
+        edges = np.flatnonzero(np.diff(np.r_[0, act.astype(np.int8), 0]))
+        for i0, i1 in zip(edges[::2], edges[1::2]):
+            hf[i0:i1], dc[i0:i1], pk[i0:i1] = spike_features(spk[i0:i1], i1 - i0, NS, NC, batch=a.batch)
     flag = hf > a.hf_frac
     if a.d_crest > 0:
         flag &= dc > a.d_crest
     if a.sat_adu > 0:
         flag |= pk >= a.sat_adu                       # saturation is unambiguous, gate it regardless
+    flag &= act
+    hf, pk = hf[act], pk[act]
     _det("hf_frac", f"median {np.median(hf):.3f}  p99 {np.percentile(hf, 99):.3f}  max {hf.max():.3f}")
     _det("thresholds", f"hf_frac > {a.hf_frac}" + (f" AND d_crest > {a.d_crest}" if a.d_crest > 0 else "")
          + (f"; OR |peak| >= {a.sat_adu} (saturation)" if a.sat_adu > 0 else ""))
-    _det("flagged", f"{int(flag.sum()):,} spikes ({100 * flag.mean():.4f}%)")
+    _det("flagged", f"{int(flag.sum()):,} spikes ({100 * flag.sum() / max(int(act.sum()), 1):.4f}%)")
     if flag.any():
-        _det("their peak", f"median {np.median(pk[flag]):.0f} ADU vs {np.median(pk):.0f} for all spikes "
-                           f"({np.median(pk[flag]) / max(np.median(pk), 1e-9):.2f}x)")
+        _det("their peak", f"median {np.median(pk[flag[act]]):.0f} ADU vs {np.median(pk):.0f} for all spikes "
+                           f"({np.median(pk[flag[act]]) / max(np.median(pk), 1e-9):.2f}x)")
     if a.dry_run:
         _det("dry-run", "nothing written")
         return
     out = nio.session_path(base, "clu", elec, variant=a.spk_variant, tag=a.out_tag)
-    nio.write_clu_file(out, flag.astype(np.int32), n_clusters=2)
-    _det("wrote", f"{os.path.basename(out)}   (0 = keep, 1 = artifact; pass to fiber-session --exclude-clu)")
+    mask = _fch.mark_inactive(flag.astype(np.int64), res, cfg["sr"], chunks, a.chunk_length)
+    if chunks is None:
+        nio.write_clu_file(out, mask.astype(np.int32), n_clusters=2)
+    else:
+        nio.write_clu_file(out, mask.astype(np.int32))
+    _det("wrote", f"{os.path.basename(out)}   (0 = keep, 1 = artifact"
+                  + (f", {_fch.RESERVED_LO}+chunk = not evaluated" if chunks is not None else "")
+                  + "; pass to fiber-session --exclude-clu)")
 
 
 if __name__ == "__main__":

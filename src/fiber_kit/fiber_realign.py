@@ -30,6 +30,10 @@ def _log(m=""): print(f"{_LP} \u00b7 {m}" if m else _LP)
 def _det(k, v, w=8): print(f"{' ' * (len(_LP) + 3)}{k:<{w}} {v}")
 
 try:
+    from . import fiber_chunks as _fch
+except ImportError:
+    import fiber_chunks as _fch
+try:
     from . import neuro_io as nio
 except ImportError:
     import neuro_io as nio
@@ -506,7 +510,8 @@ def window_index(filmm, cfg, group, res, nsamp, nch, base, tokens=("standard",),
 
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             min_n=20, method="klusters", peak=None, min_score=0.70, upsample=1,
-            variant="standard", verbose=True, recenter=False, rmin=0.4, align_index=None):
+            variant="standard", verbose=True, recenter=False, rmin=0.4, align_index=None,
+            chunks=None, sr=None, chunk_min=12.0):
     """Read the .spk of the VARIANT the clu/res points to, .res, .clu; compute per-spike
     offsets and corrected .res.
 
@@ -535,6 +540,13 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             _log(f"WARNING length mismatch: res={len(res):,} clu={len(labels):,} "
                  f"spk={spk.shape[0]:,} → using first {n:,}")
     res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
+    # FROZEN spikes are never moved: the reserved clusters (spikes of chunks a stage did not compute, see
+    # fiber_chunks) and, with `chunks`, every spike outside them.  They join no template (label 0, the
+    # unit klusters_offsets skips) and keep offset 0 -- so a commit re-cuts their windows where they were.
+    freeze = _fch.is_reserved(labels)
+    if chunks is not None:
+        freeze |= ~_fch.active_mask(res, sr, chunks, chunk_min)
+    labels_align = np.where(freeze, 0, labels) if freeze.any() else labels
     if method == "centroid":
         T = spk.shape[1]
         pos = np.asarray(fl._centroid_pos(spk.astype(float)))           # per-spike circular centroid
@@ -554,11 +566,14 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
         if peak is None:
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
         align_peak = timestamp_index(peak) if align_index is None else int(align_index)
-        off, ioff = klusters_offsets(spk, labels, align_peak, max_shift, iters, min_n, min_score, upsample,
+        off, ioff = klusters_offsets(spk, labels_align, align_peak, max_shift, iters, min_n, min_score, upsample,
                                      recenter=recenter, rmin=rmin)
     else:
-        off, ioff = fl.template_offsets(spk, labels, max_shift, iters, min_n)
+        off, ioff = fl.template_offsets(spk, labels_align, max_shift, iters, min_n)
         align_peak = None
+    if freeze.any():
+        off = np.asarray(off).copy(); ioff = np.asarray(ioff).copy()
+        off[freeze] = 0; ioff[freeze] = 0
     res_corr = res + ioff.astype(np.int64)
     if verbose:
         nz = np.count_nonzero(ioff)
@@ -835,6 +850,7 @@ def main(argv=None):
                          "unless this is set [FK_REALIGN_PARK_DUPS]")
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
+    _fch.add_argument(ap, _g)
     a = ap.parse_args(argv)
     if a.recut and a.check:
         raise SystemExit("[realign] --recut writes, --check does not: pick one")
@@ -897,7 +913,11 @@ def main(argv=None):
         res, off, ioff, res_corr, spk, spk_path, labels = realign(
             base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
             method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
-            variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index)
+            variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index,
+            chunks=_fch.parse(a.chunks), sr=cfg["sr"], chunk_min=a.chunk_length)
+        if _fch.parse(a.chunks) is not None:
+            _det("chunks", _fch.describe(_fch.parse(a.chunks), a.chunk_length) + "; their spikes are not moved")
+            labels = _fch.mark_inactive(labels, res, cfg["sr"], _fch.parse(a.chunks), a.chunk_length)
     if win_note:
         _det("windows", win_note)
     if a.check:
@@ -911,6 +931,8 @@ def main(argv=None):
         # later of each same-unit pair (opt-in, in place on the --clu), list every pair for review.
         realign_report(res, res_corr, ioff, labels)
         same, cross = time_coincidences(res_corr, labels)
+        if len(same):                                     # a reserved cluster is many cells, not one: no parking
+            same = same[~_fch.is_reserved(np.asarray(labels)[same[:, 0]])]
         parked = same[:, 1] if (a.park_duplicates and len(same) and a.clu) else np.zeros(0, np.int64)
         if parked.size and a.out_tag and not a.emit_clu:
             _det("parked", "none: a side-by-side commit (--out-tag) parks only in the clu it emits, and "

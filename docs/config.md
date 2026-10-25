@@ -11,6 +11,7 @@ Values below are the defaults in the shipped `fiber-kit-exp.yaml`.
 | knob | default | meaning |
 |---|---|---|
 | `FK_SESSION_FINE_METHOD` | `rkk` | rkk \| kk.  Per-fiber fine clusterer; rkk = masked-EM KlustaKwik with BIC model selection (robust to unequal covariances). Categorical. |
+| `FK_CHUNKS` | `""` | `""` = every chunk.  Run only these 0-based chunks, e.g. `14-16` or `3,7,10-12` (chunks of FK_SESSION_CHUNK_MIN minutes from the first spike).  Every spike of another chunk goes to that chunk's reserved cluster 16777116+chunk.  Read by fiber-flag-artifacts, fiber-session, fiber-xcorr-merge, fiber-realign and fiber-rdr; fiber-pipeline refuses the other stages while it is set.  See pipeline.md, Chunk runs. |
 | `FK_SESSION_CHUNK_MIN` | `18` | 12 \| 8-20 (min).  Drift must be ~stationary within a chunk: choose so the probe drifts << site pitch (20 um) per chunk.  Too long smears templates across drift; too short starves per-chunk templates of spikes. |
 | `FK_SESSION_RKK_DELETE` | `0` | 0 \| 0/1.  0 = session OVER-clusters: keep small non-singular rkk sub-clusters so refine/intrachunk adjudicate them.  1 = cull sub-min-group pieces (old behaviour; sheds fragments into the artifact bin -- not what session is for). |
 | `FK_SESSION_MERGE_METHOD` | `sliding` | sliding \| template \| profile.  Coarse merge method; INERT when MERGE_CORR=0. |

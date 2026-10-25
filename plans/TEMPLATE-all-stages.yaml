@@ -189,6 +189,7 @@ pipeline:
   #       realign: auto                   # FK_SESSION_REALIGN. At the end of the run, align every spike to its fiber's template (fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY waveform variant's .spk on disk at the shifted times (standard, stderiv*, ...) and its .fet (from its .pca; _D alias .fet included) -- what `fiber-realign --reextract --refeaturize --variants all` does as a separate step. reextract = re-read the .fil; shift-spk = circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil exists, else shift-spk; off = leave .res/.spk/.fet as extracted. — choices: `auto`, `reextract`, `shift-spk`, `off`
   #       realign-algo: klusters          # FK_REALIGN_ALGO. fiber-realign --align-algo for the end-of-run commit; its other knobs (FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there — choices: `klusters`, `template`, `centroid`
   #       realign-fil: ""                 # filtered signal the end-of-run re-extraction reads (default <base>.fil)
+  #       chunks: ""                      # FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk
   #     }}
 
   # ===== fiber-realign : Per-spike Klusters-style realignment + corrected .res spike times, with optional re-extraction from .fil and re-featurisation (commit-and-reextract finalize). Probe geometry is read from <session>.yaml; flags override. =====
@@ -224,6 +225,8 @@ pipeline:
   #       park-duplicates: false          # after the shift, move the later spike of every same-unit pair that landed on one sample (two detections of one spike; identical windows) to cluster 0 in the --clu, in place, as one child atom under 0 when the clu has its .clc/.clp; with --out-tag (the canonical .res is left alone) only in the clu emitted under the tag. Rows are never removed. Cross-unit pairs are only listed (<base>.realign.<variant>.<group>[.<tag>].tsv). fiber-session's own commit parks; a stand-alone run only lists unless this is set [FK_REALIGN_PARK_DUPS]
   #       out-res: ""
   #       out-off: ""
+  #       chunks: ""                      # FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk
+  #       chunk-length: 12.0              # FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in
   #     }}
 
   # ===== fiber-refine : Dedup at the imposed refractory, then iteratively split/peel a fine sort into clean units; writes a refined .clu (+ deduped .res). =====
@@ -561,6 +564,8 @@ pipeline:
   #       emit-drift: 1                   # FK_XCM_EMIT_DRIFT (default 1)
   #       drift-k: 6                      # FK_XCM_DRIFT_K (default 6)
   #       drift-chunk-min: 12.0           # FK_XCM_DRIFT_CHUNK_MIN (default 12.0)
+  #       chunks: ""                      # FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk
+  #       chunk-length: 12.0              # FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in
   #     }}
 
   # ===== fiber-backbone-link : Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. =====

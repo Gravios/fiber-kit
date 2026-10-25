@@ -50,6 +50,8 @@ def main():
         refused = True
     check(refused, "an in-place fiber-realign step is refused without --allow-inplace")
     check(fb.build_run(cfg)[2] == h0, "the hash is deterministic")
+    _, s5, h5 = fb.build_run(dict(cfg, FK_CHUNKS="14-16"))
+    check(h5 != h0 and s5[0]["hash"] != s0[0]["hash"], "a chunk selection (FK_CHUNKS) changes every step's hash")
 
     ov = fb.parse_overrides(["FK_A=1"], ["FK_B=1,2", "FK_C=x,y"], None)
     check(len(ov) == 4 and all(o["FK_A"] == 1 for o in ov) and {(o["FK_B"], o["FK_C"]) for o in ov} ==
@@ -122,8 +124,18 @@ def main():
             with open(os.path.join(bd, "report.html")) as fh:
                 html = fh.read()
             check(rc == 0 and "<table" in html and html.count("data:image/png") >= 2, "report.html with table and figures")
+            # a chunk run: spikes in a reserved cluster are not scored (truth or truth-free)
+            from fiber_kit import fiber_chunks as fch
+            part = sortlab.copy(); part[:100] = fch.RESERVED_LO + 3
+            nio.write_clu_file(base + ".clu.stderiv.1.sortC", part)
+            fb.main(["score", base, "1", "--clu-method", "stderiv", "--stages", "sortC",
+                     "--gt-clu", base + ".gt.clu", "--gt-res", base + ".gt.res", "--interneurons", "4"])
+            mc = next(r for r in fb._tsv_read(os.path.join(bd, "metrics.tsv")) if r["tag"] == "sortC")
+            check(mc["n_spikes"] == 500 and mc["chunks_left_out"] == 1 and mc["n_clusters"] == 2,
+                  f"a chunk run scores only its computed spikes ({int(mc['n_spikes'])} of 600, "
+                  f"{int(mc['chunks_left_out'])} chunk left out)")
             # two swept runs (as `run` would register them): the report gains the parameter-effect figure
-            rows = fb._tsv_read(os.path.join(bd, "metrics.tsv"))
+            rows = [r for r in fb._tsv_read(os.path.join(bd, "metrics.tsv")) if r["tag"] == "sortA"]
             extra = [dict(rows[0], tag=f"sortA_{i}", hash=f"0000000{i}", overrides=json.dumps({"FK_SESSION_COARSE_DR": v}),
                           pyr_acc=0.5 + 0.1 * i) for i, v in enumerate((0.1, 0.2))]
             fb._tsv_write(os.path.join(bd, "metrics.tsv"), rows + extra)

@@ -30,12 +30,22 @@ like any other stage.  The hash (8 hex digits of a SHA-1) covers:
 | fiber-session | every `FK_*` key not owned by another stage (so a new session knob is never missed), plus the artifact step's hash when `FK_SESSION_EXCLUDE` is on |
 | fiber-flag-artifacts | `FK_FLAG_*` |
 | fiber-xcorr-merge, fiber-rdr, ... | their own prefix (`FK_XCM_*`, `FK_RDR_*`, ...), plus the hash of the step that made their `in:` |
-| every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT` |
+| every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT`, `FK_CHUNKS`, `FK_SESSION_CHUNK_MIN` |
 
 So the same parameters always give the same tag, a changed merge knob reuses the cached session output,
 and a changed session knob gives every later step a new tag.  A step whose output already exists is
 skipped: a sweep can be stopped and resumed.  The hash covers parameters, not code; the fiber-kit
 version is recorded with each run (`fk-bench/runs.jsonl`).
+
+## Chunk runs
+
+`fiber-bench run --chunks 14-16` sets `FK_CHUNKS` for every variant (or set it per variant with `--set`):
+each stage sorts only those chunks, and the others' spikes go to the reserved clusters
+16777116+chunk (pipeline.md, Chunk runs).  A parameter search on a few chunks costs only those chunks' sorting
+time.  `FK_CHUNKS` is in every step's hash, so chunk runs never share a tag with
+full runs.  `score` leaves the reserved spikes out: truth spikes in a chunk that was not run count for
+no unit.  Units with no truth spikes in the chunks run are dropped, and `units_scored` and
+`chunks_left_out` record that.  The free metrics ignore the reserved clusters.
 
 ## Isolation
 

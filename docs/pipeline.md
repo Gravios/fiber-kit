@@ -248,6 +248,27 @@ from `--plan`, else from the `pipeline:` section of `$FK_CONFIG`.  A bare stage 
 once is refused with its ids; on the command line a bare KNOWN stage name (`fiber-pipeline 5
 fiber-realign`) keeps its old meaning -- that stage stand-alone with the pipeline defaults, not a plan step.
 
+## Chunk runs
+
+`FK_CHUNKS` (in `$FK_CONFIG`, the environment, or `--chunks` on a stage) runs the pipeline on
+some chunks only, e.g. `FK_CHUNKS: "14-16"`.  Chunks are fiber-session's own:
+`FK_SESSION_CHUNK_MIN` minutes long, counted from the first spike, numbered from 0.  fiber-session's
+log numbers them from 1.
+
+* Each stage still writes one label per spike of the shared `.res`.  Every spike of a chunk it did
+  not run goes to that chunk's **reserved cluster**, `16777116 + chunk`.  These are the top 100 ids
+  (2^24-100 .. 2^24-1), the highest Klusters holds exactly.  So the output opens in Klusters, and the
+  reserved clusters show what was left out.
+* Reserved clusters are not sorted.  They are never merged, split, realigned, scored or flagged.  Every
+  id allocator skips the block: `fiber_chunks.next_free_id` here, and `highestClusterId()` in
+  Klusters (neurosuite-3 0889).  So new clusters are always numbered below it.  The two sides'
+  constants are checked by `test_shared_contract` when `NS3_ROOT` is set.
+* Stages that support it: fiber-flag-artifacts, fiber-session, fiber-xcorr-merge, fiber-realign,
+  fiber-rdr (the fiber-kit-exp plan).  fiber-pipeline refuses every other stage while `FK_CHUNKS` is
+  set, rather than letting it sort the reserved clusters.
+* fiber-session's hierarchy (`.clp`) gives each left-out chunk one atom, whose parent is the reserved id.
+* At most 100 chunks can be reserved.  For a longer session, lengthen `FK_SESSION_CHUNK_MIN`.
+
 ## Configuration
 
 Point `$FK_CONFIG` at a `fiber-kit.yaml` (or use the shipped `fiber-kit-exp.yaml`).  It holds flat
