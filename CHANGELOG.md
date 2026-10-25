@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.56.1] — shared files are never left cut short, half-written or half-deduped
+- `neuro_io.atomic_write` (new): every writer goes to a temporary file beside the target and moves it in with
+  `os.replace`.  This covers .res/.clu/.fet/.spk/.nst/.wti/.wtl/.eap/.tcl, plus .pca, .cpos, .position,
+  .fibers, the fiber-stats and fiber-stochastic tables, and the xcorr-merge drift table.  A crash, a full disk
+  or Ctrl-C leaves the previous file, never a truncated one.
+- fiber-realign refuses a clu whose length differs from the .res or .spk.  Until now it aligned "the first
+  n" spikes and committed them, which cut the shared .res and every .spk/.fet down to the clu's length.
+- fiber-realign writes the .res last, after the windows, .fet and clu.  A run that died after the .res left
+  shifted times beside the old windows, and the re-run shifted those spikes a second time.
+- `apply_spike_keep` (dedup) is two-phase: every subset is written beside its file, and only when all of them
+  succeeded are they moved in.  A failed rewrite now raises and leaves the group as it was.  It used to
+  truncate the file, quarantine the now empty file as .stalebkp and report success.
+- `read_clu_file(n_spikes=)` raises on a .clu of another length instead of truncating it or returning it
+  short, so a stale or foreign sort can no longer be row-aligned with the wrong spikes.
+- An empty .spk reads as 0 spikes; `np.memmap` used to raise on it.
+- test_atomic_io (new).  The negative control on 0.56.0 fails 6 checks and reproduces the quarantined
+  .spk.
+
 ## [0.56.0] — chunk runs (`FK_CHUNKS`) and reserved cluster ids
 - `FK_CHUNKS` (global; `--chunks` on each supporting stage) runs only some chunks, e.g. `14-16`.
   Chunks are fiber-session's own `FK_SESSION_CHUNK_MIN` chunks, 0-based.  Every spike of a chunk that

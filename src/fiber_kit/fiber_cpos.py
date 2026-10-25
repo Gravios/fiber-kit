@@ -144,7 +144,7 @@ def spike_table(nspk, clu, per):
 def write_cpos(path, table):
     """int32 nCols header + float32 (Nspk x nCols), row-major, .res order."""
     table = np.asarray(table, np.float32)
-    with open(path, "wb") as f:
+    with nio.atomic_write(path, "wb") as f:
         np.array([table.shape[1]], np.int32).tofile(f)
         table.tofile(f)
     return path

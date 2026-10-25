@@ -39,6 +39,7 @@
 #  as text (e.g. a 1332-cluster .clu -> first header byte 0x34 = '4'), which broke
 #  reads outright -- it was never the "non-issue in practice" it was assumed to be.
 # ════════════════════════════════════════════════════════════════════════════
+import contextlib
 import glob
 import os
 from collections import namedtuple
@@ -216,6 +217,31 @@ def resolve_input(base, type_, group, prefer_variants):
     return ResolvedInput(canonical, "", False, False)
 
 
+# ── atomic writes ────────────────────────────────────────────────────────────
+@contextlib.contextmanager
+def atomic_write(path, mode="wb"):
+    """Open a temporary file beside `path` and, if the block finishes, move it onto
+    `path` with os.replace (atomic on POSIX and Windows).  If the block raises, the
+    temporary file is removed and `path` is left as it was.  So a crash, a full disk
+    or Ctrl-C never leaves a truncated .res/.clu/.spk/.fet for Klusters or the next
+    stage to read.  A reader holding a memmap of the old file keeps the old data."""
+    path = os.fspath(path)
+    d = os.path.dirname(os.path.abspath(path))
+    tmp = os.path.join(d, f".{os.path.basename(path)}.tmp{os.getpid()}")
+    f = open(tmp, mode)  # noqa: SIM115 -- closed on both paths below
+    try:
+        yield f
+        f.flush()
+        os.fsync(f.fileno())
+        f.close()
+        os.replace(tmp, path)
+    except BaseException:
+        f.close()
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
+        raise
+
+
 # ── .res.N ───────────────────────────────────────────────────────────────────
 def read_res_file(path):
     """Read a binary .res file (int64 spike timestamps; mirrors
@@ -226,7 +252,8 @@ def read_res_file(path):
 def write_res_file(path, times):
     """Write spike timestamps as canonical binary .res (little-endian int64,
     no header).  Mirrors neurofileio::writeRes' binary counterpart."""
-    np.asarray(times, dtype=RES_DTYPE).tofile(path)
+    with atomic_write(path) as f:
+        np.asarray(times, dtype=RES_DTYPE).tofile(f)
     return path
 
 
@@ -309,13 +336,16 @@ def write_res(base, elec, times, variant="", tag=None):
 def read_clu_file(path, n_spikes=None):
     """Read a binary .clu -> (nClusters, ids:int64 ndarray): int32 nClusters
     header + int32 ids (mirrors neurofileio::writeClu / KK::LoadClu binary path).
-    `n_spikes` truncates the id array for symmetry with the C++ reader; the file
-    size otherwise determines it."""
+    `n_spikes` is the spike count the caller's .res holds: a .clu with a different
+    count belongs to another spike set (a stale or foreign sort), and reading it
+    row-aligned would label the wrong spikes, so it raises ValueError rather than
+    truncating or returning a short array."""
     raw = np.fromfile(path, dtype=CLU_DTYPE)
     n_clu = int(raw[0]) if raw.size else 0
     ids = raw[1:].astype(np.int64)
     if n_spikes is not None and ids.size != n_spikes:
-        ids = ids[:n_spikes]
+        raise ValueError(f"{path}: {ids.size:,} labels for {int(n_spikes):,} spikes -- "
+                         "this .clu does not belong to the .res being used")
     return n_clu, ids
 
 
@@ -326,7 +356,7 @@ def write_clu_file(path, ids, n_clusters=None):
     ids = np.asarray(ids, dtype=CLU_DTYPE)
     if n_clusters is None:
         n_clusters = int(ids.max()) + 1 if ids.size else 0
-    with open(path, "wb") as f:
+    with atomic_write(path, "wb") as f:
         np.array([n_clusters], CLU_DTYPE).tofile(f)
         ids.tofile(f)
     return path
@@ -617,7 +647,7 @@ def write_fet_file(path, values):
     values = np.asarray(values, dtype=FET_DTYPE)
     if values.ndim != 2:
         raise ValueError("write_fet_file expects (nSpikes, nFeatures)")
-    with open(path, "wb") as f:
+    with atomic_write(path, "wb") as f:
         np.array([values.shape[1]], FET_HDR_DTYPE).tofile(f)
         values.tofile(f)
     return path
@@ -633,6 +663,8 @@ def write_fet(base, elec, values, variant="", tag=""):
 def open_spk_file(path, nsamp, nchan, mode="r"):
     """Memmap a .spk/.spkD file as (nSpikes, nsamp, nchan) int16, sample-major.
     Only whole spikes are exposed (trailing partial spike, if any, is dropped)."""
+    if os.path.getsize(path) == 0:                 # np.memmap cannot map an empty file
+        return np.zeros((0, nsamp, nchan), SPK_DTYPE)
     mm = np.memmap(path, dtype=SPK_DTYPE, mode=mode)
     n = mm.size // (nsamp * nchan)
     return mm[:n * nsamp * nchan].reshape(n, nsamp, nchan)
@@ -757,7 +789,8 @@ def open_spk_raw(base, elec, nsamp, nchan, mode="r"):
 def write_spk_file(path, waves):
     """Write a .spk/.spkD: int16, sample-major, no header (inverse of
     open_spk_file).  `waves` is (nSpikes, nsamp, nchan)."""
-    np.asarray(waves, dtype=SPK_DTYPE).tofile(path)
+    with atomic_write(path) as f:
+        np.asarray(waves, dtype=SPK_DTYPE).tofile(f)
     return path
 
 
@@ -798,7 +831,7 @@ def write_nst(path, s):
     mean = np.asarray(s["mean"], "<f8").reshape(D)
     cov = np.asarray(s["cov"], "<f8").reshape(D * D)
     sigma = np.asarray(s["sigma"], "<f8").reshape(nc)
-    with open(path, "wb") as f:
+    with atomic_write(path, "wb") as f:
         f.write(np.array([NSTE_MAGIC, NST_VERSION[1], ns, nc, s.get("peak", 0), s.get("guard", 0),
                           s.get("passes", 0), 0], "<i4").tobytes())
         f.write(np.array([s.get(k, 0) for k in ("n_requested", "n_drawn", "n_kept",
@@ -892,7 +925,7 @@ def write_wti(base, elec, rows, nsamp, nchan, peak=-1, sr=0.0, variant="", tag="
     any_parent = any(int(rd.get("parent", -1)) >= 0 for rd in rows)
     ver = WTI_VERSION[1] if any_parent else 1
     path = session_path(base, "wti", elec, variant=variant, tag=tag)
-    with open(path, "w") as f:
+    with atomic_write(path, "w") as f:
         f.write("wti %d\n" % ver)
         f.write("nSamples %d\n" % int(nsamp))
         f.write("nChannels %d\n" % int(nchan))
@@ -1003,7 +1036,7 @@ def write_wtl(base, elec, nodes, tag=""):
     is the index list medianed to build the node (the generator re-medians exactly
     these).  Mirrors neurofileio::writeWtl; pair with read_wtl."""
     path = session_path(base, "wtl", elec, variant="", tag=tag)
-    with open(path, "w") as f:
+    with atomic_write(path, "w") as f:
         f.write("wtl %d\n" % WTL_VERSION[1])
         f.write("nNodes %d\n" % len(nodes))
         f.write("# node class kind parent a b nSpikes spikes...\n")
@@ -1135,7 +1168,7 @@ def write_eap(base, elec, cells, group=0, flags=0, tag=""):
     arr = np.ascontiguousarray(cells, dtype=np.int8)
     n, t = (int(arr.shape[0]), int(arr.shape[1])) if arr.ndim == 2 else (0, 0)
     path = session_path(base, "eap", elec, variant="", tag=tag)
-    with open(path, "wb") as f:
+    with atomic_write(path, "wb") as f:
         f.write(b"EAP" + bytes([EAP_VERSION[1]]))
         f.write(struct.pack("<IIII", n, t, int(group), int(flags)))
         f.write(b"\x00" * 12)
@@ -1176,7 +1209,7 @@ def write_tcl(base, elec, entries, n_classes=None):
         n_classes = len(entries)
     def dash(x):
         return "-" if (x is None or x == "") else str(x)
-    with open(path, "w") as f:
+    with atomic_write(path, "w") as f:
         f.write("tcl %d\n" % TCL_VERSION[1])
         f.write("nClasses %d\n" % int(n_classes))
         f.write("# col\tstatus\tlabel\tprovenance_clu\tprovenance_stage\tcreated\n")
@@ -1278,6 +1311,8 @@ def _is_live_perspike(stage):
             return False
         if tok == "part":                 # byte-split fragment (.part.aa)
             return False
+        if tok == "tmp":                  # a dedup copy left by an interrupted run (.dedup.tmp)
+            return False
         if tok.endswith("bkp"):           # explicit backup (refine_linked_bkp)
             return False
         if tok in _PERSPIKE_SIDECAR:      # .units.npz and friends
@@ -1339,16 +1374,33 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             return int(f.n_spikes) if f.ok else None
         return None
 
-    def _subset(path, t):                                  # rewrite path in place, keeping `keep` rows
+    # Two-phase: every subset is first written beside its file (<file>.dedup.tmp) and only when ALL
+    # of them succeeded are they moved onto the live files.  A failure (full disk, unreadable file)
+    # raises and leaves the group exactly as it was -- never half-deduped, never a file quarantined
+    # because its rewrite failed.
+    pending = []                                           # (tmp, live path)
+    failed = []                                            # (path, error)
+
+    def _subset(path, t):                                  # write the `keep` rows of path to a temp file
+        tmp = path + ".dedup.tmp"
         if t == "res":
-            write_res_file(path, np.fromfile(path, dtype=RES_DTYPE)[keep])
+            write_res_file(tmp, np.fromfile(path, dtype=RES_DTYPE)[keep])
         elif t in ("clu", "clc"):
             raw = np.fromfile(path, dtype=CLU_DTYPE)
-            write_clu_file(path, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
+            write_clu_file(tmp, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
         elif t in ("spk", "spkD"):
-            write_spk_file(path, np.asarray(open_spk_file(path, nsamp, nchan)[keep]))   # materialise before truncate
+            write_spk_file(tmp, np.asarray(open_spk_file(path, nsamp, nchan)[keep]))
         elif t in ("fet", "fetD"):
-            write_fet_file(path, read_fet_file(path).values[keep])
+            write_fet_file(tmp, read_fet_file(path).values[keep])
+        pending.append((tmp, path))
+
+    def _try_subset(path, t):
+        try:
+            _subset(path, t)
+            return True
+        except Exception as e:  # noqa: BLE001 -- collected and raised below, after cleaning up
+            failed.append((path, e))
+            return False
 
     # ── group live per-spike files by stage (variant before the electrode is ignored: standard
     #    and stderiv are the same spike set per stage) ──
@@ -1391,10 +1443,8 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             # the base stage is the set `keep` is for; subset its n_orig files, leave nkeep, orphan the rest
             for (path, t), c in counts.items():
                 if c == n_orig:
-                    try:
-                        _subset(path, t); rewritten.append(path); base_changed = True
-                    except Exception as e:  # noqa: BLE001
-                        orphans.append((path, f"error: {e}"))
+                    if _try_subset(path, t):
+                        rewritten.append(path); base_changed = True
                 elif c == nkeep:
                     done.append((path, c))
                 else:
@@ -1408,10 +1458,8 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             vals = set(core.values())
             if vals == {n_orig}:
                 for (path, t), c in core.items():          # consistent derived stage -> dedup it too
-                    try:
-                        _subset(path, t); rewritten.append(path)
-                    except Exception as e:  # noqa: BLE001
-                        orphans.append((path, f"error: {e}"))
+                    if _try_subset(path, t):
+                        rewritten.append(path)
             elif vals == {nkeep}:
                 done.extend((path, c) for (path, t), c in core.items())
             else:                                          # stale / inconsistent stage -> whole stage as a unit
@@ -1419,22 +1467,34 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                 continue
             for (path, t), c in atoms.items():
                 if c == n_orig and vals == {n_orig}:
-                    try:
-                        _subset(path, t); rewritten.append(path)
-                    except Exception as e:  # noqa: BLE001
-                        orphans.append((path, f"error: {e}"))
+                    if _try_subset(path, t):
+                        rewritten.append(path)
                 elif c == nkeep and vals == {nkeep}:
                     done.append((path, c))
                 else:
                     orphans.append((path, c))
 
     # per-spike sidecars of the base spike set (named outside the type grammar above)
-    if base_changed:
-        off = f"{base}.offsets.{elec}.npy"
-        if os.path.exists(off):
+    off = f"{base}.offsets.{elec}.npy"
+    if base_changed and not failed and os.path.exists(off):
+        try:
             o = np.load(off)
             if o.shape[0] == n_orig:
-                np.save(off, o[keep]); rewritten.append(off)
+                with atomic_write(off + ".dedup.tmp") as fh:
+                    np.save(fh, o[keep])
+                pending.append((off + ".dedup.tmp", off)); rewritten.append(off)
+        except Exception as e:  # noqa: BLE001
+            failed.append((off, e))
+    if failed:
+        for tmp, _ in pending:
+            with contextlib.suppress(OSError):
+                os.remove(tmp)
+        names = "; ".join(f"{os.path.basename(p)}: {e}" for p, e in failed)
+        raise RuntimeError(f"dedup: group {elec} left unchanged -- could not write the deduped copy of "
+                           f"{len(failed)} file(s): {names}")
+    for tmp, path in pending:                              # commit: all subsets exist, move them in
+        os.replace(tmp, path)
+    if base_changed:
         for kind, how in (("deconv", "re-run fiber-session --deconv to regenerate"),
                           ("realign", "fiber-realign --check lists the pairs again")):
             for man in sorted(glob.glob(f"{glob.escape(base)}.{kind}.*.tsv")):

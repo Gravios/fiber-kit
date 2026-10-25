@@ -712,7 +712,7 @@ def _dump_ensemble(a, rows, peel_log, mask, gch):
     print(f"fiber_stochastic: compressing + writing {out} ({M:,} instances)...",
           file=_sys.stderr, flush=True)
     _tw = _time.time()
-    with open(out, "wb") as f:
+    with nio.atomic_write(out, "wb") as f:
         np.savez_compressed(f, **arrs)
     print(f"fiber_stochastic: wrote {out}  ({_time.time() - _tw:.1f}s)", file=_sys.stderr, flush=True)
 

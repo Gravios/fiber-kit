@@ -158,7 +158,7 @@ def main():
     # is why the old standalone flag was redundant as well as misplaced.
     out = a.out or nio.fibers_path(base, a.clu_method, elec,
                                    a.method if a.method is not None else a.variant)
-    with open(out, "wb") as f:
+    with nio.atomic_write(out, "wb") as f:
         np.savez_compressed(f, **arrs)
     print(f"wrote {out}  ({M} cluster-instances over {len(windows)} window(s); "
           f"{time.time() - t0:.0f}s; rows sharing gid = that cluster over time)")

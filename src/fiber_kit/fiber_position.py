@@ -236,7 +236,8 @@ def write_positions(out, base, elec):
     """Bare per-spike position as binary float32 (parallel to .res) + an
     analysis .npz with all columns (res, unit, s, conf, energy, chunk)."""
     pos_path = f"{base}.position.{elec}"
-    np.asarray(out["s"], dtype="<f4").tofile(pos_path)
+    with nio.atomic_write(pos_path) as _f:
+        np.asarray(out["s"], dtype="<f4").tofile(_f)
     npz_path = f"{base}.position.{elec}.npz"
     np.savez(npz_path, **out)
     return pos_path, npz_path

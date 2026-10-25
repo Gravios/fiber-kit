@@ -532,7 +532,7 @@ def main():
                 # Through a file handle, as fiber-session writes its .fibers: np.savez(<path>) appends
                 # '.npz', so the table landed at <path>.npz while fiber-pipeline hands backbone-link
                 # the canonical <path> -- and the drift step was silently skipped.
-                with open(dpath, "wb") as _fh:
+                with nio.atomic_write(dpath, "wb") as _fh:
                     np.savez(_fh, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
                              drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
                              drift_resid=resid.astype(np.float32), drift_nanchor=na,

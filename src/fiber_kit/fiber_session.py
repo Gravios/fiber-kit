@@ -2586,7 +2586,7 @@ def main():
         drift_pca_basis=drift_basis, drift_pca_mean=drift_mean, drift_R=drift_R, drift_t=drift_t,
         drift_resid=drift_resid, drift_nanchor=drift_nanchor, meta_drift_k=KDRIFT,
         drift_anchor_pairs=drift_anchor_pairs)
-    with open(fib_out, "wb") as f:
+    with nio.atomic_write(fib_out, "wb") as f:
         np.savez_compressed(f, **arrs)
     log("wrote")
     det("clu", clu_out)

@@ -534,12 +534,14 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     spk_path = r.path
     res = nio.read_res(base, elec)
     nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
-    n = min(len(res), len(labels), spk.shape[0])
     if not (len(res) == len(labels) == spk.shape[0]):
-        if verbose:
-            _log(f"WARNING length mismatch: res={len(res):,} clu={len(labels):,} "
-                 f"spk={spk.shape[0]:,} → using first {n:,}")
-    res, labels, spk = res[:n], labels[:n], np.asarray(spk[:n])
+        # The commit rewrites the SHARED .res and every .spk/.fet at the length aligned here, so
+        # aligning "the first n" would cut every file of the group down to a stale clu's length.
+        raise SystemExit(f"[realign] length mismatch: res={len(res):,} clu={len(labels):,} "
+                         f"spk={spk.shape[0]:,} ({spk_path}) -- the clu or the .spk belongs to another "
+                         "spike set; nothing written")
+    spk = np.asarray(spk)
+    n = len(res)
     # FROZEN spikes are never moved: the reserved clusters (spikes of chunks a stage did not compute, see
     # fiber_chunks) and, with `chunks`, every spike outside them.  They join no template (label 0, the
     # unit klusters_offsets skips) and keep offset 0 -- so a commit re-cuts their windows where they were.
@@ -906,7 +908,7 @@ def main(argv=None):
     if a.recut:
         res = np.asarray(nio.read_res(base, group), np.int64)
         off = np.zeros(res.size, np.float32); ioff = np.zeros(res.size, np.int32); res_corr = res.copy()
-        labels = _read_clu(a.clu)[1][:res.size] if a.clu else None
+        labels = nio.read_clu_file(a.clu, n_spikes=res.size)[1] if a.clu else None
         a.emit_clu = False                                 # no label changes: nothing to re-emit
         _log(f"recut: {res.size:,} spikes re-cut at their current times (no alignment)")
     else:
@@ -956,19 +958,6 @@ def main(argv=None):
             _det("pairs", f"{tsv}" + ("" if parked.size or not len(same) else
                                       "  (same-unit pairs listed, not parked: --park-duplicates)"))
 
-    # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
-    # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose
-    # res is .res.stderiv.N under a stderiv_C5 clu (out_variant=stderiv_C5) spawns a SECOND .res.stderiv_C5.N
-    # -- two res per folder, which breaks the single-res invariant.  A stage-tagged commit keeps the tag.
-    _rr = nio.resolve_any(base, "res", group)
-    _res_variant = _rr.variant if getattr(_rr, "found", False) else out_variant
-    res_out = nio.write_res(base, group, res_corr, variant=_res_variant, tag=a.out_tag)
-    np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
-    if a.out_res:                                          # optional extra explicit copy
-        nio.write_res_file(a.out_res, res_corr)
-    _log("committed timestamps")
-    _det("res", f"{res_out}   (variant {out_variant or 'canonical'}, "
-                f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
 
     # realignment shifts timestamps/waveforms but NOT cluster assignments, so emit the clu unchanged
     # under the same variant+tag -- this completes the .clu/.res/.spk/.fet set Klusters loads together
@@ -1073,6 +1062,24 @@ def main(argv=None):
                 _det("fet", f"{fet_out}   ({fet.shape[1]} features incl. time)")
         if a.refeaturize:
             _refresh_lag_alias_fets(base, group, refreshed, res_corr, a.out_tag)
+
+    # COMMIT POINT -- written LAST, after every .spk/.fet/.clu above.  A run that dies earlier leaves
+    # windows that already sit at the corrected times beside the old .res: a re-run measures ~0 shift on
+    # them and re-cuts them at the old times, so the group is consistent again.  Writing the .res first
+    # (as up to 0.56) left shifted times beside the old windows, and the re-run shifted them twice.
+    # .res is the ONE shared artifact (resolve_any finds it under whatever token it wears): commit the
+    # correction back to THAT file, not a feature-variant copy.  Without this, realigning a session whose
+    # res is .res.stderiv.N under a stderiv_C5 clu (out_variant=stderiv_C5) spawns a SECOND .res.stderiv_C5.N
+    # -- two res per folder, which breaks the single-res invariant.  A stage-tagged commit keeps the tag.
+    _rr = nio.resolve_any(base, "res", group)
+    _res_variant = _rr.variant if getattr(_rr, "found", False) else out_variant
+    res_out = nio.write_res(base, group, res_corr, variant=_res_variant, tag=a.out_tag)
+    np.save(a.out_off or f"{base}.offsets.{group}.npy", off.astype(np.float32))
+    if a.out_res:                                          # optional extra explicit copy
+        nio.write_res_file(a.out_res, res_corr)
+    _log("committed timestamps")
+    _det("res", f"{res_out}   (variant {out_variant or 'canonical'}, "
+                f"{'overwrote canonical' if not a.out_tag else f'tag={a.out_tag}'})")
 
 
 if __name__ == "__main__":

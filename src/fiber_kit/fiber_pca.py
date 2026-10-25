@@ -157,7 +157,7 @@ def write_pcad(path, means, evec, recShift, centered=0,
     nCh, data2use = means.shape
     nComp = evec.shape[1]
     nin = int(n_input_channels) if int(n_input_channels) > 0 else nCh
-    with open(path, "wb") as f:
+    with nio.atomic_write(path, "wb") as f:
         # header order matches core: magic, version, nCh, data2use, nComp,
         # recShift, centered, method, nInputChannels
         f.write(struct.pack("<9i", PCAE_MAGIC, PCAE_VERSION, nCh, data2use, nComp,
