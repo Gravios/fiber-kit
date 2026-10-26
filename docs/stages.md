@@ -1240,6 +1240,7 @@ Positional: `session`, `elec`
 | `--out` | — | output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv) |
 | `--seed` | `0` |  |
 | `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
+| `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
 ### `fiber-bench`
 
 Run, score and compare pipeline-parameter variants under a config hash.  Sub-commands `run` (the config's

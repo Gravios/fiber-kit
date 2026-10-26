@@ -206,7 +206,10 @@ def main(argv=None):
     ap.add_argument("--line", default=kd["FK_RDR_LINE"], help="FK_RDR_LINE: fixed clean line D0SQ,K instead of fitting it")
     ap.add_argument("--out", default=None, help="output TSV (default <base>.rdr.<clu-method>.<elec>[.<stage>].tsv)")
     ap.add_argument("--seed", type=int, default=0)
-    _fch.add_argument(ap, gcfg, length=False)          # counts in --chunk-min, like fiber-session
+    # --chunks counts in fiber-session's chunks (--chunk-length = FK_SESSION_CHUNK_MIN), NOT in --chunk-min: that
+    # is rdr's own template bin (FK_RDR_CHUNK_MIN), and with 18-min session chunks and 12-min templates,
+    # counting in it selected other minutes than the session sorted and scored nothing (until 0.57.1)
+    _fch.add_argument(ap, gcfg)
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     rng = np.random.default_rng(a.seed)
@@ -235,9 +238,9 @@ def main(argv=None):
 
     chunk = ((res - res.min()) // (a.chunk_min * 60.0 * SR)).astype(int) if a.chunk_min > 0 else None
     chunks = _fch.parse(a.chunks)
-    clu = _fch.mark_inactive(clu, res, SR, chunks, a.chunk_min if a.chunk_min > 0 else _fch.DEFAULT_CHUNK_MIN)
+    clu = _fch.mark_inactive(clu, res, SR, chunks, a.chunk_length)
     if chunks is not None:
-        print(f"{_LP} \u00b7 {_fch.describe(chunks, a.chunk_min)}: other chunks' spikes not scored")
+        print(f"{_LP} \u00b7 {_fch.describe(chunks, a.chunk_length)}: other chunks' spikes not scored")
     clu = np.where(_fch.is_reserved(clu), 0, clu)          # reserved clusters are not units: never scored
     ids, cnt = np.unique(clu[clu > 1], return_counts=True)
     order = np.argsort(clu, kind="stable"); bounds = np.searchsorted(clu[order], ids)

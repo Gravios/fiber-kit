@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.1] — fiber-rdr counts FK_CHUNKS in the session's chunks
+- In a chunk run, fiber-rdr mapped `FK_CHUNKS` onto chunks of its own template length (`--chunk-min`,
+  `FK_RDR_CHUNK_MIN`, 12 min) instead of fiber-session's (`FK_SESSION_CHUNK_MIN`).  With 18-minute session
+  chunks, `FK_CHUNKS: 12-14` selected minutes 144-180 instead of 216-270: every sorted spike was outside the
+  selection, rdr scored nothing and exited 1.  rdr now takes `--chunk-length` (default
+  `FK_SESSION_CHUNK_MIN`), as fiber-flag-artifacts, fiber-xcorr-merge, fiber-realign and the chunk shield do.
+  `--chunk-min` stays the template bin.
+- test_chunks: rdr with `FK_CHUNKS=1` on 30-second session chunks scores chunk 1's clusters.  0.57.0, on the
+  same session, scored none ("chunks 1 of 12 min").
+
 ## [0.57.0] — chunk runs through every relabelling stage (the chunk shield)
 - fiber-pipeline runs fiber-cpos, fiber-intrachunk, fiber-link, fiber-anchor-link, fiber-backbone-link,
   fiber-consensus, fiber-lowmix, fiber-peel and fiber-refit on a chunk run (`FK_CHUNKS`) **shielded**.

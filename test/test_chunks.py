@@ -180,6 +180,19 @@ def main():
             with open(base + ".rdr.stderiv.1.c1.tsv") as fh:
                 tab = fh.read()
         check(rc == 0 and str(fch.RESERVED_LO) not in tab, "fiber-rdr does not score the reserved cluster")
+        # rdr --chunks counts in the SESSION's chunks (FK_SESSION_CHUNK_MIN, here 0.5 min), not in its own
+        # template bin --chunk-min (FK_RDR_CHUNK_MIN, 12 min): counted in 12-min chunks, chunk 1 is past the end
+        # of this 1-min session and rdr scored nothing (0.56.0-0.57.0)
+        rtsv = os.path.join(td, "rdr_c1.tsv")
+        rc, out = run("fiber_rdr", base, "1", "--clu-method", "stderiv", "--clu-stage", "full", "--min-n", "15",
+                      "--out", rtsv, extra={"FK_CHUNKS": "1", "FK_SESSION_CHUNK_MIN": "0.5"})
+        rows = []
+        if rc == 0 and os.path.exists(rtsv):
+            with open(rtsv) as fh:
+                rows = [ln for ln in fh.read().splitlines()[1:] if ln.strip() and not ln.startswith("#")]
+        check(rc == 0 and len(rows) > 0,
+              f"fiber-rdr FK_CHUNKS=1: chunk 1's clusters are scored ({len(rows)} rows), counting chunks in "
+              "FK_SESSION_CHUNK_MIN while its template bin stays FK_RDR_CHUNK_MIN" + ("" if rc == 0 else "\n" + out[-1500:]))
         # ── the runner guard ──
         cfgp = os.path.join(td, "fk.yaml")
         with open(cfgp, "w") as fh:
