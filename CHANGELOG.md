@@ -4,6 +4,29 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.0] — chunk runs through every relabelling stage (the chunk shield)
+- fiber-pipeline runs fiber-cpos, fiber-intrachunk, fiber-link, fiber-anchor-link, fiber-backbone-link,
+  fiber-consensus, fiber-lowmix, fiber-peel and fiber-refit on a chunk run (`FK_CHUNKS`) **shielded**.
+  These stages only relabel spikes.
+  - **Before the stage:** `fiber_chunks.shield` sets the spikes of the chunks not computed to 0 in the
+    step's input .clu (and their atoms to 0 in the .clc).  Every stage leaves cluster 0 out of its units.
+    The input is saved as `<file>.chunkshield`.
+  - **After the stage:** `unshield` puts those spikes back into their reserved clusters 16777116+chunk in
+    the .clu the stage wrote, with one atom per chunk under the reserved id in the .clc/.clp.  It then
+    restores the input byte for byte.
+  - **On failure:** an EXIT trap restores the input when the stage fails.  The next shield undoes a run
+    killed between the two.
+  - **Tags:** shield and unshield use the plan's `in:`/`out:` tags.  A `--clu-stage`/`--out-stage`
+    override in `params:` is not followed.
+- Still refused while FK_CHUNKS is set: fiber-refine (its dedup changes the spike set) and fiber-stochastic
+  (its own chunking).
+- test_chunks:
+  - backbone-link and anchor-link run shielded through the runner;
+  - the other chunk comes back in its reserved cluster, and the hierarchy reproduces the .clu;
+  - the input is restored byte for byte;
+  - a failing stage still restores its input;
+  - a killed run's shield is undone.
+
 ## [0.56.5] — review fixes to 0.56.1–0.56.4
 An independent review of the four previous releases found these; each now has a test.
 - **fiber-realign keeps a commit journal.**  Writing the .res last (0.56.1) was not enough for `--shift-spk`.

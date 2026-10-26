@@ -10,7 +10,9 @@
   * fiber-xcorr-merge on the chunk run: the reserved cluster is never merged and keeps its id;
   * fiber-realign: spikes in reserved clusters get offset 0 while the others move;
   * fiber-rdr skips the reserved cluster;
-  * fiber-pipeline refuses an unsupported stage while FK_CHUNKS is set.
+  * fiber-pipeline refuses a stage that changes the spike set while FK_CHUNKS is set, and SHIELDS the
+    relabelling stages: backbone-link and anchor-link run on the chunk run, the other chunk's spikes
+    come back in its reserved cluster (in the .clc/.clp too), and the input is restored byte for byte.
 """
 import os
 import shutil
@@ -182,11 +184,57 @@ def main():
         cfgp = os.path.join(td, "fk.yaml")
         with open(cfgp, "w") as fh:
             fh.write('FK_CHUNKS: "1"\n')
-        r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "fiber-cpos", "--dry-run"],
+        r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "fiber-refine", "--dry-run"],
                            capture_output=True, text=True, cwd=td,
                            env=_env({"FK_CONFIG": cfgp, "FK_DIR": td, "FK_SESS": "mini"}), timeout=300)
         check(r.returncode != 0 and "does not support chunk runs" in (r.stdout + r.stderr),
-              "fiber-pipeline refuses fiber-cpos while FK_CHUNKS is set")
+              "fiber-pipeline refuses fiber-refine (it changes the spike set) while FK_CHUNKS is set")
+        # ── shielded stages: backbone-link and anchor-link on the chunk run, through the runner ──
+        plan = os.path.join(td, "plan.yaml")
+        with open(plan, "w") as fh:
+            fh.write("pipeline:\n"
+                     "  - {stage: fiber-backbone-link, in: c1, out: c1bb}\n"
+                     "  - {stage: fiber-anchor-link,   in: c1, out: c1al}\n")
+        before = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
+        penv = _env({"FK_CONFIG": cfgp, "FK_DIR": td, "FK_SESS": "mini", "FK_SESSION_CHUNK_MIN": "0.5"})
+        r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "--plan", plan,
+                            "--dry-run"], capture_output=True, text=True, cwd=td, env=penv, timeout=300)
+        check(r.returncode == 0 and (r.stdout + r.stderr).count("chunk shield") == 2,
+              "dry run: both stages are shielded" + ("" if r.returncode == 0 else "\n" + (r.stdout + r.stderr)[-2000:]))
+        r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "--plan", plan],
+                           capture_output=True, text=True, cwd=td, env=penv, timeout=1800)
+        pout = r.stdout + r.stderr
+        check(r.returncode == 0, "the shielded plan runs" + ("" if r.returncode == 0 else "\n" + pout[-4000:]))
+        if r.returncode == 0:
+            for tag in ("c1bb", "c1al"):
+                o = nio.read_clu_file(f"{base}.clu.stderiv.1.{tag}")[1]
+                check(np.all(o[ci == 0] == fch.RESERVED_LO) and not fch.is_reserved(o[ci == 1]).any()
+                      and (o[ci == 1] > 1).mean() > 0.9,
+                      f".{tag}: chunk 0 back in cluster {fch.RESERVED_LO}, chunk 1 in real clusters")
+                if os.path.exists(f"{base}.clc.stderiv.1.{tag}"):
+                    hh = FiberHierarchy.load(base, 1, variant="stderiv", tag=tag)
+                    check(np.array_equal(hh.refiberize(renumber=False)[0], o),
+                          f".{tag}: its .clc/.clp reproduce the .clu, reserved atom included")
+            after = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
+            check(after == before, "the input .c1 triple is restored byte for byte")
+            left = [f for f in os.listdir(td) if "chunkshield" in f]
+            check(not left, f"no shield state or backup left ({left})")
+            bad = os.path.join(td, "bad.yaml")                 # a shielded stage that fails
+            with open(bad, "w") as fh:
+                fh.write("pipeline:\n  - {stage: fiber-backbone-link, in: c1, out: c1x, params: {no-such-flag: 1}}\n")
+            r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "--plan", bad],
+                               capture_output=True, text=True, cwd=td, env=penv, timeout=600)
+            after = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
+            check(r.returncode != 0 and after == before and not [f for f in os.listdir(td) if "chunkshield" in f],
+                  "a shielded stage that fails: the step fails, the input is restored, nothing left over")
+            st = os.path.join(td, "mini.chunkshield.1.json")      # a run killed between shield and unshield
+            fch.shield(os.path.join(td, "mini"), 1, "stderiv", "c1", "c1y", st, [1], 0.5, log=lambda m: None)
+            masked = open(f"{base}.clu.stderiv.1.c1", "rb").read()
+            fch.shield(os.path.join(td, "mini"), 1, "stderiv", "c1", "c1y", st, [1], 0.5, log=lambda m: None)
+            fch.unshield(st, log=lambda m: None)
+            after = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
+            check(masked != before["clu"] and after == before,
+                  "a shield left by a killed run is undone by the next one (the input is not shielded twice)")
         r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "fiber-rdr", "--dry-run"],
                            capture_output=True, text=True, cwd=td,
                            env=_env({"FK_CONFIG": cfgp, "FK_DIR": td, "FK_SESS": "mini"}), timeout=300)

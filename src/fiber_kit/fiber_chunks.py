@@ -20,7 +20,9 @@ numbered below it.  The same constants are in neurosuite-3's libklustersshared/t
 A stage run with chunks writes every spike of a chunk it did not compute to that chunk's reserved
 cluster, so its output still has one label per spike of the shared .res and opens in Klusters, where
 the reserved clusters show which part of the recording was left out.  Stages treat reserved clusters as
-"not sorted here": never merged, realigned, scored or split.
+"not sorted here": never merged, realigned, scored or split.  Stages without native support that only
+relabel spikes run under fiber-pipeline's CHUNK SHIELD (shield / unshield below; `python -m
+fiber_kit.fiber_chunks shield|unshield`).
 """
 
 import numpy as np
@@ -164,3 +166,171 @@ def fmt(chunks):
             out.append(run); run = [k]
     out.append(run)
     return ",".join(f"{r[0]}-{r[-1]}" if len(r) > 1 else str(r[0]) for r in out)
+
+
+# ── the chunk shield: chunk runs for stages that do not know about them ─────────
+# A stage that only RELABELS spikes (reads a .clu at one tag, writes a .clu at another; never changes the
+# spike set or the .res) can run on a chunk run without knowing about it: fiber-pipeline shields it.
+#   shield    every spike of a chunk not computed is set to 0 in the input .clu (and its atom to 0 in the
+#             .clc) -- the artifact bin, which every stage leaves out of its units -- with the input saved
+#             beside it (<file>.chunkshield) and the reserved id of every such spike in a state file;
+#   the stage runs on the shielded input;
+#   unshield  in the .clu the stage wrote, every shielded spike goes back to its chunk's reserved cluster
+#             (in the .clc/.clp as one atom per chunk under the reserved id), and the input is restored.
+# A run that died between the two leaves the state file; the next shield restores the input first.
+SHIELD_STAGES = ("fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-anchor-link", "fiber-backbone-link",
+                 "fiber-consensus", "fiber-lowmix", "fiber-peel", "fiber-refit")
+
+
+def _triple(base, elec, variant, tag):
+    from . import neuro_io as nio
+    return {k: nio.session_path(base, k, elec, variant=variant, tag=tag) for k in ("clu", "clc", "clp")}
+
+
+def _stat(path):
+    import os
+    try:
+        st = os.stat(path)
+        return [st.st_mtime_ns, st.st_size]
+    except OSError:
+        return None
+
+
+def _restore_inputs(st):
+    import os
+    for path in st["backups"]:
+        if os.path.exists(path + ".chunkshield"):
+            os.replace(path + ".chunkshield", path)
+
+
+def shield(session, elec, variant, in_tag, out_tag, state_path, chunks, chunk_min, log=print):
+    """Hide the spikes of the chunks not computed from the input of a stage (see above)."""
+    import json
+    import os
+    from . import neuro_io as nio
+    from . import session_yaml as sy
+    if os.path.exists(state_path):                         # an earlier run died between shield and unshield
+        with open(state_path) as fh:
+            _restore_inputs(json.load(fh))
+        os.remove(state_path)
+        log(f"chunk shield: restored the input an interrupted run left shielded ({os.path.basename(state_path)})")
+    cfg = sy.resolve_session_params(session, int(elec), require=(), verbose=False)
+    base = cfg["base"]
+    res = nio.read_res(base, elec)
+    tin = _triple(base, elec, variant, in_tag)
+    _, lab = nio.read_clu_file(tin["clu"], n_spikes=res.size)
+    lab = np.asarray(lab, np.int64)
+    ci = chunk_index(res, cfg["sr"], chunk_min)
+    off = is_reserved(lab) | ~np.isin(ci, np.asarray(chunks, np.int64))
+    rid = np.where(off, np.where(is_reserved(lab), lab, RESERVED_LO + np.minimum(ci, RESERVED_N - 1)), 0)
+    if np.any(off & (ci >= RESERVED_N)):
+        raise SystemExit(f"chunk shield: chunk {int(ci.max())} has no reserved cluster (only {RESERVED_N}); "
+                         "use a longer FK_SESSION_CHUNK_MIN")
+    backups = []
+    for k in ("clu", "clc", "clp"):
+        if os.path.exists(tin[k]):
+            with open(tin[k], "rb") as src, nio.atomic_write(tin[k] + ".chunkshield") as dst:
+                dst.write(src.read())
+            backups.append(tin[k])
+    masked = lab.copy(); masked[off] = 0
+    nio.write_clu_file(tin["clu"], masked)
+    if os.path.exists(tin["clc"]) and os.path.exists(tin["clp"]):
+        _, child = nio.read_clu_file(tin["clc"])
+        if child.size == lab.size:
+            child = np.asarray(child, np.int64).copy()
+            gone = np.setdiff1d(np.unique(child[off]), np.unique(child[~off]))   # atoms left with no spike
+            child[off] = 0
+            _, par = nio.read_clu_file(tin["clp"])
+            par = np.asarray(par, np.int64).copy()
+            g = gone[(gone >= 1) & (gone <= par.size)]
+            par[g - 1] = 0
+            nio.write_clu_file(tin["clc"], child)
+            nio.write_clu_file(tin["clp"], par)
+    tout = _triple(base, elec, variant, out_tag)
+    np.save(state_path + ".rid.npy", rid)
+    st = dict(base=base, elec=int(elec), variant=variant, in_tag=in_tag, out_tag=out_tag, backups=backups,
+              out_before={k: _stat(p) for k, p in tout.items()})
+    with nio.atomic_write(state_path, "w") as fh:
+        json.dump(st, fh)
+    log(f"chunk shield: {int(off.sum()):,} spikes of the chunks not computed hidden from the stage "
+        f"(input .{in_tag} saved; they return to clusters {RESERVED_LO}+chunk)")
+    return st
+
+
+def unshield(state_path, log=print):
+    """Put the shielded spikes back into their reserved clusters in what the stage wrote; restore the input."""
+    import json
+    import os
+    from . import neuro_io as nio
+    from .fiber_refiberize import FiberHierarchy
+    with open(state_path) as fh:
+        st = json.load(fh)
+    rid = np.load(state_path + ".rid.npy")
+    off = rid != 0
+    base, elec, variant = st["base"], st["elec"], st["variant"]
+    tout = _triple(base, elec, variant, st["out_tag"])
+    wrote = {k: _stat(p) != st["out_before"][k] and _stat(p) is not None for k, p in tout.items()}
+    if wrote["clu"]:
+        _, lab = nio.read_clu_file(tout["clu"], n_spikes=rid.size)
+        lab = np.asarray(lab, np.int64).copy()
+        if is_reserved(lab[~off]).any():
+            raise SystemExit(f"chunk shield: {tout['clu']} numbers computed spikes into the reserved block")
+        lab[off] = rid[off]
+        done = False
+        if wrote["clc"] and wrote["clp"]:
+            h = FiberHierarchy.load(base, elec, clc=tout["clc"], clp=tout["clp"])
+            if h.child.size == rid.size:
+                child = np.asarray(h.child, np.int64).copy(); parent = dict(h.parent)
+                nxt = max(int(child.max()) if child.size else 0, max(parent, default=0)) + 1
+                for r in np.unique(rid[off]):
+                    child[rid == r] = nxt; parent[nxt] = int(r); nxt += 1
+                clu_b, clc_b, clp_b = FiberHierarchy(child, parent).refiberize(renumber=False)
+                if np.array_equal(clu_b, lab):
+                    for k, arr in (("clu", clu_b), ("clc", clc_b), ("clp", clp_b)):
+                        nio.write_clu_file(tout[k], arr)
+                    done = True
+        if not done:
+            nio.write_clu_file(tout["clu"], lab)
+        log(f"chunk shield: {int(off.sum()):,} spikes back in their reserved clusters in .{st['out_tag']}"
+            + (" (+ .clc/.clp)" if done else ""))
+    same = st["in_tag"] == st["out_tag"]
+    for path in st["backups"]:
+        bak = path + ".chunkshield"
+        if not os.path.exists(bak):
+            continue
+        kind = next((t for t, p in tout.items() if p == path), None)
+        if same and kind is not None and wrote.get(kind, False):
+            os.remove(bak)                                 # the stage replaced its own input: keep its output
+        else:
+            os.replace(bak, path)                          # restore the input exactly
+    os.remove(state_path + ".rid.npy")
+    os.remove(state_path)
+
+
+def main(argv=None):
+    import argparse
+    import os
+    ap = argparse.ArgumentParser(prog="fiber_chunks", description="chunk shield for fiber-pipeline (see module doc)")
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("shield")
+    s.add_argument("session"); s.add_argument("elec", type=int); s.add_argument("variant")
+    s.add_argument("in_tag"); s.add_argument("out_tag"); s.add_argument("state")
+    add_argument(s, None, length=True)
+    u = sub.add_parser("unshield")
+    u.add_argument("state")
+    a = ap.parse_args(argv)
+    pre = "▸ chunk-shield · "
+    if a.cmd == "shield":
+        chunks = parse(a.chunks if a.chunks else os.environ.get("FK_CHUNKS", ""))
+        if chunks is None:
+            return 0
+        shield(a.session, a.elec, a.variant, a.in_tag, a.out_tag, a.state, chunks, a.chunk_length,
+               log=lambda m: print(pre + m))
+    else:
+        unshield(a.state, log=lambda m: print(pre + m))
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

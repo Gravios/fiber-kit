@@ -83,7 +83,9 @@ FK_CHUNKS:               ""       # "" = every chunk | e.g. 14-16 or 3,7,10-12 (
                                   #   fiber-session, fiber-xcorr-merge, fiber-realign and fiber-rdr process only these
                                   #   chunks and write every other chunk's spikes to its RESERVED cluster
                                   #   16777116 + chunk (the top 100 ids Klusters holds exactly, 2^24-100 .. 2^24-1;
-                                  #   no allocator hands them out).  Every other stage refuses to run while it is set.
+                                  #   no allocator hands them out).  fiber-pipeline SHIELDS the stages that only relabel
+                                  #   spikes (cpos, intrachunk, link, anchor-link, backbone-link, consensus, lowmix,
+                                  #   peel, refit); fiber-refine and fiber-stochastic refuse to run while it is set.
 FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.

@@ -779,19 +779,61 @@ fiber_rdr() {   # post-sort QC: residual-derivative contamination score per clus
 }
 
 # Chunk runs (FK_CHUNKS, fiber_chunks): spikes of the chunks not selected are in RESERVED clusters
-# (16777116 + chunk).  Only the stages below know to leave those clusters alone; any other stage would take
-# a reserved cluster for a unit, so it refuses to run while FK_CHUNKS is set.
+# (16777116 + chunk).
+#   CHUNK_STAGES   know about them natively (--chunks): run as they are;
+#   SHIELD_STAGES  only relabel spikes, so they run SHIELDED: fiber_chunks hides the not-computed chunks'
+#                  spikes from the stage's input (cluster 0, input saved beside it) and afterwards puts them
+#                  back into their reserved clusters in the stage's output and restores the input;
+#   anything else  changes the spike set or the .res (fiber-refine's dedup, fiber-stochastic's own chunking)
+#                  and refuses to run while FK_CHUNKS is set.
 CHUNK_STAGES=" fiber-flag-artifacts fiber-session fiber-xcorr-merge fiber-realign fiber-rdr "
-_chunks_guard() {
+SHIELD_STAGES=" fiber-cpos fiber-intrachunk fiber-link fiber-anchor-link fiber-backbone-link fiber-consensus fiber-lowmix fiber-peel fiber-refit "
+_chunks_guard() {   # 0 = run as is; 1 = run shielded; exits for a stage that cannot run on a chunk run
     case "${FK_CHUNKS:-}" in ""|all|ALL|none) return 0 ;; esac
     case "$CHUNK_STAGES" in *" $1 "*) return 0 ;; esac
+    case "$SHIELD_STAGES" in *" $1 "*) return 1 ;; esac
     echo "fiber-pipeline: FK_CHUNKS=$FK_CHUNKS is set, but $1 does not support chunk runs" \
-         "(supported:$CHUNK_STAGES) -- unset FK_CHUNKS, or end the plan before $1" >&2
+         "(native:$CHUNK_STAGES; shielded:$SHIELD_STAGES) -- unset FK_CHUNKS, or end the plan before $1" >&2
     exit 2
+}
+_shield_tags() {    # "<in> <out>": the clu tags a shielded stage reads and writes (as its function above does)
+    case "$1" in
+        fiber-cpos)          echo "${STEP_IN:-refine} ${STEP_OUT:-refine}" ;;
+        fiber-intrachunk)    echo "${STEP_IN:-refine} ${STEP_OUT:-refine_intrachunk}" ;;
+        fiber-link)          echo "${STEP_IN:-refine} ${STEP_OUT:-refine_linked}" ;;
+        fiber-peel)          echo "${STEP_IN:-refine} ${STEP_OUT:-${STEP_IN:-refine}}" ;;
+        fiber-refit)         echo "${STEP_IN:-curated} ${STEP_OUT:-${STEP_IN:-curated}_refit}" ;;
+        fiber-backbone-link) echo "${STEP_IN:-fiber_session} ${STEP_OUT:-backbone_linked}" ;;
+        fiber-anchor-link)   echo "${STEP_IN:-fiber_session} ${STEP_OUT:-anchor_linked}" ;;
+        fiber-consensus)     echo "${STEP_IN:-exp_final} ${STEP_OUT:-consensus}" ;;
+        fiber-lowmix)        echo "${STEP_IN:-exp_final} ${STEP_OUT:-${STEP_IN:-exp_final}_lowmix}" ;;
+    esac
+}
+_fkchunks() { "${FK_PYTHON:-python3}" -c 'import sys; from fiber_kit.fiber_chunks import main; sys.exit(main(sys.argv[1:]))' "$@"; }
+_shielded() {       # $1 = stage, $2.. = the command that runs it.  In a subshell, so the EXIT trap (which
+    local stage="$1"; shift   # unshields even when the stage fails under set -e) is this step's own.
+    local tags; tags="$(_shield_tags "$stage")"
+    local tin="${tags%% *}" tout="${tags##* }"
+    local state="$SESS.chunkshield.$ELEC.json"
+    if [ -n "${FK_DRYRUN:-}" ]; then
+        echo "    (chunk shield: FK_CHUNKS=$FK_CHUNKS -- .$tin's other chunks hidden, back in reserved clusters in .$tout)"
+        "$@"; return
+    fi
+    (
+        _fkchunks shield "$SESS" "$ELEC" "$(clu_variant)" "$tin" "$tout" "$state"
+        trap '_fkchunks unshield "$state"' EXIT   # the stage failed
+        "$@"
+        trap - EXIT
+        _fkchunks unshield "$state"   # a failure here fails the step
+    )
 }
 
 run_stage() {
-    _chunks_guard "$1"
+    if ! _chunks_guard "$1"; then local _st="$1"; shift; _shielded "$_st" run_stage_direct "$_st" "$@"; return; fi
+    run_stage_direct "$@"
+}
+
+run_stage_direct() {
     # forward the command-line override args (set in main) to the selected stage only; argparse is
     # last-wins, so a forwarded --flag overrides the pipeline default of the same flag.
     local -a ov=()
@@ -819,7 +861,11 @@ run_stage() {
 }
 
 run_plan_stage() {     # dispatch a plan step (STEP_* already set in the calling subshell)
-    _chunks_guard "$1"
+    if ! _chunks_guard "$1"; then _shielded "$1" run_plan_stage_direct "$1"; return; fi
+    run_plan_stage_direct "$1"
+}
+
+run_plan_stage_direct() {
     case "$1" in
         fiber-session)    fiber_session    ;;
         fiber-realign)    fiber_realign    ;;

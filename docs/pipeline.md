@@ -263,9 +263,19 @@ log numbers them from 1.
   id allocator skips the block: `fiber_chunks.next_free_id` here, and `highestClusterId()` in
   Klusters (neurosuite-3 0889).  So new clusters are always numbered below it.  The two sides'
   constants are checked by `test_shared_contract` when `NS3_ROOT` is set.
-* Stages that support it: fiber-flag-artifacts, fiber-session, fiber-xcorr-merge, fiber-realign,
-  fiber-rdr (the fiber-kit-exp plan).  fiber-pipeline refuses every other stage while `FK_CHUNKS` is
-  set, rather than letting it sort the reserved clusters.
+* Stages that support it natively (`--chunks`): fiber-flag-artifacts, fiber-session, fiber-xcorr-merge,
+  fiber-realign, fiber-rdr.
+* Stages that only relabel spikes run **shielded** by fiber-pipeline: fiber-cpos, fiber-intrachunk,
+  fiber-link, fiber-anchor-link, fiber-backbone-link, fiber-consensus, fiber-lowmix, fiber-peel,
+  fiber-refit.  Before the stage, `fiber_chunks shield` sets the not-computed chunks' spikes to 0 in the
+  step's input `.clu` (their atoms to 0 in the `.clc`), the artifact bin every stage leaves out of its units,
+  and saves the input beside it (`<file>.chunkshield`).  After the stage, `unshield` puts those spikes back
+  into their reserved clusters in the `.clu` the stage wrote (in the `.clc`/`.clp`, as one atom per chunk
+  under the reserved id), and restores the input byte for byte.  A stage that fails still has its input
+  restored (an EXIT trap), and a run killed in between is undone by the next shield.  The step's in/out tags
+  are the plan's `in:`/`out:`; a `--clu-stage`/`--out-stage` override in `params:` is not followed.
+* fiber-refine (its dedup changes the spike set) and fiber-stochastic (its own chunking) refuse to run while
+  `FK_CHUNKS` is set.
 * fiber-session's hierarchy (`.clp`) gives each left-out chunk one atom, whose parent is the reserved id.
 * At most 100 chunks can be reserved.  For a longer session, lengthen `FK_SESSION_CHUNK_MIN`.
 
