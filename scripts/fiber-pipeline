@@ -907,10 +907,66 @@ sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN
 }
 
+_pf_on_disk() {   # $1 = kind (in/units/cpos/drift), $2 = tag: is that input already on disk (any method token)?
+    case "$1" in
+        in)    compgen -G "$SESS.clu.*.$ELEC.$2" >/dev/null ;;
+        units) compgen -G "$SESS.clu.*.$ELEC.$2.units.npz" >/dev/null ;;
+        cpos)  compgen -G "$SESS.cpos.*.$ELEC.$2*" >/dev/null ;;
+        drift) compgen -G "$SESS.fibers.*.$ELEC.$2*" >/dev/null ;;
+    esac
+}
+
+_plan_preflight() {   # $1 = parsed plan.  Every selected step's inputs -- in:, units:, cpos:, drift: -- must be
+    # written by an earlier selected step (its out:) or already be on disk.  Checked BEFORE step 1, so a plan
+    # that cannot reach a step stops at once instead of after hours of the steps before it.  A dry run warns.
+    local spec="$1" n=0 bad=0 sel sid sname st pin pout punits pspk pcpos pdrift rest why kind tag
+    local -A made=() writer=() wpos=()
+    while IFS=$'\x1f' read -r sel sid sname st pin pout rest; do
+        [ -z "$st" ] && continue
+        n=$((n + 1))
+        if [ -n "$pout" ] && [ -z "${writer[$pout]:-}" ]; then writer[$pout]="$n ($sid${sname:+, $sname})"; wpos[$pout]=$n; fi
+    done <<<"$spec"
+    n=0
+    while IFS=$'\x1f' read -r sel sid sname st pin pout punits pspk pcpos pdrift rest; do
+        [ -z "$st" ] && continue
+        n=$((n + 1))
+        if [ "$sel" = 1 ]; then
+            for kind in in units cpos drift; do
+                case "$kind" in in) tag="$pin" ;; units) tag="$punits" ;; cpos) tag="$pcpos" ;; drift) tag="$pdrift" ;; esac
+                [ -z "$tag" ] && continue
+                [ -n "${made[$tag]:-}" ] && continue
+                _pf_on_disk "$kind" "$tag" && continue
+                if [ -z "${writer[$tag]:-}" ]; then
+                    why="no step of the plan writes it"
+                elif [ "${wpos[$tag]}" -gt "$n" ]; then
+                    why="step ${writer[$tag]} writes it, but runs AFTER this one -- move it before step $n"
+                elif [ "${wpos[$tag]}" -eq "$n" ]; then
+                    why="only this step writes it"
+                else
+                    why="step ${writer[$tag]} writes it, but is not selected"
+                fi
+                echo "fiber-pipeline: step $n ($sid${sname:+, $sname}) reads $kind: $tag, which no earlier step" \
+                     "writes and which is not on disk: $why" >&2
+                bad=1
+            done
+            [ -n "$pout" ] && made[$pout]=1
+        fi
+    done <<<"$spec"
+    [ "$bad" = 0 ] && return 0
+    if [ -n "${FK_DRYRUN:-}" ]; then
+        echo "fiber-pipeline: (dry run: a real run would stop here, before step 1)" >&2
+        return 0
+    fi
+    echo "fiber-pipeline: nothing run -- fix the plan's step order or its in:/units:/cpos:/drift: tags" \
+         "(fiber-plan-lint checks a plan)" >&2
+    exit 2
+}
+
 run_plan() {           # run an ordered, possibly-repeating plan of steps ($2.. = step selectors: run only those)
     local plan="$1"; shift
     [ -f "$plan" ] || { echo "fiber-pipeline: plan not found: $plan" >&2; exit 2; }
     local spec; spec="$(_plan_parse "$plan" "$@")" || exit $?
+    _plan_preflight "$spec"
     # Track the most recent fiber-intrachunk out-stage so a later fiber-link can
     # default its --from-units producer (<stage>.units.npz) to the stage the
     # units were actually emitted at when the plan step omits 'units'.  Without

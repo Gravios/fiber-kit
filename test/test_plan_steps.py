@@ -187,6 +187,47 @@ def main():
         fr = fkrun("5", "fiber-realign-2", cfg=os.path.join(d, "none.yaml"))
         check(fr.returncode == 2 and "no plan" in fr.stderr, "fk run 5 <step> without a plan is refused")
 
+        print("fiber-pipeline preflight (a step's in: must exist before step 1 runs):")
+        order = write(d, "order.yaml", "pipeline:\n"
+                      "  - {stage: fiber-session,       name: session,  out: fs}\n"
+                      "  - {stage: fiber-backbone-link, name: backbone, in: xcm, out: final}\n"
+                      "  - {stage: fiber-xcorr-merge,   name: merge,    in: fs, out: xcm}\n")
+
+        def real(*args):
+            e = env()
+            e["FK_CONFIG"] = os.path.join(d, "none.yaml")
+            r = subprocess.run(["bash", PIPE, "5", *args], cwd=sess, capture_output=True, text=True, env=e,
+                               timeout=300)
+            return r.returncode, r.stdout + r.stderr
+        rc, out = real("--plan", order)
+        check(rc == 2 and "step 2 (fiber-backbone-link-1, backbone) reads in: xcm" in out
+              and "step 3 (fiber-xcorr-merge-1, merge) writes it, but runs AFTER this one" in out
+              and not headers(out),
+              "a step whose input is written by a LATER step: the plan stops before step 1, naming both steps")
+        rc, out = pipe(sess, "5", "--plan", order)
+        check(rc == 0 and "a real run would stop here" in out and len(headers(out)) == 3,
+              "... a dry run only warns and shows every step")
+        fixed = write(d, "fixed.yaml", "pipeline:\n"
+                      "  - {stage: fiber-session,       name: session,  out: fs}\n"
+                      "  - {stage: fiber-xcorr-merge,   name: merge,    in: fs, out: xcm}\n"
+                      "  - {stage: fiber-backbone-link, name: backbone, in: xcm, out: final}\n")
+        rc, out = pipe(sess, "5", "--plan", fixed)
+        check(rc == 0 and "no earlier step writes" not in out, "the same steps in order pass the preflight")
+        rc, out = real("--plan", fixed, "--step", "backbone")
+        check(rc == 2 and "step 2 (fiber-xcorr-merge-1, merge) writes it, but is not selected" in out,
+              "only the reading step selected, its input not on disk: stops, naming the unselected writer")
+        open(os.path.join(sess, "mysess.clu.stderiv_C5.5.xcm"), "wb").close()
+        rc, out = pipe(sess, "5", "--plan", fixed, "--step", "backbone")
+        check(rc == 0 and "no earlier step writes" not in out,
+              "... and passes once a .clu with that tag is on disk (any variant)")
+        drift = write(d, "drift.yaml", "pipeline:\n"
+                      "  - {stage: fiber-session,       name: session,  out: fs}\n"
+                      "  - {stage: fiber-backbone-link, name: backbone, in: fs, out: final, drift: xm}\n")
+        rc, out = real("--plan", drift)
+        check(rc == 2 and "reads drift: xm" in out and "no step of the plan writes it" in out and not headers(out),
+              "a drift: no step writes and not on disk stops the plan too (backbone would only print "
+              "'--drift ignored' and link without it)")
+
         print("fiber-plan-edit model / fiber-plan-lint:")
         try:
             from fiber_kit import fiber_pipeline_editor as ed

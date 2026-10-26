@@ -210,6 +210,13 @@ with different tags.  `params:` map to that stage's CLI flags (`key: val` → `-
 every stage and its parameters), or with the GUI editor `fiber-plan-edit`; lint them with
 `fiber-plan-lint`.
 
+**Preflight.**  Before step 1, fiber-pipeline checks that every selected step's inputs -- `in:`, `units:`,
+`cpos:`, `drift:` -- are written by an earlier selected step or are already on disk (any method token).
+For each one that is not, it names the step, the tag and where its writer is: a later step ("move it
+before step N"), a step that is not selected, or none.  Then it stops without running anything (exit 2),
+instead of failing at that step after hours of the steps before it.  `--dry-run` prints the same and
+carries on.
+
 ### Step names
 
 A plan may run a stage several times (`fiber-kit-exp.yaml` runs `fiber-realign` and `fiber-cpos` twice

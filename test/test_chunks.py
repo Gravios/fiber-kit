@@ -248,6 +248,14 @@ def main():
             after = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
             check(masked != before["clu"] and after == before,
                   "a shield left by a killed run is undone by the next one (the input is not shielded twice)")
+            try:
+                fch.shield(os.path.join(td, "mini"), 1, "stderiv", "no_such_tag", "x", st, [1], 0.5,
+                           log=lambda m: None)
+                msg = ""
+            except SystemExit as e:
+                msg = str(e.code)
+            check("does not exist" in msg and "no_such_tag" in msg and not os.path.exists(st),
+                  "a missing input is a message from the shield (not a traceback), and leaves no state")
         r = subprocess.run(["bash", os.path.join(HERE, "..", "scripts", "fiber-pipeline"), "1", "fiber-rdr", "--dry-run"],
                            capture_output=True, text=True, cwd=td,
                            env=_env({"FK_CONFIG": cfgp, "FK_DIR": td, "FK_SESS": "mini"}), timeout=300)

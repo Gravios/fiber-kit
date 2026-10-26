@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.2] — fiber-pipeline checks a plan's inputs before step 1
+- **Preflight.**  Before running anything, fiber-pipeline checks that every selected step's inputs (`in:`,
+  `units:`, `cpos:`, `drift:`) are written by an earlier selected step or are already on disk under any
+  method token.  For each that is not, it names the step and the tag, and says where its writer is: a later
+  step ("move it before step N"), an unselected step, or none.  It then exits 2 without running step 1;
+  `--dry-run` warns and carries on.
+  - Until now a plan whose backbone step read `exp_xcm` with the merge step that writes it commented out
+    ran its first seven steps and failed at step 8.
+  - A `drift:` no step writes was not even an error: fiber-backbone-link printed "--drift ignored" and linked
+    without the transform.
+- The chunk shield reports a step input that does not exist as a message, not a traceback.
+- test_plan_steps:
+  - a writer that runs after its reader stops the plan before step 1, naming both steps;
+  - a dry run only warns;
+  - the same steps in order pass;
+  - an unselected writer is named;
+  - a tag already on disk passes;
+  - an unwritten `drift:` stops the plan.
+- test_chunks: the shield's missing-input message.
+
 ## [0.57.1] — fiber-rdr counts FK_CHUNKS in the session's chunks
 - In a chunk run, fiber-rdr mapped `FK_CHUNKS` onto chunks of its own template length (`--chunk-min`,
   `FK_RDR_CHUNK_MIN`, 12 min) instead of fiber-session's (`FK_SESSION_CHUNK_MIN`).  With 18-minute session

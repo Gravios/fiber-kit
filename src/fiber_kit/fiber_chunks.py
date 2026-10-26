@@ -218,7 +218,13 @@ def shield(session, elec, variant, in_tag, out_tag, state_path, chunks, chunk_mi
     base = cfg["base"]
     res = nio.read_res(base, elec)
     tin = _triple(base, elec, variant, in_tag)
-    _, lab = nio.read_clu_file(tin["clu"], n_spikes=res.size)
+    if not os.path.exists(tin["clu"]):
+        raise SystemExit(f"chunk shield: the step's input {tin['clu']} does not exist -- no earlier step wrote "
+                         f".{in_tag} (is the step that writes it before this one?  fiber-plan-lint checks a plan)")
+    try:
+        _, lab = nio.read_clu_file(tin["clu"], n_spikes=res.size)
+    except ValueError as e:
+        raise SystemExit(f"chunk shield: {e}") from None
     lab = np.asarray(lab, np.int64)
     ci = chunk_index(res, cfg["sr"], chunk_min)
     off = is_reserved(lab) | ~np.isin(ci, np.asarray(chunks, np.int64))
