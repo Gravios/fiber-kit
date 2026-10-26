@@ -50,7 +50,7 @@ __all__ = [
     "ResolvedInput", "resolve_input", "resolve_any", "prefer_derived", "prefer_canonical",
     "VariantSpec", "parse_variant_token", "variant_family", "is_stderiv_variant",
     "read_res_file", "write_res_file", "read_res", "write_res",
-    "read_clu_file", "write_clu_file", "read_clu", "write_clu",
+    "read_clu_file", "write_clu_file", "read_clu", "write_clu", "clu_kind", "clu_header",
     "read_cluster_res",
     "read_fet_file", "read_fet", "write_fet_file", "write_fet",
     "open_spk_file", "open_spk", "open_spkD", "write_spk_file", "write_spk",
@@ -336,8 +336,11 @@ def write_res(base, elec, times, variant="", tag=None):
 
 # ── .clu.N ───────────────────────────────────────────────────────────────────
 def read_clu_file(path, n_spikes=None):
-    """Read a binary .clu -> (nClusters, ids:int64 ndarray): int32 nClusters
-    header + int32 ids (mirrors neurofileio::writeClu / KK::LoadClu binary path).
+    """Read a binary .clu -> (header, ids:int64 ndarray): int32 header + int32 ids
+    (mirrors neurofileio::writeClu / KK::LoadClu binary path).  The header is
+    informational -- the number of distinct ids for what Klusters and fiber-kit write,
+    the highest id for KlustaKwik's output, the entry count for a .clp -- so never
+    use it as a spike count or as the highest id; take those from `ids`.
     `n_spikes` is the spike count the caller's .res holds: a .clu with a different
     count belongs to another spike set (a stale or foreign sort), and reading it
     row-aligned would label the wrong spikes, so it raises ValueError rather than
@@ -351,15 +354,42 @@ def read_clu_file(path, n_spikes=None):
     return n_clu, ids
 
 
+_CLU_KINDS = ("clu", "clc", "clp")
+
+
+def clu_kind(path):
+    """'clu', 'clc' or 'clp': the first of those tokens after the base in
+    <base>.<kind>[.<variant>].<elec>[.<tag>] (a suffix after the tag, .tmp say, does not change it).
+    'clu' when the name carries none of them (an explicit --in-clu path, say)."""
+    for t in os.path.basename(os.fspath(path)).split(".")[1:]:
+        if t in _CLU_KINDS:
+            return t
+    return "clu"
+
+
+def clu_header(path, ids, kind=None):
+    """The int32 header of a cluster-id file, from its ids (the format pages in neurosuite-3,
+    doc/ndmanager-plugins/formats/clu.md, clc.md, clp.md):
+      .clu / .clc  the number of DISTINCT ids -- what Klusters' Save writes, and what keeps the header in
+                   the 0-65536 Klusters accepts once a chunk run's reserved clusters (16777116 + chunk)
+                   are in the file.  Until 0.57.3 fiber-kit wrote the highest id + 1, and Klusters
+                   refused those files ("Invalid or missing .clu header");
+      .clp         its number of entries = the highest atom id (readers take nAtoms from the size).
+    `kind` ('clu', 'clc', 'clp') overrides the kind read from the name (clu_kind)."""
+    ids = np.asarray(ids)
+    if (kind or clu_kind(path)) == "clp":
+        return int(ids.size)
+    return int(np.unique(ids).size)
+
+
 def write_clu_file(path, ids, n_clusters=None):
-    """Write canonical binary .clu (int32 nClusters header + int32 ids).
-    `n_clusters` defaults to max(id)+1 (NeuroSuite convention: ids are the
-    header count, 0 = noise).  Mirrors neurofileio::writeClu's binary form."""
+    """Write canonical binary .clu / .clc / .clp (int32 header + int32 ids).  The header is always
+    clu_header(path, ids): the number of distinct ids, or the entry count for a .clp.  `n_clusters` is
+    ignored -- it is accepted so callers written before 0.57.3 keep working.  Mirrors
+    neurofileio::writeCluBinary."""
     ids = np.asarray(ids, dtype=CLU_DTYPE)
-    if n_clusters is None:
-        n_clusters = int(ids.max()) + 1 if ids.size else 0
     with atomic_write(path, "wb") as f:
-        np.array([n_clusters], CLU_DTYPE).tofile(f)
+        np.array([clu_header(path, ids)], CLU_DTYPE).tofile(f)
         ids.tofile(f)
     return path
 
@@ -550,9 +580,8 @@ def read_clu_at(base, elec, variant="", tag="", n_spikes=None):
 def write_clu(base, elec, ids, n_clusters=None, variant="", tag=""):
     """Write <base>.clu[.<variant>].<elec>[.<tag>].  `variant` = method (before group),
     `tag` = fiber stage (after group), e.g. variant='stderiv', tag='refine' ->
-    <base>.clu.stderiv.<elec>.refine."""
-    return write_clu_file(session_path(base, "clu", elec, variant=variant, tag=tag),
-                          ids, n_clusters=n_clusters)
+    <base>.clu.stderiv.<elec>.refine.  The header is clu_header's; `n_clusters` is ignored."""
+    return write_clu_file(session_path(base, "clu", elec, variant=variant, tag=tag), ids)
 
 
 # ── matched .clu + .res pair (mirrors neurofileio::readClusterRes) ───────────
@@ -1389,7 +1418,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             write_res_file(tmp, np.fromfile(path, dtype=RES_DTYPE)[keep])
         elif t in ("clu", "clc"):
             raw = np.fromfile(path, dtype=CLU_DTYPE)
-            write_clu_file(tmp, raw[1:][keep].astype(np.int64), n_clusters=int(raw[0]))
+            write_clu_file(tmp, raw[1:][keep].astype(np.int64))
         elif t in ("spk", "spkD"):
             write_spk_file(tmp, np.asarray(open_spk_file(path, nsamp, nchan)[keep]))
         elif t in ("fet", "fetD"):

@@ -165,7 +165,7 @@ def main():
     out = nio.session_path(base, "clu", elec, variant=a.spk_variant, tag=a.out_tag)
     mask = _fch.mark_inactive(flag.astype(np.int64), res, cfg["sr"], chunks, a.chunk_length)
     if chunks is None:
-        nio.write_clu_file(out, mask.astype(np.int32), n_clusters=2)
+        nio.write_clu_file(out, mask.astype(np.int32))
     else:
         nio.write_clu_file(out, mask.astype(np.int32))
     _det("wrote", f"{os.path.basename(out)}   (0 = keep, 1 = artifact"

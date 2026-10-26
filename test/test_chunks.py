@@ -12,7 +12,9 @@
   * fiber-rdr skips the reserved cluster;
   * fiber-pipeline refuses a stage that changes the spike set while FK_CHUNKS is set, and SHIELDS the
     relabelling stages: backbone-link and anchor-link run on the chunk run, the other chunk's spikes
-    come back in its reserved cluster (in the .clc/.clp too), and the input is restored byte for byte.
+    come back in its reserved cluster (in the .clc/.clp too), and the input is restored byte for byte;
+  * every .clu/.clc the chunk run wrote has its number of distinct ids as its header (a .clp: its number of
+    entries), within the 0-65536 Klusters accepts -- 0.57.2 wrote the highest id + 1, 16777117 here.
 """
 import os
 import shutil
@@ -37,6 +39,15 @@ fails = 0
 def check(ok, what):
     global fails
     print(("  ok:   " if ok else "  FAIL: ") + what); fails += not ok
+
+
+def header_ok(path):
+    """The header of a .clu/.clc is its number of distinct ids, of a .clp its number of entries; either
+    is within the 0-65536 Klusters accepts.  0.57.2 wrote the highest id + 1: 16777117 for a .clu with
+    chunk 0 in its reserved cluster."""
+    r = np.fromfile(path, "<i4")
+    want = r.size - 1 if ".clp." in os.path.basename(path) else np.unique(r[1:]).size
+    return int(r[0]) == want and 0 <= int(r[0]) <= 65536
 
 
 def _env(extra=None):
@@ -228,6 +239,13 @@ def main():
                     hh = FiberHierarchy.load(base, 1, variant="stderiv", tag=tag)
                     check(np.array_equal(hh.refiberize(renumber=False)[0], o),
                           f".{tag}: its .clc/.clp reproduce the .clu, reserved atom included")
+            files = [f"{base}.{k}.{m}.1.{tag}" for k in ("clu", "clc", "clp") for m in ("stderiv", "standard")
+                     for tag in ("c1", "c1m", "c1x", "fx", "c1bb", "c1al", "artifact")]
+            files = [f for f in files if os.path.exists(f)]
+            bad_h = [os.path.basename(f) for f in files if not header_ok(f)]
+            check(len(files) >= 8 and not bad_h,
+                  f"the headers of the chunk run's {len(files)} .clu/.clc/.clp files: distinct ids (entries for "
+                  f".clp), all within Klusters' 0-65536" + (f"; off: {bad_h}" if bad_h else ""))
             after = {k: open(f"{base}.{k}.stderiv.1.c1", "rb").read() for k in ("clu", "clc", "clp")}
             check(after == before, "the input .c1 triple is restored byte for byte")
             left = [f for f in os.listdir(td) if "chunkshield" in f]

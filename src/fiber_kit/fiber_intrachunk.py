@@ -1260,10 +1260,10 @@ def main():
         _log(f"WARNING: the source .clc/.clp cannot be read ({e}); the output is a FLAT .clu and the "
              "atom hierarchy of the source is not carried")
 
-    def _emit(newids, ncl):
-        """Write the result.  With a source triple, PRESERVE+re-parent atoms so the intrachunk
-        merge lands in the hierarchy atomically with link (parent owns its merged set of children,
-        unmergeable via FiberHierarchy.split_parent).  intrachunk is per-chunk, so an atom whose
+    def _emit(newids):
+        """Write the result and return its number of distinct ids (the .clu header).  With a source
+        triple, PRESERVE+re-parent atoms so the intrachunk merge lands in the hierarchy atomically
+        with link (parent owns its merged set of children, unmergeable via FiberHierarchy.split_parent).  intrachunk is per-chunk, so an atom whose
         spikes straddle a chunk boundary is SPLIT into per-chunk children first -- and the child
         key below also carries the FINAL UNIT, so each child sits in exactly one unit even under a
         per-spike labelling ('ms' linkage, or the consolidation pass) while the source atom remains
@@ -1285,7 +1285,6 @@ def main():
                     newids, hier.child, lambda ix: _std[np.asarray(ix)],
                     a.amp_band_top, a.amp_band_gap, a.amp_band_min, log=_log)
                 if n_extra:
-                    ncl = int(newids.max()) + 1
                     _log(f"amp-band partition: {n_extra} amplitude-band split(s) "
                          f"(gap {a.amp_band_gap} log2, top {a.amp_band_top:.0%}, "
                          f"anchor >= {a.amp_band_min} spk)")
@@ -1298,7 +1297,6 @@ def main():
                 min_spk=a.recut_min_spk, alpha=a.recut_alpha, giqr_thr=a.recut_giqr,
                 win=a.kk_win, peak=getattr(cfg, "peak", None), log=None)
             if n_rc or n_sh:
-                ncl = int(newids.max()) + 1
                 _log(f"residual recut ({a.recut_gate}): {n_rc} new unit(s), "
                      f"{n_sh} spike(s) shed to reserve")
         if a.cons_mode != "off":
@@ -1310,10 +1308,10 @@ def main():
                                           newids, chid_c, mode=mode, exclude=(0, 1),
                                           strip_kw=strip_kw, knn_kw=knn_kw, log=_log,
                                           tag="intrachunk consolidate")
-            ncl = int(newids.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
         if hier is None:
-            nio.write_clu_file(out_path, newids, n_clusters=ncl); return
+            nio.write_clu_file(out_path, newids)
+            return nio.clu_header(out_path, newids)
         from .fiber_refiberize import FiberHierarchy as _FH
         ch = np.asarray(hier.child, np.int64); nid = np.asarray(newids)
         chid_sp = (res.astype(float) / sr / 60.0 / a.chunk_minutes).astype(np.int64)
@@ -1326,6 +1324,7 @@ def main():
         _FH(newchild, newpar).save(base, elec, variant=clu_method, tag=out_stage, backup=False)
         _log(f"intrachunk hierarchy: {len(newpar)} per-chunk atoms -> "
              f"{len(set(newpar.values()))} units (.clu/.clc/.clp)")
+        return nio.clu_header(out_path, newids)
 
     spkD, _ = nio.open_spkD(base, elec, nsamp, nch, prefer=clu_method)   # returns (memmap, path)
     tbl = nio.session_path(base, "cpos", elec, variant=a.cpos_method, tag=a.cpos_stage) + ".clusters.npz"
@@ -1365,9 +1364,8 @@ def main():
                         cos_thr=a.cos_thr, off_thr=a.off_thr, depth_gate=max(1.0, a.depth_gate / 20.0),
                         var_env_mult=a.var_env_mult, split_min_sil=a.split_min_sil, split_min_n=a.split_min_n)
             out_lab[sel] = lab + nxt; nxt += int(lab.max()) + 1
-        ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-        _emit(out_lab, ncl)
+        ncl = _emit(out_lab)
         _log(f"merge+split over {len(np.unique(chid)):,} chunks → "
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units (per-spike labelling)")
         _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
@@ -1490,9 +1488,8 @@ def main():
                 drop = bad.sum(1) > a.kk_strip_maxbad
                 if drop.any() and (~drop).sum() >= a.min_n:                     # keep the unit viable
                     out_lab[ui[drop]] = 1; n_strip += int(drop.sum())
-        ncl = int(out_lab.max()) + 1
         out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-        _emit(out_lab, ncl)
+        ncl = _emit(out_lab)
         _log(f"MW-cluster + median-residual KlustaKwik over {len(np.unique(chid)):,} chunks → "
              f"{len(np.unique(out_lab[out_lab > 1])):,} per-chunk units "
              f"({n_fold:,} small atoms folded, {n_reserve:,} reserved"
@@ -1558,9 +1555,9 @@ def main():
                                  align_lag=a.align_lag, align_upsample=a.align_upsample, amp_gate=a.amp_gate)
     if pre is not None:
         label = np.asarray(label)[pre]                    # super-node label -> per original fragment
-    newids, ncl = intrachunk_clu(src, sig["ids"], label)
+    newids, _ = intrachunk_clu(src, sig["ids"], label)
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-    _emit(newids, ncl)
+    ncl = _emit(newids)
     if a.provenance:                       # per-merge gate-score sidecar for overmerge diagnosis
         try:
             from . import fiber_provenance as _fp

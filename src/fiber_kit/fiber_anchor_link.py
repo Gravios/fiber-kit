@@ -698,7 +698,7 @@ def main():
     if a.hierarchy:
         nio.write_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.out_tag), child)
         nio.write_clu_file(nio.session_path(base, "clp", elec, variant=a.clu_method, tag=a.out_tag),
-                           parent, n_clusters=n_atoms)      # header = nChildren, as klusters writes it
+                           parent)                          # .clp header = its entry count (clu_header)
         print(f"[anchor-link] hierarchy: {n_atoms} children under {ncells} fibers | wrote .clc + .clp")
 
 

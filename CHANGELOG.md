@@ -4,6 +4,34 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.3] — the .clu header is the number of distinct ids
+- **The header.**  Every `.clu` and `.clc` fiber-kit writes carries its number of distinct ids as its int32
+  header, as Klusters writes it on Save; a `.clp` carries its number of entries (`neuro_io.clu_header`).
+  - Until now the header was the highest id + 1.  In a chunk run (`FK_CHUNKS`, 0.56.0) the reserved
+    clusters 16777116+chunk made that about 16.8 million, and Klusters, which accepts 0-65536, refused
+    every output: "Invalid or missing .clu header (nClusters=16777136)".
+  - `write_clu_file` takes the header from the ids.  The `n_clusters=` that callers passed are gone
+    (fiber-contam, fiber-defrag, fiber-decollide, fiber-intrachunk, fiber-link, fiber-peel,
+    fiber-anchor-link, fiber-backbone-link, fiber-flag-artifacts, fiber-realign's duplicate parking, the
+    spike-keep subset); the argument is accepted and ignored.
+- **`fiber-clu-header FILE...`** repairs a file written before: it rewrites the 4 header bytes in place and
+  leaves the ids alone.  `--check` reports without writing and exits 1 when a header is off.  It skips
+  names that are not `<base>.<clu|clc|clp>[.<variant>].<elec>[.<tag>]`, text `.clu` files and odd sizes,
+  so a glob over a stage's files (`.res`, `.spk`, `.units.npz`, ...) is safe.
+- **No reader takes the header for a count.**
+  - fiber-refiber cut its per-spike atom labels to the file's header as if it were the spike count.  Its
+    atom templates came from the first N spikes only (N = the number of atoms), and atoms absent from those
+    were dropped.  It now requires the atom labels and the raw `.spk` to have the same number of rows.
+  - fiber-realign's log counted units from the header; it counts them from the labels.
+- test_clu_header:
+  - a chunk run's `.clu` gets the distinct-id count, within 0-65536;
+  - a `.clc` its distinct atom ids, a `.clp` its entry count;
+  - `n_clusters=` is ignored, through `write_clu` too;
+  - `fiber-clu-header --check` finds the files a 0.57.2 chunk run left and writes nothing; the repair
+    changes only the header bytes and skips the `.res`, `.units.npz` and text `.clu` the same glob caught;
+  - negative control: on 0.57.2 the headers are 16777119, 41 and 16777117.
+- test_chunks: every `.clu`/`.clc`/`.clp` the chunk run writes has the right header.
+
 ## [0.57.2] — fiber-pipeline checks a plan's inputs before step 1
 - **Preflight.**  Before running anything, fiber-pipeline checks that every selected step's inputs (`in:`,
   `units:`, `cpos:`, `drift:`) are written by an earlier selected step or are already on disk under any

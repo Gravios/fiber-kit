@@ -264,9 +264,7 @@ def main():
         if orig != root:
             new[clu == orig] = root
     tag = a.out_tag if a.out_tag else "defrag"
-    nio.write_clu(base, elec, new.astype(np.int64),
-                  n_clusters=int(len(np.unique(new[new > 0]))),
-                  variant=a.clu_method, tag=tag)
+    nio.write_clu(base, elec, new.astype(np.int64), variant=a.clu_method, tag=tag)
     print(f"wrote .clu.{a.clu_method}.{elec}.{tag}  "
           f"(then run fiber-contam on it to flag any cells the merge over-reached on)")
 

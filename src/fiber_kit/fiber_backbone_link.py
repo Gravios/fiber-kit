@@ -321,7 +321,7 @@ def main():
         nfib = int(len(set(new[new > 1].tolist())))
         nio.write_clu_file(nio.session_path(base, "clc", elec, variant=a.clu_method, tag=a.out_tag), child)
         nio.write_clu_file(nio.session_path(base, "clp", elec, variant=a.clu_method, tag=a.out_tag),
-                           lut, n_clusters=nchild)          # header = nChildren, as klusters writes it
+                           lut)                             # .clp header = its entry count (clu_header)
         print(f"[backbone-link] hierarchy: {int((lut > 0).sum())} children ({src}) under {nfib} fibers "
               f"| wrote .clc + .clp")
     print(f"[backbone-link] {len(ids)} fragments -> {len(set(new[new > 1]))} units "

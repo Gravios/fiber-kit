@@ -533,7 +533,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     spk, r = open_waveforms(base, elec, nsamp, nch, variant or "standard")
     spk_path = r.path
     res = nio.read_res(base, elec)
-    nclu, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
+    _, labels = _read_clu(clu_path or f"{base}.clu.{elec}")
     if not (len(res) == len(labels) == spk.shape[0]):
         # The commit rewrites the SHARED .res and every .spk/.fet at the length aligned here, so
         # aligning "the first n" would cut every file of the group down to a stale clu's length.
@@ -585,7 +585,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
                    f"{max_shift if max_shift is not None else 'peak//2'}" + (f" recenter-rms rmin={rmin:g}" if recenter else ""))
         pk = f" peak={align_peak:.2f}" if align_peak is not None else ""
         _log(f"realign {method}{up}  variant={variant or 'canonical'}{pk}")
-        _det("input", f"{n:,} spikes · {nclu - 1:,} units · {spk_path}")
+        _det("input", f"{n:,} spikes · {np.unique(labels[labels > 1]).size:,} units · {spk_path}")
         _det("offsets", f"{nz:,} nonzero ({100 * nz / n:.1f}%) · mean {off.mean():+.3f} · "
                         f"std {off.std():.3f} · max {int(np.abs(ioff).max())} samp")
     return res, off, ioff, res_corr, spk, spk_path, labels
@@ -699,7 +699,7 @@ def park_duplicates(base, group, clu_path, rows):
         from .fiber_refiberize import FiberHierarchy
     except ImportError:
         from fiber_refiberize import FiberHierarchy
-    hdr, labels = nio.read_clu_file(clu_path)
+    _, labels = nio.read_clu_file(clu_path)
     labels = np.asarray(labels, np.int64)
     dup = duplicates_cluster(labels)
     want = labels.copy(); want[rows] = dup
@@ -720,7 +720,7 @@ def park_duplicates(base, group, clu_path, rows):
                                f"({os.path.basename(clu_path)} + .clc/.clp)")
                 return int(rows.size)
         _det("parked", "the .clc/.clp do not reproduce the .clu; editing the flat .clu only")
-    nio.write_clu_file(clu_path, want, n_clusters=max(int(hdr), int(want.max()) + 1))
+    nio.write_clu_file(clu_path, want)
     _det("parked", f"{rows.size:,} duplicate spike(s) -> cluster {dup} (duplicates) ({os.path.basename(clu_path)})")
     return int(rows.size)
 

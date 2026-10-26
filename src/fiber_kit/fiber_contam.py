@@ -310,9 +310,7 @@ def main():
             nsplit += 1
             nparts += k + 1
         tag = (a.variant + ".csplit") if a.variant else "csplit"
-        nio.write_clu(base, elec, new.astype(np.int64),
-                      n_clusters=int(len(np.unique(new[new > 0]))),
-                      variant=a.clu_method, tag=tag)
+        nio.write_clu(base, elec, new.astype(np.int64), variant=a.clu_method, tag=tag)
         print(f"--split: {nsplit} flagged clusters -> {nparts} parts "
               f"(QC-gated, recursive); wrote .clu.{a.clu_method}.{elec}.{tag}")
 

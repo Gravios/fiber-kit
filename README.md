@@ -2,7 +2,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.57.2-orange)
+![version](https://img.shields.io/badge/version-0.57.3-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -216,7 +216,7 @@ by `test/custody_token_conformance` against `test/custody_vectors.tsv`.
 
 | File | Contents |
 |------|----------|
-| `<base>.clu.<elec>` | `int32` cluster ids (header = nClusters; `0` = noise, fiber ids `+1`) |
+| `<base>.clu.<elec>` | `int32` header + `int32` cluster ids; the header is the number of distinct ids (`.clc` the same, `.clp` its number of entries; `0` = noise, fiber ids `+1`) |
 | `<base>.fibers.<method>.<group>[.<stage>]` | `npz` of per-(chunk,fiber) geometry + statistics (below).  `<method>` is the operation the clusters stem from (`standard`/`stderiv`/`stderiv_C5`); the optional `<stage>` is the post-fiber tag of the clu the table describes, so each stage can keep its own. |
 | `<base>.merge_candidates.<elec>.tsv` | proposed same-neuron merges (with `--emit-merge-candidates`) |
 
@@ -437,6 +437,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-view-tour` | Interesting-projection tour video of the fibers. |
 | `fiber-plan-edit` | Qt editor for pipeline plans. |
 | `fiber-kit-init` | Copy the template fiber-kit.yaml (fiber-pipeline tuning config) into the current directory. |
+| `fiber-clu-header` | Check or repair the header of .clu/.clc/.clp files (the number of distinct ids); repairs the chunk-run files of 0.56.0-0.57.2 that Klusters refuses. |
 | `fiber-morpho` | Morphology modelling experiments (sub-commands; each writes an .npz beside its report). |
 | `fiber-morpho-fetch` | Acquire, validate and record the provenance of neuron reconstructions. |
 | `ndm_fiber-kit` | The ndmanager plugin entry: runs fiber-kit steps from NDManager (`--ndm-version` prints the format versions). |

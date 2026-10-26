@@ -343,9 +343,8 @@ def main():
         burst_alpha=a.burst_alpha, burst_ratio=a.burst_ratio, burst_min_count=a.burst_min_count,
         stats=st)
 
-    ncl = int(out.max()) + 1
     out_path = nio.session_path(base, "clu", elec, variant=clu_method, tag=out_stage)
-    nio.write_clu_file(out_path, out, n_clusters=ncl)
+    nio.write_clu_file(out_path, out)
     _carry_hierarchy(base, elec, clu_method, clu_stage, out_stage, src, out)
     n_in = len(np.unique(src[src > 1]))
     n_out = len(np.unique(out[out > 1]))
@@ -355,7 +354,7 @@ def main():
     if a.burst_foot_lo:
         _det("burst", f"{st.get('n_burst_merges', 0):,} merges in cosine [{a.burst_foot_lo:.2f}, {a.foot_lo:.2f}) "
                       f"on refractory dip + burst CCG")
-    _log(f"wrote {out_path}   ({ncl:,} clusters incl reserve)")
+    _log(f"wrote {out_path}   ({nio.clu_header(out_path, out):,} clusters incl reserve)")
 
 
 if __name__ == "__main__":

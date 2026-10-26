@@ -91,14 +91,15 @@ def refiber(base, group, *, variant="stderiv", tag="microfiber",
     mask = fl.MASK_FULL if mask is None else mask
 
     # 1. atoms (.clc) — the stable per-spike layer
-    n, atoms = nio.read_clu_at(base, group, variant=variant, tag=tag)
+    _, atoms = nio.read_clu_at(base, group, variant=variant, tag=tag)
     atoms = np.asarray(atoms, np.int64)
 
     # 2. per-atom RAW templates (localization MUST be on raw amplitudes)
     spk, _ = nio.open_spk_raw(base, group, nsamp, nchan)
     spk = np.asarray(spk)
-    n = min(n, spk.shape[0])
-    atoms = atoms[:n]
+    if atoms.size != spk.shape[0]:
+        raise SystemExit(f"fiber-refiber: the atom labels have {atoms.size:,} rows, the raw .spk "
+                         f"{spk.shape[0]:,} -- they belong to different spike sets")
     ids = [int(a) for a in np.unique(atoms) if a >= 1]
     templates = atom_templates(spk, atoms, ids, max_spikes=max_spikes)
 

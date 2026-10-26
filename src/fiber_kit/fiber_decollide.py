@@ -151,8 +151,7 @@ def _fmt(v):
 
 
 def write_decollided_stage(base, elec, new_times, new_clu, new_waves, manifest, *,
-                           tag, res_variant="", clu_variant="", spk_variant="standard",
-                           n_clusters=None):
+                           tag, res_variant="", clu_variant="", spk_variant="standard"):
     """Write the derived .decollided stage: res (on its detection variant), clu
     (on its feature variant), spk.standard (raw cleaned waveforms) -- all at the
     shared `tag` -- plus the .decollide.tsv manifest.  Each file keeps its own
@@ -162,8 +161,7 @@ def write_decollided_stage(base, elec, new_times, new_clu, new_waves, manifest, 
     .fet (the linear-subtraction-per-variant path), use decollide_all_variants."""
     paths = {}
     paths["res"] = nio.write_res(base, elec, new_times, variant=res_variant, tag=tag)
-    paths["clu"] = nio.write_clu(base, elec, new_clu, n_clusters=n_clusters,
-                                 variant=clu_variant, tag=tag)
+    paths["clu"] = nio.write_clu(base, elec, new_clu, variant=clu_variant, tag=tag)
     paths["spk"] = nio.write_spk(base, elec, new_waves, variant=spk_variant, tag=tag)
     man = nio.session_path(base, "decollide", elec, variant=clu_variant, tag=tag) + ".tsv"
     paths["manifest"] = write_manifest(man, manifest)

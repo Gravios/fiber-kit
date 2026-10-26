@@ -918,7 +918,7 @@ def main():
         _log(f"linked hierarchy: {len(newpar)} atoms -> "
              f"{len(set(newpar.values()))} bundles (.clu/.clc/.clp)")
     else:
-        nio.write_clu_file(out_path, newids, n_clusters=ncl)
+        nio.write_clu_file(out_path, newids)
 
     multi = [b for b in R["bundles"] if len(set(R["chunk"][b])) >= 2]
     Dv = list(R["D"].values())

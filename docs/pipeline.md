@@ -266,6 +266,11 @@ log numbers them from 1.
   not run goes to that chunk's **reserved cluster**, `16777116 + chunk`.  These are the top 100 ids
   (2^24-100 .. 2^24-1), the highest Klusters holds exactly.  So the output opens in Klusters, and the
   reserved clusters show what was left out.
+* The int32 header of a `.clu`/`.clc` is its number of distinct ids (of a `.clp`, its number of entries),
+  as Klusters writes it.  Klusters refuses a header above 65536.  0.56.0-0.57.2 wrote the highest id + 1,
+  about 16.8 million once a reserved id is in the file, so Klusters refused every output of a chunk run
+  ("Invalid or missing .clu header (nClusters=16777136)").  `fiber-clu-header FILE...` repairs such files
+  in place: it rewrites the 4 header bytes and leaves the ids alone; `--check` only reports.
 * Reserved clusters are not sorted.  They are never merged, split, realigned, scored or flagged.  Every
   id allocator skips the block: `fiber_chunks.next_free_id` here, and `highestClusterId()` in
   Klusters (neurosuite-3 0889).  So new clusters are always numbered below it.  The two sides'

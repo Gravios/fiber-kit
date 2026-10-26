@@ -1416,6 +1416,15 @@ Copy the template fiber-kit.yaml (fiber-pipeline tuning config) into the current
 | `-o` (`--output`) | `fiber-kit.yaml` | destination path (default: ./fiber-kit.yaml) |
 | `-f` (`--force`) | flag (off) | overwrite the destination if it already exists |
 | `--exp` | flag (off) | copy the EXPERIMENTAL template (fiber-kit-exp.yaml: the newest gates turned on) to ./fiber-kit.yaml instead of the production default |
+### `fiber-clu-header`
+
+Check or repair the int32 header of `.clu` / `.clc` / `.clp` files.  The header is the number of distinct ids (a `.clp`: its number of entries).  That is what Klusters writes, and it keeps a chunk run's files (`FK_CHUNKS`) within the 0-65536 Klusters accepts.  fiber-kit 0.56.0-0.57.2 wrote the highest id + 1 instead: about 16.8 million once the reserved clusters are in the file, so Klusters refused those files.  Rewrites the 4 header bytes in place and leaves the ids alone; names that are not `<base>.<clu|clc|clp>[.<variant>].<elec>[.<tag>]`, text `.clu` files and odd sizes are skipped.  `--check` writes nothing and exits 1 when a header is off.
+
+Positional: `files`
+
+| flag | default | description |
+|---|---|---|
+| `--check` | flag (off) | report only, write nothing; exit 1 when a header is off |
 ### `fiber-raw-vs-stderiv`
 
 raw .fil vs stderiv discrimination of the original fibers; reads <session>.yaml.
