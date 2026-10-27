@@ -1,7 +1,8 @@
 """fiber-bench: config hashes, plan rewriting, truth matching / scoring, and score + report end to end.
 
   * hashes: a session knob changes the session hash; a merge knob does not; a flag knob changes the
-    flag hash AND the session's (the mask is its input); the merge step reads the hashed session tag;
+    flag hash AND the session's (the mask is its input); a consolidation knob (FK_CONS_*) changes the
+    session hash and a consensus knob (FK_CONSENSUS_*) does not; the merge step reads the hashed session tag;
     FK_SESSION_REALIGN is forced off (in-place commit), and an in-place fiber-realign step is refused;
   * --grid / --set / sweep files expand to the expected override list;
   * match_gt matches one-to-one within the tolerance, nearest offset first, and drops non-truth units;
@@ -52,6 +53,18 @@ def main():
     check(fb.build_run(cfg)[2] == h0, "the hash is deterministic")
     _, s5, h5 = fb.build_run(dict(cfg, FK_CHUNKS="14-16"))
     check(h5 != h0 and s5[0]["hash"] != s0[0]["hash"], "a chunk selection (FK_CHUNKS) changes every step's hash")
+    # FK_CONS_* is fiber-consolidate's: fiber-session runs that pass inside the stage, so a consolidation
+    # knob must give the session a new tag (before 0.57.4 it did not, and a sweep over FK_CONS_* re-used
+    # its first variant's output for every other); FK_CONSENSUS_* stays fiber-consensus's own.
+    _, s6, h6 = fb.build_run(dict(cfg, FK_CONS_AGG_IQR=0.0))
+    check(h6 != h0 and s6[0]["hash"] == s0[0]["hash"],
+          "a consolidation knob (FK_CONS_AGG_IQR) changes the session hash, not the flag's")
+    _, _, h7 = fb.build_run(dict(cfg, FK_CONSENSUS_JOBS=3))
+    check(h7 == h0, "a consensus knob (FK_CONSENSUS_JOBS) leaves the session hash alone")
+    pi, pa, pc = (fb.stage_params(st, cfg) for st in ("fiber-intrachunk", "fiber-anchor-link", "fiber-consensus"))
+    check(all(any(k.startswith("FK_CONS_") for k in p) for p in (pi, pa))
+          and not any(k.startswith("FK_CONS_") for k in pc) and any(k.startswith("FK_CONSENSUS_") for k in pc),
+          "FK_CONS_* is hashed by every stage that hosts the consolidation pass, and not by fiber-consensus")
 
     ov = fb.parse_overrides(["FK_A=1"], ["FK_B=1,2", "FK_C=x,y"], None)
     check(len(ov) == 4 and all(o["FK_A"] == 1 for o in ov) and {(o["FK_B"], o["FK_C"]) for o in ov} ==

@@ -27,9 +27,10 @@ like any other stage.  The hash (8 hex digits of a SHA-1) covers:
 
 | step | knobs in its hash |
 |---|---|
-| fiber-session | every `FK_*` key not owned by another stage (so a new session knob is never missed), plus the artifact step's hash when `FK_SESSION_EXCLUDE` is on |
+| fiber-session | every `FK_*` key not owned by another stage (so a new session knob is never missed), fiber-consolidate's `FK_CONS_*` among them (its in-stage consolidation pass), plus the artifact step's hash when `FK_SESSION_EXCLUDE` is on |
 | fiber-flag-artifacts | `FK_FLAG_*` |
 | fiber-xcorr-merge, fiber-rdr, ... | their own prefix (`FK_XCM_*`, `FK_RDR_*`, ...), plus the hash of the step that made their `in:` |
+| fiber-intrachunk, fiber-anchor-link | their own prefix and `FK_CONS_*` (they host the consolidation pass too); fiber-consensus has `FK_CONSENSUS_*` only |
 | every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT`, `FK_CHUNKS`, `FK_SESSION_CHUNK_MIN` |
 
 So the same parameters always give the same tag, a changed merge knob reuses the cached session output,

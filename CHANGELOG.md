@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.4] — fiber-bench hashes the consolidation knobs into fiber-session's tag
+- **The bug.**  fiber-bench listed `FK_CONS_` among fiber-consensus's prefixes, so fiber-session's hash left out
+  every `FK_CONS_*` knob.  Those are fiber-consolidate's knobs, read by the consolidation pass fiber-session runs
+  inside the stage (`FK_SESSION_CONS_MODE`), not by fiber-consensus (`FK_CONSENSUS_*`).  Two variants that
+  differed only in a consolidation knob (`FK_CONS_AGG_IQR`, `FK_CONS_PURE_IQR`, `FK_CONS_ITERS`, ...) got the
+  same session tag: the first variant ran, every other was skipped as cached and scored with the first's
+  output.  Sweeps over `FK_CONS_*` made before 0.57.4 compared one sort with itself; run them again.
+- **The fix.**  fiber-consensus owns `FK_CONSENSUS_*` only.  `SHARED_PREFIXES` lists the prefixes several stages
+  read: `FK_CONS_*` goes into the hash of fiber-session, fiber-intrachunk and fiber-anchor-link, the stages that
+  host the pass.  docs/bench.md's hash table says so.
+- test_bench: a consolidation knob changes the session hash and not the flag's; a consensus knob leaves the
+  session hash alone; intrachunk's and anchor-link's hashes carry `FK_CONS_*` and fiber-consensus's does not
+  (the first and third fail on 0.57.3).
+
 ## [0.57.3] — the .clu header is the number of distinct ids
 - **The header.**  Every `.clu` and `.clc` fiber-kit writes carries its number of distinct ids as its int32
   header, as Klusters writes it on Save; a `.clp` carries its number of entries (`neuro_io.clu_header`).

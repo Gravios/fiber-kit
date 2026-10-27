@@ -13,6 +13,8 @@ first 8 hex digits of a SHA-1 over
   * the step's stage name and its plan `params:`;
   * every FK_* key that stage reads -- fiber-session: every key NOT owned by another stage (so a new
     session knob is never missed); the others: their own prefixes (FK_XCM_, FK_RDR_, FK_FLAG_, ...);
+    a prefix several stages read (fiber-consolidate's FK_CONS_*: fiber-session, fiber-intrachunk and
+    fiber-anchor-link host its pass) is in each of their hashes;
   * FK_REALIGN_VARIANT (the method token every file name carries);
   * the hash of the step that produced its input (`in:`), and for fiber-session with FK_SESSION_EXCLUDE
     the artifact mask's step -- a chain, so changing an upstream knob changes every downstream hash and
@@ -70,7 +72,7 @@ STAGE_PREFIXES = {
     "fiber-rdr": ("FK_RDR_",),
     "fiber-backbone-link": ("FK_BBLINK_",),
     "fiber-anchor-link": ("FK_ALINK_",),
-    "fiber-consensus": ("FK_CONSENSUS_", "FK_CONS_"),
+    "fiber-consensus": ("FK_CONSENSUS_",),
     "fiber-lowmix": ("FK_LOWMIX_",),
     "fiber-intrachunk": ("FK_INTRA_",),
     "fiber-link": ("FK_LINK_", "FK_MERGE_"),
@@ -78,6 +80,10 @@ STAGE_PREFIXES = {
     "fiber-peel": ("FK_PEEL_",),
     "fiber-stochastic": ("FK_STOCH_",),
 }
+# FK_* prefixes read by SEVERAL stages: each listed stage hashes these keys.  FK_CONS_* are fiber-consolidate's
+# knobs; the stages that host its pass read them (FK_<STAGE>_CONS_MODE picks the mode per stage).  They
+# are not fiber-consensus's (FK_CONSENSUS_*).
+SHARED_PREFIXES = {"FK_CONS_": ("fiber-session", "fiber-intrachunk", "fiber-anchor-link")}
 _FOREIGN_TO_SESSION = tuple(p for st, ps in STAGE_PREFIXES.items() if st != "fiber-realign" for p in ps)
 GLOBAL_KEYS = ("FK_REALIGN_VARIANT", "FK_CHUNKS", "FK_SESSION_CHUNK_MIN")   # every stage's hash carries these
 
@@ -96,6 +102,7 @@ def stage_params(stage, cfg):
     else:
         pre = STAGE_PREFIXES.get(stage)
         own = [k for k in keys if pre and k.startswith(pre)]
+    own += [k for k in keys for p, sts in SHARED_PREFIXES.items() if stage in sts and k.startswith(p)]
     own = sorted(set(own) | {k for k in GLOBAL_KEYS if k in cfg})
     return {k: cfg[k] for k in own}
 
