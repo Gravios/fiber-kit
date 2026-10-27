@@ -4,6 +4,47 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.6] — tools/fil_noise_rhythms.py: how does a group's noise vary with theta and gamma?
+- **What it reads.**  One group's channels of the `.fil` in 1-s windows, keeping the spike-free samples
+  (`fil_noise_states.py`'s mask), in the space the pipeline sorts in (`--variant`).  The LFP is `<base>.lfp`,
+  else `<base>.eeg`, or `--lfp`.  Its reference is the median of `--lfp-channels` (default the group's;
+  `--theta-channels` for a separate theta reference), band-passed (zero-phase Butterworth, Hilbert) for delta,
+  theta and each `--gamma-bands` band (default slow 30-50, mid 55-90, fast 90-150 Hz).
+- **Four answers.**
+  1. *State*: the noise level in theta windows against non-theta windows, overall and per channel.  Its
+     correlation with the theta index and with each band's power, raw and given the detection rate.
+  2. *Phase*: noise power per phase bin, each window normalised by its own mean, so slow level changes drop out.
+     - Theta is measured in the theta windows; each gamma band in its bursts and in its exclusive bursts
+       (every other band below its own threshold).
+     - Output: modulation m, preferred phase and max/min, per channel and for the channel mean.
+     - The null rotates each window's phase histogram by a random offset.
+     - The detection rate per phase bin is the comparison.
+  3. *Amplitude*: noise power and detection rate per decile of each gamma band's instantaneous envelope, with a
+     block-bootstrap interval.  A joint regression on all the bands' envelopes gives each band's unique slope
+     (% noise power per SD, the other bands held fixed) beside its marginal one.
+  4. *Coupling*: each gamma band's envelope by theta phase, and the correlation between the bands' envelopes.
+- **Windows left out:** flat windows (a channel's robust SD below 1 file unit), dropouts (a channel below
+  `--drop-frac` of its median) and `--exclude-minutes` spans.  The report counts them.
+- **Outputs.**  `<out>.npz`, `<out>.png`, and a printed report.
+- **Why the exclusive bursts and the joint regression.**  A strong gamma burst leaks into the neighbouring band.
+  In the test, mid-gamma bursts gave the fast band, which held no fast gamma, a noise phase modulation of 0.098
+  at the mid phase and a +0.8%/SD marginal slope.  In its exclusive bursts the modulation drops to 0.010; with
+  the mid envelope held fixed, the fast slope is -0.8%/SD.
+- test_fil_noise_rhythms, on synthetic 20-kHz sessions with a 1250-Hz LFP:
+  - **Modulated file** (theta on channels 0-3 at 180 deg, mid-gamma phase on channels 4-7 at +90 deg, a theta
+    state x1.2, theta-coupled slow gamma, a 4-s flat stretch and a 3-s channel dropout):
+    - the flat and dropout windows are found;
+    - the theta windows, the state ratio, the per-channel theta and mid-gamma modulations and phases;
+    - the detections' theta modulation;
+    - no slow-gamma relation;
+    - the leak into the fast band, and its removal in the exclusive bursts;
+    - the joint-regression slopes (+15%/SD on channels 4-7 for mid);
+    - the slow-gamma coupling at -90 deg;
+    - the stderiv_C5 space also runs.
+  - **Stationary control:** no phase modulation, amplitude relation or state change.
+  - Three planted bugs are each caught: negated phase, non-exclusive bursts, and the flat test without the
+    robust-SD floor.
+
 ## [0.57.5] — tools/fil_noise_states.py: is a group's noise stationary, or does it come in states?
 - **What it measures.**  It streams one group's channels of the `.fil` in 1-s windows and keeps the
   spike-free samples (at least `--guard-ms` outside every detected spike's window).  It measures them in the
