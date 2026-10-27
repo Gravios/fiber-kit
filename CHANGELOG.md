@@ -4,6 +4,40 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.5] — tools/fil_noise_states.py: is a group's noise stationary, or does it come in states?
+- **What it measures.**  It streams one group's channels of the `.fil` in 1-s windows and keeps the
+  spike-free samples (at least `--guard-ms` outside every detected spike's window).  It measures them in the
+  space the pipeline sorts in: `--variant standard` is the `.fil` itself, a stderiv token goes through
+  `fiber_stderiv.space_transform` with the session's sdiffPairs.  Per window:
+  - the level: robust SD, dithered, because a MAD of int16 data is quantised;
+  - the tails (plain over robust SD);
+  - the common share (0 = independent channels, 1 = all common);
+  - the spectral tilt and band powers;
+  - the detection rate;
+  - with an LFP (`<base>.lfp`), the theta index and ripple-band power.
+- **Four answers.**
+  1. *Structure*: the share of the window-to-window variation of the level that is real.  The measurement
+     noise comes from even against odd 25-ms sub-blocks.  The level's autocorrelation is reported at 1 s to
+     10 min.
+  2. *States*: a Gaussian mixture on (level, tails, common share, tilt), K by BIC.  Per state: the features,
+     the detection rate, theta, and dwell times.  A small state of single windows is marked *transient*:
+     windows straddling a switch, or holding a ripple.
+  3. *Fast structure*: noise power by theta phase in theta windows, and the noise level around ripple events.
+  4. *Pipeline impact*: the block-Toeplitz noise covariance over the session mask, for the span, each state
+     and each 12-min chunk.  It reports the eigenvalues of `Cs^-1/2 C Cs^-1/2`, i.e. how far from white each
+     state's noise is under one span whitener (a common factor = a level change, a spread = a change of shape).
+- **Outputs.**  `<out>.npz`, `<out>.png` and `<out>_fast.png`, plus a printed report.
+- test_fil_noise_states, on synthetic 20-kHz sessions:
+  - **Two-state file:** the real share is high, and the two dominant states match the built ones (99% of
+    windows). Further checks:
+    - the level ratio, common shares, tail order and dwell times;
+    - theta-phase modulation x2.9;
+    - a noise rise at the ripples x1.8;
+    - the whitener mismatch;
+    - the stderiv_C5 space separates the states too.
+  - **Stationary control:** real share 0%, one state, no phase modulation.  Without the dither, the
+    quantised level splits the stationary control into three spurious states.
+
 ## [0.57.4] — fiber-bench hashes the consolidation knobs into fiber-session's tag
 - **The bug.**  fiber-bench listed `FK_CONS_` among fiber-consensus's prefixes, so fiber-session's hash left out
   every `FK_CONS_*` knob.  Those are fiber-consolidate's knobs, read by the consolidation pass fiber-session runs
