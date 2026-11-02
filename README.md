@@ -482,6 +482,23 @@ aren't re-attempted:
   keys on the `[2,5] ms` band and the across-session rate handoff instead.
 - **`hill_fp` returns NaN** for units too sparse to estimate, rather than a
   misleading 0.5 clamp.
+- **The roll-cosine, not Klusters' profile similarity, scores `fiber-xcorr-merge`.**
+  A port of `tmProfileSim`, the Profile metric of Klusters' template matrix, as
+  `--metric profile` (2026-10-22) was not merged.
+  - On sirotaA-jg-000005-20120316 g6 (exp_final of the 2026-10-21 run) it separated
+    same-unit halves split in time from distinct units at AUC 0.93, against the
+    roll-cosine's 0.985.
+  - The case in its test, a unit and a co-located one that differ only off their
+    shared dominant channel, is already refused at roll-cosine 0.96: the band-overlap
+    co-gate and the residual-variance test each refuse it on their own.
+  - On sirotaA-jg-000005-20120312 g7, minutes 168–204, scored against 27 curated
+    pyramidal units, the exp plan's merge reaches a mean unit accuracy of 0.308.
+    With the profile score in its place the accuracy is 0.245–0.288 (thresholds
+    0.97–0.90).  A last profile merge after it makes one merge at 0.97, and joins
+    two units at 0.93.
+  - To review merges by profile in Klusters, set Preferences ▸ Matrices ▸ Template
+    matrix metric to Profile (inter-channel): the template matrix shows it, and
+    Auto-Merge Similar Clusters thresholds it.
 
 ## Project layout
 
