@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>neurosuite-3</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/>
+<path d="M62,312 V128 L138,312 V128" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="34"/>
+<path d="M286,151 A46,46 0 1 0 246,220 A46,46 0 1 1 206,289" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#EEF4F8" stroke-width="34"/>
+<path d="M354,151 A46,46 0 1 1 394,220 A46,46 0 1 1 354,289" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#FF8F45" stroke-width="34"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

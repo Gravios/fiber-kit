@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>pipeline</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><rect x="50" y="160" width="72" height="72" rx="20" fill="#43C8E2"/><path d="M134.0,180 L150.0,196 L134.0,212" fill="none" stroke="#EEF4F8" stroke-opacity="0.75" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><rect x="162" y="160" width="72" height="72" rx="20" fill="#EEF4F8"/><path d="M246.0,180 L262.0,196 L246.0,212" fill="none" stroke="#EEF4F8" stroke-opacity="0.75" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><rect x="274" y="160" width="72" height="72" rx="20" fill="#EEF4F8"/><path d="M358.0,180 L374.0,196 L358.0,212" fill="none" stroke="#EEF4F8" stroke-opacity="0.75" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><rect x="386" y="160" width="72" height="72" rx="20" fill="#FF8F45"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

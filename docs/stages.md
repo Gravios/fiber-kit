@@ -1,3 +1,8 @@
+<picture>
+  <source media="(max-width: 600px)" srcset="images/doc-stages-banner-narrow.png">
+  <img src="images/doc-stages-banner.png" width="100%" alt="">
+</picture>
+
 # fiber-kit — stage & parameter reference
 
 Every `fiber-*` command is a pipeline stage or tool.  This file is generated from each stage's

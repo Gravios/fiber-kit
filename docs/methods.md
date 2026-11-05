@@ -1,3 +1,8 @@
+<picture>
+  <source media="(max-width: 600px)" srcset="images/doc-methods-banner-narrow.png">
+  <img src="images/doc-methods-banner.png" width="100%" alt="">
+</picture>
+
 # fiber-kit — core methods & primitives
 
 The reusable numerical primitives behind the stages, with their signatures and parameters.

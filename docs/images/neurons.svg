@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>neurons</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><ellipse cx="262" cy="200" rx="196" ry="122" transform="rotate(-14 262 200)" fill="#FF8F45" fill-opacity="0.12" stroke="#FF8F45" stroke-width="14"/><path d="M110,262 Q190,150 330,120" fill="none" stroke="#43C8E2" stroke-width="12" stroke-linecap="round" stroke-opacity="0.55"/><circle cx="173.3" cy="193.6" r="11.0" fill="#43C8E2"/><circle cx="251.4" cy="145.4" r="14.0" fill="#43C8E2"/><circle cx="330.0" cy="120.0" r="17.0" fill="#43C8E2"/><path d="M150,292 Q260,250 410,200" fill="none" stroke="#EEF4F8" stroke-width="12" stroke-linecap="round" stroke-opacity="0.55"/><circle cx="231.9" cy="261.6" r="11.0" fill="#EEF4F8"/><circle cx="323.6" cy="229.3" r="14.0" fill="#EEF4F8"/><circle cx="410.0" cy="200.0" r="17.0" fill="#EEF4F8"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

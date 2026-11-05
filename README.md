@@ -1,4 +1,7 @@
-# fiber-kit
+<h1><picture>
+  <source media="(max-width: 600px)" srcset="docs/images/banner-narrow.png">
+  <img src="docs/images/banner.png" width="100%" alt="fiber-kit">
+</picture></h1>
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)

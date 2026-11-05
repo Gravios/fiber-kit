@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>stages</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><path d="M84,110 L144,152 L84,194" fill="none" stroke="#43C8E2" stroke-width="24" stroke-linecap="round" stroke-linejoin="round"/><path d="M178,194 H258" stroke="#FF8F45" stroke-width="24" stroke-linecap="round"/><path d="M84,246 H190" stroke="#43C8E2" stroke-width="16" stroke-linecap="round"/><path d="M226,246 H428" stroke="#EEF4F8" stroke-opacity="0.8" stroke-width="16" stroke-linecap="round"/><path d="M84,290 H190" stroke="#43C8E2" stroke-width="16" stroke-linecap="round"/><path d="M226,290 H428" stroke="#EEF4F8" stroke-opacity="0.8" stroke-width="16" stroke-linecap="round"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><title>fiber-kit</title><defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+    <stop offset="0" stop-color="#0E2236"/><stop offset="1" stop-color="#173F5C"/>
+  </linearGradient>
+</defs>
+<rect width="512" height="512" rx="112" fill="url(#bg)"/><path d="M88,326 Q130,150 286,70" fill="none" stroke="#43C8E2" stroke-width="18" stroke-linecap="round" stroke-opacity="0.6"/><circle cx="148.9" cy="187.0" r="14.0" fill="#43C8E2"/><circle cx="215.1" cy="116.0" r="20.0" fill="#43C8E2"/><circle cx="286.0" cy="70.0" r="26.0" fill="#43C8E2"/><path d="M88,326 Q240,236 420,160" fill="none" stroke="#EEF4F8" stroke-width="18" stroke-linecap="round" stroke-opacity="0.6"/><circle cx="230.5" cy="247.8" r="14.0" fill="#EEF4F8"/><circle cx="331.8" cy="198.9" r="20.0" fill="#EEF4F8"/><circle cx="420.0" cy="160.0" r="26.0" fill="#EEF4F8"/><path d="M88,326 Q290,330 436,276" fill="none" stroke="#FF8F45" stroke-width="18" stroke-linecap="round" stroke-opacity="0.6"/><circle cx="258.5" cy="317.9" r="14.0" fill="#FF8F45"/><circle cx="359.5" cy="299.4" r="20.0" fill="#FF8F45"/><circle cx="436.0" cy="276.0" r="26.0" fill="#FF8F45"/>
+<path d="M-10,392 H206 L220,380 L244,462 L266,376 Q282,400 300,396 H522" fill="none" stroke-linecap="round" stroke-linejoin="round" stroke="#43C8E2" stroke-width="16"/></svg>

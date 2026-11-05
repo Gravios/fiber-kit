@@ -1,3 +1,8 @@
+<picture>
+  <source media="(max-width: 600px)" srcset="images/doc-pipeline-banner-narrow.png">
+  <img src="images/doc-pipeline-banner.png" width="100%" alt="">
+</picture>
+
 # fiber-kit — the pipeline
 
 fiber-kit turns a raw extracellular recording (already spike-detected into per-group `.spk`/`.res`)
