@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.57.7] — fiber_srcgeom: a 6-source chain fits a unit's footprint to the noise; the shared-geometry test
+- **New module `fiber_srcgeom`.**  A unit's raw template is the field of six point current sources on one axis
+  through the soma (currents summing to zero); given the geometry the currents are linear, so a fit is a
+  projection onto a 5-dim channel subspace and only the geometry (soma position, axis, scale) is searched.
+  On g6 0316 it reaches the template noise (median misfit / noise 1.05), where the reconstructed CA1 cable
+  cells of fiber-morpho stayed ~60x above it.
+- **`shared_geometry_z`**: the cost, in noise units, of fitting two templates with ONE geometry and their own
+  currents.  g6 GT pairs: AUC 0.78-0.94 alone, roll-cosine 0.878 -> 0.914 with it (held-out sort).
+- **Resolution is coarse** (synthetic: 80 um in depth z 5.1, 40 um 2.2, 20 / 40 um laterally 0.1 / 0.3).
+  As a veto in fiber-xcorr-merge it changed nothing, and its soma position in place of fiber-cpos's lost
+  merges in fiber-intrachunk / fiber-link -- so it is not wired into a stage.  docs/methods.md
+  "Shared source geometry".
+- **test_srcgeom**: refit to the noise, one place with different currents (small z), and the negative control
+  (80 um apart: large z).
+
 ## [0.57.6] — tools/fil_noise_rhythms.py: how does a group's noise vary with theta and gamma?
 - **What it reads.**  One group's channels of the `.fil` in 1-s windows, keeping the spike-free samples
   (`fil_noise_states.py`'s mask), in the space the pipeline sorts in (`--variant`).  The LFP is `<base>.lfp`,

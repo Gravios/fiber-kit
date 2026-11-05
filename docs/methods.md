@@ -871,3 +871,29 @@ bursting cells cut by amplitude — all ten at 2 Hz; the five misses are 0.5 Hz 
 test abstains, left unmerged by choice — and 0/25 negatives (independent cells, theta co-modulated
 cells, a monosynaptic pair, the big fragment of one bursting cell against the small of another, two
 theta interneurons).  Not yet run on a real session.
+
+## Shared source geometry (`fiber_srcgeom`, 0.57.7)
+
+A unit's raw template is fitted by a chain of six point current sources on one straight axis through the
+soma (axial offsets -2, -1, 0, 1, 2, 4 x a fitted scale), with the currents summing to zero at every sample.
+Given the geometry (soma position, axis direction, scale) the currents are linear, so a fit is the projection
+of the template onto a 5-dimensional channel subspace, and only the geometry is searched.
+
+- **Why this model.**  Recorded octrode templates have spatial rank about 3 at the noise level (g6 0316:
+  residual energy after rank 3 0.0020, split-half noise 0.0023).  The 6-source chain reaches the noise
+  (median misfit / noise 1.05; 4 sources 3.6, 5 sources 2.5).  The cable-model library of the reconstructed
+  CA1 cells (fiber-morpho) stayed at ~60x the noise even after calibrating the pyramidal channels and the
+  filter, so it cannot tell one cell from two.
+- **The merge test.**  `shared_geometry_z`: fit both templates with ONE geometry and their own currents; the
+  cost of sharing, in units of the two templates' noise (`template_noise`, or a split-half estimate).  Currents stay free, so a cell's amplitude and shape
+  changes cost nothing.
+- **Measured on g6 0316** (GT-labelled candidate pairs, roll-cos >= 0.75, four sorts): AUC same vs different
+  cell 0.78-0.94 alone; with roll-cosine 0.878 -> 0.914 (logistic model, each sort held out in turn).
+- **Coarse resolution.**  On a synthetic octrode a source moved 10 / 20 / 40 / 80 um in depth gives z
+  2.4 / 0.9 / 2.2 / 5.1, laterally 20 / 40 um 0.1 / 0.3.  Among the pairs a cosine merge looks at
+  (roll-cos >= 0.92) different cells mostly share a place, so:
+  - as a veto inside fiber-xcorr-merge it changed nothing (cos 0.98: 0 vetoes; cos 0.95 / 0.92: 5 vetoes,
+    ARI 0.584 -> 0.582, 0.583 -> 0.578);
+  - its soma position fed to fiber-link / fiber-intrachunk's position gates in place of fiber-cpos's lost
+    merges (intrachunk dynamic linkage ARI 0.195 -> 0.151) -- the monopole is the better position;
+  - so it is not wired into a stage here; the module is a building block for merge evidence.
