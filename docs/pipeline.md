@@ -119,6 +119,7 @@ The embedded plan of `fiber-kit-exp.yaml`, in order:
 | 8 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
 | 9 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
 | 10 | fiber-realign | exp_final (in place) | final re-extraction for curation |
+| (opt) | fiber-psame-merge | exp_xcm -> exp_psame (+ .psame tsv) | merge by a calibrated P(same cell) from history-conditioned cell models; + completeness at a purity cost (docs/methods.md "P(same cell)") |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
 | (QC) | fiber-rdr | the final stage's clu -> `.rdr.<method>.<group>.<in>.tsv` | per-cluster contamination score from the residual's temporal derivative; flags only, no `.clu` (in the 0.54.0 exp plan as step `rdr`, after realign-final) |
 

@@ -142,6 +142,14 @@ CATALOG = {
         _p("novel", "str", "noise", "noise = novel groups to noise (kept as .clc children); keep = own units"),
         _p("copy-on-abstain", "int", 0, "1 = return a shape copy even when the refractory test has no power"),
         _p("res-variant", "str", "", "pin the .res variant (e.g. stderiv_S3); empty = shared resolve")]),
+    "fiber-psame-merge": dict(input=True, tags=["in", "out"], params=[  # calibrated P(same) merge; not in `all`
+        _p("theta", "float", 0.5, "merge while the best candidate's P(same cell) reaches this"),
+        _p("cannot-link", "float", 0.3, "two groups may not merge if any pair of their original clusters scored below this"),
+        _p("knn", "int", 8, "candidates per cluster (most similar by roll-cosine)"),
+        _p("cos-floor", "float", 0.75, "candidates need at least this roll-cosine"),
+        _p("min-n", "int", 50, "min spikes for a cluster to take part"),
+        _p("spk-variant", "str", "", "waveform variant the cell models use (empty = the clu method; calibrated on stderiv_C5)"),
+        _p("geo", "int", 0, "1 = add the shared-geometry term (fiber_srcgeom; standard .spk + probe geometry)")]),
     "fiber-rdr": dict(input=True, tags=["in"], params=[  # post-sort QC table; writes no .clu; not in `all`
         _p("thr", "float", 2.0, "flag clusters whose residual-derivative excess ratio reaches this"),
         _p("min-amp", "float", 4.0, "channels below this amplitude (noise SD) are not scored"),
@@ -164,6 +172,7 @@ STAGE_MODULES = {
     "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
     "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
+    "fiber-psame-merge": "fiber_kit.fiber_psame",
     "fiber-consensus": "fiber_kit.fiber_consensus",
     "fiber-lowmix": "fiber_kit.fiber_lowmix",
     "fiber-rdr": "fiber_kit.fiber_rdr",

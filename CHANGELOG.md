@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.58.0] — fiber-psame-merge: merge by a calibrated P(same cell) from history-conditioned cell models
+- **New stage `fiber-psame-merge`** (`fiber_psame`; opt-in, ALT stage, plan step commented in
+  fiber-kit-exp.yaml section [F]; knobs `FK_PSAME_*`).  Each cluster gets a cell model whose expected amplitude
+  comes from its own preceding spikes (EWMA adaptation state, best of 30 ms - 1.2 s, plus a burst term) and
+  whose shape follows the amplitude.  A pair's evidence is the BIC of one model of the union against two;
+  P(same) = logistic(bias + w_rc roll-cos + w_dbic dbic), calibrated on g6 0316 (2,026 GT pairs).
+- **Merging** is sequential with refit, while P >= theta (0.5), with a member-level cannot-link (0.3) that
+  stops one growing cluster from absorbing its neighbours.  Writes the `.clu`, carries `.clc/.clp`, and logs
+  every merge to `<SESS>.psame.<group>.<tag>.tsv`.
+- **g6 fix_linked -> GT** (ARI / purity / completeness): fiber-xcorr-merge 0.577 / 0.758 / 0.598; this stage
+  0.603-0.668 / 0.723 / 0.701-0.769 over two runs; merging by the GT itself 0.692 / 0.759 / 0.764.  A
+  completeness step at a purity cost.  Held-out-sort pair AUC 0.961 (roll-cos alone 0.910).
+- **`--geo 1`** adds `fiber_srcgeom`'s shared-geometry z with its own calibrated weights (off by default).
+- **Limits, in docs/methods.md "P(same cell)"**: a cell cut by a hard amplitude threshold scores dbic < 0;
+  the per-spike version of the model does not clean clusters; the weights are session-calibrated.
+- **test_psame**: EWMA state against fiber_adapt.ewma; a bursting cell cut in time is merged; a tonic cell
+  with the same average waveform (roll-cos as close) is not.
+
 ## [0.57.7] — fiber_srcgeom: a 6-source chain fits a unit's footprint to the noise; the shared-geometry test
 - **New module `fiber_srcgeom`.**  A unit's raw template is the field of six point current sources on one axis
   through the soma (currents summing to zero); given the geometry the currents are linear, so a fit is a

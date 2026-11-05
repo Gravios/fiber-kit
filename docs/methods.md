@@ -896,4 +896,51 @@ of the template onto a 5-dimensional channel subspace, and only the geometry is 
     ARI 0.584 -> 0.582, 0.583 -> 0.578);
   - its soma position fed to fiber-link / fiber-intrachunk's position gates in place of fiber-cpos's lost
     merges (intrachunk dynamic linkage ARI 0.195 -> 0.151) -- the monopole is the better position;
-  - so it is not wired into a stage here; the module is a building block for merge evidence.
+  - so it ships as an optional term of fiber-psame-merge (`FK_PSAME_GEO`, 0.58.0), off by default: with
+    roll-cosine and the history term it lifts the pair AUC 0.961 -> 0.965 and purity at strict theta, not
+    the end-to-end ARI.
+
+## P(same cell): history-conditioned cell models (`fiber_psame`, 0.58.0)
+
+`fiber-psame-merge` merges clusters by a calibrated probability that two clusters are one cell.
+
+- **Cell model.**  In a global 24-PC space of the `.spk` (projected without centring, so a cell stays
+  proportional to its template): y_i ~ N(a_i T + (a_i - <a>) S, diag var), where the spike's amplitude a_i is
+  predicted from the cluster's own spikes before t_i -- an EWMA adaptation state at the best of five time
+  constants (30 ms - 1.2 s) and a burst term exp(-dt_prev / 8 ms) -- and S is the shape change per unit of
+  amplitude.
+- **Pair evidence.**  dbic = [2 (LL_union - LL_A - LL_B) + k ln n] / n with one model of the union against
+  two (k = the parameters of one model): fragments one adaptation and burst law predicts score as one cell.
+  Statistics of the fitted parameters (adaptation slope, burst decrement, shape vector S, ISI shape, burst
+  ordering, refractory ratio) were tested as further terms and get ~0 weight next to dbic.
+- **P(same)** = logistic(bias + w_rc roll-cos + w_dbic dbic), calibrated on g6 0316 exp_chunk + fs_clean
+  (2,026 GT-labelled pairs).  Held-out sort AUC 0.961 (roll-cos alone 0.910).  Reliability (each sort held out
+  in turn): P >= 0.97 -> 100 % same cell, 0.90-0.97 -> 97 %, 0.8-0.9 -> 74 %; below 0.2 it is pessimistic
+  (26 % same).
+- **Merging.**  Sequential with refit: the most probable candidate pair merges, the merged cluster's model is
+  refitted and re-scored against its neighbours, while P >= theta.  A member-level cannot-link (no original
+  pair across the two groups scored below `cannot-link`) stops a growing, ever broader cluster from absorbing
+  its neighbours -- without it one group swallowed five cells on g6.
+- **End to end**, g6 fix_linked (the exp plan's linked sort) against GT, ARI / purity / completeness:
+
+  | | ARI | purity | completeness |
+  |---|---|---|---|
+  | fix_linked (input) | 0.554 | 0.759 | 0.518 |
+  | fiber-xcorr-merge (exp plan) | 0.577 | 0.758 | 0.598 |
+  | average linkage on P, P >= 0.5 | 0.606 | 0.743 | 0.652 |
+  | fiber-psame-merge, theta 0.5, no cannot-link | 0.639 | 0.702 | 0.779 |
+  | fiber-psame-merge, theta 0.5, cannot-link 0.3 | 0.603-0.668 | 0.723 | 0.701-0.769 |
+  | fiber-psame-merge, theta 0.9 | 0.588 | 0.736 | 0.631 |
+  | merging by the GT itself (ceiling) | 0.692 | 0.759 | 0.764 |
+
+  The range at theta 0.5 is two runs that differ in a few early merges (the spikes sampled for the means
+  move pairs near the cosine floor): the order matters.  Purity falls by 0.035 -- merges among clusters that
+  were already mixed (930 of the 1,098 candidate pairs involve a cluster below 80 % purity) -- so it is a
+  completeness step, not a cleaning one.
+- **Limit.**  A cell cut by a hard amplitude threshold: each piece is narrower than the cell along the noisy
+  amplitude axis, the union always fits worse, dbic < 0 (test_psame documents the synthetic case).
+- **Not usable for cleaning.**  The same model per spike (own cluster against the 3 nearest) finds foreign
+  spikes at within-unit AUC 0.66; adding self-timing and neighbour cross-correlogram terms made it worse
+  (0.57-0.61), because their statistics come from the contaminated clusters they should clean.
+- **Session-calibrated.**  The weights are for g6 0316, stderiv_C5 `.spk`; re-fit them on a curated session
+  of another probe, filter or variant.

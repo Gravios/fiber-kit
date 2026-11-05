@@ -68,6 +68,7 @@ _LP = "▸ fiber-bench"
 STAGE_PREFIXES = {
     "fiber-flag-artifacts": ("FK_FLAG_",),
     "fiber-xcorr-merge": ("FK_XCM_",),
+    "fiber-psame-merge": ("FK_PSAME_",),
     "fiber-realign": ("FK_REALIGN_",),
     "fiber-rdr": ("FK_RDR_",),
     "fiber-backbone-link": ("FK_BBLINK_",),

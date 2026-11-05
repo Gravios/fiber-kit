@@ -438,6 +438,25 @@ the built-in default applies), then the yaml's own description, which usually st
 | `FK_RDR_ALIGN_MIN_SCORE` | `0.10` | — | 0.10.  Klusters realign threshold; 0.70 leaves low-correlation spikes behind. |
 | `FK_RDR_CAP` | `4000` | — | 4000.  Spikes sampled per cluster. |
 
+## [F] FIBER-PSAME-MERGE -- merge by a calibrated P(same cell)  (opt-in plan step; docs/methods.md
+
+| knob | fiber-kit-exp.yaml | fiber-kit.yaml | meaning |
+|---|---|---|---|
+| `FK_PSAME_THETA` | `0.5` | — | 0.5 \| 0.5-0.9.  Merge while the best candidate's P reaches this; 0.9 keeps purity (g6: 0.737) and still beats the cosine merge on completeness. |
+| `FK_PSAME_CANNOT_LINK` | `0.3` | — | 0.3 \| 0-0.7.  Groups may not merge if any pair of their ORIGINAL clusters scored below this at the start (0 = off: g6 ARI 0.639 -> 0.668 with 0.3). |
+| `FK_PSAME_KNN` | `8` | — | 8.  Candidates per cluster (most similar by roll-cosine). |
+| `FK_PSAME_COS_FLOOR` | `0.75` | — | 0.75.  Candidates need at least this roll-cosine (the calibration's range). |
+| `FK_PSAME_MIN_N` | `50` | — | 50.  Smaller clusters keep their labels. |
+| `FK_PSAME_SHIFT` | `4` | — | 4 (samples).  Roll-cosine half-window. |
+| `FK_PSAME_W_RC` | `22.2143` | — | calibrated logistic weights (raw scale), g6 0316 stderiv_C5 |
+| `FK_PSAME_W_DBIC` | `0.6144` | — |  |
+| `FK_PSAME_BIAS` | `-17.773` | — |  |
+| `FK_PSAME_GEO` | `0` | — | 0 \| 1.  1 = add the shared-geometry z of fiber_srcgeom (a 6-source chain at ONE place for both RAW templates); needs the standard .spk + probe geometry. g6: pair AUC 0.961 -> 0.965, no end-to-end gain.  Its own weights: |
+| `FK_PSAME_GEO_W_RC` | `21.5792` | — |  |
+| `FK_PSAME_GEO_W_DBIC` | `0.5606` | — |  |
+| `FK_PSAME_GEO_W_Z` | `-0.4395` | — |  |
+| `FK_PSAME_GEO_BIAS` | `-17.0015` | — |  |
+
 ## Legacy names
 
 Still honoured for old configs; use the replacement.

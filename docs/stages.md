@@ -745,6 +745,35 @@ Positional: `session`, `elec`
 | `--drift-chunk-min` | `12.0` | FK_XCM_DRIFT_CHUNK_MIN (default 12.0) |
 | `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
 | `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
+### `fiber-psame-merge`
+
+Merge by a calibrated P(same cell) from history-conditioned cell models (docs/methods.md "P(same cell)").
+
+Positional: `session`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` |  |
+| `--clu-stage` | `xcorr_merged` | input .clu stage tag |
+| `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
+| `--spk-method` (`--spk-variant`) | — | waveform variant the cell models are fitted on (default: --clu-method; the shipped coefficients were calibrated on stderiv_C5) |
+| `--out-stage` (`--out-tag`) | `psame_merged` |  |
+| `--cap` | — | spikes per cluster model (default: all) |
+| `--seed` | `0` |  |
+| `--theta` | `0.5` | FK_PSAME_THETA (default 0.5) |
+| `--cannot-link` | `0.3` | FK_PSAME_CANNOT_LINK (default 0.3) |
+| `--knn` | `8` | FK_PSAME_KNN (default 8) |
+| `--cos-floor` | `0.75` | FK_PSAME_COS_FLOOR (default 0.75) |
+| `--min-n` | `50` | FK_PSAME_MIN_N (default 50) |
+| `--shift` | `4` | FK_PSAME_SHIFT (default 4) |
+| `--w-rc` | `22.2143` | FK_PSAME_W_RC (default 22.2143) |
+| `--w-dbic` | `0.6144` | FK_PSAME_W_DBIC (default 0.6144) |
+| `--bias` | `-17.773` | FK_PSAME_BIAS (default -17.773) |
+| `--geo` | `0` | FK_PSAME_GEO (default 0) |
+| `--geo-w-rc` | `21.5792` | FK_PSAME_GEO_W_RC (default 21.5792) |
+| `--geo-w-dbic` | `0.5606` | FK_PSAME_GEO_W_DBIC (default 0.5606) |
+| `--geo-w-z` | `-0.4395` | FK_PSAME_GEO_W_Z (default -0.4395) |
+| `--geo-bias` | `-17.0015` | FK_PSAME_GEO_BIAS (default -17.0015) |
 ### `fiber-relink`
 
 Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).

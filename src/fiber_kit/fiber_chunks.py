@@ -179,7 +179,7 @@ def fmt(chunks):
 #             (in the .clc/.clp as one atom per chunk under the reserved id), and the input is restored.
 # A run that died between the two leaves the state file; the next shield restores the input first.
 SHIELD_STAGES = ("fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-anchor-link", "fiber-backbone-link",
-                 "fiber-consensus", "fiber-lowmix", "fiber-peel", "fiber-refit")
+                 "fiber-psame-merge", "fiber-consensus", "fiber-lowmix", "fiber-peel", "fiber-refit")
 
 
 def _triple(base, elec, variant, tag):
