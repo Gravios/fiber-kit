@@ -80,16 +80,18 @@ def main():
     print("ids and names:")
     steps = ps.load_steps(EXP)
     ids = [s["id"] for s in steps]
-    check(ids == ["fiber-flag-artifacts-1", "fiber-session-1", "fiber-xcorr-merge-1", "fiber-realign-1",
-                   "fiber-rdr-1"],
+    check(ids == ["fiber-flag-artifacts-1", "fiber-session-1", "fiber-realign-1", "fiber-consensus-1",
+                   "fiber-realign-2", "fiber-cpos-1", "fiber-anchor-link-1", "fiber-realign-3",
+                   "fiber-xcorr-merge-1", "fiber-psame-merge-1", "fiber-realign-4", "fiber-rdr-1"],
           "fiber-kit-exp.yaml: <stage>-<k> ids (" + ", ".join(ids[:3]) + ", ...)")
     check(len(set(ids)) == len(ids), "every id unique")
-    for f, rname in (("fiber-kit.yaml", "realign-chunk"), ("fiber-kit-exp.yaml", "realign-final")):
+    for f, rname, rid in (("fiber-kit.yaml", "realign-chunk", "fiber-realign-1"),
+                          ("fiber-kit-exp.yaml", "realign-final", "fiber-realign-4")):
         sh = ps.load_steps(os.path.join(ROOT, "src", "fiber_kit", f))
         nm = [s["name"] for s in sh]
         rc_ = ps.resolve(sh, [rname])
-        check(all(nm) and len(set(nm)) == len(nm) and len(rc_) == 1 and sh[rc_[0]]["id"] == "fiber-realign-1",
-              f"{f}: every shipped step named, uniquely ({', '.join(nm[:3])}, ...); session realigns itself")
+        check(all(nm) and len(set(nm)) == len(nm) and len(rc_) == 1 and sh[rc_[0]]["id"] == rid,
+              f"{f}: every shipped step named, uniquely ({', '.join(nm[:3])}, ...); {rname} is {rid}")
     with tempfile.TemporaryDirectory() as d:
         em = subprocess.run(["bash", PIPE, "--emit-plan"], capture_output=True, text=True, env=env())
         sh = ps.load_steps(write(d, "emit.yaml", em.stdout))

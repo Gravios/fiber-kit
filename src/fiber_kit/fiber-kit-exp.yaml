@@ -22,10 +22,11 @@
 #  they define the file-naming contract, not tuning.
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
-#  Plan order (the embedded pipeline below, since 0.52.0; fiber-rdr since 0.54.0):
-#    fiber-flag-artifacts -> fiber-session(+realign) -> fiber-xcorr-merge -> realign -> fiber-rdr (QC table)
-#  (the previous plan -- consensus, intrachunk, anchor-link, xcorr-merge, backbone-link -- is kept, commented,
-#  under the pipeline section)
+#  Plan order (the embedded pipeline below, since 0.58.1; fiber-rdr since 0.54.0):
+#    fiber-flag-artifacts -> fiber-session -> realign -> fiber-consensus (quarantine-only) -> realign
+#      -> fiber-cpos -> fiber-anchor-link (units) -> realign -> fiber-xcorr-merge -> fiber-psame-merge
+#      -> realign -> fiber-rdr (QC table)
+#  (the 0.52.0 plan and the plan before it are kept, commented, under the pipeline section)
 #
 #  LAYOUT -- knob sections follow the plan order:
 #    [1] fiber-session   [2] fiber-realign   [3] fiber-cpos   [4] fiber-intrachunk
@@ -38,7 +39,7 @@
 #    [D] fiber-lowmix: post-sort split of low-amplitude MIXTURE units (opt-in plan step, not in `all`)
 #    [E] fiber-rdr: post-sort contamination QC table (in the plan, last; writes no .clu)
 #    [F] fiber-psame-merge: merge by a calibrated P(same cell) from history-conditioned cell models
-#        (opt-in plan step after the merge; not in `all`)
+#        (in the plan after the cosine merge, step `psame`)
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -102,6 +103,20 @@
 #      lab chain: ARI 0.433 -> 0.524, cmp 0.608 -> 0.694, purity -0.3pp.  The last
 #      realign re-extracts exp_final for curation.
 # ============================================================================
+#  SINCE 0.58.1 -- the plan that worked on the lab's sessions (the user's production config), with the
+#  P(same) merge added after the cosine merge:
+#    * session      : 18-min chunks with 8-min overlap (FK_SESSION_CHUNK_MIN / _OVERLAP_MIN), inclusion k 3.0,
+#                     method token stderiv_C6_D34 (FK_REALIGN_VARIANT); realign after it.
+#    * clean        : fiber-consensus --quarantine-only 1 on the fibers, then realign.
+#    * link         : fiber-cpos on fs_clean (raw .spk), fiber-anchor-link on the units layer -> exp_linked,
+#                     then realign.
+#    * merge        : fiber-xcorr-merge -> exp_xcm.
+#    * psame        : fiber-psame-merge -> exp_psame (section [F]); its weights were calibrated on
+#                     stderiv_C5, see the note there.
+#    * realign-final, rdr : on exp_psame.
+#  No GT score for this plan as a whole yet; the psame step's own g6 numbers are in section [F].
+#  The 0.52.0 notes below describe the plan before this one.
+# ============================================================================
 #  SINCE 0.52.0 -- tuned on sirotaA-jg-000005-20120312 group 7 against the 29 clean units of the old
 #  manual curation (see plans/10-session-xcorr.yaml for the scoring), and built so that NO real spike ends
 #  in cluster 0 or 1: only a spike whose unwhitened derivative is an artifact (fiber-flag-artifacts) does.
@@ -124,11 +139,25 @@
 pipeline:
   - {stage: fiber-flag-artifacts, name: flag}
   - {stage: fiber-session,        name: session,         out: fiber_session}
-  - {stage: fiber-xcorr-merge,    name: merge,           in: fiber_session, out: exp_xcm}
-  - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
-  - {stage: fiber-rdr,            name: rdr,             in: exp_xcm}      # QC table only: <SESS>.rdr.<method>.<group>.exp_xcm.tsv
-  # optional P(same) merge after the cosine merge (section [F]; opt-in: +completeness at a purity cost):
-  # - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}
+  - {stage: fiber-realign,        name: realign-1,       in: fiber_session}
+  - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
+  - {stage: fiber-realign,        name: realign-2,       in: fs_clean}
+  - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
+  - {stage: fiber-anchor-link,    name: link,            in: fs_clean, out: exp_linked, params: {frag-layer: units}}
+  - {stage: fiber-realign,        name: realign-3,       in: exp_linked}
+  - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
+  - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}   # section [F]
+  - {stage: fiber-realign,        name: realign-final,   in: exp_psame}
+  - {stage: fiber-rdr,            name: rdr,             in: exp_psame}    # QC table only: <SESS>.rdr.<method>.<group>.exp_psame.tsv
+  # without the P(same) merge:
+  # - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
+  # - {stage: fiber-rdr,            name: rdr,             in: exp_xcm}
+  # the 0.52.0 plan (cosine merge straight on the fiber-session fibers):
+  # - {stage: fiber-flag-artifacts, name: flag}
+  # - {stage: fiber-session,        name: session,         out: fiber_session}
+  # - {stage: fiber-xcorr-merge,    name: merge,           in: fiber_session, out: exp_xcm}
+  # - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
+  # - {stage: fiber-rdr,            name: rdr,             in: exp_xcm}
   # previous plan (before 0.52.0):
   # - {stage: fiber-session,        name: session,         out: fiber_session}
   # - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
@@ -173,10 +202,10 @@ FK_CHUNKS:               ""       # "" = every chunk | e.g. 14-16 or 3,7,10-12 (
                                   #   no allocator hands them out).  fiber-pipeline SHIELDS the stages that only relabel
                                   #   spikes (cpos, intrachunk, link, anchor-link, backbone-link, consensus, lowmix,
                                   #   peel, refit); fiber-refine and fiber-stochastic refuse to run while it is set.
-FK_SESSION_CHUNK_MIN:    12       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
+FK_SESSION_CHUNK_MIN:    18       # 12 | 8-20 (min).  Drift must be ~stationary within a chunk: choose so the
                                   #   probe drifts << site pitch (20 um) per chunk.  Too long smears templates
                                   #   across drift; too short starves per-chunk templates of spikes.
-FK_SESSION_OVERLAP_MIN:  4        # 4 | 0 or 3-8 (min).  Overlap between adjacent chunks for OVERLAP-ANCHOR cross-chunk
+FK_SESSION_OVERLAP_MIN:  8        # 4 | 0 or 3-8 (min).  Overlap between adjacent chunks for OVERLAP-ANCHOR cross-chunk
                                   #   linking: the same physical spikes fall in both chunks' overlap, so two fibers that
                                   #   share those spikes are the same unit (drift-free identity).  Needs enough shared
                                   #   spikes (~>=50 for the slowest cells) so keep it a few minutes; 0 DISABLES cross-chunk
@@ -306,7 +335,7 @@ FK_SESSION_FEATURE_ALIGN:        xcorr    # xcorr | centroid | off.  Sub-sample 
                                   #   ~(d/W)^2 (W = spike width); for narrow interneurons (W~4 samp) even d=1 hurts.
                                   #   The #1 lever for separating subtle look-alike shapes.  xcorr aligns to the
                                   #   summed template; centroid uses the energy centroid; off disables.
-FK_SESSION_INCLUSION_K:          2.0      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
+FK_SESSION_INCLUSION_K:          3.0      # 2.5 | 2.0-3.0.  Per-fiber core radius = median + k*MAD of within-fiber distance.
                                   #   Gaussian MAD=0.6745*sigma, so k=2.5 -> median+1.69*sigma (~91% of a unimodal
                                   #   core).  Lower k = purer cores (drop contaminant tails); higher = more inclusive.
 FK_SESSION_DIP_DIM:              4        # 6 | 4-8.  PCA dims the Hartigan dip test runs on.  More dims expose footprint /
@@ -368,7 +397,7 @@ FK_REALIGN_AFTER_MODE:   reextract  # canonical mode only.  reextract | shift-sp
 FK_REALIGN_FINAL_MODE:   reextract  # canonical mode only.  Mode for the LAST realign of the run (the artefacts that go to curation): reextract
                                   #   re-reads the .fil at the corrected times for the cleanest final .spk/.fet.  Set to
                                   #   shift-spk to make the final step match the intermediate ones (no .fil read).
-FK_REALIGN_VARIANT:      stderiv_C5_D34  # "" | e.g. stderiv_C5.  SET for the g6 reference run (sirotaA-jg-000005-
+FK_REALIGN_VARIANT:      stderiv_C6_D34  # "" | e.g. stderiv_C5.  SET for the g6 reference run (sirotaA-jg-000005-
                                   #   20120316): its sort lives in the lag feature space (.clu/.fet/.pca.stderiv_C5_D34),
                                   #   which inference deliberately never picks (it skips _D aliases), so without this
                                   #   every stage would compose .stderiv_C5 names.  Same as `fiber-pipeline 6 --method
@@ -1338,6 +1367,10 @@ FK_RDR_CAP:              4000     # 4000.  Spikes sampled per cluster.
 #  g6 fix_linked -> GT (ARI / purity / completeness): fiber-xcorr-merge 0.577 / 0.758 / 0.598; this stage
 #  0.60-0.67 / 0.72 / 0.70-0.77 (merge ceiling 0.692 / 0.759 / 0.764).  Session-calibrated: re-fit the
 #  weights on a curated session of another probe / filter / .spk variant.  Log: <SESS>.psame.<group>.<tag>.tsv
+#  THIS CONFIG: the cell models are fitted on the clu method's .spk (FK_REALIGN_VARIANT, stderiv_C6_D34 here),
+#  but the weights were calibrated on stderiv_C5.  Check the .psame tsv (P and dbic per merge) on a session you
+#  know before trusting THETA; a stderiv_C5 .spk can be pinned with  params: {spk-variant: stderiv_C5}  on
+#  the plan step if the session has one.
 # ============================================================================
 FK_PSAME_THETA:          0.5      # 0.5 | 0.5-0.9.  Merge while the best candidate's P reaches this; 0.9 keeps
                                   #   purity (g6: 0.737) and still beats the cosine merge on completeness.

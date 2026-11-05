@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.58.1] — fiber-kit-exp.yaml carries the lab's production plan, with the P(same) merge
+- **Embedded plan** replaced by the one that worked on the lab's sessions: flag -> session -> realign ->
+  consensus (quarantine-only) -> realign -> cpos -> anchor-link (units) -> realign -> xcorr-merge ->
+  **psame** (fiber-psame-merge, new in 0.58.0) -> realign-final -> rdr, both last steps on exp_psame.
+- **Knob values** from that config: FK_SESSION_CHUNK_MIN 18, FK_SESSION_OVERLAP_MIN 8, FK_SESSION_INCLUSION_K
+  3.0, FK_REALIGN_VARIANT stderiv_C6_D34.  The knob set is unchanged (every FK_* of 0.58.0, FK_PSAME_* included).
+- **Kept as comments:** the plan without the psame step, and the 0.52.0 plan.
+- **Note in section [F]:** psame's weights were calibrated on stderiv_C5; with stderiv_C6_D34 check the
+  .psame tsv on a known session, or pin `spk-variant: stderiv_C5` on the step.
+- docs/pipeline.md plan table and docs/config.md follow.  No GT score for the plan as a whole.
+
 ## [0.58.0] — fiber-psame-merge: merge by a calibrated P(same cell) from history-conditioned cell models
 - **New stage `fiber-psame-merge`** (`fiber_psame`; opt-in, ALT stage, plan step commented in
   fiber-kit-exp.yaml section [F]; knobs `FK_PSAME_*`).  Each cluster gets a cell model whose expected amplitude

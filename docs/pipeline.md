@@ -105,23 +105,23 @@ hierarchy is carried (fiber-intrachunk and the linkers consume the triple).  The
 clusters are written to a separate `<out>_qreview` stage for review in Klusters, and the per-spike
 record to `<sess>.qrn.<elec>.<out>`.
 
-The embedded plan of `fiber-kit-exp.yaml`, in order:
+The embedded plan of `fiber-kit-exp.yaml` (0.58.1), in order:
 
-| # | stage | in -> out | what |
-|---|---|---|---|
-| 1 | fiber-session | -> fiber_session | per-chunk over-clustering (12-min chunks, 4-min overlap); then its own realign: shifted .res, every variant's .spk / .fet |
-| 2 | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
-| 3 | fiber-cpos | fs_clean | positions / templates from .spk.standard |
-| 4 | fiber-intrachunk | fs_clean -> exp_chunk | within-chunk merge |
-| 5 | fiber-realign | exp_chunk (in place) | |
-| 6 | fiber-cpos | exp_chunk | |
-| 7 | fiber-anchor-link (`frag-layer: units`) | exp_chunk -> exp_linked | cross-chunk link |
-| 8 | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
-| 9 | fiber-backbone-link (`drift: exp_xcm`) | exp_xcm -> exp_final | backbone link with the drift transform |
-| 10 | fiber-realign | exp_final (in place) | final re-extraction for curation |
-| (opt) | fiber-psame-merge | exp_xcm -> exp_psame (+ .psame tsv) | merge by a calibrated P(same cell) from history-conditioned cell models; + completeness at a purity cost (docs/methods.md "P(same cell)") |
+| # | step | stage | in -> out | what |
+|---|---|---|---|---|
+| 1 | flag | fiber-flag-artifacts | -> artifact mask | acquisition artifacts from the unwhitened derivative, handed to fiber-session |
+| 2 | session | fiber-session | -> fiber_session | per-chunk over-clustering (18-min chunks, 8-min overlap, method stderiv_C6_D34) |
+| 3 | realign-1 | fiber-realign | fiber_session (in place) | |
+| 4 | clean | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
+| 5 | realign-2 | fiber-realign | fs_clean (in place) | |
+| 6 | cpos-clean | fiber-cpos | fs_clean | positions / templates from .spk.standard |
+| 7 | link | fiber-anchor-link (`frag-layer: units`) | fs_clean -> exp_linked | cross-chunk link |
+| 8 | realign-3 | fiber-realign | exp_linked (in place) | |
+| 9 | merge | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
+| 10 | psame | fiber-psame-merge | exp_xcm -> exp_psame (+ .psame tsv) | merge by a calibrated P(same cell) from history-conditioned cell models; + completeness at a purity cost (docs/methods.md "P(same cell)") |
+| 11 | realign-final | fiber-realign | exp_psame (in place) | final re-extraction for curation |
+| 12 | rdr | fiber-rdr | exp_psame -> `.rdr.<method>.<group>.exp_psame.tsv` | per-cluster contamination QC; flags only, no `.clu` |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
-| (QC) | fiber-rdr | the final stage's clu -> `.rdr.<method>.<group>.<in>.tsv` | per-cluster contamination score from the residual's temporal derivative; flags only, no `.clu` (in the 0.54.0 exp plan as step `rdr`, after realign-final) |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
 (`FK_REALIGN_VARIANT: stderiv_C5_D34`, the reference session's lag feature space -- inference never

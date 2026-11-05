@@ -42,11 +42,13 @@ def main():
     check(h1 != h0 and s1[0]["hash"] == s0[0]["hash"], "a session knob changes the session hash, not the flag's")
     check(h2 == h0, "a merge knob leaves the session hash alone")
     check(s3[0]["hash"] != s0[0]["hash"] and h3 != h0, "a flag knob changes the flag hash and the session's")
-    _, s4, _ = fb.build_run(cfg, upto="merge")
-    check(s4[-1]["in"] == s4[1]["out_tag"] and s4[-1]["out_tag"].startswith("exp_xcm_"),
-          f"the merge step reads the hashed session tag ({s4[-1]['in']} -> {s4[-1]['out_tag']})")
+    # the plan (0.58.1) realigns in place before the merge, so reaching it needs --allow-inplace
+    _, s4, _ = fb.build_run(cfg, upto="merge", allow_inplace=True)
+    link = [s for s in s4 if s["stage"] == "fiber-anchor-link"][-1]
+    check(s4[-1]["in"] == link["out_tag"] and s4[-1]["out_tag"].startswith("exp_xcm_"),
+          f"the merge step reads the hashed link tag ({s4[-1]['in']} -> {s4[-1]['out_tag']})")
     try:
-        fb.build_run(cfg, upto="realign-final"); refused = False
+        fb.build_run(cfg, upto="realign-1"); refused = False
     except SystemExit:
         refused = True
     check(refused, "an in-place fiber-realign step is refused without --allow-inplace")
