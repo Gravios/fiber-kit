@@ -107,12 +107,22 @@ fiber-tune show    <session> <elec> --spec plans/tune/exp-search.yaml
 FK_CONFIG=fk-bench/tune/exp-search/best.yaml fiber-pipeline <elec>       # use the winner
 ```
 
-**Spec** (yaml; `plans/tune/exp-search.yaml` is a worked example over the exp plan): `config` (base config
+**Spec** (yaml; `plans/tune/exp-search.yaml` is a worked example over the exp plan, in plan order, with both plans and per-step psame knobs): `config` (base config
 with a plan), `truth` (`clu`, `res`, optional `units`, `exclude`, `tol`, `int_rate`), `chunks` (the
 search's `FK_CHUNKS`), `score_at` (the plan step scored; default the last step with `out:`), `objective`,
-`set` (fixed overrides), `start` (where the search starts), `passes`, `min_gain`, `search_realign`, and `stages`: knob
+`set` (fixed overrides), `start` (where the search starts), `passes`, `min_gain`, `search_realign`, `plans`, and `stages`: knob
 groups, each a mapping of knob -> list of values, searched in order (upstream first).  Every knob must
 be one the base config lists, so a typo stops the run instead of doing nothing.
+
+**Three kinds of knob**, searched alike: `FK_*` (a config knob; it reaches every step of its stage),
+`<step>:<param>` (one plan step's `params:` entry, the stage's CLI flag without `--` -- e.g. `psame:theta`,
+needed when a stage runs twice, as fiber-psame-merge in the exp plan), and `@plan` (which of the spec's
+`plans:` runs).  `plans:` maps a name to `base` (the config's plan), an explicit list of steps,
+`{file: x.yaml}` (that file's `pipeline:`) or `{drop: [step names]}` (the base plan without those steps;
+a later `in:` that read a dropped step's output reads that step's input instead).  Every plan must contain
+`score_at`; a step parameter is ignored by a plan without the step.  Each trial carries its plan to
+fiber-bench as a `pipeline` override, so the hashed tags still re-use every unchanged step (a
+`psame:theta` trial re-runs only the final psame).  `best.yaml` carries the winning plan.
 
 **Search.**  Coordinate ascent: each knob in turn is tried at each listed value with every other knob at
 the current best, and its best value is kept when the objective rises by at least `min_gain`; the knob

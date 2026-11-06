@@ -46,6 +46,23 @@
 #  probe geometry.  On g6 it raises pair AUC (0.958 -> 0.962; held-out sort 0.871 ->
 #  0.895) and purity at strict theta, but not the end-to-end ARI.  Off by default.
 #
+#  CHUNKS.  The cell model has no drift term: one template per cluster over its lifetime, so
+#  drift across a long cluster is absorbed into its variance.  Two chunk-local modes:
+#    --per-chunk 1    merge only clusters of the SAME chunk (the partition fiber-anchor-link uses:
+#                     recovered from the clusters' time spans, else FK_SESSION_CHUNK_MIN by median
+#                     time).  For a plan step BEFORE the linker: inside a chunk there is no drift,
+#                     and the linker then sees ~100 clusters per chunk instead of ~330 fragments.
+#    --chunk-aware 1  score each pair CHUNK-LOCALLY: the union is tested inside every chunk both
+#                     clusters occupy (>= --min-chunk-n spikes each; rc and dbic averaged with weights
+#                     min(n_a, n_b)), else across their two nearest chunks (<= --max-gap apart; farther
+#                     pairs are not merged).  Chunks = FK_SESSION_CHUNK_MIN of spike time.
+#  Measured on g6 0316 (four 18-min chunks, real anchor-link -> xcorr-merge -> psame, the shipped
+#  weights, three seeds; ARI / purity / completeness):
+#      link -> xcm -> psame                       0.617-0.635 / 0.779-0.793 / 0.785-0.793
+#      link -> xcm -> psame --chunk-aware 1       0.627-0.677 / 0.800-0.808 / 0.744-0.774
+#      psame --per-chunk 1 -> link -> xcm -> psame  0.677-0.685 / 0.762-0.770 / 0.828-0.854
+#  per-chunk first then chunk-aware last: 0.664 / 0.780 / 0.786 (the two do not add up).
+#
 #  A pure .clu relabel (.res/.spk untouched); the .clc/.clp hierarchy is carried.
 #  Writes <base>.psame.<group>.<out-stage>.tsv: every accepted merge with P and terms.
 #  Knobs FK_PSAME_* (CLI > env > $FK_CONFIG > default).
@@ -79,6 +96,10 @@ _KNOBS = {
     "FK_PSAME_GEO_W_DBIC": ("geo_w_dbic", float, 0.5606),
     "FK_PSAME_GEO_W_Z": ("geo_w_z", float, -0.4395),
     "FK_PSAME_GEO_BIAS": ("geo_bias", float, -17.0015),
+    "FK_PSAME_PER_CHUNK": ("per_chunk", int, 0),
+    "FK_PSAME_CHUNK_AWARE": ("chunk_aware", int, 0),
+    "FK_PSAME_MIN_CHUNK_N": ("min_chunk_n", int, 30),
+    "FK_PSAME_MAX_GAP": ("max_gap", int, 1),
 }
 
 
@@ -175,10 +196,13 @@ def project(spk, idx, mu, V):
 # ── the merge ───────────────────────────────────────────────────────────────
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
                 w_rc=22.2143, w_dbic=0.6144, bias=-17.773, geo_term=None, w_geo=0.0, cap=None, rng=None,
-                log=print):
+                group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print):
     """Sequential P(same) merge.  spk: (N, nsamp, nchan) memmap of the scoring variant; times (s) per spike;
-    clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups' raw templates.  Returns (new clu,
-    list of accepted merges as dicts)."""
+    clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups'
+    raw templates.
+    group_of: {cluster: group} -- only clusters of the same group may merge (--per-chunk).
+    chunk_of: chunk index per spike -- score pairs chunk-locally (--chunk-aware; see the header).
+    Returns (new clu, list of accepted merges as dicts)."""
     rng = rng or np.random.default_rng(0)
     clu = np.asarray(clu).astype(np.int64).copy()
     mu, V = pca_basis(spk, rng=rng)
@@ -186,27 +210,53 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
     if len(ids) < 2:
         return clu, []
     model, mean = {}, {}
+    cmod, cmean, cn = {}, {}, {}                      # chunk-aware: per cluster, per chunk
 
     def refresh(u):
         idx = np.flatnonzero(clu == u)
         sub = np.sort(rng.choice(idx, min(1000, idx.size), replace=False))
         mean[u] = np.asarray(spk[sub], float).mean(0)
-        use = idx if cap is None or idx.size <= cap else np.sort(rng.choice(idx, cap, replace=False))
-        model[u] = CellModel(project(spk, use, mu, V), times[use])
+        if chunk_of is None:
+            use = idx if cap is None or idx.size <= cap else np.sort(rng.choice(idx, cap, replace=False))
+            model[u] = CellModel(project(spk, use, mu, V), times[use])
+            return
+        cmod[u], cmean[u], cn[u] = {}, {}, {}
+        for k in np.unique(chunk_of[idx]):
+            ik = idx[chunk_of[idx] == k]
+            if k < 0 or ik.size < min_chunk_n:
+                continue
+            use = ik if cap is None or ik.size <= cap else np.sort(rng.choice(ik, cap, replace=False))
+            cmod[u][int(k)] = CellModel(project(spk, use, mu, V), times[use])
+            cmean[u][int(k)] = np.asarray(spk[use[:1000]], float).mean(0); cn[u][int(k)] = int(ik.size)
 
     for u in ids:
         refresh(u)
 
     def neighbours(u):
-        sc = sorted(((rollcos(mean[u], mean[v], shift), v) for v in ids if v != u), reverse=True)[:knn]
+        pool = (v for v in ids if v != u and (group_of is None or group_of.get(v) == group_of.get(u)))
+        sc = sorted(((rollcos(mean[u], mean[v], shift), v) for v in pool), reverse=True)[:knn]
         return [v for r, v in sc if r >= cos_floor]
 
     def score(a, b):
-        rc = rollcos(mean[a], mean[b], shift)
-        d = dbic(model[a], model[b])
+        how = "lifetime"
+        if chunk_of is None:
+            rc = rollcos(mean[a], mean[b], shift)
+            d = dbic(model[a], model[b])
+        else:
+            sh = sorted(set(cmod[a]) & set(cmod[b]))
+            if sh:
+                w = np.array([min(cn[a][k], cn[b][k]) for k in sh], float)
+                rc = float(np.average([rollcos(cmean[a][k], cmean[b][k], shift) for k in sh], weights=w))
+                d = float(np.average([dbic(cmod[a][k], cmod[b][k]) for k in sh], weights=w)); how = "shared"
+            else:
+                near = [(abs(ka - kb), ka, kb) for ka in cmod[a] for kb in cmod[b]]
+                if not near or min(near)[0] > max_gap:
+                    return 0.0, dict(rc=float("nan"), dbic=float("nan"), geo_z=0.0, how="far")
+                _, ka, kb = min(near)
+                rc = rollcos(cmean[a][ka], cmean[b][kb], shift); d = dbic(cmod[a][ka], cmod[b][kb]); how = "adjacent"
         z = geo_term(members[a], members[b]) if geo_term is not None else 0.0
         p = 1.0 / (1.0 + np.exp(-(bias + w_rc * rc + w_dbic * d + w_geo * z)))
-        return float(p), dict(rc=rc, dbic=d, geo_z=z)
+        return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how)
 
     members = {u: {u} for u in ids}
     cand = {}
@@ -231,7 +281,9 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
             del cand[(a, b)]; continue
         clu[clu == b] = a; ids.remove(b); members[a] |= members.pop(b)
         merges.append(dict(into=a, merged=b, p=p, **terms))
-        del mean[b], model[b]; refresh(a)
+        for d_ in (mean, model, cmod, cmean, cn):
+            d_.pop(b, None)
+        refresh(a)
         cand = {k: v for k, v in cand.items() if a not in k and b not in k}
         for v in neighbours(a):
             k = (min(a, v), max(a, v)); cand[k] = score(*k)
@@ -258,6 +310,9 @@ def main():
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="psame_merged")
     ap.add_argument("--cap", type=int, default=None, help="spikes per cluster model (default: all)")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--chunk-min", type=float, default=cfgmod.knob_value("FK_SESSION_CHUNK_MIN", float, 12.0, gcfg),
+                    help="chunk length (min) for --per-chunk's fallback partition and --chunk-aware's chunks "
+                         "(default FK_SESSION_CHUNK_MIN)")
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
@@ -306,20 +361,37 @@ def main():
             return z
         geo_term = _geo_term
         w_rc, w_dbic, bias, w_geo = a.geo_w_rc, a.geo_w_dbic, a.geo_bias, a.geo_w_z
+    group_of = chunk_of = None
+    if a.per_chunk:
+        # the partition fiber-anchor-link uses: recovered from the clusters' time spans (chunk-local fragments
+        # fall into disjoint groups), else FK_SESSION_CHUNK_MIN by each cluster's median time
+        try:
+            from .fiber_anchor_link import atom_chunks_and_rates
+        except ImportError:
+            from fiber_anchor_link import atom_chunks_and_rates
+        group_of, _ = atom_chunks_and_rates(clu, res, sr, chunk_min=a.chunk_min)
+        print(f"{_LP} · per-chunk: merges only within each of {len(set(group_of.values()))} chunks")
+    if a.chunk_aware:
+        chunk_of = np.floor(res / float(sr) / 60.0 / a.chunk_min).astype(np.int64)
+        chunk_of[clu <= 1] = -1
+        print(f"{_LP} · chunk-aware: pairs scored inside shared {a.chunk_min:g}-min chunks "
+              f"(>= {a.min_chunk_n} spikes each), else across chunks <= {a.max_gap} apart")
     print(f"{_LP} · {base} elec {a.elec} | {var} .spk | theta {a.theta} cannot-link {a.cannot_link}"
           + (" | + shared geometry" if a.geo else ""))
     new, merges = psame_merge(spk, res / float(sr), clu, theta=a.theta, cannot_link=a.cannot_link, knn=a.knn,
                               cos_floor=a.cos_floor, min_n=a.min_n, shift=a.shift, w_rc=w_rc, w_dbic=w_dbic,
-                              bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng)
+                              bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng,
+                              group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap)
     nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=a.out_tag)
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
     print(f"{_LP} · {len(merges)} merges ({n_in} -> {n_out} clusters); wrote "
           f"{os.path.basename(nio.session_path(base, 'clu', a.elec, variant=a.clu_method, tag=a.out_tag))}")
     log_path = f"{base}.psame.{a.elec}.{a.out_tag}.tsv"
     with open(log_path, "w") as fh:
-        fh.write("into\tmerged\tp\trc\tdbic\tgeo_z\n")
+        fh.write("into\tmerged\tp\trc\tdbic\tgeo_z\thow\n")
         for m in merges:
-            fh.write(f"{m['into']}\t{m['merged']}\t{m['p']:.4f}\t{m['rc']:.4f}\t{m['dbic']:.4f}\t{m['geo_z']:.3f}\n")
+            fh.write(f"{m['into']}\t{m['merged']}\t{m['p']:.4f}\t{m['rc']:.4f}\t{m['dbic']:.4f}\t{m['geo_z']:.3f}"
+                     f"\t{m.get('how', 'lifetime')}\n")
     print(f"{_LP} · wrote {os.path.basename(log_path)}")
     # carry the .clc/.clp hierarchy: a merge only re-parents children
     try:

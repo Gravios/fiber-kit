@@ -949,3 +949,32 @@ of the template onto a 5-dimensional channel subspace, and only the geometry is 
   (0.57-0.61), because their statistics come from the contaminated clusters they should clean.
 - **Session-calibrated.**  The weights are for g6 0316, stderiv_C5 `.spk`; re-fit them on a curated session
   of another probe, filter or variant.
+
+### Chunks (0.60.0)
+
+The cell model has no drift term: one template per cluster over its lifetime, so drift across a long
+cluster is absorbed into its variance.  Two chunk-local modes:
+
+- **`--per-chunk 1`** merges only clusters of the same chunk, using the partition fiber-anchor-link uses
+  (recovered from the clusters' time spans, else `FK_SESSION_CHUNK_MIN` by median time).  As a plan step
+  before the linker (the exp plan's `psame-chunk`) it works where the model is valid -- no drift inside a
+  chunk -- and hands the linker ~100 clusters per chunk instead of ~330 fragments.  fiber-anchor-link
+  translates its overlap anchors to the merged clusters by majority (its own layer translation).
+- **`--chunk-aware 1`** scores each pair chunk-locally: per-chunk cell models (>= `--min-chunk-n` spikes),
+  the union tested inside every chunk both clusters occupy (rc and dbic averaged with weights
+  min(n_a, n_b)), else across their two nearest chunks (<= `--max-gap` apart; farther pairs never merge).
+  The merge log's `how` column says which (shared / adjacent).
+
+Measured on g6 0316 (four 18-min chunks, 0-72 min, real anchor-link -> xcorr-merge -> psame-merge with the
+production knobs, the shipped weights, GT cells, no oracle; ranges over three seeds and the stage CLI):
+
+| chain | ARI | purity | completeness | units |
+|---|---|---|---|---|
+| link -> xcm -> psame | 0.617-0.635 | 0.779-0.793 | 0.785-0.793 | ~284 |
+| link -> xcm -> psame `--chunk-aware 1` | 0.627-0.677 | 0.800-0.808 | 0.744-0.774 | ~335 |
+| psame `--per-chunk 1` -> link -> xcm -> psame | 0.677-0.685 | 0.762-0.770 | 0.828-0.854 | ~190 |
+| psame `--per-chunk 1` -> link -> xcm -> psame `--chunk-aware 1` | 0.664 | 0.780 | 0.786 | 219 |
+
+Per chunk first lifts the linker most (ARI after anchor-link 0.203 -> 0.631-0.660) and ends with the best
+ARI and completeness at ~0.02 purity; chunk-aware alone is the purest; the two do not add up.  Not covered:
+overlapping chunks, realign / consensus / cpos, deconv.

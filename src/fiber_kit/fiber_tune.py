@@ -21,11 +21,26 @@ SPEC (yaml):
     passes:    2                       # coordinate-search passes over every knob
     min_gain:  0.002                   # an objective gain below this does not move the search
     search_realign: false              # true = every trial runs the FULL plan in a workspace (see below)
+    plans:                             # optional named alternatives to the base config's plan (see PLANS)
+      exp: base
+      no-psame-chunk: {drop: [psame-chunk]}
     stages:                            # knob groups, searched in this order (upstream first)
+      - name: plan
+        knobs: {"@plan": [exp, no-psame-chunk]}
       - name: session
         knobs: {FK_SESSION_COARSE_DR: [0.07, 0.09, 0.12, 0.15], FK_SESSION_INCL_ASSIGN: [0, 1]}
       - name: psame
-        knobs: {FK_PSAME_THETA: [0.3, 0.5, 0.7]}
+        knobs: {"psame:theta": [0.3, 0.5, 0.7], "psame:chunk-aware": [0, 1]}
+
+KNOBS.  Three kinds of name, all searched the same way:
+    FK_*             a config knob (must be one the base config lists); reaches every step of its stage
+    <step>:<param>   one plan step's `params:` entry (the stage's CLI flag without --), e.g. psame:theta
+                     -- tunes ONE step when a stage runs twice (the exp plan's psame-chunk and psame)
+    @plan            which of `plans:` the trial runs
+PLANS.  `plans:` maps a name to: `base` (the config's plan), an explicit list of steps, {file: x.yaml}
+(that file's `pipeline:`), or {drop: [step names]} (the base plan without those steps, each later `in:`
+that named a dropped step's output re-wired to that step's input).  Every plan must contain `score_at`.
+A step parameter is ignored by a plan that lacks the step.
 
 SEARCH.  Coordinate ascent: from `start`, each knob in turn is tried at each of its listed values with
 every other knob held at the current best; the best value is kept when it raises the objective by at
@@ -87,7 +102,8 @@ except ImportError:                      # run as a script from src/fiber_kit
 
 _LP = "▸ fiber-tune"
 SPEC_KEYS = {"name", "config", "truth", "chunks", "score_at", "objective", "set", "start", "passes", "min_gain",
-             "stages", "method", "search_realign"}
+             "stages", "method", "search_realign", "plans"}
+PLAN_KNOB = "@plan"
 # files fiber-realign / fiber-session rewrite in place: copied into a workspace (everything else is symlinked)
 _WS_COPY = re.compile(r"\.(res|spk|fet|off|offsets)(\.|$)")
 # stage outputs: not carried into a workspace (the run makes its own)
@@ -169,6 +185,7 @@ def load_spec(path):
     spec["passes"] = int(spec.get("passes", 2)); spec["min_gain"] = float(spec.get("min_gain", 0.002))
     spec["chunks"] = "" if spec.get("chunks") in (None, "", "all") else str(spec["chunks"])
     spec["search_realign"] = bool(spec.get("search_realign", False))
+    spec["plans"] = dict(spec.get("plans") or {}); spec["_here"] = here
     stages = spec.get("stages") or []
     for g in stages:
         if not isinstance(g, dict) or not isinstance(g.get("knobs"), dict) or not g["knobs"]:
@@ -179,13 +196,25 @@ def load_spec(path):
     return spec
 
 
-def check_knobs(spec, cfg):
+def check_knobs(spec, cfg, plans=None):
     """Every knob the spec sets must be one the base config lists (the config lists every knob the code
-    reads), so a typo cannot silently do nothing."""
+    reads), every <step>:<param> must name a step of some plan, and @plan values must be `plans:` names --
+    so a typo cannot silently do nothing."""
     names = set(spec["set"]) | set(spec["start"]) | {k for g in spec["stages"] for k in g["knobs"]}
-    bad = sorted(k for k in names if k not in cfg and k != "FK_CHUNKS")
+    plans = plans or {}
+    steps = {s.get("name") or s["stage"] for P in (list(plans.values()) or [cfg.get("pipeline") or []]) for s in P}
+    bad = sorted(k for k in names if k not in cfg and k != "FK_CHUNKS" and k != PLAN_KNOB and ":" not in k)
     if bad:
         raise SystemExit(f"{_LP} · knob(s) not in {os.path.basename(spec['config'])}: {bad}")
+    nostep = sorted(k for k in names if ":" in k and k.split(":", 1)[0] not in steps)
+    if nostep:
+        raise SystemExit(f"{_LP} · step parameter(s) naming no plan step: {nostep} (steps: {sorted(steps)})")
+    vals = [v for g in spec["stages"] for k, vs in g["knobs"].items() if k == PLAN_KNOB for v in vs]
+    vals += [spec["start"][PLAN_KNOB]] if PLAN_KNOB in spec["start"] else []
+    unknown = sorted({v for v in vals if v not in plans})
+    if unknown:
+        raise SystemExit(f"{_LP} · @plan value(s) {unknown} are not in "
+                         f"`plans:` ({sorted(plans)})")
     # the chunk grid is what `chunks:` indexes: searching it would score different spans of the recording
     moving = sorted(k for g in spec["stages"] for k in g["knobs"] if k in ("FK_CHUNKS", "FK_SESSION_CHUNK_MIN"))
     if moving and spec["chunks"]:
@@ -199,6 +228,48 @@ def default_score_at(plan):
     if not steps:
         raise SystemExit(f"{_LP} · the plan has no step with `out:` to score")
     return steps[-1].get("name") or steps[-1]["stage"]
+
+
+def derive_plan(base_plan, d, here="."):
+    """A `plans:` entry -> a list of steps (see PLANS in the module docstring)."""
+    if d in (None, "base"):
+        return [dict(s) for s in base_plan]
+    if isinstance(d, list):
+        return [dict(s) for s in d]
+    if isinstance(d, dict) and "file" in d:
+        f = d["file"] if os.path.isabs(d["file"]) else os.path.join(here, d["file"])
+        with open(f) as fh:
+            return [dict(s) for s in (fb._yaml_load(fh) or {}).get("pipeline") or []]
+    if isinstance(d, dict) and "drop" in d:
+        drop = set(d["drop"] if isinstance(d["drop"], list) else [d["drop"]])
+        names = {s.get("name") or s["stage"] for s in base_plan}
+        if drop - names:
+            raise SystemExit(f"{_LP} · plans: drop names no step: {sorted(drop - names)}")
+        out, alias = [], {}
+        for s in base_plan:
+            s = dict(s)
+            if s.get("in") in alias:
+                s["in"] = alias[s["in"]]
+            if (s.get("name") or s["stage"]) in drop:
+                if s.get("out") and s.get("in") and s["out"] != s["in"]:
+                    alias[s["out"]] = s["in"]               # later readers of its output read its input
+                continue
+            out.append(s)
+        return out
+    raise SystemExit(f"{_LP} · plans: an entry must be `base`, a list of steps, {{file: ...}} or {{drop: [...]}}")
+
+
+def apply_step_params(plan, overrides):
+    """<step>:<param> overrides into the named steps' `params:` (a plan without the step ignores it)."""
+    out = [dict(s) for s in plan]
+    for k, v in overrides.items():
+        if ":" not in k:
+            continue
+        step, prm = k.split(":", 1)
+        for s in out:
+            if (s.get("name") or s["stage"]) == step:
+                s["params"] = dict(s.get("params") or {}, **{prm: v})
+    return out
 
 
 def search_plan(plan, score_at):
@@ -276,11 +347,15 @@ class Tuner:
         sp = sy.resolve_session_params(session, elec)
         self.session, self.base, self.sr = session, sp["base"], sp["sr"]
         self.cfg_full = fb.load_config(spec["config"])
-        check_knobs(spec, self.cfg_full)
         plan = list(self.cfg_full.get("pipeline") or [])
         if not plan:
             raise SystemExit(f"{_LP} · {spec['config']} has no `pipeline:` plan")
         self.score_at = spec.get("score_at") or default_score_at(plan)
+        self.base_plan = plan
+        self.plans = {n: derive_plan(plan, d, spec.get("_here", ".")) for n, d in spec["plans"].items()}
+        check_knobs(spec, self.cfg_full, self.plans)
+        for P in self.plans.values():
+            search_plan(P, self.score_at)                 # every plan must contain score_at
         self.method = spec.get("method") or self.cfg_full.get("FK_REALIGN_VARIANT") or clu_method
         self.dir = os.path.join(fb.bench_dir(self.base), "tune", spec["name"]); os.makedirs(self.dir, exist_ok=True)
         # the search config: base + fixed overrides, plan cut at score_at without in-place realigns
@@ -317,8 +392,20 @@ class Tuner:
         with open(os.path.join(self.dir, "trials.jsonl"), "a") as fh:
             fh.write(json.dumps(rec, default=float) + "\n")
 
+    def split(self, overrides, full=False):
+        """Trial overrides -> (config-knob overrides incl. the trial's `pipeline`, as fiber-bench --set takes them).
+        The plan is the @plan choice (default the base plan) with the <step>:<param> overrides applied, cut at
+        score_at without in-place realign unless `full`."""
+        knobs = {k: v for k, v in overrides.items() if k != PLAN_KNOB and ":" not in k}
+        name = overrides.get(PLAN_KNOB)
+        plan = self.plans[name] if name is not None else self.base_plan
+        plan = apply_step_params(plan, overrides)
+        knobs["pipeline"] = plan if full else search_plan(plan, self.score_at)
+        return knobs
+
     def plan_of(self, overrides, cfg_base=None, upto=None, allow_inplace=False, keep_realign=False):
-        cfg = dict(self.cfg_search if cfg_base is None else cfg_base); cfg.update(overrides)
+        full = cfg_base is not None
+        cfg = dict(self.cfg_search if cfg_base is None else cfg_base); cfg.update(self.split(overrides, full))
         if self.spec["chunks"]:
             cfg["FK_CHUNKS"] = str(self.spec["chunks"])
         return fb.build_run(cfg, upto or self.score_at, keep_realign=keep_realign, allow_inplace=allow_inplace)
@@ -335,7 +422,8 @@ class Tuner:
                 return r
         t0 = time.time()
         ns = argparse.Namespace(session=self.session, elec=self.elec, clu_method=self.method,
-                                config=self.cfg_search_path, set=[f"{k}={_fmt(v)}" for k, v in overrides.items()],
+                                config=self.cfg_search_path,
+                                set=[f"{k}={_fmt(v)}" for k, v in self.split(overrides).items()],
                                 grid=[], sweep=None, upto=self.score_at, keep_realign=False, allow_inplace=False,
                                 force=False, keep_going=True, dry_run=self.dry_run, chunks=self.spec["chunks"] or None)
         fb.cmd_run(ns)
@@ -375,7 +463,7 @@ class Tuner:
             moved = False
             for g in self.spec["stages"]:
                 for knob, vals in g["knobs"].items():
-                    now = cur.get(knob, self.cfg_search.get(knob))
+                    now = cur.get(knob, self.default_of(knob))
                     tried = []
                     for v in vals:
                         if _same(v, now):
@@ -397,8 +485,20 @@ class Tuner:
                 self.log(f"{_LP} · pass {p + 1} changed nothing: done"); break
         return self.finish(cur, best)
 
+    def default_of(self, knob):
+        """The value a knob has when the trial does not set it."""
+        if knob == PLAN_KNOB:
+            return None                                   # the base plan
+        if ":" in knob:
+            step, prm = knob.split(":", 1)
+            for s in self.base_plan:
+                if (s.get("name") or s["stage"]) == step:
+                    return (s.get("params") or {}).get(prm)
+            return None
+        return self.cfg_search.get(knob)
+
     def finish(self, cur, best):
-        cfg = dict(self.cfg_full); cfg.update(self.spec["set"]); cfg.update(cur)
+        cfg = dict(self.cfg_full); cfg.update(self.spec["set"]); cfg.update(self.split(cur, full=True))
         hdr = (f"fiber-tune {self.spec['name']} best: objective {best['objective']:.4f} "
                f"({self.spec['objective']}) on chunks {self.spec['chunks'] or 'all'}\n"
                f"# overrides vs {os.path.basename(self.spec['config'])}: {json.dumps(dict(self.spec['set'], **cur))}")
@@ -436,7 +536,8 @@ class Tuner:
         self.log(f"    workspace {ws} ({nbytes / 1e9:.2f} GB copied)")
         t0 = time.time()
         ns = argparse.Namespace(session=wbase, elec=self.elec, clu_method=self.method, config=self.cfg_confirm_path,
-                                set=[f"{k}={_fmt(v)}" for k, v in overrides.items()], grid=[], sweep=None,
+                                set=[f"{k}={_fmt(v)}" for k, v in self.split(overrides, full=True).items()],
+                                grid=[], sweep=None,
                                 upto=self.score_at, keep_realign=True, allow_inplace=True, force=False,
                                 keep_going=True, dry_run=self.dry_run, chunks=self.spec["chunks"] or None)
         fb.cmd_run(ns)

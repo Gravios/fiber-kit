@@ -456,6 +456,10 @@ the built-in default applies), then the yaml's own description, which usually st
 | `FK_PSAME_GEO_W_DBIC` | `0.5606` | — |  |
 | `FK_PSAME_GEO_W_Z` | `-0.4395` | — |  |
 | `FK_PSAME_GEO_BIAS` | `-17.0015` | — |  |
+| `FK_PSAME_PER_CHUNK` | `0` | — | 0 \| 0/1.  1 = merge only clusters of the SAME chunk (the partition fiber-anchor- link uses: recovered from the clusters' time spans, else FK_SESSION_CHUNK_MIN by median time).  Set per STEP, not here: the plan's `psame-chunk` step passes params {per-chunk: 1}; this global value reaches every psame step. |
+| `FK_PSAME_CHUNK_AWARE` | `0` | — | 0 \| 0/1.  1 = score each pair CHUNK-LOCALLY: the union is tested inside every FK_SESSION_CHUNK_MIN chunk both clusters occupy, else across their two nearest chunks (<= MAX_GAP apart; farther pairs never merge).  g6, final step without psame-chunk: purity 0.779-0.793 -> 0.800-0.808, completeness -0.03. |
+| `FK_PSAME_MIN_CHUNK_N` | `30` | — | 30.  CHUNK_AWARE: spikes a cluster needs in a chunk for that chunk's model. |
+| `FK_PSAME_MAX_GAP` | `1` | — | 1 (chunks).  CHUNK_AWARE: pairs with no shared chunk are tested across chunks at most this far apart; farther pairs are not merged. |
 
 ## Legacy names
 

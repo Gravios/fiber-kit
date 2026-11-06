@@ -22,10 +22,10 @@
 #  they define the file-naming contract, not tuning.
 #
 #  Each comment gives:  DEFAULT | useful RANGE | the reasoning.
-#  Plan order (the embedded pipeline below, since 0.58.1; fiber-rdr since 0.54.0):
+#  Plan order (the embedded pipeline below, since 0.60.0; fiber-rdr since 0.54.0):
 #    fiber-flag-artifacts -> fiber-session -> realign -> fiber-consensus (quarantine-only) -> realign
-#      -> fiber-cpos -> fiber-anchor-link (units) -> realign -> fiber-xcorr-merge -> fiber-psame-merge
-#      -> realign -> fiber-rdr (QC table)
+#      -> fiber-cpos -> fiber-psame-merge (per chunk) -> fiber-anchor-link (units) -> realign
+#      -> fiber-xcorr-merge -> fiber-psame-merge -> realign -> fiber-rdr (QC table)
 #  (the 0.52.0 plan and the plan before it are kept, commented, under the pipeline section)
 #
 #  LAYOUT -- knob sections follow the plan order:
@@ -39,7 +39,8 @@
 #    [D] fiber-lowmix: post-sort split of low-amplitude MIXTURE units (opt-in plan step, not in `all`)
 #    [E] fiber-rdr: post-sort contamination QC table (in the plan, last; writes no .clu)
 #    [F] fiber-psame-merge: merge by a calibrated P(same cell) from history-conditioned cell models
-#        (in the plan after the cosine merge, step `psame`)
+#        (in the plan twice: per chunk before the linker, step `psame-chunk`; after the cosine merge,
+#        step `psame`)
 #
 #  OPTIONAL embedded primary plan: this file may also carry a `pipeline:` section (an ordered list of
 #  steps, as written by `fiber-plan-edit` -> Make Primary).  When present, `fiber-pipeline <elec>` runs
@@ -103,6 +104,22 @@
 #      lab chain: ARI 0.433 -> 0.524, cmp 0.608 -> 0.694, purity -0.3pp.  The last
 #      realign re-extracts exp_final for curation.
 # ============================================================================
+#  SINCE 0.60.0 -- fiber-psame-merge also runs PER CHUNK before the linker (step `psame-chunk`,
+#  --per-chunk 1: only clusters of the same chunk merge, where the cell model has no drift to absorb).
+#  The linker then sees ~100 clusters per chunk instead of ~330 fragments.  Measured on
+#  sirotaA-jg-000005-20120316 group 6 (four 18-min chunks, 0-72 min, real anchor-link -> xcorr-merge ->
+#  psame-merge with this file's knobs, GT cells, no oracle; ARI / purity / completeness):
+#                                            after link            final
+#      0.58.3 plan (no psame-chunk)          0.203 / 0.842 / 0.297  0.617-0.635 / 0.779-0.793 / 0.785-0.793
+#      0.60.0 plan (psame-chunk first)       0.660 / 0.804 / 0.696  0.677-0.685 / 0.762-0.770 / 0.828-0.854
+#  (ranges: three seeds of the prototype and the stage CLI.)  The cost is ~0.02 purity.  For a PURER
+#  result, FK_PSAME_CHUNK_AWARE=1 on the final step scores pairs inside their shared chunks instead
+#  (without psame-chunk: purity 0.800-0.808, ARI 0.627-0.677, completeness 0.744-0.774); combined with
+#  psame-chunk it does not add up (0.664 / 0.780 / 0.786).  Without the per-chunk step: drop it and
+#  point `link` back at fs_clean (the commented lines under the pipeline).
+#  Not covered by that test: overlapping chunks (the anchors are translated to the merged clusters by
+#  majority -- fiber-anchor-link's own layer translation), realign / consensus / cpos, deconv.
+# ============================================================================
 #  SINCE 0.58.3 -- three fiber-session knobs changed from the lab's production config, from a test on
 #  sirotaA-jg-000005-20120316 group 6 (four 18-min chunks, 0-72 min; real anchor-link -> xcorr-merge ->
 #  psame-merge with this file's knobs; scored on the GT cells, no oracle merging):
@@ -158,13 +175,16 @@ pipeline:
   - {stage: fiber-consensus,      name: clean,           in: fiber_session, out: fs_clean, params: {quarantine-only: 1}}
   - {stage: fiber-realign,        name: realign-2,       in: fs_clean}
   - {stage: fiber-cpos,           name: cpos-clean,      in: fs_clean, out: fs_clean, spk: standard}
-  - {stage: fiber-anchor-link,    name: link,            in: fs_clean, out: exp_linked, params: {frag-layer: units}}
+  - {stage: fiber-psame-merge,    name: psame-chunk,     in: fs_clean, out: fs_psc, params: {per-chunk: 1}}   # section [F]
+  - {stage: fiber-anchor-link,    name: link,            in: fs_psc, out: exp_linked, params: {frag-layer: units}}
   - {stage: fiber-realign,        name: realign-3,       in: exp_linked}
   - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
   - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}   # section [F]
   - {stage: fiber-realign,        name: realign-final,   in: exp_psame}
   - {stage: fiber-rdr,            name: rdr,             in: exp_psame}    # QC table only: <SESS>.rdr.<method>.<group>.exp_psame.tsv
-  # without the P(same) merge:
+  # without the per-chunk P(same) merge (the 0.58.3 plan): drop psame-chunk and
+  # - {stage: fiber-anchor-link,    name: link,            in: fs_clean, out: exp_linked, params: {frag-layer: units}}
+  # without the final P(same) merge:
   # - {stage: fiber-realign,        name: realign-final,   in: exp_xcm}
   # - {stage: fiber-rdr,            name: rdr,             in: exp_xcm}
   # the 0.52.0 plan (cosine merge straight on the fiber-session fibers):
@@ -1386,6 +1406,9 @@ FK_RDR_CAP:              4000     # 4000.  Spikes sampled per cluster.
 #  but the weights were calibrated on stderiv_C5.  Check the .psame tsv (P and dbic per merge) on a session you
 #  know before trusting THETA; a stderiv_C5 .spk can be pinned with  params: {spk-variant: stderiv_C5}  on
 #  the plan step if the session has one.
+#  CHUNKS (0.60.0): the cell model has no drift term.  The plan runs this stage twice -- `psame-chunk`
+#  (--per-chunk 1, before the linker, no drift inside a chunk) and `psame` (after the cosine merge).
+#  The knobs below reach BOTH steps; tune one step with its plan `params:` (fiber-tune: psame:theta).
 # ============================================================================
 FK_PSAME_THETA:          0.5      # 0.5 | 0.5-0.9.  Merge while the best candidate's P reaches this; 0.9 keeps
                                   #   purity (g6: 0.737) and still beats the cosine merge on completeness.
@@ -1405,6 +1428,17 @@ FK_PSAME_GEO_W_RC:       21.5792
 FK_PSAME_GEO_W_DBIC:     0.5606
 FK_PSAME_GEO_W_Z:        -0.4395
 FK_PSAME_GEO_BIAS:       -17.0015
+FK_PSAME_PER_CHUNK:      0        # 0 | 0/1.  1 = merge only clusters of the SAME chunk (the partition fiber-anchor-
+                                  #   link uses: recovered from the clusters' time spans, else FK_SESSION_CHUNK_MIN by
+                                  #   median time).  Set per STEP, not here: the plan's `psame-chunk` step passes
+                                  #   params {per-chunk: 1}; this global value reaches every psame step.
+FK_PSAME_CHUNK_AWARE:    0        # 0 | 0/1.  1 = score each pair CHUNK-LOCALLY: the union is tested inside every
+                                  #   FK_SESSION_CHUNK_MIN chunk both clusters occupy, else across their two nearest
+                                  #   chunks (<= MAX_GAP apart; farther pairs never merge).  g6, final step without
+                                  #   psame-chunk: purity 0.779-0.793 -> 0.800-0.808, completeness -0.03.
+FK_PSAME_MIN_CHUNK_N:    30       # 30.  CHUNK_AWARE: spikes a cluster needs in a chunk for that chunk's model.
+FK_PSAME_MAX_GAP:        1        # 1 (chunks).  CHUNK_AWARE: pairs with no shared chunk are tested across
+                                  #   chunks at most this far apart; farther pairs are not merged.
 
 # ============================================================================
 #  POST-PIPELINE merge / QC tools  (REFERENCE ONLY -- separate CLIs, NOT run by

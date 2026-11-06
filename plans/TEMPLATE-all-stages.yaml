@@ -577,6 +577,7 @@ pipeline:
   #       out-stage: psame_merged
   #       cap: ""                         # spikes per cluster model (default: all)
   #       seed: 0
+  #       chunk-min: 12.0                 # chunk length (min) for --per-chunk's fallback partition and --chunk-aware's chunks (default FK_SESSION_CHUNK_MIN)
   #       theta: 0.5                      # FK_PSAME_THETA (default 0.5)
   #       cannot-link: 0.3                # FK_PSAME_CANNOT_LINK (default 0.3)
   #       knn: 8                          # FK_PSAME_KNN (default 8)
@@ -591,6 +592,10 @@ pipeline:
   #       geo-w-dbic: 0.5606              # FK_PSAME_GEO_W_DBIC (default 0.5606)
   #       geo-w-z: -0.4395                # FK_PSAME_GEO_W_Z (default -0.4395)
   #       geo-bias: -17.0015              # FK_PSAME_GEO_BIAS (default -17.0015)
+  #       per-chunk: 0                    # FK_PSAME_PER_CHUNK (default 0)
+  #       chunk-aware: 0                  # FK_PSAME_CHUNK_AWARE (default 0)
+  #       min-chunk-n: 30                 # FK_PSAME_MIN_CHUNK_N (default 30)
+  #       max-gap: 1                      # FK_PSAME_MAX_GAP (default 1)
   #     }}
 
   # ===== fiber-backbone-link : Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. =====

@@ -13,6 +13,9 @@
   than the cell along the noisy amplitude axis (selection), the union always fits worse, and dbic < 0
   (synthetic: -0.53 for the true pair, -0.06 for a tonic look-alike).  See the module docstring.
   4. A distinct cell stays alone; the input labels are not modified in place.
+  5. Chunk modes: --per-chunk never merges clusters of different chunks (and still merges within one);
+     --chunk-aware joins A's time halves across ADJACENT chunks (scored on those chunks), keeps the
+     look-alike B apart, and with max-gap 0 refuses halves that share no chunk.
 Exits nonzero on failure.
 """
 import os
@@ -89,5 +92,21 @@ check("A's fragments merged", len(np.unique(new[lab == 0])) == 1, str(merges))
 check("B stays apart from A", not set(np.unique(new[lab == 1])) & set(np.unique(new[lab == 0])))
 check("C stays alone", len(np.unique(new[lab == 2])) == 1 and not set(np.unique(new[lab == 2])) & set(np.unique(new[lab != 2])))
 check("input labels untouched", (clu == clu_in).all())
+
+# chunk modes.  A's two fragments are cut at 150 s (A1 earlier, A2 later); the session has four 75-s chunks.
+kw = dict(theta=0.5, cannot_link=0.3, knn=3, cos_floor=0.5, min_n=50, w_rc=0.0, w_dbic=4.0, bias=0.0, log=lambda *_: None)
+grp = {2: 0, 3: 1, 4: 0, 5: 0}                                    # per-chunk: A1 and A2 in different chunks
+new_pc, m_pc = ps.psame_merge(spk, times, clu, group_of=grp, **kw)
+check("per-chunk: fragments of different chunks are never merged", len(np.unique(new_pc[lab == 0])) == 2, str(m_pc))
+grp2 = {2: 0, 3: 0, 4: 0, 5: 0}
+new_pc2, _ = ps.psame_merge(spk, times, clu, group_of=grp2, **kw)
+check("per-chunk: fragments of one chunk still merge", len(np.unique(new_pc2[lab == 0])) == 1)
+chunk = np.floor(times / 75.0).astype(np.int64)
+new_ca, m_ca = ps.psame_merge(spk, times, clu, chunk_of=chunk, min_chunk_n=30, max_gap=1, **kw)
+check("chunk-aware: A's halves (adjacent chunks 1|2) merge", len(np.unique(new_ca[lab == 0])) == 1, str(m_ca))
+check("chunk-aware: the merge is scored across the adjacent chunks", any(m.get("how") == "adjacent" for m in m_ca), str(m_ca))
+check("chunk-aware: B stays apart from A", not set(np.unique(new_ca[lab == 1])) & set(np.unique(new_ca[lab == 0])))
+new_g0, _ = ps.psame_merge(spk, times, clu, chunk_of=chunk, min_chunk_n=30, max_gap=0, **kw)
+check("chunk-aware, max-gap 0: halves with no shared chunk are not merged", len(np.unique(new_g0[lab == 0])) == 2)
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

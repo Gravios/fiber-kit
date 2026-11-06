@@ -75,7 +75,7 @@ with tempfile.TemporaryDirectory() as td:
     t.spec = dict(name="t", config="base.yaml", objective="x", set={}, start={}, passes=3, min_gain=1e-6, chunks="",
                   stages=[dict(name="session", knobs={"A": [0.05, 0.09, 0.15]}), dict(name="merge", knobs={"B": [0, 1, 2]})])
     t.cfg_search = {"A": 0.15, "B": 0}; t.cfg_full = {"A": 0.15, "B": 0, "pipeline": []}
-    t.dir = td; t.trials = []; t.log = lambda *_: None; t.score_at = "x"
+    t.dir = td; t.trials = []; t.log = lambda *_: None; t.score_at = "x"; t.base_plan = []; t.plans = {}
     calls = []
 
     def fake(ov, phase="search", note=""):
@@ -104,6 +104,64 @@ with tempfile.TemporaryDirectory() as td:
                                                         objective=float("-inf"), overrides=dict(ov), metrics={}, note=note)
     cur, _ = t.search()
     check("failed trials never move the search", cur == {}, str(cur))
+
+# 4b. plans and step parameters
+base = [dict(stage="fiber-session", name="session", out="fiber_session"),
+        dict(stage="fiber-cpos", name="cpos-clean", **{"in": "fiber_session"}, out="fiber_session"),
+        dict(stage="fiber-psame-merge", name="psame-chunk", **{"in": "fiber_session"}, out="fs_psc", params={"per-chunk": 1}),
+        dict(stage="fiber-anchor-link", name="link", **{"in": "fs_psc"}, out="exp_linked"),
+        dict(stage="fiber-realign", name="realign-3", **{"in": "exp_linked"}),
+        dict(stage="fiber-psame-merge", name="psame", **{"in": "exp_linked"}, out="exp_psame")]
+nd = ft.derive_plan(base, {"drop": ["psame-chunk"]})
+check("plans: drop removes the step and re-wires its reader to its input",
+      [s.get("name") for s in nd] == ["session", "cpos-clean", "link", "realign-3", "psame"]
+      and [s for s in nd if s["name"] == "link"][0]["in"] == "fiber_session")
+check("plans: base is a copy", ft.derive_plan(base, "base") == base and ft.derive_plan(base, "base") is not base)
+pp = ft.apply_step_params(base, {"psame:theta": 0.7, "psame-chunk:theta": 0.3, "FK_X": 1, "nostep:theta": 9})
+check("step parameters reach only their step", [s.get("params") for s in pp if s["name"] == "psame"] == [{"theta": 0.7}]
+      and [s.get("params") for s in pp if s["name"] == "psame-chunk"] == [{"per-chunk": 1, "theta": 0.3}]
+      and base[2]["params"] == {"per-chunk": 1})
+cfgk = {"FK_A": 1, "pipeline": base}
+spec_ok = dict(set={}, start={}, chunks="", stages=[dict(knobs={"@plan": ["a", "b"], "psame:theta": [0.3], "FK_A": [2]})],
+               config="c.yaml")
+try:
+    ft.check_knobs(spec_ok, cfgk, {"a": base, "b": nd}); ok = True
+except SystemExit:
+    ok = False
+check("check_knobs accepts @plan values, step parameters and config knobs", ok)
+for bad, why in (({"@plan": ["c"]}, "unknown plan"), ({"nostep:theta": [1]}, "unknown step"), ({"FK_TYPO": [1]}, "unknown knob")):
+    try:
+        ft.check_knobs(dict(spec_ok, stages=[dict(knobs=bad)]), cfgk, {"a": base, "b": nd}); ok = False
+    except SystemExit:
+        ok = True
+    check(f"check_knobs refuses an {why}", ok)
+# a trial with @plan + a step parameter carries its plan through --set: same hash as fiber-bench run
+t = object.__new__(ft.Tuner); t.base_plan = plan; t.plans = {"exp": plan, "nochunk": plan}; t.score_at = "psame"
+kn = t.split({"@plan": "exp", "psame:theta": 0.7, "FK_SESSION_COARSE_DR": 0.12})
+back = fb.parse_overrides([f"{k}={ft._fmt(v)}" for k, v in kn.items()], [], None)[0]
+c1 = dict(exp); c1.update(kn); c2 = dict(exp); c2.update(back)
+check("a trial's plan survives --set and gives fiber-bench's hash", fb.build_run(c1, "psame")[2] == fb.build_run(c2, "psame")[2]
+      and [s.get("params") for s in back["pipeline"] if s.get("name") == "psame"] == [{"theta": 0.7}])
+k0 = t.split({}); k1 = t.split({"psame:theta": 0.7})
+check("a final-step parameter changes only that step's hash",
+      [s["hash"] for s in fb.build_run(dict(exp, **k0), "psame")[1][:-1]] == [s["hash"] for s in fb.build_run(dict(exp, **k1), "psame")[1][:-1]]
+      and fb.build_run(dict(exp, **k0), "psame")[2] != fb.build_run(dict(exp, **k1), "psame")[2])
+
+# a search over @plan picks the better plan
+with tempfile.TemporaryDirectory() as td:
+    t = object.__new__(ft.Tuner)
+    t.spec = dict(name="t", config="base.yaml", objective="x", set={}, start={}, passes=2, min_gain=1e-6, chunks="",
+                  stages=[dict(name="plan", knobs={"@plan": ["a", "b"]})])
+    t.cfg_search = {}; t.cfg_full = {"pipeline": base}; t.dir = td; t.trials = []; t.log = lambda *_: None
+    t.score_at = "psame"; t.base_plan = base; t.plans = {"a": base, "b": nd}
+    t.evaluate = lambda ov, phase="search", note="": dict(phase=phase, hash=json.dumps(ov, sort_keys=True), ok=True,
+                                                         objective={None: 0.0, "a": 0.0, "b": 1.0}[ov.get("@plan")],
+                                                         overrides=dict(ov), metrics={}, note=note)
+    cur, _ = t.search()
+    with open(os.path.join(td, "best.yaml")) as fh:
+        by = fb._yaml_load(fh)
+    check("search over @plan keeps the better plan, and best.yaml carries it", cur == {"@plan": "b"}
+          and [s.get("name") for s in by["pipeline"]] == [s.get("name") for s in nd])
 
 # 5. workspace
 with tempfile.TemporaryDirectory() as td:

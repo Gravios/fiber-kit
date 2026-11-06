@@ -4,6 +4,34 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.60.0] — fiber-psame-merge per chunk and chunk-aware; the exp plan merges within chunks before linking; fiber-tune searches plans and per-step parameters
+- **fiber-psame-merge `--per-chunk 1`** (`FK_PSAME_PER_CHUNK`): only clusters of the same chunk merge (the
+  partition fiber-anchor-link uses).  For a plan step before the linker: the cell model has no drift term, and
+  inside a chunk there is no drift.
+- **fiber-psame-merge `--chunk-aware 1`** (`FK_PSAME_CHUNK_AWARE`, `FK_PSAME_MIN_CHUNK_N`, `FK_PSAME_MAX_GAP`):
+  each pair is scored inside the chunks both clusters occupy, else across their two nearest chunks (at most
+  MAX_GAP apart).  The merge log gains a `how` column (lifetime / shared / adjacent).
+- **The exp plan** (fiber-kit-exp.yaml, "SINCE 0.60.0") gains step `psame-chunk` (fiber-psame-merge
+  `per-chunk: 1`, fs_clean -> fs_psc) before `link`, which now reads fs_psc.  Measured on g6 0316 (four 18-min
+  chunks, real anchor-link -> xcorr-merge -> psame-merge, GT cells, no oracle; three seeds and the stage CLI):
+  ARI 0.617-0.635 -> 0.677-0.685, completeness 0.785-0.793 -> 0.828-0.854, purity 0.779-0.793 -> 0.762-0.770;
+  ARI after the linker 0.203 -> 0.631-0.660.  `--chunk-aware 1` on the final step instead is the purest
+  (0.800-0.808) at completeness 0.744-0.774; the two together do not add up (0.664 / 0.780 / 0.786).
+  Not covered: overlapping chunks, realign / consensus / cpos, deconv.
+- **fiber-tune** searches **plans** and **per-step parameters**: spec key `plans:` (named alternatives:
+  `base`, a step list, `{file: ...}`, or `{drop: [steps]}` with the dropped step's readers re-wired), the
+  pseudo-knob `@plan`, and `<step>:<param>` knobs that set one step's `params:` (fiber-psame-merge runs twice
+  in the exp plan).  Each trial carries its plan to fiber-bench as a `pipeline` override, so unchanged steps
+  are still re-used; best.yaml carries the winning plan.  `plans/tune/exp-search.yaml` is reorganised in plan
+  order: plan, session, consensus, psame-chunk, link, merge, psame.
+- fiber-bench prints a plan override as its step names.
+- docs: methods.md "P(same cell)" -> Chunks; pipeline.md plan table; bench.md (knob kinds, plans);
+  config.md, stages.md and the plan template regenerated.
+- Tests: test_psame (per-chunk never merges across chunks and still merges within one; chunk-aware joins a
+  cell's time halves across adjacent chunks, keeps a look-alike apart, and refuses with max-gap 0);
+  test_tune (plan derivation and re-wiring, step parameters, knob checks, the plan's hash round trip, a
+  search over @plan); test_plan_steps and test_bench for the new step.
+
 ## [0.59.0] — fiber-tune: a knob search against a ground truth on a subset of chunks
 - **New tool `fiber-tune`** (`fiber_tune`): `search` runs a coordinate search over the knob groups of a spec
   file, each trial a `fiber-bench run` of the plan up to `score_at` on the spec's chunks, scored on a

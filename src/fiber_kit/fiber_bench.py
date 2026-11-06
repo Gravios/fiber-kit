@@ -256,7 +256,10 @@ def cmd_run(a):
             s["path"] = path
             if path is None or not os.path.exists(path) or a.force:
                 todo.append(s)
-        desc = ", ".join(f"{k}={v}" for k, v in ov.items()) or "(base config)"
+        # a plan given as an override (fiber-tune's trials) prints as its step names, not the whole list
+        desc = ", ".join(f"{k}=[{' > '.join(st.get('name') or st['stage'] for st in v)}]"
+                         if k == "pipeline" and isinstance(v, list) else f"{k}={v}"
+                         for k, v in ov.items()) or "(base config)"
         tags = " -> ".join(s.get("out_tag", s["stage"]) for s in steps)
         if not todo:
             print(f"  [{h}] {desc}: cached ({tags})")

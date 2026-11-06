@@ -184,7 +184,9 @@ def main():
     by = {s.get("name"): s for s in st_}
     check(by["cpos-clean"]["out_tag"] == by["clean"]["out_tag"] and by["cpos-clean"].get("annotates") == "cpos",
           "cpos-clean (out == in) keeps the consensus stage's tag and is marked as a cpos annotation")
-    check(by["link"]["in"] == by["clean"]["out_tag"], "the link step reads the consensus output, not a re-tagged copy")
+    check(by["psame-chunk"]["in"] == by["clean"]["out_tag"],
+          "the per-chunk psame step reads the consensus output, not a re-tagged copy")
+    check(by["link"]["in"] == by["psame-chunk"]["out_tag"], "the linker reads the per-chunk psame output")
     print(f"\ntest_bench: {'FAIL' if fails else 'PASS'} ({fails} failed)")
     return 1 if fails else 0
 

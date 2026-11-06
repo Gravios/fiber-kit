@@ -110,7 +110,7 @@ hierarchy is carried (fiber-intrachunk and the linkers consume the triple).  The
 clusters are written to a separate `<out>_qreview` stage for review in Klusters, and the per-spike
 record to `<sess>.qrn.<elec>.<out>`.
 
-The embedded plan of `fiber-kit-exp.yaml` (0.58.1), in order:
+The embedded plan of `fiber-kit-exp.yaml` (0.60.0), in order:
 
 | # | step | stage | in -> out | what |
 |---|---|---|---|---|
@@ -120,12 +120,13 @@ The embedded plan of `fiber-kit-exp.yaml` (0.58.1), in order:
 | 4 | clean | **fiber-consensus** `quarantine-only: 1` | fiber_session -> fs_clean (+ fs_clean_qreview, .qrn) | quarantine contaminants to noise, hierarchy carried |
 | 5 | realign-2 | fiber-realign | fs_clean (in place) | |
 | 6 | cpos-clean | fiber-cpos | fs_clean | positions / templates from .spk.standard |
-| 7 | link | fiber-anchor-link (`frag-layer: units`) | fs_clean -> exp_linked | cross-chunk link |
-| 8 | realign-3 | fiber-realign | exp_linked (in place) | |
-| 9 | merge | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
-| 10 | psame | fiber-psame-merge | exp_xcm -> exp_psame (+ .psame tsv) | merge by a calibrated P(same cell) from history-conditioned cell models; + completeness at a purity cost (docs/methods.md "P(same cell)") |
-| 11 | realign-final | fiber-realign | exp_psame (in place) | final re-extraction for curation |
-| 12 | rdr | fiber-rdr | exp_psame -> `.rdr.<method>.<group>.exp_psame.tsv` | per-cluster contamination QC; flags only, no `.clu` |
+| 7 | psame-chunk | fiber-psame-merge `per-chunk: 1` | fs_clean -> fs_psc (+ .psame tsv) | P(same cell) merge **within each chunk** (no drift there), so the linker gets ~100 clusters per chunk instead of ~330 fragments (docs/methods.md "P(same cell)", Chunks) |
+| 8 | link | fiber-anchor-link (`frag-layer: units`) | fs_psc -> exp_linked | cross-chunk link |
+| 9 | realign-3 | fiber-realign | exp_linked (in place) | |
+| 10 | merge | fiber-xcorr-merge | exp_linked -> exp_xcm | roll-shift cosine merge |
+| 11 | psame | fiber-psame-merge | exp_xcm -> exp_psame (+ .psame tsv) | merge by a calibrated P(same cell) from history-conditioned cell models; + completeness at a purity cost; `FK_PSAME_CHUNK_AWARE: 1` for the purer chunk-local pair test |
+| 12 | realign-final | fiber-realign | exp_psame (in place) | final re-extraction for curation |
+| 13 | rdr | fiber-rdr | exp_psame -> `.rdr.<method>.<group>.exp_psame.tsv` | per-cluster contamination QC; flags only, no `.clu` |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
