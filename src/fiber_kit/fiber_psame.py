@@ -252,8 +252,9 @@ def main():
     ap.add_argument("--clu-stage", default="xcorr_merged", help="input .clu stage tag")
     ap.add_argument("--in-clu", default=None, help="explicit input .clu path (overrides --clu-method/--clu-stage)")
     ap.add_argument("--spk-method", "--spk-variant", dest="spk_variant", default=None,
-                    help="waveform variant the cell models are fitted on (default: --clu-method; the shipped "
-                         "coefficients were calibrated on stderiv_C5)")
+                    help="waveform variant the cell models are fitted on (default: the WAVEFORM token of "
+                         "--clu-method, e.g. stderiv_C5_D34 -> stderiv_C5; the shipped coefficients were "
+                         "calibrated on stderiv_C5)")
     ap.add_argument("--out-stage", "--out-tag", dest="out_tag", default="psame_merged")
     ap.add_argument("--cap", type=int, default=None, help="spikes per cluster model (default: all)")
     ap.add_argument("--seed", type=int, default=0)
@@ -268,7 +269,9 @@ def main():
         _, clu = nio.read_clu_file(a.in_clu, n_spikes=res.size)
     else:
         _, clu = nio.read_clu_at(base, a.elec, variant=a.clu_method, tag=a.clu_stage, n_spikes=res.size)
-    var = a.spk_variant or a.clu_method
+    # the .spk of a _D feature-space token is its WAVEFORM token (stderiv_C5_D34 -> .spk.stderiv_C5): there is
+    # no _D waveform set, so the clu method itself names a file that does not exist
+    var = a.spk_variant or nio.waveform_token(a.clu_method)
     spk = nio.open_spk_file(nio.session_path(base, "spk", a.elec, variant=var), ns, nc)
     if not (res.size == clu.size == spk.shape[0]):
         raise SystemExit(f"{_LP} · res/clu/spk length mismatch ({res.size}/{clu.size}/{spk.shape[0]})")

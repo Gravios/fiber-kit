@@ -4,6 +4,13 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.58.2] — fiber-psame-merge finds the .spk of a _D feature-space method
+- **Fix:** with a `_D` feature-space `--clu-method` (e.g. `stderiv_C5_D34`, as the pipeline passes) and no
+  `--spk-method`, fiber-psame-merge opened `.spk.stderiv_C5_D34.<elec>`, which never exists (there is no `_D`
+  waveform set), and stopped with FileNotFoundError.  The default is now the method's waveform token
+  (`nio.waveform_token`: stderiv_C5_D34 -> stderiv_C5), as fiber-realign resolves it.  An explicit
+  `--spk-method` / plan `spk-variant` is used as given.  Found running xcorr-merge -> psame-merge on g6 0316.
+
 ## [0.58.1] — fiber-kit-exp.yaml carries the lab's production plan, with the P(same) merge
 - **Embedded plan** replaced by the one that worked on the lab's sessions: flag -> session -> realign ->
   consensus (quarantine-only) -> realign -> cpos -> anchor-link (units) -> realign -> xcorr-merge ->
