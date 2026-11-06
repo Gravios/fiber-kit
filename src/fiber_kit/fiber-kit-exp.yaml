@@ -103,6 +103,21 @@
 #      lab chain: ARI 0.433 -> 0.524, cmp 0.608 -> 0.694, purity -0.3pp.  The last
 #      realign re-extracts exp_final for curation.
 # ============================================================================
+#  SINCE 0.58.3 -- three fiber-session knobs changed from the lab's production config, from a test on
+#  sirotaA-jg-000005-20120316 group 6 (four 18-min chunks, 0-72 min; real anchor-link -> xcorr-merge ->
+#  psame-merge with this file's knobs; scored on the GT cells, no oracle merging):
+#      FK_SESSION_COARSE_DR        0.15 -> 0.09   narrower amplitude bands: more, cleaner coarse groups
+#      FK_SESSION_INCL_ASSIGN      1    -> 0      spikes beyond a fiber's inclusion core are not forced in ...
+#      FK_SESSION_ASSIGN_UNSORTED  1    -> 0      ... nor are the chunk's leftovers (the gates strip them)
+#                                     ARI     purity  completeness  unsorted
+#      0.58.2 (0.15, assign)          0.587   0.778   0.785         0
+#      0.58.3 (0.09, strip)           0.635   0.793   0.785         2.3%
+#  Not covered by that test: overlapping chunks, realign / consensus / cpos, FK_SESSION_DECONV (with
+#  ASSIGN_UNSORTED=0, DECONV_ASSIGN sees the stripped spikes and parks those it can attribute -- check the
+#  .deconv.tsv), and the two changes separately (band only = INCL_ASSIGN / ASSIGN_UNSORTED back to 1).
+#  A strip -> re-fiber -> KK rescue of the stripped spikes was also tried; it lost with real merging
+#  (ARI 0.572), so it is not here.
+# ============================================================================
 #  SINCE 0.58.1 -- the plan that worked on the lab's sessions (the user's production config), with the
 #  P(same) merge added after the cosine merge:
 #    * session      : 18-min chunks with 8-min overlap (FK_SESSION_CHUNK_MIN / _OVERLAP_MIN), inclusion k 3.0,
@@ -222,7 +237,7 @@ FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT me
                                   #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session
                                   #   sliding merge (premature: it welds co-active cells before refine can clean).
 FK_SESSION_RESPLIT_PASSES: 3     # 0 | 1-5.  Iterative WITHIN-CHUNK cleanup: residual-gated re-split (em_swap on the
-FK_SESSION_COARSE_DR: 0.15       # coarse radial (whitened-amplitude) band half-width for spike->seed association.
+FK_SESSION_COARSE_DR: 0.09       # coarse radial (whitened-amplitude) band half-width for spike->seed association.
                                  #   Lower -> tighter amplitude bands -> more, smaller coarse fibers (amplitude-distinct
                                  #   cells stay separate for the fine splitter); higher -> fewer, fatter coarse groups.
 FK_SESSION_NO_WHITEN: 0          # 0 | 1.  1 = cluster in the RAW mask-selected (mean-centred) feature space instead of
@@ -305,7 +320,7 @@ FK_XCM_DRIFT_CHUNK_MIN:  12.0     # 12.0 (min).  Chunk length used to bin cluste
                                   #   chunking the consumer uses, or the per-chunk-pair transforms index the wrong pairs.
 FK_SESSION_DIPSPLIT:     1        # 1 | 0/1.  Dip-bimodal split within fibers -- over-cluster welds at session so the
                                   #   downstream stages have the real cells to stitch, not a pre-merged blob.
-FK_SESSION_INCL_ASSIGN:  1        # 1 | 0/1.  1 = keep spikes beyond the per-fiber inclusion radius by ASSIGNING them to
+FK_SESSION_INCL_ASSIGN:  0        # 1 | 0/1.  1 = keep spikes beyond the per-fiber inclusion radius by ASSIGNING them to
                                   #   that fiber (kept in the sort) instead of dropping them to the unsorted/artifact bin.
                                   #   FK_SESSION_INCLUSION_K still sets the pure CORE used for geometry/templates; this only stops
                                   #   the good high-amplitude tail (~6-7% of spikes here) being lost.  0 = legacy drop.
@@ -315,7 +330,7 @@ FK_SESSION_KEEP_SMALL:   1       # 0 | 0/1.  1 = a fine group below FK_SESSION_F
                                   #   < 40 spikes in a 12-min chunk).  Over-split is recoverable downstream; a dropped
                                   #   unit is not.
 FK_SESSION_KEEP_SMALL_MIN: 5     # 5.  Smallest group KEEP_SMALL keeps as a fiber; smaller ones go to ASSIGN_UNSORTED.
-FK_SESSION_ASSIGN_UNSORTED: 1    # 0 | 0/1.  1 = place every spike still unsorted at the end of a chunk (coarse-
+FK_SESSION_ASSIGN_UNSORTED: 0    # 0 | 0/1.  1 = place every spike still unsorted at the end of a chunk (coarse-
                                   #   unassigned, groups too small to keep), in the chunk's whitened realigned features:
                                   #   inside its nearest fiber's own spread (median + INCLUSION_K x MAD) -> that fiber;
                                   #   outside every fiber's spread -> GMM groups of their own (>= KEEP_SMALL_MIN); the

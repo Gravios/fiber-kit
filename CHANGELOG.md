@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.58.3] — fiber-kit-exp.yaml: narrower coarse bands, and the session gates strip instead of forcing
+- **Embedded plan's knobs:** `FK_SESSION_COARSE_DR` 0.15 -> 0.09, `FK_SESSION_INCL_ASSIGN` 1 -> 0,
+  `FK_SESSION_ASSIGN_UNSORTED` 1 -> 0.  The plan steps are unchanged.
+- **Measured** on sirotaA-jg-000005-20120316 group 6, four 18-min chunks (0-72 min), real anchor-link ->
+  xcorr-merge -> psame-merge, GT cells only: ARI 0.587 -> 0.635, purity 0.778 -> 0.793, completeness 0.785
+  both, 2.3% of spikes left unsorted.  Not covered: overlapping chunks, realign / consensus / cpos, deconv,
+  and the band and the strip separately.  Header note "SINCE 0.58.3" in the yaml; docs/config.md regenerated.
+
 ## [0.58.2] — fiber-psame-merge finds the .spk of a _D feature-space method
 - **Fix:** with a `_D` feature-space `--clu-method` (e.g. `stderiv_C5_D34`, as the pipeline passes) and no
   `--spk-method`, fiber-psame-merge opened `.spk.stderiv_C5_D34.<elec>`, which never exists (there is no `_D`
