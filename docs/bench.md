@@ -33,6 +33,11 @@ like any other stage.  The hash (8 hex digits of a SHA-1) covers:
 | fiber-intrachunk, fiber-anchor-link | their own prefix and `FK_CONS_*` (they host the consolidation pass too); fiber-consensus has `FK_CONSENSUS_*` only |
 | every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT`, `FK_CHUNKS`, `FK_SESSION_CHUNK_MIN` |
 
+A step that **annotates** its input rather than writing a new `.clu` -- `fiber-cpos` with `out:` equal to its
+`in:`, as the exp plan's `cpos-clean` -- keeps its input's tag: its `.cpos` table is named for the
+labelling it describes, the next step reading that name still gets the labelling, and the step counts as
+done when the `.cpos` table exists.
+
 So the same parameters always give the same tag, a changed merge knob reuses the cached session output,
 and a changed session knob gives every later step a new tag.  A step whose output already exists is
 skipped: a sweep can be stopped and resumed.  The hash covers parameters, not code; the fiber-kit
@@ -88,3 +93,60 @@ Files in `fk-bench/`: `metrics.tsv` (one row per sort), `units.tsv` (per truth u
 A sortable table (overrides and metrics per run), pyramidal accuracy against false pyramidal merges, the
 effect of each swept parameter on accuracy / recall / precision / merges / cluster count, a per-unit
 accuracy heatmap (runs × units, interneurons starred), and the truth-free measures against cluster purity.
+
+## fiber-tune
+
+`fiber-tune` drives fiber-bench to **search** a plan's knobs against a ground truth on a few chunks, then
+**confirms** the best configurations with the full plan.
+
+```bash
+cd <session dir>
+fiber-tune search  <session> <elec> --spec plans/tune/exp-search.yaml      # resumable; --max-trials N
+fiber-tune confirm <session> <elec> --spec plans/tune/exp-search.yaml --top 3 [--chunks all]
+fiber-tune show    <session> <elec> --spec plans/tune/exp-search.yaml
+FK_CONFIG=fk-bench/tune/exp-search/best.yaml fiber-pipeline <elec>       # use the winner
+```
+
+**Spec** (yaml; `plans/tune/exp-search.yaml` is a worked example over the exp plan): `config` (base config
+with a plan), `truth` (`clu`, `res`, optional `units`, `exclude`, `tol`, `int_rate`), `chunks` (the
+search's `FK_CHUNKS`), `score_at` (the plan step scored; default the last step with `out:`), `objective`,
+`set` (fixed overrides), `start` (where the search starts), `passes`, `min_gain`, `search_realign`, and `stages`: knob
+groups, each a mapping of knob -> list of values, searched in order (upstream first).  Every knob must
+be one the base config lists, so a typo stops the run instead of doing nothing.
+
+**Search.**  Coordinate ascent: each knob in turn is tried at each listed value with every other knob at
+the current best, and its best value is kept when the objective rises by at least `min_gain`; the knob
+list is walked `passes` times, stopping early when a pass changes nothing.  Each trial is one
+`fiber-bench run` with the trial's overrides, so steps whose parameters did not change are re-used: a
+merge knob re-runs the merges, not fiber-session.  Interactions between knobs are reached only through
+later passes; this is not a global search.
+
+**In-place realign.**  The search leaves out every `fiber-realign` step without `out:` (they rewrite the
+shared `.res`/`.spk`, so each trial would start from data the previous one moved), and fiber-bench turns
+fiber-session's own end-of-run realign off.  `confirm` re-runs the start configuration and the `--top`
+best with the full plan, realign steps included, each in a private workspace
+(`fk-bench/tune/<name>/ws/<hash>/`): the `.res`/`.spk`/`.fet`/offset files are copied (reflinked where the
+file system allows), everything else is symlinked, stage outputs are not carried over.  The copies are
+removed after scoring unless `--keep-ws`; the workspace's stage outputs stay for inspection.
+
+The realign matters: on g6 0316 (one 6-min chunk, identical parameters) the search scored ARI 0.675 /
+accuracy 0.376 and the workspace run ARI 0.503 / accuracy 0.417, because fiber-session's end-of-run realign
+and the realign steps change the spikes every later stage sees.  Treat the search's ranking as a shortlist
+and let `confirm` decide; or set `search_realign: true` in the spec to run every trial that way (faithful,
+but each trial re-sorts the chunks, since nothing can be shared between workspaces).
+
+**Metrics** per trial (truth spikes in chunks not run are left out): fiber-bench's `all_acc`, `pyr_acc`,
+`int_acc`, `*_rec`, `*_prec`, `*_n80`, `*_frag80`, `merges`, `merges_pyr_pyr`, `merges_with_int`, plus
+`ari` (sorted truth spikes), `purity` (of the sorted truth spikes), `completeness` (share of truth spikes
+in their unit's best single cluster), `unsorted` and `n_clusters`.  The `objective` is an arithmetic
+expression over these names (`+ - * /`, numbers, `min`, `max`, `abs`); a missing name or NaN scores
+`-inf`.
+
+**Output** in `fk-bench/tune/<name>/`: `trials.jsonl` (every trial with its overrides, metrics, objective
+and phase), `trials.tsv`, `summary.md` (best first, search and confirm) and `best.yaml` (the base config
+with the best overrides and the plan as given, realign steps included, no `FK_CHUNKS`).
+
+**Choosing chunks.**  At least two consecutive chunks, so the linker and the merges see a chunk boundary,
+and chunks the truth covers well.  `FK_SESSION_CHUNK_MIN` cannot be searched on a chunk subset (the chunk
+indices would move); set it under `set:` or search it with `chunks: all`.  A winner on a few chunks is a
+candidate, not a result: `confirm --chunks all` scores it on the whole session.

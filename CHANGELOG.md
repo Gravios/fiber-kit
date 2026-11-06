@@ -4,6 +4,31 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.59.0] — fiber-tune: a knob search against a ground truth on a subset of chunks
+- **New tool `fiber-tune`** (`fiber_tune`): `search` runs a coordinate search over the knob groups of a spec
+  file, each trial a `fiber-bench run` of the plan up to `score_at` on the spec's chunks, scored on a
+  ground truth (fiber-bench's truth metrics plus ARI, purity, completeness) with a user objective;
+  steps whose parameters did not change are re-used through fiber-bench's hashed tags, and a search
+  resumes from `trials.jsonl`.  `confirm` re-runs the best configurations with the full plan, in-place
+  realign steps included, each in a private workspace with its own `.res`/`.spk`/`.fet` copies.  Writes
+  `fk-bench/tune/<name>/` with `best.yaml` (the base config with the winning overrides).
+  `search_realign: true` runs every search trial that way.  Measured on g6 0316 (one 6-min chunk, the
+  same parameters): search ARI 0.675 / accuracy 0.376, workspace run ARI 0.503 / accuracy 0.417 -- the
+  realign changes what the later stages see, so the search ranks and `confirm` decides.
+- **Example spec** `plans/tune/exp-search.yaml`: the exp plan's session, consensus, link, xcorr-merge and
+  psame knobs (about 44 trials per pass, 18 of which re-sort the session).
+- **Fix (fiber-bench): an annotating step keeps its input's tag.**  The exp plan's `cpos-clean` step
+  (`fiber-cpos`, `in: fs_clean, out: fs_clean`) writes a .cpos table, never a .clu, but bench gave its
+  `out:` a new hashed tag, so the next step (anchor-link, `in: fs_clean`) looked for a labelling nobody
+  wrote and `fiber-bench run` of the exp plan stopped there.  A fiber-cpos step with `out:` equal to its
+  `in:` now keeps the input's tag (its table is named for the labelling it describes) and its done-check
+  is the .cpos table.  test_bench checks both.
+- **plans/TEMPLATE-all-stages.yaml regenerated:** 0.58.2 changed fiber-psame-merge's `--spk-method` help
+  without regenerating the template, so `gen_stages_doc --check --template` (in run_all) failed from 0.58.2.
+- docs/bench.md section "fiber-tune", docs/stages.md entry, README tool row.  test/test_tune.py: the
+  objective parser, the search plan, the override/hash round trip, the coordinate search on a known
+  objective, the workspace layout and the scoring.
+
 ## [0.58.3] — fiber-kit-exp.yaml: narrower coarse bands, and the session gates strip instead of forcing
 - **Embedded plan's knobs:** `FK_SESSION_COARSE_DR` 0.15 -> 0.09, `FK_SESSION_INCL_ASSIGN` 1 -> 0,
   `FK_SESSION_ASSIGN_UNSORTED` 1 -> 0.  The plan steps are unchanged.

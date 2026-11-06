@@ -573,7 +573,7 @@ pipeline:
   #       clu-method: stderiv
   #       clu-stage: xcorr_merged         # input .clu stage tag
   #       in-clu: ""                      # explicit input .clu path (overrides --clu-method/--clu-stage)
-  #       spk-method: ""                  # waveform variant the cell models are fitted on (default: --clu-method; the shipped coefficients were calibrated on stderiv_C5)
+  #       spk-method: ""                  # waveform variant the cell models are fitted on (default: the WAVEFORM token of --clu-method, e.g. stderiv_C5_D34 -> stderiv_C5; the shipped coefficients were calibrated on stderiv_C5)
   #       out-stage: psame_merged
   #       cap: ""                         # spikes per cluster model (default: all)
   #       seed: 0

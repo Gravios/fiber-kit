@@ -87,6 +87,11 @@ STAGE_PREFIXES = {
 SHARED_PREFIXES = {"FK_CONS_": ("fiber-session", "fiber-intrachunk", "fiber-anchor-link")}
 _FOREIGN_TO_SESSION = tuple(p for st, ps in STAGE_PREFIXES.items() if st != "fiber-realign" for p in ps)
 GLOBAL_KEYS = ("FK_REALIGN_VARIANT", "FK_CHUNKS", "FK_SESSION_CHUNK_MIN")   # every stage's hash carries these
+# Stages that ANNOTATE their input instead of writing a new .clu: with `out:` equal to `in:` (the exp plan's
+# `cpos-clean: in: fs_clean, out: fs_clean`) the step keeps its input's tag -- its table is named for the
+# labelling it describes, and the next step reading `fs_clean` still gets that labelling -- and its output
+# file is that table, not a .clu (stage -> file kind).
+ANNOTATING_STAGES = {"fiber-cpos": "cpos"}
 
 
 # ───────────────────────────── config, hashes, plans ─────────────────────────────
@@ -141,6 +146,7 @@ def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False):
     for s in plan[:idx + 1]:
         s = dict(s)
         st = s["stage"]
+        in0 = s.get("in")
         if st == "fiber-realign" and not s.get("out") and not allow_inplace:
             raise SystemExit(f"{_LP} · step {s.get('name') or st!r} realigns IN PLACE (rewrites the shared .res/.spk); "
                              "stop the run before it (--upto) or pass --allow-inplace")
@@ -156,11 +162,14 @@ def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False):
         if st == "fiber-flag-artifacts":
             tag = f"{cfg.get('FK_FLAG_STAGE', 'artifact')}_{h}"
             cfg["FK_FLAG_STAGE"] = tag; s["out_tag"] = tag; flag_hash = h
+        elif s.get("out") and st in ANNOTATING_STAGES and s["out"] == in0:
+            tag = s["in"]                                          # the input's (hashed) tag; by_out unchanged
+            s["out"] = tag; s["out_tag"] = tag; s["annotates"] = ANNOTATING_STAGES[st]
         elif s.get("out"):
             tag = f"{s['out']}_{h}"
             by_out[s["out"]] = (h, tag); s["out"] = tag; s["out_tag"] = tag
         steps.append(s)
-    cfg["pipeline"] = [{k: v for k, v in s.items() if k not in ("hash", "out_tag")} for s in steps]
+    cfg["pipeline"] = [{k: v for k, v in s.items() if k not in ("hash", "out_tag", "annotates")} for s in steps]
     return cfg, steps, steps[-1]["hash"]
 
 
@@ -242,7 +251,8 @@ def cmd_run(a):
         todo = []
         for s in steps:
             spk_m = cfg_run.get("FK_FLAG_SPK", "standard") if s["stage"] == "fiber-flag-artifacts" else meth
-            path = f"{base}.clu.{spk_m}.{a.elec}.{s['out_tag']}" if s.get("out_tag") else None
+            path = (f"{base}.{s.get('annotates', 'clu')}.{spk_m}.{a.elec}.{s['out_tag']}" if s.get("out_tag")
+                    else None)
             s["path"] = path
             if path is None or not os.path.exists(path) or a.force:
                 todo.append(s)

@@ -1,0 +1,77 @@
+# fiber-tune search spec: the exp plan's knobs, searched against a curated ground truth on a few chunks.
+#
+#   cd <session dir>
+#   fiber-tune search  <session> <elec> --spec plans/tune/exp-search.yaml          # resumable; --max-trials N
+#   fiber-tune confirm <session> <elec> --spec plans/tune/exp-search.yaml --top 3  # full plan, realign included
+#   fiber-tune show    <session> <elec> --spec plans/tune/exp-search.yaml
+#
+# Results: <session dir>/fk-bench/tune/exp-search/{trials.jsonl, trials.tsv, summary.md, best.yaml}.
+# best.yaml is the base config with the winning overrides and the plan as given: run it with
+#   FK_CONFIG=fk-bench/tune/exp-search/best.yaml fiber-pipeline <elec>
+#
+# COST.  Every trial runs the plan up to `score_at` on `chunks`, re-using every step whose parameters did
+# not change (fiber-bench's hashed tags).  A session knob therefore costs a full sort of those chunks plus
+# everything downstream; a psame knob costs only fiber-psame-merge.  One pass below is ~45 trials, of
+# which ~20 re-sort the session.  Upstream groups come first so the downstream ones are tuned on the
+# session that won.
+name: exp-search
+config: ../../src/fiber_kit/fiber-kit-exp.yaml   # relative to this file; or the lab's own fiber-kit.yaml
+truth:
+  clu: /path/to/curated.clu.6                     # ground truth (.clu with its .res), e.g. the old curation
+  res: /path/to/curated.res.6
+  units: ""                                       # "" = every unit > 1; or e.g. "2-34"
+  exclude: ""                                     # units to leave out, e.g. "7,18"
+  tol: 5                                          # spike match tolerance (samples)
+  int_rate: 5.0                                   # truth units firing >= this (Hz) count as interneurons
+# Chunks of FK_SESSION_CHUNK_MIN minutes, 0-based.  Use at least TWO consecutive chunks so the linker and
+# the merges see a chunk boundary, and chunks the truth covers well.  (FK_SESSION_CHUNK_MIN itself cannot
+# be searched on a chunk subset: the indices would move.)
+chunks: "2-3"
+score_at: psame                                   # the plan step scored (default: the last step with out:)
+# Objective over the metric names (see `fiber-tune -h` / docs/bench.md): mean best-cluster accuracy, with
+# a small charge per merge of two truth units.  Alternatives: "ari", "0.5*purity + 0.5*completeness",
+# "pyr_acc - 0.01*merges_pyr_pyr".
+objective: "all_acc - 0.005*merges"
+passes: 2
+min_gain: 0.002
+# false: trials leave out the in-place realign steps and re-use unchanged steps (fast); `confirm` then
+# re-runs the best with the full plan.  true: every trial runs the full plan in a private workspace
+# (faithful to the realigned data the later stages see in production, but each trial re-sorts).
+search_realign: false
+set: {}                                           # fixed overrides for every trial, e.g. {FK_SESSION_DECONV: 0}
+start: {}                                         # where the search starts (default: the base config)
+stages:
+  - name: session                                 # most expensive group: each value re-sorts the chunks
+    knobs:
+      FK_SESSION_COARSE_DR:        [0.07, 0.09, 0.12, 0.15]   # 0.09 won on g6 0316 (ARI 0.587 -> 0.635 with the strip)
+      FK_SESSION_INCL_ASSIGN:      [0, 1]                     # 0 = the inclusion gate strips, 1 = forces the tail in
+      FK_SESSION_ASSIGN_UNSORTED:  [0, 1]                     # 0 = the chunk's leftovers stay unsorted
+      FK_SESSION_INCLUSION_K:      [2.5, 3.0, 3.5, 4.0]       # per-fiber core radius (median + k*MAD)
+      FK_SESSION_DECONV_ASSIGN:    [0, 1]                     # deconv parks stripped spikes it can attribute
+      FK_SESSION_SEED_DENSITY:     [0.0, 0.5]                 # density-weighted coarse seeds (did not help on g6)
+      FK_SESSION_CFIBER_Q:         [0.85, 0.90, 0.95]
+      FK_SESSION_DIP_ALPHA:        [0.01, 0.02, 0.03]
+      FK_SESSION_RESPLIT_PASSES:   [0, 3, 5]
+      FK_SESSION_EBAND_WIDTH:      [0.30, 0.40, 0.50]
+  - name: consensus                               # the clean step (quarantine-only in the exp plan)
+    knobs:
+      FK_CONSENSUS_THETA_CELL:     [5.0, 7.0, 10.0]
+      FK_CONSENSUS_PERIM_THR:      [0.7, 0.8, 0.9]
+  - name: link
+    knobs:
+      FK_ALINK_TARGET_FPR:         [1.0, 2.0, 4.0]
+      FK_ALINK_AMP_THR:            [0.80, 0.85, 0.90]
+      FK_ALINK_Z:                  [0.4, 0.5, 0.8]
+      FK_ALINK_MAX_GAP:            [2, 4]
+  - name: merge
+    knobs:
+      FK_XCM_COS_THR:              [0.94, 0.96, 0.98]
+      FK_XCM_MIN_N:                [15, 40]
+      FK_XCM_RVU_THR:              [0, 0.5]
+      FK_XCM_BAND_THR:             [0.0, 0.5]
+  - name: psame                                   # cheap: only fiber-psame-merge re-runs
+    knobs:
+      FK_PSAME_THETA:              [0.3, 0.5, 0.7, 0.9]
+      FK_PSAME_CANNOT_LINK:        [0.2, 0.3, 0.5]
+      FK_PSAME_KNN:                [4, 8, 16]
+      FK_PSAME_MIN_N:              [30, 50, 100]

@@ -761,7 +761,7 @@ Positional: `session`, `elec`
 | `--clu-method` | `stderiv` |  |
 | `--clu-stage` | `xcorr_merged` | input .clu stage tag |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
-| `--spk-method` (`--spk-variant`) | — | waveform variant the cell models are fitted on (default: --clu-method; the shipped coefficients were calibrated on stderiv_C5) |
+| `--spk-method` (`--spk-variant`) | — | waveform variant the cell models are fitted on (default: the WAVEFORM token of --clu-method, e.g. stderiv_C5_D34 -> stderiv_C5; the shipped coefficients were calibrated on stderiv_C5) |
 | `--out-stage` (`--out-tag`) | `psame_merged` |  |
 | `--cap` | — | spikes per cluster model (default: all) |
 | `--seed` | `0` |  |
@@ -1282,6 +1282,19 @@ plan up to `--upto`, one run per `--set`/`--grid`/`--sweep` variant, every clust
 `<out>_<hash>`; fiber-session's in-place realign forced off), `score` (truth metrics per truth unit, typed
 pyramidal / interneuron, and truth-free per-cluster measures), `report` (HTML) and `list`.  See
 [bench.md](bench.md).
+
+Positional: `cmd`
+
+| flag | default | description |
+|---|---|---|
+### `fiber-tune`
+
+Search a plan's knobs against a ground truth on a subset of chunks, then confirm the best.  Sub-commands
+`search` (coordinate search over the knob groups of a spec file, each trial a `fiber-bench run` of the plan
+up to `score_at` on the spec's `chunks`, in-place realign steps left out, scored on the truth), `confirm`
+(the best configurations again with the FULL plan, realign included, each in a private workspace with
+its own copy of the .res/.spk/.fet) and `show`.  Writes `fk-bench/tune/<name>/` (trials, summary,
+`best.yaml`).  Example spec: `plans/tune/exp-search.yaml`.  See [bench.md](bench.md#fiber-tune).
 
 Positional: `cmd`
 
