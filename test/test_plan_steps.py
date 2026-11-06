@@ -85,6 +85,10 @@ def main():
                    "fiber-realign-3", "fiber-xcorr-merge-1", "fiber-psame-merge-2", "fiber-realign-4", "fiber-rdr-1"],
           "fiber-kit-exp.yaml: <stage>-<k> ids (" + ", ".join(ids[:3]) + ", ...)")
     check(len(set(ids)) == len(ids), "every id unique")
+    dflt = [s["name"] for s in ps.load_steps(os.path.join(ROOT, "src", "fiber_kit", "fiber-kit.yaml"))]
+    check(dflt == ["session", "psame-chunk", "cpos-session", "chunk", "realign-chunk", "cpos-chunk", "link",
+                   "psame", "realign-final"],
+          "fiber-kit.yaml: P(same) per chunk before intrachunk, P(same) after the linker")
     for f, rname, rid in (("fiber-kit.yaml", "realign-chunk", "fiber-realign-1"),
                           ("fiber-kit-exp.yaml", "realign-final", "fiber-realign-4")):
         sh = ps.load_steps(os.path.join(ROOT, "src", "fiber_kit", f))

@@ -304,3 +304,16 @@ Point `$FK_CONFIG` at a `fiber-kit.yaml` (or use the shipped `fiber-kit-exp.yaml
 `FK_*` knobs (see [config.md](config.md)) and optionally an embedded `pipeline:` plan.  Knob precedence
 is **CLI/plan-param > `FK_*` env > `$FK_CONFIG` > default**; stages print their resolved knobs at
 startup so you can confirm what took effect.
+
+The two shipped templates embed different plans.  `fiber-kit-exp.yaml` links with fiber-anchor-link (see
+its "SINCE 0.60.0" notes).  `fiber-kit.yaml` links with fiber-link off intrachunk's units, and since
+0.60.1 it carries the same two P(same) merges:
+
+```
+session -> psame-chunk (per-chunk: 1) -> cpos-session -> chunk -> realign-chunk -> cpos-chunk -> link
+        -> psame -> realign-final
+```
+
+`psame-chunk` runs before intrachunk there, not just before the linker, because fiber-link reads
+intrachunk's `units.npz`, which a relabel after intrachunk would leave stale.  That combination has not
+been scored on a ground truth; the plan without the merges is kept commented out in the template.

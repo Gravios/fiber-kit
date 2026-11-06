@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.60.1] — fiber-kit.yaml runs the P(same) merges
+- **The default template's plan** (fiber-kit.yaml, the fiber-link route) gains the exp plan's two
+  fiber-psame-merge steps: `psame-chunk` (`per-chunk: 1`, fiber_session -> fk_psc) before intrachunk, and
+  `psame` (fk_linked -> fk_psame) after the linker; realign-final re-extracts fk_psame.  `cpos-session`
+  now runs on fk_psc, the tag intrachunk reads its positions from.  psame-chunk sits before intrachunk,
+  not just before the linker as in exp, because fiber-link reads intrachunk's units.npz.  The template
+  gains section [F] (`FK_PSAME_*`, the built-in defaults); the old plan stays commented out.
+  This plan has NOT been scored on a ground truth (the exp plan's 0.60.0 numbers are anchor-link's).
+
 ## [0.60.0] — fiber-psame-merge per chunk and chunk-aware; the exp plan merges within chunks before linking; fiber-tune searches plans and per-step parameters
 - **fiber-psame-merge `--per-chunk 1`** (`FK_PSAME_PER_CHUNK`): only clusters of the same chunk merge (the
   partition fiber-anchor-link uses).  For a plan step before the linker: the cell model has no drift term, and
