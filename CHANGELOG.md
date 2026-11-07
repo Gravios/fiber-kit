@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.62.0] — the `best` config profile, `fk set config` / `fk list config`, shell completion
+- **`fiber-kit-best.yaml`**, a third shipped profile: fiber-kit-exp.yaml with the fiber-tune exp-search
+  winner on g6 0316 (2026-11-07) applied -- the plan without the per-chunk P(same) step, `psame` at theta
+  0.9 chunk-aware, `FK_SESSION_CFIBER_Q` 0.85, `FK_SESSION_INCL_ASSIGN` 1, `FK_SESSION_DIP_ALPHA` 0.03,
+  `FK_CONSENSUS_THETA_CELL` 5.0, `FK_XCM_COS_THR` 0.94 -- and its knobs ordered by RELEVANCE: [T1] the
+  knobs the search moved (each with the value it replaced), [T2] the ones it tried that were inert, [T3]
+  what is set per session (chunks, variant, resume, chunk grid, realign modes), then the stages the plan
+  runs in plan order, then the stages it does not.  GENERATED from fiber-kit-exp.yaml by
+  `tools/gen_best_profile.py` (every knob once, comments verbatim); `run_all.py` checks it is current, and
+  docs/config.md gains a `fiber-kit-best.yaml` column (bold where tuned).  Not yet confirmed with
+  `fiber-tune confirm --chunks all`.
+- **`fk set config --profile <name>`** writes a profile (`base`, `exp`, `best`; a file name or a path) as
+  `./fiber-kit.yaml` in the working directory, refusing to overwrite without `--force`; **`fk list config`**
+  lists the profiles (tagline, knob count, plan steps) and which one `./fiber-kit.yaml` is (`*` exact, `~`
+  edited).  `fiber-kit-init` gains `--profile` / `--list` and is the same operation.
+- **`fk completion bash|zsh`**: tab completion for `fk` -- subcommands, `config`, `--profile` with the
+  profile names, and the plan's step names (read from `fk list --names`, honouring `--plan`).
+- test_profiles: 33 checks.
+
 ## [0.61.0] — clean-core metrics, fiber-tune rescore, fiber-gt-review
 For the goal of clean-but-incomplete cores linked across the session, and for refining the curation
 they are scored against.

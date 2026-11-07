@@ -153,6 +153,7 @@ fiber-tune search  <session> <elec> --spec plans/tune/exp-search.yaml      # res
 fiber-tune confirm <session> <elec> --spec plans/tune/exp-search.yaml --top 3 [--chunks all]
 fiber-tune show    <session> <elec> --spec plans/tune/exp-search.yaml
 FK_CONFIG=fk-bench/tune/exp-search/best.yaml fiber-pipeline <elec>       # use the winner
+fk set config --profile best                                              # or the shipped tuned profile (the g6 0316 winner, knobs by relevance)
 ```
 
 **Spec** (yaml; `plans/tune/exp-search.yaml` is a worked example over the exp plan, in plan order, with both plans and per-step psame knobs): `config` (base config

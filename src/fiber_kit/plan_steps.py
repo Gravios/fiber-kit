@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────────────
 #  plan_steps.py — unique, addressable names for the steps of a pipeline plan,
-#  and the `fk` command (`fk list`, `fk run`).
+#  and the `fk` command (`fk list`, `fk run`, `fk list config`, `fk set config`,
+#  `fk completion`).
 #
 #  A plan may run a stage several times (fiber-kit-exp.yaml runs fiber-realign
 #  three times, fiber-cpos twice), so the stage name does not say WHICH run is
@@ -29,8 +30,10 @@ import sys
 
 try:
     from .config import yaml_load as _yaml_load                  # YAML 1.2 booleans: `off` stays "off"
+    from . import init_config as _profiles                       # the shipped config profiles
 except ImportError:                                              # script / direct execution
     from config import yaml_load as _yaml_load
+    import init_config as _profiles
 
 TAG_FIELDS = ("in", "out", "units", "spk", "cpos", "drift")
 NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
@@ -232,6 +235,10 @@ def _table(steps, selected=None):
 
 
 def _cmd_list(a):
+    if a.select and a.select[0] == "config":                 # `fk list config [--names]`
+        if len(a.select) > 1:
+            raise PlanError("`fk list config` takes no further arguments")
+        return _profiles.list_profiles(names_only=a.names)
     path = default_plan(a.plan)
     if not path:
         raise PlanError("no plan: give --plan <file>, or run where fiber-kit.yaml (or $FK_CONFIG) has a "
@@ -273,15 +280,89 @@ def _cmd_run(a):
     return subprocess.call(cmd)
 
 
+def _cmd_set(a):
+    """`fk set config --profile P [-o FILE] [--force]`: write a shipped profile as ./fiber-kit.yaml."""
+    if a.what != "config":
+        raise PlanError(f"`fk set` knows `config` only, not {a.what!r}")
+    return _profiles.set_profile(a.profile, a.output, a.force)
+
+
+COMPLETION_BASH = r"""# bash completion for fk (fiber-kit).  Install:  eval "$(fk completion bash)"   (e.g. in ~/.bashrc)
+# zsh:  autoload -Uz bashcompinit && bashcompinit && eval "$(fk completion bash)"
+_fk_complete() {
+    local cur prev words cword
+    if type _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=(); cur="${COMP_WORDS[COMP_CWORD]}"; prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}"); cword=$COMP_CWORD
+    fi
+    local cmd="${words[1]}" plan="" i opts="" files=""
+    for ((i = 1; i < ${#words[@]} - 1; i++)); do      # --plan FILE on the line: the step names come from it
+        [[ "${words[i]}" == "--plan" ]] && plan="${words[i+1]}"
+    done
+    local steps=""
+    _fk_steps() { if [[ -n "$plan" ]]; then fk list --names --plan "$plan" 2>/dev/null; else fk list --names 2>/dev/null; fi; }
+    case "$prev" in
+        --plan)              files=yaml ;;
+        --profile|-p)        opts=$(fk list config --names 2>/dev/null); files=yaml ;;
+        -o|--output)         files=any ;;
+        --from|--to)         opts=$(_fk_steps) ;;
+        --method|--variant)  return ;;
+    esac
+    if [[ -z "$opts$files" ]]; then
+        if (( cword == 1 )); then
+            opts="list run set completion"
+        else
+            case "$cmd" in
+                list)
+                    if (( cword == 2 )); then opts="config $(_fk_steps) --plan --names"
+                    elif [[ "${words[2]}" == "config" ]]; then opts="--names"
+                    else opts="$(_fk_steps) --plan --names"; fi ;;
+                run)
+                    if (( cword == 2 )); then opts="1 2 3 4 5 6 7 8 9 10 11 12"
+                    else opts="$(_fk_steps) --from --to --plan --method --dry-run -n"; fi ;;
+                set)
+                    if (( cword == 2 )); then opts="config"; else opts="--profile --output --force"; fi ;;
+                completion)
+                    (( cword == 2 )) && opts="bash zsh" ;;
+            esac
+        fi
+    fi
+    local reply=""
+    [[ -n "$opts" ]] && reply=$(compgen -W "$opts" -- "$cur")
+    if [[ "$files" == yaml ]]; then
+        reply="$reply"$'\n'"$(compgen -f -X '!*.y*ml' -- "$cur")"$'\n'"$(compgen -d -- "$cur")"
+    elif [[ "$files" == any ]]; then
+        reply="$reply"$'\n'"$(compgen -f -- "$cur")"
+    fi
+    COMPREPLY=($reply)
+}
+complete -F _fk_complete fk
+"""
+
+COMPLETION_ZSH = r"""# zsh completion for fk (fiber-kit): bash's script through bashcompinit.
+# Install:  eval "$(fk completion zsh)"   (e.g. in ~/.zshrc)
+autoload -Uz bashcompinit && bashcompinit
+""" + COMPLETION_BASH
+
+
+def _cmd_completion(a):
+    sys.stdout.write(COMPLETION_ZSH if a.shell == "zsh" else COMPLETION_BASH)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
-        prog="fk", description="fiber-kit pipeline plans: list the steps by their unique names, run the "
-                               "plan or chosen steps of it.  A step is named <stage>-<k> (its k-th run of that stage, in plan "
-                               "order) or by its own `name:` in the plan; a stage that runs once is also its "
-                               "bare stage name.")
+        prog="fk", description="fiber-kit pipeline plans and configs: list the plan's steps by their unique "
+                               "names, run the plan or chosen steps of it, list the shipped config profiles and "
+                               "write one as ./fiber-kit.yaml.  A step is named <stage>-<k> (its k-th run of that "
+                               "stage, in plan order) or by its own `name:` in the plan; a stage that runs once is "
+                               "also its bare stage name.")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    pl = sub.add_parser("list", help="list the plan's steps and their names")
-    pl.add_argument("select", nargs="*", help="only these steps (names, positions, ranges A..B)")
+    pl = sub.add_parser("list", help="list the plan's steps and their names; `fk list config` lists the "
+                                     "shipped config profiles and which one ./fiber-kit.yaml is")
+    pl.add_argument("select", nargs="*", help="only these steps (names, positions, ranges A..B); or `config`")
     pl.add_argument("--plan", help="plan file (default: the 'pipeline:' section of $FK_CONFIG or "
                                    "./fiber-kit.yaml, as fiber-pipeline)")
     pl.add_argument("--names", action="store_true", help="print only the step names, one per line")
@@ -295,9 +376,25 @@ def main(argv=None):
     pr.add_argument("--plan", help="plan file (default as for `fk list`)")
     pr.add_argument("--method", "--variant", dest="method", help="session method token for the run")
     pr.add_argument("-n", "--dry-run", action="store_true", help="print the stage commands only")
+    st = sub.add_parser("set", help="fk set config --profile <name>: write a shipped config profile as "
+                                    "./fiber-kit.yaml (the file fiber-pipeline reads here)")
+    st.add_argument("what", help="`config`")
+    st.add_argument("-p", "--profile", required=True,
+                    help="profile: " + ", ".join(f"{k} ({v})" for k, v in _profiles.PROFILES.items())
+                         + "; a short name, a file name, or a path to a yaml of your own")
+    st.add_argument("-o", "--output", default=_profiles.TARGET, help="destination (default: ./fiber-kit.yaml)")
+    st.add_argument("-f", "--force", action="store_true", help="overwrite an existing destination")
+    cp = sub.add_parser("completion", help="print the shell completion script: eval \"$(fk completion bash)\"")
+    cp.add_argument("shell", nargs="?", default="bash", choices=["bash", "zsh"])
     a = ap.parse_args(argv)
     try:
-        return _cmd_list(a) if a.cmd == "list" else _cmd_run(a)
+        if a.cmd == "list":
+            return _cmd_list(a)
+        if a.cmd == "run":
+            return _cmd_run(a)
+        if a.cmd == "set":
+            return _cmd_set(a)
+        return _cmd_completion(a)
     except PlanError as e:
         print(f"fk: {e}", file=sys.stderr)
         return 2

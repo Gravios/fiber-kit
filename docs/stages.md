@@ -1473,7 +1473,7 @@ Positional: `plans`
 | `-q` (`--quiet`) | flag (off) | print only failures |
 ### `fk`
 
-Plan steps by name: `fk list` prints the steps of the plan `fiber-pipeline` would run (`--plan`, else the `pipeline:` section of `$FK_CONFIG`) with their unique ids (`<stage>-<k>`, the k-th run of that stage) and `name:` aliases; `fk run <elec>` runs the whole plan (as `fiber-pipeline <elec>`: the canonical stages when there is no plan), and `fk run <elec> <step>...` / `--from` / `--to` run chosen steps (`fiber-pipeline <elec> --plan P --step ...`).  See [pipeline.md](pipeline.md#step-names).
+Plan steps by name, and the config profiles.  `fk list` prints the steps of the plan `fiber-pipeline` would run (`--plan`, else the `pipeline:` section of `$FK_CONFIG` / `./fiber-kit.yaml`) with their unique ids (`<stage>-<k>`, the k-th run of that stage) and `name:` aliases; `fk run <elec>` runs the whole plan (as `fiber-pipeline <elec>`: the canonical stages when there is no plan), and `fk run <elec> <step>...` / `--from` / `--to` run chosen steps (`fiber-pipeline <elec> --plan P --step ...`).  `fk list config` lists the shipped config profiles (`base` fiber-kit.yaml, `exp` fiber-kit-exp.yaml, `best` fiber-kit-best.yaml -- the tuned one) and which one `./fiber-kit.yaml` is; `fk set config --profile <name>` writes one as `./fiber-kit.yaml` in the working directory (refuses to overwrite without `--force`; a profile is its short name, its file name or a path).  `fk completion bash|zsh` prints the shell completion for all of this (subcommands, profiles, the plan's step names): `eval "$(fk completion bash)"`.  See [pipeline.md](pipeline.md#step-names) and [config.md](config.md).
 
 Positional: `cmd`
 
@@ -1481,13 +1481,15 @@ Positional: `cmd`
 |---|---|---|
 ### `fiber-kit-init`
 
-Copy the template fiber-kit.yaml (fiber-pipeline tuning config) into the current directory.
+Write a shipped config profile (`--profile base|exp|best`, or a path) into the current directory as fiber-kit.yaml -- the same as `fk set config`; `--list` lists the profiles as `fk list config` does.
 
 | flag | default | description |
 |---|---|---|
+| `-p` (`--profile`) | — | profile: base (fiber-kit.yaml), exp (fiber-kit-exp.yaml), best (fiber-kit-best.yaml), or a path to a yaml (default: base; --exp = exp) |
 | `-o` (`--output`) | `fiber-kit.yaml` | destination path (default: ./fiber-kit.yaml) |
 | `-f` (`--force`) | flag (off) | overwrite the destination if it already exists |
-| `--exp` | flag (off) | copy the EXPERIMENTAL template (fiber-kit-exp.yaml: the newest gates turned on) to ./fiber-kit.yaml instead of the production default |
+| `--exp` | flag (off) | the same as --profile exp (kept from earlier versions) |
+| `--list` | flag (off) | list the profiles (as `fk list config`) and exit |
 ### `fiber-clu-header`
 
 Check or repair the int32 header of `.clu` / `.clc` / `.clp` files.  The header is the number of distinct ids (a `.clp`: its number of entries).  That is what Klusters writes, and it keeps a chunk run's files (`FK_CHUNKS`) within the 0-65536 Klusters accepts.  fiber-kit 0.56.0-0.57.2 wrote the highest id + 1 instead: about 16.8 million once the reserved clusters are in the file, so Klusters refused those files.  Rewrites the 4 header bytes in place and leaves the ids alone; names that are not `<base>.<clu|clc|clp>[.<variant>].<elec>[.<tag>]`, text `.clu` files and odd sizes are skipped.  `--check` writes nothing and exits 1 when a header is off.

@@ -202,8 +202,11 @@ fiber-pipeline 5 fiber-intrachunk --gate cfiber   # one stage with argument over
 fiber-pipeline 5 --plan plans/09-backbone-xcorr.yaml   # a custom, reorderable, repeatable step plan
 fiber-pipeline 5 --dry-run …           # print the stage commands instead of running them
 fiber-pipeline -l                      # list stages
+fk set config --profile best           # write the tuned profile as ./fiber-kit.yaml (base | exp | best, or a path)
+fk list config                         # the shipped profiles, and which one ./fiber-kit.yaml is
 fk list                                # list the plan's steps by their unique names
 fk run 5                               # the whole plan (same as fiber-pipeline 5)
+eval "$(fk completion bash)"           # tab completion for all of the above (zsh: fk completion zsh)
 fiber-pipeline 5 fiber-realign-2       # run ONE plan step (its plan in/out/params)
 fiber-pipeline 5 --from fiber-cpos-2   # the plan from that step on (--to <step> ends a span)
 ```

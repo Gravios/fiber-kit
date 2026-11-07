@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.61.0"
+version = "0.62.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -108,7 +108,7 @@ ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml", "hippocampal_pathways.tsv"]
+fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml", "fiber-kit-best.yaml", "hippocampal_pathways.tsv"]
 
 [tool.ruff]
 line-length = 110
