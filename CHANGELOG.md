@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.63.0] — sub-sessions: a plan on the spikes of chosen clusters (the Klusters recluster contract)
+- **`fk subsession export <base> <g> --clu <clu> --clusters ...`** writes a sub-session: the selected spikes
+  as a session of their own in the session directory -- row subsets of every `.res`/`.spk`/`.fet` variant
+  (time order, the same in every file), a seed `.clu` with their current ids, copies of the parameter files,
+  and symlinks to `.fil`/`.dat`/`.nst`/`.pca`/`.eap`/`.tcl` so realign, deconv, consensus and refeaturize read
+  the real recording.  `fk subsession clean` removes it with everything a run wrote.
+  `fiber_subsession.export()` is the reference implementation of the files Klusters writes for *Recluster
+  with fiber-kit* (neurosuite-3 0938).
+- **`fiber-pipeline` / `fk run`: `--session <base>`** (the CLI spelling of `FK_DIR`/`FK_SESS`) and
+  **`--final-clu <path>`** (copy the run's last `.clu` -- the plan's last `out:` step or the last canonical
+  stage -- and its `.clc`/`.clp` to `<path>`; the dry run names it).
+- docs/pipeline.md "Reclustering a selection"; test_subsession (23 checks: subsets equal the originals' rows,
+  a stage and a plan run on the sub-session and deliver one id per selected spike, refusals, clean).
+
 ## [0.62.0] — the `best` config profile, `fk set config` / `fk list config`, shell completion
 - **`fiber-kit-best.yaml`**, a third shipped profile: fiber-kit-exp.yaml with the fiber-tune exp-search
   winner on g6 0316 (2026-11-07) applied -- the plan without the per-chunk P(same) step, `psame` at theta

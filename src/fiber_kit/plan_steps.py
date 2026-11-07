@@ -275,6 +275,10 @@ def _cmd_run(a):
     cmd = [exe, str(a.elec)] + (["--plan", path] if path else []) + [x for s in sel for x in ("--step", s)]
     if a.method:
         cmd += ["--method", a.method]
+    if a.session:
+        cmd += ["--session", a.session]
+    if a.final_clu:
+        cmd += ["--final-clu", a.final_clu]
     if a.dry_run:
         cmd.append("--dry-run")
     return subprocess.call(cmd)
@@ -306,13 +310,13 @@ _fk_complete() {
     case "$prev" in
         --plan)              files=yaml ;;
         --profile|-p)        opts=$(fk list config --names 2>/dev/null); files=yaml ;;
-        -o|--output)         files=any ;;
+        -o|--output|--session|--final-clu|--clu|--out)  files=any ;;
         --from|--to)         opts=$(_fk_steps) ;;
         --method|--variant)  return ;;
     esac
     if [[ -z "$opts$files" ]]; then
         if (( cword == 1 )); then
-            opts="list run set completion"
+            opts="list run set subsession completion"
         else
             case "$cmd" in
                 list)
@@ -321,11 +325,14 @@ _fk_complete() {
                     else opts="$(_fk_steps) --plan --names"; fi ;;
                 run)
                     if (( cword == 2 )); then opts="1 2 3 4 5 6 7 8 9 10 11 12"
-                    else opts="$(_fk_steps) --from --to --plan --method --dry-run -n"; fi ;;
+                    else opts="$(_fk_steps) --from --to --plan --method --session --final-clu --dry-run -n"; fi ;;
                 set)
                     if (( cword == 2 )); then opts="config"; else opts="--profile --output --force"; fi ;;
                 completion)
                     (( cword == 2 )) && opts="bash zsh" ;;
+                subsession)
+                    if (( cword == 2 )); then opts="export clean"
+                    else opts="--clu --clusters --out --variant --seed-tag --no-links --force --quiet"; files=any; fi ;;
             esac
         fi
     fi
@@ -352,6 +359,15 @@ def _cmd_completion(a):
     return 0
 
 
+def _cmd_subsession(a):
+    """`fk subsession ...`: the sub-session export / cleanup (fiber_subsession)."""
+    try:
+        from . import fiber_subsession as fss
+    except ImportError:
+        import fiber_subsession as fss
+    return fss.main(a.rest)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="fk", description="fiber-kit pipeline plans and configs: list the plan's steps by their unique "
@@ -375,6 +391,9 @@ def main(argv=None):
     pr.add_argument("--to", metavar="STEP", help="run up to and including this step")
     pr.add_argument("--plan", help="plan file (default as for `fk list`)")
     pr.add_argument("--method", "--variant", dest="method", help="session method token for the run")
+    pr.add_argument("--session", metavar="BASE", help="the session by its base path (= FK_DIR/FK_SESS), e.g. a "
+                                                       "Klusters recluster sub-session (fk subsession)")
+    pr.add_argument("--final-clu", metavar="PATH", help="copy the run's final .clu (and .clc/.clp) to PATH when it ends")
     pr.add_argument("-n", "--dry-run", action="store_true", help="print the stage commands only")
     st = sub.add_parser("set", help="fk set config --profile <name>: write a shipped config profile as "
                                     "./fiber-kit.yaml (the file fiber-pipeline reads here)")
@@ -386,6 +405,10 @@ def main(argv=None):
     st.add_argument("-f", "--force", action="store_true", help="overwrite an existing destination")
     cp = sub.add_parser("completion", help="print the shell completion script: eval \"$(fk completion bash)\"")
     cp.add_argument("shell", nargs="?", default="bash", choices=["bash", "zsh"])
+    ss = sub.add_parser("subsession", help="export the spikes of chosen clusters as a sub-session a plan can run on "
+                                           "(what Klusters' fiber-kit recluster does), or remove one: "
+                                           "fk subsession export|clean ... (-h for the options)", add_help=False)
+    ss.add_argument("rest", nargs=argparse.REMAINDER)
     a = ap.parse_args(argv)
     try:
         if a.cmd == "list":
@@ -394,6 +417,8 @@ def main(argv=None):
             return _cmd_run(a)
         if a.cmd == "set":
             return _cmd_set(a)
+        if a.cmd == "subsession":
+            return _cmd_subsession(a)
         return _cmd_completion(a)
     except PlanError as e:
         print(f"fk: {e}", file=sys.stderr)

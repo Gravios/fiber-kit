@@ -705,6 +705,8 @@ usage() {
     echo "curated stages (run explicitly / in a plan, not in 'all'): ${CURATED_STAGES[*]}"
     echo "override example: $(basename "$0") 5 fiber-intrachunk --gate cosine --amp-gate 1.3"
     echo "config via env: FK_DIR (default \$PWD), FK_SESS (default basename); <elec> is the first arg (or FK_ELEC)"
+    echo "         --session <base>  the session by path (= FK_DIR/FK_SESS), e.g. a Klusters recluster sub-session"
+    echo "         --final-clu <path>  copy the plan's final .clu (and its .clc/.clp) to <path> when the run ends"
 }
 
 fiber_backbone_link() {   # link fiber-session fragments on the invariant backbone -> .backbone_linked
@@ -987,12 +989,16 @@ run_plan() {           # run an ordered, possibly-repeating plan of steps ($2.. 
     local n=0 ran=0 total sel sid sname st pin pout punits pspk pcpos pdrift pargs
     total=$(printf '%s\n' "$spec" | grep -c .)
     local last_intrachunk_out=refine_intrachunk
+    FINAL_TAG=""; FINAL_TAG_SET=0           # the last ran step's `out:` tag (for --final-clu)
     while IFS=$'\x1f' read -r sel sid sname st pin pout punits pspk pcpos pdrift pargs; do
         [ -z "$st" ] && continue
         n=$((n + 1))
         [ "$st" = fiber-intrachunk ] && last_intrachunk_out="${pout:-refine_intrachunk}"
         [ "$sel" = 1 ] || continue
         ran=$((ran + 1))
+        # fiber-rdr writes no clu, a realign changes none; every other step's `out:` is the clu it
+        # leaves behind (cpos augments `in` in place: out == in).
+        case "$st" in fiber-rdr|fiber-realign) ;; *) FINAL_TAG="$pout"; FINAL_TAG_SET=1 ;; esac
         printf '== [plan %d/%d] %s%s ==\n' "$n" "$total" "$sid" "${sname:+ ($sname)}"
         (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
             STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="${punits:-$last_intrachunk_out}"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
@@ -1005,6 +1011,26 @@ $spec
 EOF
     [ "$n" -gt 0 ] || { echo "fiber-pipeline: plan produced no steps" >&2; exit 1; }
     [ "$ran" -gt 0 ] || { echo "fiber-pipeline: no plan step selected" >&2; exit 1; }
+    if [ -n "${FINAL_CLU:-}" ]; then
+        [ "$FINAL_TAG_SET" = 1 ] || { echo "fiber-pipeline: --final-clu: no plan step that writes a .clu ran" >&2; exit 1; }
+        deliver_final_clu "$FINAL_TAG"
+    fi
+}
+
+deliver_final_clu() {  # $1 = clu stage tag of the run's last .clu -> copy it (and .clc/.clp) to $FINAL_CLU
+    local src; src="$(clu_path "$1")"
+    [ "${FK_DRYRUN:-0}" = 1 ] && { echo "fiber-pipeline: --final-clu: would copy $src -> $FINAL_CLU"; return 0; }
+    [ -f "$src" ] || { echo "fiber-pipeline: --final-clu: the run's final clu $src does not exist" >&2; exit 1; }
+    cp -f "$src" "$FINAL_CLU" || exit 1
+    # the hierarchy beside it, under the same spelling (X.clu.N -> X.clc.N / X.clp.N)
+    local kind
+    for kind in clc clp; do
+        local s_sib="${src/.clu./.$kind.}"
+        if [ -f "$s_sib" ] && [[ "$FINAL_CLU" == *.clu.* ]]; then
+            cp -f "$s_sib" "${FINAL_CLU/.clu./.$kind.}" || exit 1
+        fi
+    done
+    echo "fiber-pipeline: final clu $(basename "$src") -> $FINAL_CLU"
 }
 
 emit_plan() {          # print the canonical pipeline as an editable plan template
@@ -1043,6 +1069,7 @@ main() {
 
     # option scan: pull --dry-run/-n and --plan out of the argument list (anywhere), keep the rest positional
     local PLAN=""
+    FINAL_CLU=""
     local -a pos=() STEPSEL=()
     local SEL_FROM="" SEL_TO="" HAVE_RANGE=0
     while [ "$#" -gt 0 ]; do
@@ -1060,11 +1087,25 @@ main() {
             --emit-plan)   emit_plan; exit 0 ;;
             --plan)        PLAN="${2:-}"; [ -n "$PLAN" ] || { echo "error: --plan needs a file" >&2; exit 2; }; shift 2 ;;
             --plan=*)      PLAN="${1#--plan=}"; shift ;;
+            # --session <base>: the session by its base path (the file prefix, no extension), the CLI
+            # spelling of FK_DIR + FK_SESS.  A Klusters recluster sub-session (<base>--<ids>--<date>) is
+            # not the directory's name, which is what the env default assumes.
+            --session)     [ -n "${2:-}" ] || { echo "error: --session needs a session base path" >&2; exit 2; }
+                           FK_DIR="$(cd "$(dirname "$2")" && pwd)"; FK_SESS="$(basename "$2")"; export FK_DIR FK_SESS; shift 2 ;;
+            --session=*)   _sb="${1#--session=}"; FK_DIR="$(cd "$(dirname "$_sb")" && pwd)"; FK_SESS="$(basename "$_sb")"; export FK_DIR FK_SESS; shift ;;
+            # --final-clu <path>: when the run ends, copy the last .clu it wrote (the plan's last step
+            # with an `out:`, or the last canonical stage) to <path>, with its .clc/.clp siblings when
+            # the stage wrote a hierarchy -- the file a caller that does not know the plan's tags (Klusters'
+            # recluster) reads back.
+            --final-clu)   [ -n "${2:-}" ] || { echo "error: --final-clu needs a path" >&2; exit 2; }
+                           FINAL_CLU="$2"; shift 2 ;;
+            --final-clu=*) FINAL_CLU="${1#--final-clu=}"; shift ;;
             *)             pos+=("$1"); shift ;;
         esac
     done
     set -- "${pos[@]+"${pos[@]}"}"
     [ "$HAVE_RANGE" = 1 ] && STEPSEL+=("${SEL_FROM}..${SEL_TO}")
+    case "${FINAL_CLU:-}" in ""|/*) ;; *) FINAL_CLU="$PWD/$FINAL_CLU" ;; esac   # resolved before the cd into the session dir
 
     # electrode group: first positional if numeric, else FK_ELEC fallback
     local ELEC
@@ -1219,8 +1260,10 @@ main() {
     done
 
     # run in canonical order (curated stages last); only those in `want` actually run
+    local final_tag="" final_tag_set=0
     for s in "${KNOWN_STAGES[@]}"; do
         if [ -n "${want[$s]:-}" ]; then
+            case "$s" in fiber-rdr|fiber-realign) ;; *) final_tag="$(stage_out_tag "$s")"; final_tag_set=1 ;; esac
             # fiber-session already committed its realign (--realign): the canonical stage-2 realign
             # would re-read the .fil for ~zero shifts.  Named explicitly, it still runs.
             if [ "$s" = fiber-realign ] && [ "$REQUESTED_STAGES" = 0 ] && [ -n "${want[fiber-session]:-}" ] \
@@ -1240,6 +1283,10 @@ main() {
             esac
         fi
     done
+    if [ -n "${FINAL_CLU:-}" ]; then
+        [ "$final_tag_set" = 1 ] || { echo "fiber-pipeline: --final-clu: no stage that writes a .clu ran" >&2; exit 1; }
+        deliver_final_clu "$final_tag"
+    fi
 }
 
 main "$@"

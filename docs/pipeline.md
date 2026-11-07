@@ -206,6 +206,7 @@ fk set config --profile best           # write the tuned profile as ./fiber-kit.
 fk list config                         # the shipped profiles, and which one ./fiber-kit.yaml is
 fk list                                # list the plan's steps by their unique names
 fk run 5                               # the whole plan (same as fiber-pipeline 5)
+fk run 5 --session <sub> --final-clu <sub>.clu.5   # the plan on a sub-session (see "Reclustering a selection")
 eval "$(fk completion bash)"           # tab completion for all of the above (zsh: fk completion zsh)
 fiber-pipeline 5 fiber-realign-2       # run ONE plan step (its plan in/out/params)
 fiber-pipeline 5 --from fiber-cpos-2   # the plan from that step on (--to <step> ends a span)
@@ -300,6 +301,36 @@ log numbers them from 1.
   `FK_CHUNKS` is set.
 * fiber-session's hierarchy (`.clp`) gives each left-out chunk one atom, whose parent is the reserved id.
 * At most 100 chunks can be reserved.  For a longer session, lengthen `FK_SESSION_CHUNK_MIN`.
+
+## Reclustering a selection (sub-sessions)
+
+A plan runs on the spikes of chosen clusters -- what Klusters' *Recluster with fiber-kit* does on the
+selected clusters or atoms -- by running on a **sub-session**: those spikes as a session of their own,
+in the session's directory, under a base of its own (`<base>--<ids>--<date>`).  Nothing in the stages
+changes; the files are a row subset.
+
+```bash
+fk subsession export <base> <group> --clu <base>.clu.<v>.<g>.<tag> --clusters 12 15 33 --out <sub>
+fk run <group> --session <sub> --final-clu <sub>.clu.<group>      # the plan of ./fiber-kit.yaml
+fk subsession clean <sub>                                        # remove it and everything it wrote
+```
+
+| file | what |
+|---|---|
+| `<sub>.res[.<v>].<g>` | the selected spikes' times, a row subset of every `.res` of the group; ABSOLUTE times, so the real recording stays valid for them |
+| `<sub>.spk.<v>.<g>`, `<sub>.fet.<v>.<g>` | row subsets of every waveform / feature variant on disk |
+| `<sub>.clu.<v>.<g>[.<tag>]` | the SEED: the selected spikes' current ids (a plan step with `in:` can start from the curation) |
+| `<sub>.yaml` / `.yml` / `.xml` | copies of the parameter files (geometry, rate, `sdiffPairs`) |
+| `<sub>.fil`, `.dat`, `.nst.<v>.<g>`, `.pca.<v>.<g>`, `.eap.*`, `.tcl.*` | **symlinks** to the session's: `fiber-realign --reextract`, deconv, the consensus envelope and refeaturize read the real recording; nothing large is copied |
+
+The rows are in time order (ascending spike index), the same in every file, so the sub-session's `.res`
+is sorted and the final `.clu` maps back to the selection by position.  Stages relabel spikes and never
+drop one, so `--final-clu` delivers exactly one id per selected spike; `--final-clu` copies the run's
+last `.clu` (the plan's last step with an `out:`, or the last canonical stage) -- and its `.clc`/`.clp`
+when the stage wrote a hierarchy -- to the given path, which is how a caller that does not know the plan's
+tags reads the result back.  `--session <base>` is the CLI spelling of `FK_DIR`/`FK_SESS`.  The realigned
+`.res` of the sub-session is not written back to the session (Klusters realigns the new clusters itself);
+`fiber_subsession.export()` is the reference implementation of the files Klusters writes.
 
 ## Configuration
 

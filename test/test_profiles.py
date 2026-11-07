@@ -130,7 +130,7 @@ t fk ""; t fk set ""; t fk set config --profile ""; t fk run 6 --from ""; t fk l
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ.get("PATH", ""), PYTHONPATH=os.path.join(ROOT, "src"))
             r = subprocess.run(["bash", "-c", drive], cwd=tmp, env=env, capture_output=True, text=True)
             lines = r.stdout.splitlines()
-            check(len(lines) == 5 and lines[0].split() == ["list", "run", "set", "completion"], f"completes the subcommands ({lines[:1]})")
+            check(len(lines) == 5 and lines[0].split() == ["list", "run", "set", "subsession", "completion"], f"completes the subcommands ({lines[:1]})")
             check(len(lines) == 5 and lines[1] == "config", "completes `fk set` -> config")
             check(len(lines) == 5 and lines[2].split()[:3] == ["base", "exp", "best"], f"completes --profile with the profiles ({lines[2:3]})")
             check(len(lines) == 5 and "psame-chunk" in lines[3].split() and "realign-final" in lines[3].split(),
