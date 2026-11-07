@@ -52,6 +52,26 @@ def profile_text(name):
     raise ValueError(f"no profile {name!r}: one of {', '.join(PROFILES)} (or a path to a yaml)")
 
 
+def profile_path(name):
+    """A filesystem path to the profile `name` (short name, file name or path): the packaged file when
+    it is a real file, else a copy in the user's cache (a zipped install).  For FK_CONFIG."""
+    short, fn, text = profile_text(name)
+    if os.path.isfile(fn):
+        return os.path.abspath(fn)
+    try:
+        p = files("fiber_kit") / fn
+        if os.path.isfile(str(p)):
+            return str(p)
+    except (ModuleNotFoundError, OSError):
+        pass
+    cache = os.path.join(os.path.expanduser("~"), ".cache", "fiber-kit", "profiles")
+    os.makedirs(cache, exist_ok=True)
+    q = os.path.join(cache, fn)
+    with open(q, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return q
+
+
 def describe(text):
     """One line about a profile: the first header line after the file name (its '--' tagline)."""
     for ln in text.splitlines()[:6]:

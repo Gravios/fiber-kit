@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fiber-kit-recluster  -  a Klusters plugin descriptor (neurosuite-3 Klusters, src/klusters/docs/PLUGIN_API.md).
+
+  Kind `recluster`: Klusters writes the selected clusters' (or atoms') spikes as a SUB-SESSION (the
+  temp-file method: row subsets of the group's .res/.spk/.fet, a seed .clu, parameter copies, links to
+  the recording -- docs/pipeline.md "Reclustering a selection"), runs the <command> on it, and reads
+  the .clu named by %final back by spike order; its clusters replace the selection as a recluster does.
+
+  Install:   fk install klusters-plugin        (copies this file into Klusters' plugin directory)
+  Then:      Klusters > Plugins > fiber-kit-recluster  (or Actions > Recluster > Recluster with fiber-kit,
+             Shift+Q, which uses the parameter defaults set in Preferences > Plugins).
+
+  The plan and knobs are the session folder's fiber-kit.yaml unless `profile` / `config` say otherwise.
+-->
+<program>
+  <n>fiber-kit-recluster</n>
+  <parameters>
+    <parameter>
+      <n>profile</n>
+      <value></value>
+      <status>Optional</status>
+      <type>choice</type>
+      <choices>|base|exp|best</choices>
+      <help>Shipped config profile to run instead of the session folder's fiber-kit.yaml (knobs and plan). Unset: fiber-kit.yaml in the session folder, else fiber-kit's defaults.</help>
+    </parameter>
+    <parameter>
+      <n>config</n>
+      <value></value>
+      <status>Optional</status>
+      <type>path</type>
+      <help>A fiber-kit.yaml file to run with (knobs and plan); overrides the session folder's.</help>
+    </parameter>
+    <parameter>
+      <n>plan</n>
+      <value></value>
+      <status>Optional</status>
+      <type>path</type>
+      <help>A plan yaml to run instead of the config's pipeline: section.</help>
+    </parameter>
+    <parameter>
+      <n>method</n>
+      <value></value>
+      <status>Optional</status>
+      <help>Waveform variant for the run (e.g. stderiv); unset: the config's / the session's.</help>
+    </parameter>
+  </parameters>
+  <help>Run the fiber-kit pipeline on the selected clusters' spikes and replace them with its clusters.
+The plan and knobs come from the session folder's fiber-kit.yaml (fk set config --profile best), or from
+the profile / config chosen here.  The result is integrated as a recluster (one undo step); in a
+hierarchical session a plan ending on a hierarchy also installs its atoms.</help>
+  <klusters>
+    <kind>recluster</kind>
+    <input>subsession</input>
+    <produces>triple</produces>
+    <integration>recluster-integrate</integration>
+    <selection>clusters</selection>
+    <command>fk run %group --session %base --final-clu %final %params</command>
+  </klusters>
+</program>

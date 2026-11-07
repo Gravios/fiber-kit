@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.63.0-orange)
+![version](https://img.shields.io/badge/version-0.64.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -437,7 +437,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-refiberize` | Edit the fiber<-microfiber hierarchy and regenerate the aligned .clu/.clc/.clp from the child->parent map. |
 | `fiber-qc` | Per-group QC report (rate, ISI violation, SNR, amplitude, presence) rendered as an interactive HoloViz/Bokeh HTML, with a metrics CSV. |
 | `fiber-plan-lint` | Statically check plans: stage names, tag wiring, cycles, unknown or mistyped param flags. |
-| `fk` | Plan steps by name (`fk list`, `fk run <elec> <step>...`), the config profiles (`fk list config`, `fk set config --profile best`), sub-sessions of chosen clusters for a plan to run on (`fk subsession`, `fk run --session --final-clu`) and shell completion (`fk completion bash`). |
+| `fk` | Plan steps by name (`fk list`, `fk run <elec> <step>...`, `fk run --profile best`), the config profiles (`fk list config`, `fk set config --profile best`), sub-sessions of chosen clusters for a plan to run on (`fk subsession`, `fk run --session --final-clu`), the Klusters plugin descriptor (`fk install klusters-plugin`) and shell completion (`fk completion bash`). |
 | `fiber-view` | Visualise fibers: template montages, a 3-D manifold of local fiber curves, and ISI/geometry panels. |
 | `fiber-view-gui` | A standalone, rotatable bundle viewer. |
 | `fiber-view-tour` | Interesting-projection tour video of the fibers. |

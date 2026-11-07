@@ -108,6 +108,29 @@ def main():
         check(r.returncode == 2 and "knows `config` only" in r.stderr, "fk set refuses anything but config")
         r = fk("list", cwd=tmp)      # the exp plan now sits in ./fiber-kit.yaml
         check(r.returncode == 0 and "psame-chunk" in r.stdout, "fk list reads the plan of the written profile")
+        # fk run --profile / --config choose the config for the run (dry run: the best plan has no psame-chunk)
+        r = fk("run", "6", "--profile", "best", "--dry-run", cwd=tmp)
+        check(r.returncode == 0 and "psame-chunk" not in r.stdout and "[plan 1/" in r.stdout, "fk run --profile best runs the best plan, not ./fiber-kit.yaml's")
+        r = fk("run", "6", "--config", os.path.join(tmp, "fiber-kit.yaml"), "--dry-run", cwd=tmp)
+        check(r.returncode == 0 and "psame-chunk" in r.stdout, "fk run --config <file> runs that file's plan")
+        r = fk("run", "6", "--profile", "nope", "--dry-run", cwd=tmp)
+        check(r.returncode == 2 and "no profile" in r.stderr, "fk run --profile refuses an unknown profile")
+        # fk install klusters-plugin
+        r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), cwd=tmp)
+        xml = os.path.join(tmp, "plug", "fiber-kit-recluster.xml")
+        check(r.returncode == 0 and os.path.isfile(xml), "fk install klusters-plugin writes the descriptor")
+        with open(xml) as fh:
+            x = fh.read()
+        check("<kind>recluster</kind>" in x and "<input>subsession</input>" in x and "%final" in x,
+              "the descriptor is a recluster plugin on the sub-session with a %final token")
+        r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), cwd=tmp)
+        check(r.returncode == 0 and "is current" in r.stdout, "a second install sees it current")
+        with open(xml, "a") as fh:
+            fh.write("<!-- edited -->\n")
+        r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), cwd=tmp)
+        check(r.returncode == 1 and "differs" in r.stderr, "an edited descriptor is not overwritten without --force")
+        r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), "--force", cwd=tmp)
+        check(r.returncode == 0 and "wrote" in r.stdout, "--force overwrites it")
         # completion
         for shell in ("bash", "zsh"):
             r = fk("completion", shell, cwd=tmp)
@@ -130,7 +153,7 @@ t fk ""; t fk set ""; t fk set config --profile ""; t fk run 6 --from ""; t fk l
             env = dict(os.environ, PATH=tmp + os.pathsep + os.environ.get("PATH", ""), PYTHONPATH=os.path.join(ROOT, "src"))
             r = subprocess.run(["bash", "-c", drive], cwd=tmp, env=env, capture_output=True, text=True)
             lines = r.stdout.splitlines()
-            check(len(lines) == 5 and lines[0].split() == ["list", "run", "set", "subsession", "completion"], f"completes the subcommands ({lines[:1]})")
+            check(len(lines) == 5 and lines[0].split() == ["list", "run", "set", "subsession", "install", "completion"], f"completes the subcommands ({lines[:1]})")
             check(len(lines) == 5 and lines[1] == "config", "completes `fk set` -> config")
             check(len(lines) == 5 and lines[2].split()[:3] == ["base", "exp", "best"], f"completes --profile with the profiles ({lines[2:3]})")
             check(len(lines) == 5 and "psame-chunk" in lines[3].split() and "realign-final" in lines[3].split(),

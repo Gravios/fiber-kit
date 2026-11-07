@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.64.0] — the Klusters plugin descriptor, `fk run --profile`
+- **`fk install klusters-plugin`** copies the shipped Klusters plugin descriptor
+  `src/fiber_kit/klusters/fiber-kit-recluster.xml` into Klusters' plugin directory (per-user data
+  location, or `$KLUSTERS_PLUGIN_PATH`; `--dir` elsewhere; a differing copy needs `--force`).  It is a
+  `recluster` plugin on the sub-session (the Klusters <-> sorter contract: neurosuite-3 PLUGIN_API.md):
+  `<command>fk run %group --session %base --final-clu %final %params</command>`, with typed parameters
+  `profile` (choice), `config` / `plan` (path), `method` edited in Klusters' Preferences → Plugins.
+- **`fk run --profile <name>` / `--config <file>`** run with that config (knobs and plan) instead of
+  the session folder's fiber-kit.yaml (`FK_CONFIG` for the run).
+- test_profiles: 40 checks.
+
 ## [0.63.0] — sub-sessions: a plan on the spikes of chosen clusters (the Klusters recluster contract)
 - **`fk subsession export <base> <g> --clu <clu> --clusters ...`** writes a sub-session: the selected spikes
   as a session of their own in the session directory -- row subsets of every `.res`/`.spk`/`.fet` variant

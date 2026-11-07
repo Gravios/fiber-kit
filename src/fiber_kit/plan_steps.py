@@ -259,6 +259,19 @@ def _cmd_run(a):
     """`fk run <elec>` runs what `fiber-pipeline <elec>` runs: the whole plan (--plan, else the
     pipeline: of $FK_CONFIG), or the canonical stages when there is no plan.  Steps, --from and --to
     narrow it to those plan steps."""
+    # --profile / --config choose the fiber-kit.yaml (knobs AND plan) for this run: FK_CONFIG for
+    # fiber-pipeline, and the plan default_plan reads.
+    if a.profile and a.config:
+        raise PlanError("give --profile or --config, not both")
+    if a.profile:
+        try:
+            os.environ["FK_CONFIG"] = _profiles.profile_path(a.profile)
+        except ValueError as e:
+            raise PlanError(str(e)) from None
+    elif a.config:
+        if not os.path.isfile(a.config):
+            raise PlanError(f"--config {a.config}: no such file")
+        os.environ["FK_CONFIG"] = os.path.abspath(a.config)
     path = default_plan(a.plan)
     sel = list(a.steps)
     if a.from_ or a.to:
@@ -310,13 +323,13 @@ _fk_complete() {
     case "$prev" in
         --plan)              files=yaml ;;
         --profile|-p)        opts=$(fk list config --names 2>/dev/null); files=yaml ;;
-        -o|--output|--session|--final-clu|--clu|--out)  files=any ;;
+        -o|--output|--session|--final-clu|--clu|--out|--config)  files=any ;;
         --from|--to)         opts=$(_fk_steps) ;;
         --method|--variant)  return ;;
     esac
     if [[ -z "$opts$files" ]]; then
         if (( cword == 1 )); then
-            opts="list run set subsession completion"
+            opts="list run set subsession install completion"
         else
             case "$cmd" in
                 list)
@@ -325,11 +338,13 @@ _fk_complete() {
                     else opts="$(_fk_steps) --plan --names"; fi ;;
                 run)
                     if (( cword == 2 )); then opts="1 2 3 4 5 6 7 8 9 10 11 12"
-                    else opts="$(_fk_steps) --from --to --plan --method --session --final-clu --dry-run -n"; fi ;;
+                    else opts="$(_fk_steps) --from --to --plan --method --profile --config --session --final-clu --dry-run -n"; fi ;;
                 set)
                     if (( cword == 2 )); then opts="config"; else opts="--profile --output --force"; fi ;;
                 completion)
                     (( cword == 2 )) && opts="bash zsh" ;;
+                install)
+                    if (( cword == 2 )); then opts="klusters-plugin"; else opts="--dir --force"; files=any; fi ;;
                 subsession)
                     if (( cword == 2 )); then opts="export clean"
                     else opts="--clu --clusters --out --variant --seed-tag --no-links --force --quiet"; files=any; fi ;;
@@ -356,6 +371,54 @@ autoload -Uz bashcompinit && bashcompinit
 
 def _cmd_completion(a):
     sys.stdout.write(COMPLETION_ZSH if a.shell == "zsh" else COMPLETION_BASH)
+    return 0
+
+
+KLUSTERS_PLUGIN_FILES = ("fiber-kit-recluster.xml",)
+
+
+def klusters_plugin_dir():
+    """Where Klusters looks for plugin descriptors (PluginRegistry::discoveryDirs, the per-user data
+    location of the application `klusters` of the organization `neurosuite-3`):
+    $XDG_DATA_HOME/neurosuite-3/klusters/plugins/descriptions (~/.local/share/neurosuite-3/klusters/...),
+    ~/Library/Application Support/neurosuite-3/klusters/plugins/descriptions on macOS;
+    $KLUSTERS_PLUGIN_PATH's first entry when set."""
+    env = os.environ.get("KLUSTERS_PLUGIN_PATH", "")
+    if env:
+        return env.split(os.pathsep)[0]
+    if sys.platform == "darwin":
+        base = os.path.expanduser("~/Library/Application Support/neurosuite-3/klusters")
+    else:
+        base = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                            "neurosuite-3", "klusters")
+    return os.path.join(base, "plugins", "descriptions")
+
+
+def _cmd_install(a):
+    """`fk install klusters-plugin [--dir D]`: copy the shipped Klusters descriptor(s) where Klusters
+    finds them."""
+    if a.what != "klusters-plugin":
+        raise PlanError(f"`fk install` knows `klusters-plugin` only, not {a.what!r}")
+    try:
+        from importlib.resources import files
+    except ImportError:                                   # pragma: no cover
+        from importlib_resources import files             # type: ignore
+    dest = a.dir or klusters_plugin_dir()
+    os.makedirs(dest, exist_ok=True)
+    n = 0
+    for fn in KLUSTERS_PLUGIN_FILES:
+        text = (files("fiber_kit") / "klusters" / fn).read_text(encoding="utf-8")
+        q = os.path.join(dest, fn)
+        if os.path.exists(q) and not a.force:
+            with open(q, encoding="utf-8") as fh:
+                if fh.read() == text:
+                    print(f"fk install: {q} is current"); continue
+            print(f"fk install: {q} exists and differs; --force overwrites it", file=sys.stderr)
+            return 1
+        with open(q, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        print(f"fk install: wrote {q}"); n += 1
+    print("fk install: in Klusters, Plugins > Reload Plugins; the plugin's defaults are in Preferences > Plugins.")
     return 0
 
 
@@ -391,6 +454,9 @@ def main(argv=None):
     pr.add_argument("--to", metavar="STEP", help="run up to and including this step")
     pr.add_argument("--plan", help="plan file (default as for `fk list`)")
     pr.add_argument("--method", "--variant", dest="method", help="session method token for the run")
+    pr.add_argument("--profile", metavar="NAME", help="run with a shipped config profile (base, exp, best; or a "
+                                                       "file) instead of ./fiber-kit.yaml / $FK_CONFIG")
+    pr.add_argument("--config", metavar="PATH", help="run with this fiber-kit.yaml (knobs and plan)")
     pr.add_argument("--session", metavar="BASE", help="the session by its base path (= FK_DIR/FK_SESS), e.g. a "
                                                        "Klusters recluster sub-session (fk subsession)")
     pr.add_argument("--final-clu", metavar="PATH", help="copy the run's final .clu (and .clc/.clp) to PATH when it ends")
@@ -405,6 +471,11 @@ def main(argv=None):
     st.add_argument("-f", "--force", action="store_true", help="overwrite an existing destination")
     cp = sub.add_parser("completion", help="print the shell completion script: eval \"$(fk completion bash)\"")
     cp.add_argument("shell", nargs="?", default="bash", choices=["bash", "zsh"])
+    ins = sub.add_parser("install", help="fk install klusters-plugin [--dir D] [--force]: install the Klusters "
+                                         "plugin descriptor (Recluster with fiber-kit) where Klusters finds it")
+    ins.add_argument("what", help="`klusters-plugin`")
+    ins.add_argument("--dir", help="destination (default: Klusters' per-user plugin directory, or $KLUSTERS_PLUGIN_PATH)")
+    ins.add_argument("-f", "--force", action="store_true", help="overwrite a differing descriptor")
     ss = sub.add_parser("subsession", help="export the spikes of chosen clusters as a sub-session a plan can run on "
                                            "(what Klusters' fiber-kit recluster does), or remove one: "
                                            "fk subsession export|clean ... (-h for the options)", add_help=False)
@@ -419,6 +490,8 @@ def main(argv=None):
             return _cmd_set(a)
         if a.cmd == "subsession":
             return _cmd_subsession(a)
+        if a.cmd == "install":
+            return _cmd_install(a)
         return _cmd_completion(a)
     except PlanError as e:
         print(f"fk: {e}", file=sys.stderr)
