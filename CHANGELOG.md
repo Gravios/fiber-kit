@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.60.3] — fiber-cpos survives a near-flat edge cluster
+- **fiber_localize._fit_edge** (the one-flank refit fiber-cpos runs when a cluster's depth fit leaves the
+  array end) started its source amplitude at `a.max()*30` without clipping it into its bounds
+  `[1, 1e9]`, as `_fit` does.  A near-flat cluster -- peak amplitude below 1/30 ADU -- at a terminal
+  channel raised "ValueError: Initial guess is outside of provided bounds" and killed the stage: on
+  g6 0316 the exp plan's cpos-clean step, and with it the fiber-tune trial
+  (`FK_SESSION_CFIBER_Q=0.85, FK_SESSION_DIP_ALPHA=0.01`).  The start point is now clipped into the
+  bounds (unchanged for any profile that was feasible before), and a single-depth-row geometry gets a
+  nonzero axial step instead of empty bounds.
+- test_localize_edge: both checks fail on 0.60.2 with the error above.
+
 ## [0.60.2] — fiber-tune checks the truth before scoring
 - **fiber-tune refuses a truth that is not the session's spike set.**  A spec whose `truth: res:` named
   group 1's `.res` beside group 6's `.clu` ran 60 trials (8 hours) that all scored nothing

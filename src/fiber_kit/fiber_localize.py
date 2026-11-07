@@ -178,9 +178,13 @@ def _fit_edge(a, xy, dipole=True):
         d = np.sqrt((x0 - xy[:, 0]) ** 2 + (y0 - xy[:, 1]) ** 2 + r ** 2)
         return a - A / d
 
-    s = least_squares(resid, [yp, 25.0, a.max() * 30.0],
-                      bounds=([yp - pitch, 3.0, 1.0], [yp + pitch, 300.0, 1e9]),
-                      x_scale=[pitch, 10.0, a.max() * 30.0], loss="soft_l1",
+    pitch = pitch if pitch > 0 else 1.0                  # one depth row: no axial freedom to speak of
+    lb, ub = [yp - pitch, 3.0, 1.0], [yp + pitch, 300.0, 1e9]
+    # keep the initial guess feasible, as _fit does: a near-flat profile (a.max() < 1/30, a cluster of
+    # near-silent waveforms) puts a.max()*30 below the amplitude bound and least_squares refuses to start
+    p0 = np.clip([yp, 25.0, a.max() * 30.0], lb, ub)
+    s = least_squares(resid, p0, bounds=(lb, ub),
+                      x_scale=[pitch, 10.0, float(p0[2])], loss="soft_l1",
                       f_scale=max(a.max() * 0.05, 1e-6), max_nfev=4000)
     y0, r, A = float(s.x[0]), float(s.x[1]), float(s.x[2])
     pred = A / np.sqrt((x0 - xy[:, 0]) ** 2 + (y0 - xy[:, 1]) ** 2 + r ** 2)
