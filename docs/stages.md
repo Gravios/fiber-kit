@@ -1298,13 +1298,33 @@ Search a plan's knobs against a ground truth on a subset of chunks, then confirm
 `search` (coordinate search over the knob groups of a spec file, each trial a `fiber-bench run` of the plan
 up to `score_at` on the spec's `chunks`, in-place realign steps left out, scored on the truth), `confirm`
 (the best configurations again with the FULL plan, realign included, each in a private workspace with
-its own copy of the .res/.spk/.fet) and `show`.  Writes `fk-bench/tune/<name>/` (trials, summary,
+its own copy of the .res/.spk/.fet), `show` and `rescore` (every recorded trial scored again from its
+stored .clu, nothing re-run).  Writes `fk-bench/tune/<name>/` (trials, summary,
 `best.yaml`).  Example spec: `plans/tune/exp-search.yaml`.  See [bench.md](bench.md#fiber-tune).
 
 Positional: `cmd`
 
 | flag | default | description |
 |---|---|---|
+### `fiber-gt-review`
+
+Lists where a sort (`--clu-stage`) and a curated ground truth disagree, with waveform (roll-cosine of the raw templates) and refractory (cross-refractory ratio) evidence for which one is wrong: curated units that violate their own refractory period, sort clusters holding two curated units or curator-noise spikes, and curated units split over sort clusters.  Writes `<base>.gtreview.<group>.<stage>.tsv` and a review `.clu` (`<stage>_gtreview`) with every listed spike set as a cluster.  See [bench.md](bench.md#reviewing-the-ground-truth-fiber-gt-review).
+
+Positional: `session`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv_C5_D34` | method token of the sort's .clu |
+| `--clu-stage` | — | stage tag of the sort to compare (e.g. exp_psame) |
+| `--gt-clu` | — | curated .clu |
+| `--gt-res` | — | its .res |
+| `--gt-units` | `""` | curated units (default every unit > 1) |
+| `--gt-exclude` | `""` | units to leave out |
+| `--gt-tol` | `5` | spike match tolerance (samples) |
+| `--min-n` | `50` | spikes a set needs to be listed |
+| `--frac` | `0.1` | ... and this share of its sort cluster |
+| `--spk-variant` | `standard` | waveforms for the cosine (default raw standard) |
+| `--no-clu` | flag (off) | do not write the review .clu |
 ### `fiber-envelope`
 
 Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision detection: flags spikes carrying a second, non-coincident spike inside the window, explains each with another unit's template at a non-circular shift, and writes the per-unit `.env` table (with the cell layer: amplitude-dependent shape, adaptation law, spike width / burst / rate), the per-spike `.nco` table and, with `--eap`, the explained partners as `.eap` membership. `--merge THETA` also merges units on envelope d' with merge inflation as a cannot-link and writes a `.envmerge` clu stage plus the per-pair evidence. See docs/methods.md, "Collision-robust envelope" and "Cell layer".

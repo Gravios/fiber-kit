@@ -78,6 +78,24 @@ Against a ground truth (`--gt-clu/--gt-res`, spikes matched one-to-one within `-
 
 Units are typed **pyramidal / interneuron** by firing rate (`--int-rate`, 5 Hz; or `--interneurons`).
 
+**Clean-core metrics** (`fiber_bench.core_metrics`), for sorts meant to be clean but incomplete -- cores
+to curate from.  A unit's *core* is the cluster holding most of its spikes.  Unlike the accuracy above, a
+spike left unsorted costs only coverage, and a spike the curator left in a noise cluster (0/1) is not
+counted as contamination (it may be a real spike nobody sorted):
+
+| column | meaning |
+|---|---|
+| `*_core_prec` | the unit's spikes / the core's spikes of curated UNITS (only other curated cells contaminate) |
+| `*_noise_share` | the core's spikes the curator left in 0/1, over its matched spikes (reported, not charged) |
+| `*_link` | the unit's spikes in its core / its spikes in any cluster ≥ 2 (1 = one cluster across the session) |
+| `*_cov` | the unit's spikes in any cluster ≥ 2 / its scored spikes |
+| `*_clean` | units with core precision ≥ 0.95 and link ≥ 0.80 |
+| `core_purity` | spike-weighted over clusters: the largest curated unit's share of the cluster's unit spikes |
+
+An objective for clean, linked cores: `"pyr_link - 10*max(0, 0.95 - pyr_core_prec) + 0.2*pyr_cov"` (link
+what is kept, keep precision at 0.95, prefer keeping more); or count them: `"pyr_clean + pyr_link"`.
+`plans/tune/core-search.yaml` is a spec built on it.
+
 Without truth (every run): `n_clusters`, `frac_c0`/`frac_c1` (shares in clusters 0 and 1),
 `median_size`, `frac_small`, refractory violations (`isi_viol_median`, `frac_isi_over_1pct`),
 `rdr_median`/`rdr_flagged` (fiber-rdr score, lower-envelope line), `gain_iqr_median`, `rvu_median`,
@@ -87,6 +105,36 @@ sessions without a curation.
 
 Files in `fk-bench/`: `metrics.tsv` (one row per sort), `units.tsv` (per truth unit), `clusters.tsv`
 (per cluster: size, ISI, rdr, gain IQR, RVU and, with truth, purity), `report.html`.
+
+## Reviewing the ground truth: fiber-gt-review
+
+A curation has errors, and every score inherits them.  `fiber-gt-review` lists where a sort and the
+curation disagree, with evidence for which one is wrong, as rows to step through in Klusters:
+
+```bash
+fiber-gt-review sirotaA-jg-000005-20120316 6 --clu-method stderiv_C6_D34 --clu-stage exp_psame_af736752 \
+    --gt-clu sirotaA-jg-000005-20120316.clu.stderiv_C6_D34.6.curated --gt-res sirotaA-jg-000005-20120316.res.stderiv_S3.6
+```
+
+- **Evidence:** the two spike sets' raw templates (roll-cosine, ±4 samples) and their cross-refractory
+  ratio (pairs (0.6, 1.5] ms apart over chance: ~0 one cell, ~1 two cells; blank without power).
+- **Rows:**
+  - `unit`: a curated unit's own train violates its refractory period (own ratio ≥ 0.25; two equal cells
+    give 0.5, a cell with ~15% foreign spikes 0.25) -- several cells or contaminated;
+  - `mixed`: a sort cluster holds two curated units -- "curation split one cell" or "sort mixes two cells";
+  - `noise`: a sort cluster holds many spikes the curator left in 0/1 -- "curation left the unit's spikes
+    in noise" or "sort holds noise";
+  - `split`: a curated unit is the main unit of two sort clusters -- "sort did not link" or "curation
+    merged two cells".
+- **Power:** two pyramidal cells rarely fire within 1.5 ms of each other often enough for the refractory
+  test (fewer than 3 pairs expected), so their calls rest on the waveform and say "(waveform only)" --
+  look-alike neighbours reach cosine 0.95, so take those as leads.
+- **Files:** `<base>.gtreview.<group>.<stage>.tsv`, and `<base>.clu.<method>.<group>.<stage>_gtreview`,
+  which holds every spike set named in the table as its own cluster (ids = the table's `set_a`/`set_b`),
+  to open in Klusters beside the sort and the curation.
+
+On the g6 0316 curation (2026-11-07) the `unit` test alone flags unit 21, the 10 Hz cell holding 39% of
+the spikes: 549 intervals of (0.6, 1.5] ms where 431 are expected at chance -- not one cell.
 
 ## Report
 
@@ -156,9 +204,16 @@ but each trial re-sorts the chunks, since nothing can be shared between workspac
 **Metrics** per trial (truth spikes in chunks not run are left out): fiber-bench's `all_acc`, `pyr_acc`,
 `int_acc`, `*_rec`, `*_prec`, `*_n80`, `*_frag80`, `merges`, `merges_pyr_pyr`, `merges_with_int`, plus
 `ari` (sorted truth spikes), `purity` (of the sorted truth spikes), `completeness` (share of truth spikes
-in their unit's best single cluster), `unsorted` and `n_clusters`.  The `objective` is an arithmetic
+in their unit's best single cluster), `unsorted` and `n_clusters`, and the clean-core metrics
+(`*_core_prec`, `*_link`, `*_cov`, `*_noise_share`, `*_clean`, `core_purity`; see Metrics).  The `objective` is an arithmetic
 expression over these names (`+ - * /`, numbers, `min`, `max`, `abs`); a missing name or NaN scores
 `-inf`.
+
+**Re-scoring.**  `fiber-tune rescore <session> <elec> --spec ...` scores every recorded trial again from
+its stored `.clu` with the current truth and metric set, runs nothing, and rewrites the summary -- after a
+change of `truth:`, of the objective, or of fiber-kit's metrics (each trial records the metric set it was
+scored with; an older one is not shown until re-scored).  Workspace (`confirm`) trials need their
+workspace on disk.
 
 **Output** in `fk-bench/tune/<name>/`: `trials.jsonl` (every trial with its overrides, metrics, objective
 and phase), `trials.tsv`, `summary.md` (best first, search and confirm) and `best.yaml` (the base config

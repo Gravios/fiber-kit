@@ -1,0 +1,81 @@
+# fiber-tune search spec: CLEAN-BUT-INCOMPLETE cores, linked across the session.
+#
+#   fiber-tune search  <session> <elec> --spec plans/tune/core-search.yaml
+#   fiber-tune confirm <session> <elec> --spec plans/tune/core-search.yaml --top 3 --chunks all
+#   fiber-tune rescore <session> <elec> --spec plans/tune/core-search.yaml   # after a truth / metric change
+#   fiber-gt-review    <session> <elec> --clu-stage <best trial's tag> --gt-clu ... --gt-res ...
+#
+# GOAL.  Cores to curate from: each cell's spikes in ONE cluster across the session (link), that cluster
+# holding (almost) only that cell (core precision), as many of the cell's spikes kept as that allows
+# (coverage).  A spike left unsorted costs only coverage; a spike the curator left in a noise cluster is
+# not contamination (docs/bench.md, "Clean-core metrics").  exp-search.yaml's accuracy objective cannot
+# ask for this: it charges every unsorted spike, so a cleaner, less complete sort scores worse.
+#
+# STARTS FROM the exp-search result on g6 0316 (2026-11-07: pass-2 best) and drops the knobs that search
+# found inert (FK_SESSION_INCLUSION_K / DECONV_ASSIGN with INCL_ASSIGN 1, psame knn / cannot-link / min-n,
+# FK_ALINK_AMP_THR / MAX_GAP).  ADDS the dials that leave spikes out: the session's strip / shed pass and
+# fiber-consensus' quarantine.
+name: core-search
+config: ../../src/fiber_kit/fiber-kit-exp.yaml   # relative to this file; or the lab's own fiber-kit.yaml
+truth:
+  clu: /path/to/curated.clu.6
+  res: /path/to/curated.res.6                     # the .res the .clu indexes (same spike count)
+  units: ""
+  exclude: ""
+  tol: 5
+  int_rate: 5.0
+# Three consecutive chunks: two chunk boundaries for the linker, and more drift than one boundary shows.
+chunks: "1-3"
+score_at: psame
+# Link what is kept, hold pyramidal core precision at 0.95 (each point below costs 0.1), prefer keeping more.
+# Alternatives: "pyr_clean + pyr_link" (count clean units), or tighten the floor to 0.97.
+objective: "pyr_link - 10*max(0, 0.95 - pyr_core_prec) + 0.2*pyr_cov - 0.02*merges_pyr_pyr"
+passes: 2
+min_gain: 0.002
+search_realign: false
+set: {}
+start:
+  "@plan": no-psame-chunk
+  FK_SESSION_CFIBER_Q: 0.85
+  FK_SESSION_INCL_ASSIGN: 1
+  FK_SESSION_DIP_ALPHA: 0.03
+  FK_CONSENSUS_THETA_CELL: 5.0
+  FK_XCM_COS_THR: 0.94
+  "psame:theta": 0.9
+  "psame:chunk-aware": 1
+plans:
+  psame-chunk: base
+  no-psame-chunk: {drop: [psame-chunk]}
+stages:
+  - name: plan
+    knobs:
+      "@plan":                     [psame-chunk, no-psame-chunk]
+  - name: core                                    # what leaves spikes out (session strip/shed, consensus)
+    knobs:
+      FK_SESSION_CONS_MODE:        [strip, shed]              # shed parks a cluster's outlying spikes in 1
+      FK_CONS_SHED_K:              [2.0, 2.5, 3.0]            # shed radius: median + K * MAD (shed only)
+      FK_CONS_OWN_Q:               [0.75, 0.85, 0.95]         # strip: own-distance quantile that may be stripped
+      FK_CONS_PURE_IQR:            [0.2, 0.3, 0.4]            # strip: only clusters this pure claim spikes
+      FK_SESSION_INCL_ASSIGN:      [0, 1]                     # 0 = the inclusion gate strips
+      FK_CONSENSUS_DEV_Z:          [1.5, 2.0, 3.0]            # perimeter rule: lower quarantines more
+      FK_CONSENSUS_PERIM_THR:      [0.7, 0.8, 0.9]
+      FK_CONSENSUS_RULES:          ["collision,perimeter", "switch,collision,perimeter"]
+  - name: session
+    knobs:
+      FK_SESSION_COARSE_DR:        [0.07, 0.09, 0.12]
+      FK_SESSION_CFIBER_Q:         [0.85, 0.90, 0.95]
+      FK_SESSION_DIP_ALPHA:        [0.01, 0.02, 0.03]
+      FK_SESSION_RESPLIT_PASSES:   [0, 3]
+      FK_SESSION_EBAND_WIDTH:      [0.3, 0.4]
+  - name: link                                    # drift-aware linking across the chunk boundaries
+    knobs:
+      FK_ALINK_TARGET_FPR:         [1.0, 2.0, 4.0]
+      FK_ALINK_Z:                  [0.4, 0.5, 0.8]
+  - name: merge
+    knobs:
+      FK_XCM_COS_THR:              [0.92, 0.94, 0.96]
+      FK_XCM_RVU_THR:              [0, 0.5]
+  - name: psame
+    knobs:
+      "psame:theta":               [0.7, 0.8, 0.9, 0.95]
+      "psame:chunk-aware":         [0, 1]

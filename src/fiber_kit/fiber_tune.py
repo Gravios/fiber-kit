@@ -4,6 +4,7 @@
     fiber-tune search  <session> <elec> --spec tune.yaml [--max-trials N] [--dry-run]
     fiber-tune confirm <session> <elec> --spec tune.yaml [--top 3] [--chunks all] [--keep-ws]
     fiber-tune show    <session> <elec> --spec tune.yaml
+    fiber-tune rescore <session> <elec> --spec tune.yaml     # re-score recorded trials, nothing re-run
 
 A thin driver on fiber-bench: every trial is a `fiber-bench run` of the plan with one set of overrides,
 under bench's hashed stage tags, so a step whose parameters did not change is not run again (changing a
@@ -304,6 +305,9 @@ def _same(a, b):
 # A session .res that matches fewer truth spikes than this is not the truth's spike set (another group's
 # .res, another session): the search refuses to run rather than score every trial as nothing.
 MIN_TRUTH_MATCH = 0.2
+# The metric set a trial is scored with; bump when score_labels gains or changes metrics, so recorded
+# trials are re-scored (cheaply: fiber-bench re-uses the sort) instead of lacking the new names.
+SCORE_VERSION = "s2"
 
 
 class Truth:
@@ -318,9 +322,10 @@ class Truth:
             raise SystemExit(f"{_LP} · truth: {os.path.basename(tr['clu'])} holds {self.glab.size:,} labels but "
                              f"{os.path.basename(tr['res'])} {self.gres.size:,} spike times -- not one spike set "
                              "(another group's .res, or a .res re-filtered after the .clu was written)")
-        # Which truth a trial was scored against: a trial recorded under another truth is scored again.
+        # Which truth a trial was scored against, and with which metric set (SCORE_VERSION): a trial
+        # recorded under another truth or an older metric set is scored again (the sort is re-used).
         self.id = (f"{os.path.basename(tr['clu'])}:{self.glab.size}:{int(self.glab.sum())}|"
-                   f"{os.path.basename(tr['res'])}:{self.gres.size}:{int(self.gres[:1000].sum())}")
+                   f"{os.path.basename(tr['res'])}:{self.gres.size}:{int(self.gres[:1000].sum())}|{SCORE_VERSION}")
         self.units = (fb.parse_units(tr.get("units"), tr.get("exclude", "")) if tr.get("units")
                       else sorted(int(u) for u in np.unique(self.glab) if u > 1 and
                                   int(u) not in fb.parse_units(tr.get("exclude", ""))))
@@ -329,10 +334,17 @@ class Truth:
                                    fb.parse_units(tr["interneurons"]) if tr.get("interneurons") else None)
         self._cache = {}
 
+    def matched_all(self, res):
+        """Per spike of `res`: the label of its matched truth spike, ANY label (curator noise 0/1 included);
+        -1 = no truth spike."""
+        self.matched(res)
+        return self._cache_all
+
     def matched(self, res):
         key = (res.size, int(res[:1000].sum()), int(res[-1000:].sum()))
         if key not in self._cache:
-            g = fb.match_gt(res, self.gres, self.glab, self.units, self.tol)
+            g_all = fb.match_gt(res, self.gres, self.glab, None, self.tol)
+            g = np.where(np.isin(g_all, self.units), g_all, -1)
             n_truth = int(np.isin(self.glab, self.units).sum())
             n_hit = int((g >= 0).sum())
             if n_truth and n_hit < MIN_TRUTH_MATCH * n_truth:
@@ -341,15 +353,21 @@ class Truth:
                     f"({res.size:,} spikes) within +-{self.tol} samples: the truth files are not this group's spike "
                     "set (check `truth: res:` -- its group number and session).  Nothing was scored.")
             self._cache = {key: g}
+            self._cache_all = g_all
         return self._cache[key]
 
 
-def score_labels(clu, gt, truth):
-    """fiber-bench's truth metrics plus ARI / purity / completeness / unsorted on the truth spikes."""
+def score_labels(clu, gt, truth, gt_all=None):
+    """fiber-bench's truth metrics plus ARI / purity / completeness / unsorted on the truth spikes, and the
+    clean-core metrics (fiber_bench.core_metrics: <g>_core_prec, <g>_link, <g>_cov, <g>_noise_share,
+    <g>_clean, core_purity) when gt_all -- every matched truth label, curator noise included -- is given."""
     clu = np.asarray(clu, np.int64)
     rsv = fch.is_reserved(clu)
     g = np.where(rsv, -1, gt)
     T, _ = fb.truth_metrics(clu, g, truth.units, truth.types)
+    if gt_all is not None:
+        K, _ = fb.core_metrics(clu, np.where(rsv, -1, gt_all), truth.units, truth.types)
+        T = dict(T, **K)
     m = (g >= 0) & np.isin(g, truth.units)
     gl, cl = g[m], clu[m]; s = cl >= 2
     out = dict(T)
@@ -472,7 +490,7 @@ class Tuner:
             return rec
         res = nio.read_res(self.base, self.elec)
         _, clu = nio.read_clu_at(self.base, self.elec, variant=meth, tag=tag, n_spikes=res.size)
-        M = score_labels(clu, self.truth.matched(res), self.truth)
+        M = score_labels(clu, self.truth.matched(res), self.truth, self.truth.matched_all(res))
         rec.update(ok=True, metrics=M, objective=self.objective(M), seconds=round(time.time() - t0, 1))
         self._record(rec)
         return rec
@@ -585,7 +603,7 @@ class Tuner:
         if os.path.exists(path):
             res = nio.read_res(wbase, self.elec)
             _, clu = nio.read_clu_at(wbase, self.elec, variant=meth, tag=tag, n_spikes=res.size)
-            M = score_labels(clu, self.truth.matched(res), self.truth)
+            M = score_labels(clu, self.truth.matched(res), self.truth, self.truth.matched_all(res))
             rec.update(ok=True, metrics=M, objective=self.objective(M))
         else:
             rec.update(ok=False, metrics={}, objective=float("-inf"))
@@ -625,6 +643,28 @@ class Tuner:
         return out
 
     # ── tables ──
+    def rescore(self):
+        """Score every recorded trial that is not current (another truth, or an older metric set) again
+        from its stored .clu, without running anything; the new record replaces it in the summary.
+        Workspace (confirm) trials are re-scored only while their workspace still exists."""
+        res = nio.read_res(self.base, self.elec)
+        meth = self.cfg_search.get("FK_REALIGN_VARIANT") or self.method
+        done = {r.get("hash") for r in self.trials if r.get("ok") and self._current(r)}
+        n = miss = 0
+        for r in list(self.trials):
+            if not r.get("ok") or self._current(r) or r.get("hash") in done or not r.get("tag"):
+                continue
+            path = r.get("clu_path") or f"{self.base}.clu.{meth}.{self.elec}.{r['tag']}"
+            if not os.path.exists(path):
+                miss += 1; continue
+            _, clu = nio.read_clu_file(path, n_spikes=res.size)
+            M = score_labels(clu, self.truth.matched(res), self.truth, self.truth.matched_all(res))
+            new = dict(r, metrics=M, objective=self.objective(M), truth=self.truth.id,
+                       when=datetime.datetime.now().isoformat(timespec="seconds"), rescored=True)
+            self._record(new); done.add(r.get("hash")); n += 1
+        self.log(f"{_LP} · rescored {n} trial(s)" + (f"; {miss} without their .clu on disk" if miss else ""))
+        self.write_tables()
+
     def write_tables(self):
         rows = []
         for r in self.trials:
@@ -632,7 +672,9 @@ class Tuner:
                        objective=r.get("objective"), overrides=json.dumps(r.get("overrides", {}), sort_keys=True),
                        seconds=r.get("seconds"), note=r.get("note", ""), truth=r.get("truth") or "")
             for k in ("all_acc", "pyr_acc", "int_acc", "all_rec", "all_prec", "all_n80", "all_frag80", "merges",
-                      "merges_pyr_pyr", "ari", "purity", "completeness", "unsorted", "n_clusters", "units_scored"):
+                      "merges_pyr_pyr", "ari", "purity", "completeness", "unsorted", "n_clusters", "units_scored",
+                      "all_core_prec", "all_link", "all_cov", "all_noise_share", "all_clean", "pyr_core_prec",
+                      "pyr_link", "pyr_cov", "pyr_clean", "core_purity"):
                 row[k] = (r.get("metrics") or {}).get(k, "")
             rows.append(row)
         fb._tsv_write(os.path.join(self.dir, "trials.tsv"), rows)
@@ -644,18 +686,25 @@ class Tuner:
                  f"{len([r for r in S if r['phase'] == 'confirm'])} confirm", ""]
         stale = len([r for r in self.trials if r.get("ok") and not self._current(r)])
         if stale:
-            lines[-1:-1] = [f"- {stale} earlier trial(s) scored against another truth are not shown (trials.tsv lists them)"]
+            lines[-1:-1] = [f"- {stale} earlier trial(s) scored against another truth or metric set are not shown "
+                            "(trials.tsv lists them; `fiber-tune rescore` scores them again)"]
         for ph in ("search", "confirm"):
             R = sorted([r for r in S if r["phase"] == ph], key=lambda r: -r["objective"])[:15]
             if not R:
                 continue
-            lines += [f"## {ph} (best first)", "", "| objective | acc | ARI | purity | completeness | merges | clusters | overrides |",
-                      "|---|---|---|---|---|---|---|---|"]
+            lines += [f"## {ph} (best first)", "",
+                      "| objective | acc | ARI | purity | completeness | core prec | link | coverage | clean | merges "
+                      "| clusters | overrides |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+
+            def f3(M, k):
+                v = M.get(k)
+                return f"{v:.3f}" if isinstance(v, (int, float)) and v == v else "-"
             for r in R:
                 M = r["metrics"]
-                lines.append(f"| {r['objective']:.4f} | {M.get('all_acc', float('nan')):.3f} | {M.get('ari', float('nan')):.3f} | "
-                             f"{M.get('purity', float('nan')):.3f} | {M.get('completeness', float('nan')):.3f} | "
-                             f"{M.get('merges', '')} | {M.get('n_clusters', '')} | `{json.dumps(r['overrides'], sort_keys=True)}` |")
+                lines.append(f"| {r['objective']:.4f} | {f3(M, 'all_acc')} | {f3(M, 'ari')} | {f3(M, 'purity')} | "
+                             f"{f3(M, 'completeness')} | {f3(M, 'all_core_prec')} | {f3(M, 'all_link')} | {f3(M, 'all_cov')} | "
+                             f"{M.get('all_clean', '-')} | {M.get('merges', '')} | {M.get('n_clusters', '')} | "
+                             f"`{json.dumps(r['overrides'], sort_keys=True)}` |")
             lines.append("")
         with open(os.path.join(self.dir, "summary.md"), "w") as fh:
             fh.write("\n".join(lines))
@@ -684,6 +733,9 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="print the stage commands only")
     p = sub.add_parser("show", help="rewrite trials.tsv / summary.md and print the summary")
     common(p)
+    p = sub.add_parser("rescore", help="score the recorded trials again with the current truth and metrics "
+                                       "(from their stored .clu; nothing is re-run), then show the summary")
+    common(p)
     a = ap.parse_args(argv)
     spec = load_spec(a.spec)
     t = Tuner(a.session, a.elec, spec, clu_method=a.clu_method, dry_run=getattr(a, "dry_run", False))
@@ -693,6 +745,10 @@ def main(argv=None):
         t.search(a.max_trials)
     elif a.cmd == "confirm":
         t.confirm(a.top, a.chunks, a.keep_ws)
+    elif a.cmd == "rescore":
+        t.rescore()
+        with open(os.path.join(t.dir, "summary.md")) as fh:
+            print(fh.read())
     else:
         t.write_tables()
         with open(os.path.join(t.dir, "summary.md")) as fh:

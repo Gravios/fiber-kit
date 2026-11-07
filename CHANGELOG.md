@@ -4,6 +4,31 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.61.0] — clean-core metrics, fiber-tune rescore, fiber-gt-review
+For the goal of clean-but-incomplete cores linked across the session, and for refining the curation
+they are scored against.
+- **Clean-core metrics** (`fiber_bench.core_metrics`; fiber-bench `score` and every fiber-tune trial):
+  `<g>_core_prec` (a unit's core = the cluster holding most of its spikes; only other curated cells count as
+  contamination, not spikes the curator left in noise), `<g>_noise_share` (those, reported), `<g>_link`
+  (share of the unit's sorted spikes in its core: linking across the session), `<g>_cov` (share kept at
+  all), `<g>_clean` (precision >= 0.95 and link >= 0.8) and `core_purity`.  An unsorted spike costs only
+  coverage, so a cleaner, less complete sort no longer scores worse.  The fiber-tune summary shows them.
+- **`fiber-tune rescore`**: scores every recorded trial again from its stored .clu with the current truth
+  and metric set; nothing is re-run.  Trials record the metric set (`SCORE_VERSION` s2 in the truth id), so
+  a resumed search re-scores older trials instead of lacking the new names.
+- **`fiber-gt-review`** (new stage): where a sort and the curation disagree, waveform (raw roll-cosine)
+  and refractory (cross-refractory ratio) evidence for which is wrong -- curated units violating their own
+  refractory period, sort clusters holding two curated units or curator-noise spikes, curated units split
+  over sort clusters -- as a TSV and a review .clu with every listed spike set as a cluster.  On the g6
+  0316 curation, unit 21 (10 Hz, 39% of the spikes) shows 549 intervals of (0.6, 1.5] ms against 431
+  expected at chance: not one cell.
+- **`plans/tune/core-search.yaml`**: a spec for clean, linked cores -- objective `pyr_link - 10*max(0,
+  0.95 - pyr_core_prec) + 0.2*pyr_cov - 0.02*merges_pyr_pyr`, three chunks, starting from the exp-search
+  winner, without the knobs that search found inert, with the strip / shed / quarantine dials added.
+- **Fix:** `fiber_bench.match_gt(units=None)` (keep every truth label) returned no match: `np.asarray(None)`
+  is not None.  Caught by the new test before anything used it.
+- test_gt_review: 21 checks.
+
 ## [0.60.3] — fiber-cpos survives a near-flat edge cluster
 - **fiber_localize._fit_edge** (the one-flank refit fiber-cpos runs when a cluster's depth fit leaves the
   array end) started its source amplitude at `a.max()*30` without clipping it into its bounds

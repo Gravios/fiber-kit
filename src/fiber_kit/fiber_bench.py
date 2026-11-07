@@ -320,11 +320,12 @@ def parse_units(spec, exclude=""):
 def match_gt(res, gt_res, gt_lab, units, tol=5):
     """One-to-one match of the truth file's spikes to `res` within +-tol samples, nearest offset first
     (every truth-file spike competes, as in the reference build of gt.npy; spikes of units outside
-    `units` are then dropped).  Returns gt (len(res),): the truth unit of each spike, -1 = no truth."""
+    `units` are then dropped).  Returns gt (len(res),): the truth unit of each spike, -1 = no truth.
+    units=None keeps every truth label (the curator's noise/artefact clusters 0/1 included)."""
     res = np.asarray(res, np.int64); gt_res = np.asarray(gt_res, np.int64); gt_lab = np.asarray(gt_lab)
     order = np.argsort(res, kind="stable"); rs = res[order]
     tr, tl = gt_res, gt_lab                    # match EVERY truth-file spike, keep the truth units after
-    units = np.asarray(units)
+    units = None if units is None else np.asarray(units)
     out = np.full(res.size, -1, np.int64); used_new = np.zeros(res.size, bool); used_gt = np.zeros(tr.size, bool)
     for d in sorted(set(range(-tol, tol + 1)), key=abs):
         tgt = tr + d
@@ -337,7 +338,8 @@ def match_gt(res, gt_res, gt_lab, units, tol=5):
         _, first = np.unique(i_new[free], return_index=True)
         sel = np.flatnonzero(free)[first]
         out[i_new[sel]] = tl[i_gt[sel]]; used_new[i_new[sel]] = True; used_gt[i_gt[sel]] = True
-    out[~np.isin(out, units)] = -1
+    if units is not None:
+        out[~np.isin(out, units)] = -1
     return out
 
 
@@ -397,6 +399,79 @@ def truth_metrics(clu, gt, units, types, merge_min=50, merge_frac=0.2):
     S["merges_pyr_pyr"] = sum(1 for m in merges if ty[m[1]] == "pyr" and ty[m[2]] == "pyr")
     S["merges_with_int"] = S["merges"] - S["merges_pyr_pyr"]
     S["merge_list"] = " ".join(f"{m[1]}+{m[2]}" for m in merges)
+    return S, rows
+
+
+CORE_PREC = 0.95                   # a unit's core is "clean" at this precision ...
+CORE_LINK = 0.80                   # ... and "linked" when this share of its sorted spikes is in that core
+
+
+def core_metrics(clu, gt_all, units, types):
+    """Metrics for CLEAN-BUT-INCOMPLETE cores linked across the session.  Unlike truth_metrics, a spike
+    left unsorted costs nothing here except coverage, and a spike the curator left in a noise cluster is
+    not counted as contamination (it may be a real spike nobody sorted) -- it is reported separately.
+
+    gt_all: per spike, the truth label of its matched truth spike, any label (match_gt(units=None));
+    -1 = no truth spike.  Per truth unit u, its CORE is the sort cluster (>= 2, not reserved) holding most
+    of u's spikes:
+      core_prec   u's spikes / the core's spikes of truth UNITS (other curated cells are contamination;
+                  curator-noise and unmatched spikes are not counted)
+      noise_share the core's spikes the curator left in clusters 0/1, over the core's matched spikes
+      link        u's spikes in the core / u's spikes in any cluster >= 2 (how completely the sort linked
+                  what it kept of u: 1 = one cluster across the session)
+      coverage    u's spikes in any cluster >= 2 / u's scored spikes (what was kept at all)
+      clean       core_prec >= CORE_PREC and link >= CORE_LINK
+    Returns (summary, rows).  Summary keys per group all / pyr / int: <g>_core_prec, <g>_link, <g>_cov,
+    <g>_noise_share (unit means), <g>_clean (count); plus core_purity -- spike-weighted over every cluster
+    >= 2, its largest truth unit's share of its truth-unit spikes."""
+    clu = np.asarray(clu, np.int64); g = np.asarray(gt_all, np.int64)
+    units = [int(u) for u in units]
+    ev = ~_fch.is_reserved(clu)
+    sorted_ = (clu >= 2) & ev
+    is_unit = np.isin(g, units)
+    is_noise = (g >= 0) & ~is_unit                      # matched to a truth spike the curator did not put in a unit
+    present = sorted(set(np.unique(g[is_unit & ev]).tolist()))
+    rows = []
+    # per cluster: truth-unit composition and curator-noise count
+    comp = {}
+    m = sorted_ & is_unit
+    if m.any():
+        cu = np.stack([clu[m], g[m]], 1)
+        pairs, cnt = np.unique(cu, axis=0, return_counts=True)
+        for (c, u), n in zip(pairs.tolist(), cnt.tolist()):
+            comp.setdefault(int(c), {})[int(u)] = int(n)
+    nz = {int(c): int(n) for c, n in zip(*np.unique(clu[sorted_ & is_noise], return_counts=True))}
+    for u in present:
+        mine = (g == u) & ev
+        n_all = int(mine.sum())
+        in_s = mine & sorted_
+        n_s = int(in_s.sum())
+        if n_s == 0:
+            rows.append(dict(unit=u, type=types.get(u, "pyr"), n=n_all, core=-1, core_prec=float("nan"),
+                             noise_share=float("nan"), link=float("nan"), coverage=0.0, clean=False))
+            continue
+        cs, cn = np.unique(clu[in_s], return_counts=True)
+        k = int(cn.argmax()); core = int(cs[k]); n_core = int(cn[k])
+        units_in_core = sum(comp.get(core, {}).values())
+        matched_in_core = units_in_core + nz.get(core, 0)
+        prec = n_core / max(units_in_core, 1)
+        link = n_core / n_s
+        rows.append(dict(unit=u, type=types.get(u, "pyr"), n=n_all, core=core, core_prec=float(prec),
+                         noise_share=float(nz.get(core, 0) / max(matched_in_core, 1)), link=float(link),
+                         coverage=float(n_s / max(n_all, 1)), clean=bool(prec >= CORE_PREC and link >= CORE_LINK)))
+    S = {}
+    for grp, sel in (("all", lambda r: True), ("pyr", lambda r: r["type"] == "pyr"), ("int", lambda r: r["type"] == "int")):
+        R = [r for r in rows if sel(r)]
+        if not R:
+            continue
+        S[f"{grp}_core_prec"] = float(np.nanmean([r["core_prec"] for r in R])) if any(r["core"] >= 0 for r in R) else float("nan")
+        S[f"{grp}_link"] = float(np.nanmean([r["link"] for r in R])) if any(r["core"] >= 0 for r in R) else float("nan")
+        S[f"{grp}_cov"] = float(np.mean([r["coverage"] for r in R]))
+        S[f"{grp}_noise_share"] = (float(np.nanmean([r["noise_share"] for r in R]))
+                                   if any(r["core"] >= 0 for r in R) else float("nan"))
+        S[f"{grp}_clean"] = int(sum(r["clean"] for r in R))
+    tot = sum(sum(v.values()) for v in comp.values())
+    S["core_purity"] = float(sum(max(v.values()) for v in comp.values()) / tot) if tot else float("nan")
     return S, rows
 
 
@@ -527,13 +602,14 @@ def cmd_score(a):
         _, glab = nio.read_clu_file(a.gt_clu)
         gres = nio.read_res_file(a.gt_res)
         units = parse_units(a.gt_units, a.gt_exclude) if a.gt_units else sorted(int(u) for u in np.unique(glab) if u > 1)
-        gt = match_gt(res, gres, glab, units, a.gt_tol)
+        gt_all = match_gt(res, gres, glab, None, a.gt_tol)
+        gt = np.where(np.isin(gt_all, units), gt_all, -1)
         types = type_units(gres, glab, units, SR, a.int_rate, parse_units(a.interneurons) if a.interneurons else None)
         print(f"{_LP} · truth: {len(units)} units ({sum(t == 'int' for t in types.values())} interneurons: "
               f"{[u for u in units if types[u] == 'int']}), {int((gt >= 0).sum())} of {res.size} spikes matched")
     bd = bench_dir(base)
     old = {r["tag"]: r for r in _tsv_read(os.path.join(bd, "metrics.tsv"))}
-    gsig = _h([a.gt_clu, a.gt_res, units, a.gt_tol, a.int_rate, a.interneurons]) if a.gt_clu else "none"
+    gsig = _h([a.gt_clu, a.gt_res, units, a.gt_tol, a.int_rate, a.interneurons, "core-v1"]) if a.gt_clu else "none"
     summaries, unit_rows, clus_rows = [], [], []
     for tag, meth, h, ov in uniq:
         if tag in old and old[tag].get("gt_sig") == gsig and not a.force:
@@ -552,8 +628,14 @@ def cmd_score(a):
             gt_ev = np.where(rsv, -1, gt)                         # truth spikes in chunks not computed: not scored
             T, urows = truth_metrics(clu, gt_ev, units, types)
             S.update(T)
+            K, krows = core_metrics(clu, np.where(rsv, -1, gt_all), units, types)
+            S.update(K)
+            kby = {r["unit"]: r for r in krows}
             for r in urows:
-                unit_rows.append(dict(tag=tag, **r))
+                k = kby.get(r["unit"], {})
+                unit_rows.append(dict(tag=tag, **r, **{f"core_{x}" if x in ("clean",) else x: k[x]
+                                                       for x in ("core", "core_prec", "noise_share", "link", "coverage", "clean")
+                                                       if x in k}))
             pur = cluster_purity(clu, gt_ev)
             for r in crow:
                 if r["cluster"] in pur:

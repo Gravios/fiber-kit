@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.60.3-orange)
+![version](https://img.shields.io/badge/version-0.61.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -428,6 +428,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-rdr` | Per-cluster contamination score from the RMS of the residual's temporal derivative (a QC table). |
 | `fiber-bench` | Run, score and compare pipeline-parameter variants under a config hash. |
 | `fiber-tune` | Search a plan's knobs against a ground truth on a subset of chunks (coordinate search on fiber-bench), then confirm the best with the full plan. |
+| `fiber-gt-review` | Where a sort and a curated ground truth disagree, with waveform and refractory evidence for which one is wrong; a TSV and a review .clu to step through in Klusters. |
 | `fiber-defrag` | De-fragment an over-clustered sort: reunite a neuron's drift/amplitude fragments by mutual-nearest-neighbour template merging, gated by cosine AND ... |
 | `fiber-calibrate` | Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`. |
 | `fiber-score` | Score a candidate .clu against a ground-truth .clu (ARI, V-measure, pairwise precision/recall, per-unit and split/merge diagnostics). |
