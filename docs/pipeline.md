@@ -323,14 +323,25 @@ fk subsession clean <sub>                                        # remove it and
 | `<sub>.yaml` / `.yml` / `.xml` | copies of the parameter files (geometry, rate, `sdiffPairs`) |
 | `<sub>.fil`, `.dat`, `.nst.<v>.<g>`, `.pca.<v>.<g>`, `.eap.*`, `.tcl.*` | **symlinks** to the session's: `fiber-realign --reextract`, deconv, the consensus envelope and refeaturize read the real recording; nothing large is copied |
 
-**From Klusters** this is *Actions → Recluster → Recluster with fiber-kit* (`Shift+Q`) or the
-`fiber-kit-recluster` plugin: `fk install klusters-plugin` copies the shipped descriptor
-(`src/fiber_kit/klusters/fiber-kit-recluster.xml`, a Klusters `recluster` plugin whose `<command>` is
-`fk run %group --session %base --final-clu %final %params`) into Klusters' plugin directory; its
-parameters (`profile`, `config`, `plan`, `method`) are edited in Klusters' *Preferences → Plugins* and
-the run dialog.  Any other sorter plugs in the same way: a descriptor of kind `recluster` receives the
-sub-session and delivers the `.clu` named by `%final` (neurosuite-3 `src/klusters/docs/PLUGIN_API.md`).
-`fk run --profile <name>` / `--config <file>` run with that config instead of the session folder's.
+**From Klusters** this is *Actions → Recluster → Recluster with fiber-kit* (`Shift+Q`), or `Shift+R`
+with fiber-kit as the active engine, through the `fiber-kit-recluster` plugin.  `fk install
+klusters-plugin` installs two files in Klusters' plugin directory
+(`~/.local/share/neurosuite-3/klusters/plugins/descriptions/`):
+
+- `fiber-kit-recluster.xml` -- the descriptor: a Klusters `recluster` plugin whose `<command>` is
+  `fk run %group --session %base --final-clu %final %params`, with the parameters `profile`,
+  `config`, `plan`, `method` (default `%variant`: the open clustering's), edited in Klusters'
+  *Preferences → Plugins* and the run dialog;
+- `fiber-kit-klusters.yaml` -- **the configuration the plugin runs with, whatever session is open**: the
+  `klusters` profile (the `best` profile made session-agnostic for a sub-session: every chunk, no
+  resume, no fixed variant, no QC report), which the descriptor's `config` parameter points at.  A
+  recluster runs on a subset of spikes in any session, so its configuration cannot be the session
+  folder's `fiber-kit.yaml`; **edit this installed copy** to change what Klusters runs (a later
+  `fk install` keeps an edited copy; `--force` restores the shipped one).
+
+Any other sorter plugs in the same way: a descriptor of kind `recluster` receives the sub-session and
+delivers the `.clu` named by `%final` (neurosuite-3 `src/klusters/docs/PLUGIN_API.md`).  `fk run
+--profile <name>` / `--config <file>` run with that config instead of the session folder's.
 
 The rows are in time order (ascending spike index), the same in every file, so the sub-session's `.res`
 is sorted and the final `.clu` maps back to the selection by position.  Stages relabel spikes and never

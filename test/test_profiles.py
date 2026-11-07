@@ -87,7 +87,7 @@ def main():
         r = fk("list", "config", cwd=tmp)
         check(r.returncode == 0 and "not present" in r.stdout and " best " in r.stdout, "fk list config: no ./fiber-kit.yaml yet")
         r = fk("list", "config", "--names", cwd=tmp)
-        check(r.stdout.split() == ["base", "exp", "best"], f"fk list config --names ({r.stdout.split()})")
+        check(r.stdout.split() == ["base", "exp", "best", "klusters"], f"fk list config --names ({r.stdout.split()})")
         r = fk("set", "config", "--profile", "best.yaml", cwd=tmp)
         same = os.path.exists(os.path.join(tmp, "fiber-kit.yaml")) and \
             read(os.path.join(tmp, "fiber-kit.yaml")) == read(os.path.join(PKG, "fiber-kit-best.yaml"))
@@ -123,14 +123,29 @@ def main():
             x = fh.read()
         check("<kind>recluster</kind>" in x and "<input>subsession</input>" in x and "%final" in x,
               "the descriptor is a recluster plugin on the sub-session with a %final token")
+        cfg = os.path.join(tmp, "plug", "fiber-kit-klusters.yaml")
+        check(os.path.isfile(cfg) and f"<value>{cfg}</value>" in x and "@KLUSTERS_CONFIG@" not in x,
+              "the klusters profile is installed beside it and the descriptor's config default points at that copy")
+        with open(cfg) as fh:
+            ky = fh.read()
+        check("fiber-rdr" not in [ln.strip()[:30] for ln in ky.splitlines() if ln.strip().startswith("- {stage")]
+              and 'FK_SESSION_SKIP_EXTANT:  0' in ky and 'FK_REALIGN_VARIANT:      ""' in ky,
+              "the klusters profile: no rdr step, no resume, no fixed variant")
+        with open(cfg, "a") as fh:
+            fh.write("FK_CHUNKS: \"0-1\"\n")                      # the user tuned it
         r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), cwd=tmp)
-        check(r.returncode == 0 and "is current" in r.stdout, "a second install sees it current")
+        check(r.returncode == 0 and "is current" in r.stdout and "edited -- kept" in r.stdout,
+              "a second install sees the descriptor current and KEEPS the edited profile")
         with open(xml, "a") as fh:
             fh.write("<!-- edited -->\n")
         r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), cwd=tmp)
         check(r.returncode == 1 and "differs" in r.stderr, "an edited descriptor is not overwritten without --force")
         r = fk("install", "klusters-plugin", "--dir", os.path.join(tmp, "plug"), "--force", cwd=tmp)
-        check(r.returncode == 0 and "wrote" in r.stdout, "--force overwrites it")
+        with open(cfg) as fh:
+            restored = "FK_CHUNKS: \"0-1\"" not in fh.read()
+        check(r.returncode == 0 and "wrote" in r.stdout and restored, "--force overwrites both, the profile back to the shipped one")
+        r = fk("run", "6", "--profile", "klusters", "--dry-run", cwd=tmp)
+        check(r.returncode == 0 and "fiber-rdr" not in r.stdout and "realign-final" in r.stdout, "fk run --profile klusters: the plan without rdr")
         # completion
         for shell in ("bash", "zsh"):
             r = fk("completion", shell, cwd=tmp)

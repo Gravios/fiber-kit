@@ -375,6 +375,7 @@ def _cmd_completion(a):
 
 
 KLUSTERS_PLUGIN_FILES = ("fiber-kit-recluster.xml",)
+KLUSTERS_PLUGIN_CONFIG = "fiber-kit-klusters.yaml"      # the profile installed beside the descriptor
 
 
 def klusters_plugin_dir():
@@ -405,20 +406,29 @@ def _cmd_install(a):
         from importlib_resources import files             # type: ignore
     dest = a.dir or klusters_plugin_dir()
     os.makedirs(dest, exist_ok=True)
-    n = 0
-    for fn in KLUSTERS_PLUGIN_FILES:
-        text = (files("fiber_kit") / "klusters" / fn).read_text(encoding="utf-8")
+    # The profile the plugin runs with, beside the descriptor; the descriptor's `config` default is
+    # pointed at that copy (@KLUSTERS_CONFIG@), so Klusters passes it at run time whatever session is
+    # open.  An EDITED profile is kept (the user's tuning); --force replaces it with the shipped one.
+    cfg_path = os.path.abspath(os.path.join(dest, KLUSTERS_PLUGIN_CONFIG))
+    cfg_text = _profiles.profile_text("klusters")[2]
+    items = [(fn, (files("fiber_kit") / "klusters" / fn).read_text(encoding="utf-8").replace("@KLUSTERS_CONFIG@", cfg_path))
+             for fn in KLUSTERS_PLUGIN_FILES] + [(KLUSTERS_PLUGIN_CONFIG, cfg_text)]
+    for fn, text in items:
         q = os.path.join(dest, fn)
         if os.path.exists(q) and not a.force:
             with open(q, encoding="utf-8") as fh:
-                if fh.read() == text:
-                    print(f"fk install: {q} is current"); continue
+                cur = fh.read()
+            if cur == text:
+                print(f"fk install: {q} is current"); continue
+            if fn == KLUSTERS_PLUGIN_CONFIG:
+                print(f"fk install: {q} is edited -- kept (--force replaces it with the shipped profile)"); continue
             print(f"fk install: {q} exists and differs; --force overwrites it", file=sys.stderr)
             return 1
         with open(q, "w", encoding="utf-8") as fh:
             fh.write(text)
-        print(f"fk install: wrote {q}"); n += 1
-    print("fk install: in Klusters, Plugins > Reload Plugins; the plugin's defaults are in Preferences > Plugins.")
+        print(f"fk install: wrote {q}")
+    print(f"fk install: Klusters runs the plugin with {cfg_path} -- edit it to change what a recluster runs.\n"
+          "fk install: in Klusters, Plugins > Reload Plugins; the plugin's defaults are in Preferences > Plugins.")
     return 0
 
 

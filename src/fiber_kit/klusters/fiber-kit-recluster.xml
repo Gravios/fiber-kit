@@ -11,7 +11,9 @@
   Then:      Klusters > Plugins > fiber-kit-recluster  (or Actions > Recluster > Recluster with fiber-kit,
              Shift+Q, which uses the parameter defaults set in Preferences > Plugins).
 
-  The plan and knobs are the session folder's fiber-kit.yaml unless `profile` / `config` say otherwise.
+  The plan and knobs come from `config` -- the fiber-kit-klusters.yaml installed beside this file (tuned,
+  session-agnostic; edit it to change what Klusters runs) -- or from `profile`; the session folder's
+  fiber-kit.yaml only when both are unset.
 -->
 <program>
   <n>fiber-kit-recluster</n>
@@ -21,15 +23,15 @@
       <value></value>
       <status>Optional</status>
       <type>choice</type>
-      <choices>|base|exp|best</choices>
-      <help>Shipped config profile to run instead of the session folder's fiber-kit.yaml (knobs and plan). Unset: fiber-kit.yaml in the session folder, else fiber-kit's defaults.</help>
+      <choices>|base|exp|best|klusters</choices>
+      <help>A shipped config profile to run with instead of `config` (knobs and plan): base, exp, best, klusters. Unset: `config`, else the session folder's fiber-kit.yaml.</help>
     </parameter>
     <parameter>
       <n>config</n>
-      <value></value>
+      <value>@KLUSTERS_CONFIG@</value>
       <status>Optional</status>
       <type>path</type>
-      <help>A fiber-kit.yaml file to run with (knobs and plan); overrides the session folder's.</help>
+      <help>The fiber-kit.yaml the recluster runs with (knobs AND plan), whatever session is open. `fk install klusters-plugin` sets it to the fiber-kit-klusters.yaml it installs beside this descriptor: the tuned profile made session-agnostic for a sub-session (no chunk selection, no resume, no fixed variant, no QC report). Edit that file to change what Klusters runs; clear this to use the session folder's fiber-kit.yaml instead.</help>
     </parameter>
     <parameter>
       <n>plan</n>
@@ -40,14 +42,15 @@
     </parameter>
     <parameter>
       <n>method</n>
-      <value></value>
+      <value>%variant</value>
       <status>Optional</status>
-      <help>Waveform variant for the run (e.g. stderiv); unset: the config's / the session's.</help>
+      <help>Waveform variant for the run. %variant = the open clustering's (Klusters substitutes it); or a token such as stderiv; unset: the config's / the session's.</help>
     </parameter>
   </parameters>
   <help>Run the fiber-kit pipeline on the selected clusters' spikes and replace them with its clusters.
-The plan and knobs come from the session folder's fiber-kit.yaml (fk set config --profile best), or from
-the profile / config chosen here.  The result is integrated as a recluster (one undo step); in a
+The plan and knobs come from `config` (the fiber-kit-klusters.yaml installed beside this descriptor; edit it
+to change what Klusters runs) or the `profile` chosen here; the session folder's fiber-kit.yaml only when
+both are unset.  The result is integrated as a recluster (one undo step); in a
 hierarchical session a plan ending on a hierarchy also installs its atoms.</help>
   <klusters>
     <kind>recluster</kind>
