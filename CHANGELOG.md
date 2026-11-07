@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.60.2] — fiber-tune checks the truth before scoring
+- **fiber-tune refuses a truth that is not the session's spike set.**  A spec whose `truth: res:` named
+  group 1's `.res` beside group 6's `.clu` ran 60 trials (8 hours) that all scored nothing
+  (`units_scored 0`, objective -inf), and coordinate search had nothing to compare.  Now the truth `.clu`
+  and `.res` must hold the same number of spikes, and at least 20% of the truth's unit spikes must match
+  the session's `.res` within `tol`; otherwise the run stops with the counts before any trial is scored.
+- **Trials record their truth** (`truth` in trials.jsonl / trials.tsv).  A resumed search re-scores trials
+  recorded under another truth (the sorts are re-used through fiber-bench's tags), and summary.md lists
+  only the trials scored against the current one.
+- test_tune: 4 new checks (3 fail on 0.60.1).
+
 ## [0.60.1] — fiber-kit.yaml runs the P(same) merges
 - **The default template's plan** (fiber-kit.yaml, the fiber-link route) gains the exp plan's two
   fiber-psame-merge steps: `psame-chunk` (`per-chunk: 1`, fiber_session -> fk_psc) before intrachunk, and

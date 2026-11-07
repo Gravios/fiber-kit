@@ -114,6 +114,14 @@ search's `FK_CHUNKS`), `score_at` (the plan step scored; default the last step w
 groups, each a mapping of knob -> list of values, searched in order (upstream first).  Every knob must
 be one the base config lists, so a typo stops the run instead of doing nothing.
 
+**Truth checks.**  `truth: clu` and `truth: res` must hold the same number of spikes, and at least 20% of
+the truth's unit spikes must match the session's `.res` within `tol` samples; otherwise fiber-tune stops
+before the first trial is scored.  (A `res:` naming another group's `.res` once ran a whole search in
+which every trial scored nothing: `units_scored 0`, objective `-inf`.)  Each trial records the truth it
+was scored against.  After `truth:` changes, a resumed search scores its trials again -- the sorts
+are re-used through the hashed tags, so this costs scoring, not sorting -- and `summary.md` shows only
+the trials scored against the current truth.
+
 **Three kinds of knob**, searched alike: `FK_*` (a config knob; it reaches every step of its stage),
 `<step>:<param>` (one plan step's `params:` entry, the stage's CLI flag without `--` -- e.g. `psame:theta`,
 needed when a stage runs twice, as fiber-psame-merge in the exp plan), and `@plan` (which of the spec's

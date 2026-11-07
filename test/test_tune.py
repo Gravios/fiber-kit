@@ -22,7 +22,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-from fiber_kit import fiber_tune as ft, fiber_bench as fb, fiber_chunks as fch  # noqa: E402
+from fiber_kit import fiber_tune as ft, fiber_bench as fb, fiber_chunks as fch, neuro_io as nio  # noqa: E402
 
 fails = 0
 
@@ -198,5 +198,33 @@ check("reserved-chunk spikes are not scored", abs(M2["all_acc"] - 1) < 1e-12 and
 clu = np.where(gt >= 0, gt + 10, 1); clu[gt == 3] = 12                   # unit 3 merged into unit 2's cluster
 M3 = ft.score_labels(clu, gt, tr)
 check("a merge is counted and lowers purity", M3["merges"] == 1 and M3["purity"] < 0.8, f"{M3['merges']}, {M3['purity']:.3f}")
+
+# 7. truth checks: a .clu/.res pair of different sizes, and a .res of another group, stop the search
+td = tempfile.mkdtemp()
+times = np.sort(rng.choice(np.arange(100, 10_000_000), 4000, replace=False)).astype(np.int64)
+labs = rng.integers(2, 6, times.size)
+nio.write_res_file(os.path.join(td, "t.res"), times)
+nio.write_clu_file(os.path.join(td, "t.clu"), labs)
+nio.write_res_file(os.path.join(td, "short.res"), times[:3000])
+other = np.sort(rng.choice(np.arange(100, 10_000_000), 4000, replace=False)).astype(np.int64)
+nio.write_res_file(os.path.join(td, "other.res"), other)
+T = ft.Truth(dict(clu=os.path.join(td, "t.clu"), res=os.path.join(td, "t.res")), 20000.0)
+check("a matching truth scores", (T.matched(times) >= 0).sum() == times.size)
+try:
+    ft.Truth(dict(clu=os.path.join(td, "t.clu"), res=os.path.join(td, "short.res")), 20000.0)
+    check("truth .clu/.res of different sizes are refused", False, "no error")
+except SystemExit as e:
+    check("truth .clu/.res of different sizes are refused", "4,000 labels" in str(e) and "3,000 spike times" in str(e), str(e))
+T2 = ft.Truth(dict(clu=os.path.join(td, "t.clu"), res=os.path.join(td, "t.res")), 20000.0)
+try:
+    T2.matched(other)
+    check("a session .res that is not the truth's spike set is refused", False, "no error")
+except SystemExit as e:
+    check("a session .res that is not the truth's spike set is refused", "Nothing was scored" in str(e), str(e))
+# a trial recorded against another truth is not re-used, and not summarised
+tn = object.__new__(ft.Tuner); tn.truth = T
+check("trials scored against another truth are not current",
+      tn._current(dict(truth=T.id)) and not tn._current(dict(truth="x")) and not tn._current({}))
+
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

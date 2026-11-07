@@ -73,7 +73,14 @@ METRICS (per trial, truth spikes in chunks not run are left out, as fiber-bench 
 The objective is an arithmetic expression over these names (+ - * /, numbers, min, max, abs); a NaN or
 missing name makes it -inf.
 
-OUTPUT (fk-bench/tune/<name>/): trials.jsonl (every trial: overrides, metrics, objective, phase),
+TRUTH CHECKS.  The truth .clu and .res must hold the same number of spikes, and at least 20% of the
+truth's unit spikes must match the session's .res within `tol`; otherwise fiber-tune stops before scoring
+(a `truth: res:` naming another group's .res once cost a whole search of unscored trials).  Each trial
+records the truth it was scored against: after `truth:` changes, a resumed search scores its trials again
+(the sorts themselves are re-used through fiber-bench's tags), and the summary shows only trials scored
+against the current truth.
+
+OUTPUT (fk-bench/tune/<name>/): trials.jsonl (every trial: overrides, metrics, objective, phase, truth),
 trials.tsv, best.yaml -- the base config with the best overrides applied and the plan as given (realign
 steps included, no FK_CHUNKS) -- and summary.md.
 """
@@ -294,6 +301,11 @@ def _same(a, b):
 
 
 # ───────────────────────────── truth and scoring ─────────────────────────────
+# A session .res that matches fewer truth spikes than this is not the truth's spike set (another group's
+# .res, another session): the search refuses to run rather than score every trial as nothing.
+MIN_TRUTH_MATCH = 0.2
+
+
 class Truth:
     """The truth file matched to one .res (re-matched when a workspace's realigned .res differs)."""
 
@@ -302,6 +314,13 @@ class Truth:
             raise SystemExit(f"{_LP} · `truth:` needs clu and res")
         _, self.glab = nio.read_clu_file(tr["clu"])
         self.gres = nio.read_res_file(tr["res"])
+        if self.glab.size != self.gres.size:
+            raise SystemExit(f"{_LP} · truth: {os.path.basename(tr['clu'])} holds {self.glab.size:,} labels but "
+                             f"{os.path.basename(tr['res'])} {self.gres.size:,} spike times -- not one spike set "
+                             "(another group's .res, or a .res re-filtered after the .clu was written)")
+        # Which truth a trial was scored against: a trial recorded under another truth is scored again.
+        self.id = (f"{os.path.basename(tr['clu'])}:{self.glab.size}:{int(self.glab.sum())}|"
+                   f"{os.path.basename(tr['res'])}:{self.gres.size}:{int(self.gres[:1000].sum())}")
         self.units = (fb.parse_units(tr.get("units"), tr.get("exclude", "")) if tr.get("units")
                       else sorted(int(u) for u in np.unique(self.glab) if u > 1 and
                                   int(u) not in fb.parse_units(tr.get("exclude", ""))))
@@ -313,7 +332,15 @@ class Truth:
     def matched(self, res):
         key = (res.size, int(res[:1000].sum()), int(res[-1000:].sum()))
         if key not in self._cache:
-            self._cache = {key: fb.match_gt(res, self.gres, self.glab, self.units, self.tol)}
+            g = fb.match_gt(res, self.gres, self.glab, self.units, self.tol)
+            n_truth = int(np.isin(self.glab, self.units).sum())
+            n_hit = int((g >= 0).sum())
+            if n_truth and n_hit < MIN_TRUTH_MATCH * n_truth:
+                raise SystemExit(
+                    f"{_LP} · only {n_hit:,} of the truth's {n_truth:,} unit spikes match the session's .res "
+                    f"({res.size:,} spikes) within +-{self.tol} samples: the truth files are not this group's spike "
+                    "set (check `truth: res:` -- its group number and session).  Nothing was scored.")
+            self._cache = {key: g}
         return self._cache[key]
 
 
@@ -387,6 +414,11 @@ class Tuner:
                 out = [json.loads(x) for x in fh if x.strip()]
         return out
 
+    def _current(self, r):
+        """Whether a recorded trial was scored against this spec's truth (records without one predate the check)."""
+        t = getattr(self, "truth", None)
+        return t is None or r.get("truth") == t.id
+
     def _record(self, rec):
         self.trials.append(rec)
         with open(os.path.join(self.dir, "trials.jsonl"), "a") as fh:
@@ -418,7 +450,7 @@ class Tuner:
         cfg_run, steps, h = self.plan_of(overrides)
         tag = steps[-1]["out_tag"]
         for r in self.trials:
-            if r.get("phase") == phase and r.get("hash") == h and r.get("ok"):
+            if r.get("phase") == phase and r.get("hash") == h and r.get("ok") and self._current(r):
                 return r
         t0 = time.time()
         ns = argparse.Namespace(session=self.session, elec=self.elec, clu_method=self.method,
@@ -431,7 +463,7 @@ class Tuner:
         path = f"{self.base}.clu.{meth}.{self.elec}.{tag}"
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, hash=h, tag=tag,
                    overrides=overrides, note=note, when=datetime.datetime.now().isoformat(timespec="seconds"),
-                   fiber_kit=fb._fk_version())
+                   fiber_kit=fb._fk_version(), truth=self.truth.id if getattr(self, "truth", None) else None)
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
         if not os.path.exists(path):
@@ -528,7 +560,8 @@ class Tuner:
         """One configuration with the FULL plan (in-place realign steps and fiber-session's own realign kept)
         in a private workspace.  Re-uses an earlier workspace run of the same hash, from any phase."""
         cfg_run, steps, h = self.plan_of(overrides, cfg_base=self.cfg_confirm, allow_inplace=True, keep_realign=True)
-        done = next((x for x in self.trials if x.get("mode") == "workspace" and x.get("hash") == h and x.get("ok")), None)
+        done = next((x for x in self.trials if x.get("mode") == "workspace" and x.get("hash") == h and x.get("ok")
+                     and self._current(x)), None)
         if done:
             return done
         ws, nbytes = self.make_workspace(h)
@@ -544,7 +577,8 @@ class Tuner:
         tag = steps[-1]["out_tag"]; meth = cfg_run.get("FK_REALIGN_VARIANT") or self.method
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, mode="workspace",
                    hash=h, tag=tag, overrides=dict(overrides), note=note, chunks=self.spec["chunks"], workspace=ws,
-                   when=datetime.datetime.now().isoformat(timespec="seconds"), fiber_kit=fb._fk_version(), **(extra or {}))
+                   when=datetime.datetime.now().isoformat(timespec="seconds"), fiber_kit=fb._fk_version(),
+                   truth=self.truth.id if getattr(self, "truth", None) else None, **(extra or {}))
         path = f"{wbase}.clu.{meth}.{self.elec}.{tag}"
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
@@ -596,18 +630,21 @@ class Tuner:
         for r in self.trials:
             row = dict(phase=r.get("phase"), trial=r.get("trial", ""), hash=r.get("hash"), ok=r.get("ok"),
                        objective=r.get("objective"), overrides=json.dumps(r.get("overrides", {}), sort_keys=True),
-                       seconds=r.get("seconds"), note=r.get("note", ""))
+                       seconds=r.get("seconds"), note=r.get("note", ""), truth=r.get("truth") or "")
             for k in ("all_acc", "pyr_acc", "int_acc", "all_rec", "all_prec", "all_n80", "all_frag80", "merges",
                       "merges_pyr_pyr", "ari", "purity", "completeness", "unsorted", "n_clusters", "units_scored"):
                 row[k] = (r.get("metrics") or {}).get(k, "")
             rows.append(row)
         fb._tsv_write(os.path.join(self.dir, "trials.tsv"), rows)
-        S = [r for r in self.trials if r.get("ok")]
+        S = [r for r in self.trials if r.get("ok") and self._current(r)]
         lines = [f"# fiber-tune {self.spec['name']}", "",
                  f"- base config: `{self.spec['config']}`", f"- objective: `{self.spec['objective']}`",
                  f"- scored at: `{self.score_at}`; search chunks: `{self.spec['chunks'] or 'all'}`",
                  f"- trials: {len([r for r in S if r['phase'] == 'search'])} search, "
                  f"{len([r for r in S if r['phase'] == 'confirm'])} confirm", ""]
+        stale = len([r for r in self.trials if r.get("ok") and not self._current(r)])
+        if stale:
+            lines[-1:-1] = [f"- {stale} earlier trial(s) scored against another truth are not shown (trials.tsv lists them)"]
         for ph in ("search", "confirm"):
             R = sorted([r for r in S if r["phase"] == ph], key=lambda r: -r["objective"])[:15]
             if not R:
