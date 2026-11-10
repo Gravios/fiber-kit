@@ -12,6 +12,9 @@ the package:
     klusters  fiber-kit-klusters.yaml  best made session-agnostic for Klusters' recluster sub-sessions
                                  (no chunk selection, no resume, no fixed variant, no QC report); what
                                  `fk install klusters-plugin` installs beside the plugin descriptor
+    klusters-manifold  fiber-kit-klusters-manifold.yaml  the refinement profile: fiber-manifold alone
+                                 (the off-spike-channel field manifold of a selected unit, as children +
+                                 the .fet.manifold feature space); the fiber-kit-manifold plugin's config
 
 `fk set config --profile best` (or `fiber-kit-init --profile best`) copies one into the current directory
 as fiber-kit.yaml, to edit there; `fk list config` lists them and says which one ./fiber-kit.yaml is.
@@ -32,8 +35,9 @@ TEMPLATE = "fiber-kit.yaml"
 EXP_TEMPLATE = "fiber-kit-exp.yaml"
 BEST_TEMPLATE = "fiber-kit-best.yaml"
 KLUSTERS_TEMPLATE = "fiber-kit-klusters.yaml"
+KLUSTERS_MANIFOLD_TEMPLATE = "fiber-kit-klusters-manifold.yaml"
 PROFILES = {"base": TEMPLATE, "exp": EXP_TEMPLATE, "best": BEST_TEMPLATE,
-            "klusters": KLUSTERS_TEMPLATE}                                    # short name -> packaged file
+            "klusters": KLUSTERS_TEMPLATE, "klusters-manifold": KLUSTERS_MANIFOLD_TEMPLATE}   # short name -> packaged file
 TARGET = "fiber-kit.yaml"                                                      # what a session folder reads
 
 

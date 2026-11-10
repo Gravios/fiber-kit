@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""fiber-manifold: the off-spike-channel field manifold of a unit, in sliding windows, as children and as
+a .fet.manifold feature space.
+
+On a synthetic 6-channel group (one unit on channels 0-2, 2400 spikes over 60 min, white noise; 30% of the
+spikes carry a planted field on channels 3-5 (peak on channel 4, 0.8 ms AFTER the spike, decaying over the
+neighbours); a second small unit that is below --min-n):
+  * the stage exits 0 and writes .clu/.clc/.clp at the out tag, .fet.manifold.<g> (10 columns, the last the
+    .res) and the .mft table;
+  * the unit's children number <= --max-children and cover exactly the unit's spikes; the other unit keeps
+    one atom; the .clu is unchanged (nothing moves between units);
+  * the planted field is found: field spikes reach SNR >= 4 far more often than plain ones, their lag is
+    positive (after) and their position near channel 4; the 'after' classes hold mostly field spikes;
+  * --units with --jobs 2 gives the same per-spike classes (the parallel path is bit-identical);
+  * an ISI pair planted 1 ms apart gets a flag (the farther-from-median member);
+  * fiber-pipeline runs it as a step (`fiber-manifold` with FK_MANIFOLD_* from the env) and as the
+    `klusters-manifold` plan on a sub-session (clu-stage '' -> tag manifold).
+"""
+import os
+import subprocess
+import sys
+import tempfile
+
+import numpy as np
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.normpath(os.path.join(HERE, ".."))
+sys.path.insert(0, os.path.join(ROOT, "src"))
+from fiber_kit import neuro_io as nio   # noqa: E402
+
+SR = 20000
+NSAMP, NCH, PK = 40, 6, 16
+fails = 0
+
+
+def check(ok, what, out=""):
+    global fails
+    print(("  ok:   " if ok else "  FAIL: ") + what)
+    if not ok and out:
+        print(out[-3000:])
+    fails += not ok
+
+
+def session(td):
+    rng = np.random.default_rng(5)
+    os.makedirs(os.path.join(td, "man"), exist_ok=True)
+    base = os.path.join(td, "man", "man")                        # fiber-pipeline names the session after its directory
+    dur = 60 * 60 * SR
+    n1, n2 = 2400, 200
+    t1 = np.sort(rng.choice(np.arange(SR, dur - SR, 50), n1, replace=False))
+    t2 = np.sort(rng.choice(np.arange(SR, dur - SR, 50), n2, replace=False))
+    t1[1] = t1[0] + 20                                         # one ISI pair 1 ms apart
+    s = np.arange(NSAMP) - (PK - 1)
+    unit = -2500 * np.exp(-0.5 * (s / 2.0) ** 2) + 700 * np.exp(-0.5 * ((s - 6) / 3.0) ** 2)
+    sh1 = np.array([1.0, 0.7, 0.35, 0.05, 0.02, 0.0])
+    sh2 = np.array([0.0, 0.1, 0.4, 1.0, 0.5, 0.2])
+    has_field = rng.random(n1) < 0.3
+    lag = int(round(0.8e-3 * SR))                              # 16 samples after the spike
+    field = -900 * np.exp(-0.5 * ((s - lag) / 2.0) ** 2)
+    fsp = np.exp(-np.abs(np.arange(NCH) - 4.0) / 1.0) * (np.arange(NCH) >= 3)
+    sig = 25.0
+    X1 = rng.normal(0, sig, (n1, NSAMP, NCH)) + unit[None, :, None] * sh1[None, None, :]
+    X1[has_field] += field[None, :, None] * fsp[None, None, :]
+    X1 *= (1 + 0.1 * np.sin(t1 / dur * 2 * np.pi))[:, None, None]           # slow amplitude drift
+    X2 = rng.normal(0, sig, (n2, NSAMP, NCH)) + 1800 * (unit / 2500)[None, :, None] * sh2[None, None, :]
+    res = np.concatenate([t1, t2]); lab = np.concatenate([np.full(n1, 2), np.full(n2, 3)])
+    X = np.concatenate([X1, X2])
+    o = np.argsort(res, kind="stable")
+    res, lab, X = res[o].astype(np.int64), lab[o], X[o]
+    hf = np.zeros(res.size, bool); hf[o < n1] = has_field[o[o < n1]]
+    res.tofile(base + ".res.1")
+    nio.write_spk(base, 1, X.round().clip(-32768, 32767).astype(np.int16), variant="standard")
+    nio.write_clu(base, 1, lab, variant="stderiv", tag="cur")
+    with open(base + ".yaml", "w") as fh:
+        fh.write(f"acquisitionSystem: {{nBits: 16, nChannels: {NCH}, samplingRate: {SR}}}\n"
+                 "spikeDetection:\n  channelGroups:\n    - channels: [0, 1, 2, 3, 4, 5]\n"
+                 f"      nSamples: {NSAMP}\n      peakSampleIndex: {PK}\n")
+    D = NSAMP * NCH
+    nio.write_nst(base + ".nst.standard.1", dict(nsamp=NSAMP, nchan=NCH, peak=PK, sigma=np.full(NCH, sig),
+                                                  mean=np.zeros((NSAMP, NCH)), cov=np.eye(D) * sig ** 2))
+    return base, res, lab, hf
+
+
+def run(args, env, cwd, timeout=600):
+    return subprocess.run([sys.executable, "-c", "from fiber_kit.fiber_manifold import main; import sys; "
+                           "sys.exit(main(sys.argv[1:]))", *args], cwd=cwd, env=env, capture_output=True, text=True,
+                          timeout=timeout)
+
+
+def main():
+    env = {k: v for k, v in os.environ.items() if not k.startswith("FK_")}
+    env["FK_CONFIG"] = os.devnull
+    env["PYTHONPATH"] = os.pathsep.join([os.path.join(ROOT, "src"), env.get("PYTHONPATH", "")])
+    with tempfile.TemporaryDirectory() as td:
+        # the stage's console script, as the package installs it (the repo's fiber-pipeline calls it by name)
+        os.makedirs(os.path.join(td, "bin"))
+        with open(os.path.join(td, "bin", "fiber-manifold"), "w") as fh:
+            fh.write(f"#!/bin/sh\nexec {sys.executable} -m fiber_kit.fiber_manifold \"$@\"\n")
+        os.chmod(os.path.join(td, "bin", "fiber-manifold"), 0o755)
+        env["PATH"] = os.pathsep.join([os.path.join(td, "bin"), os.path.join(ROOT, "scripts"), env.get("PATH", "")])
+        base, res, lab, hf = session(td)
+        common = ["--clu-method", "stderiv", "--clu-stage", "cur", "--window-min", "20", "--step-min", "10",
+                  "--min-n", "1000", "--min-window-n", "200", "--noise-n", "3000", "--time-bins", "4", "--off-channels", "3,4,5", "--jobs", "1"]
+        sd = os.path.dirname(base)
+        r = run([base, "1"] + common, env, sd)
+        o = r.stdout + r.stderr
+        check(r.returncode == 0, "fiber-manifold exits 0", o)
+        for ext in ("clu", "clc", "clp"):
+            check(os.path.isfile(f"{base}.{ext}.stderiv.1.cur_manifold"), f"wrote .{ext} at the out tag cur_manifold")
+        check(os.path.isfile(base + ".fet.manifold.1") and os.path.isfile(base + ".mft.stderiv.1.cur_manifold.tsv"),
+              "wrote .fet.manifold.1 and the .mft table")
+        check("examining 1 unit(s): [2]" in o, "unit 3 (200 spikes) is below --min-n: only unit 2 is examined", o)
+        _, clu2 = nio.read_clu_file(f"{base}.clu.stderiv.1.cur_manifold")
+        check(np.array_equal(np.asarray(clu2), lab), "the .clu is unchanged (no spike moved between units)")
+        _, clc = nio.read_clu_file(f"{base}.clc.stderiv.1.cur_manifold")
+        clc = np.asarray(clc)
+        clp = np.fromfile(f"{base}.clp.stderiv.1.cur_manifold", dtype=np.int32)[1:]
+        parent = lambda atom: int(clp[atom - 1])   # noqa: E731
+        kids = np.unique(clc[lab == 2]); others = np.unique(clc[lab == 3])
+        check(1 < kids.size <= 200 and all(parent(k) == 2 for k in kids), f"unit 2 has {kids.size} children (<= 200), all mapped to 2")
+        check(others.size == 1 and parent(int(others[0])) == 3, "the unexamined unit keeps one atom, mapped to itself")
+        check(not np.intersect1d(kids, others).size, "no child is shared between units")
+        f = nio.read_fet_file(base + ".fet.manifold.1")
+        check(f.ok and f.values.shape == (res.size, 10) and np.array_equal(f.values[:, -1], res),
+              f"the feature space has 10 columns, the last the .res ({f.values.shape if f.ok else f})")
+        snr, lag_us, pos, cls = f.values[:, 0] / 100, f.values[:, 1], f.values[:, 2] / 100, f.values[:, 6]
+        u2 = lab == 2
+        ff = (snr[u2 & hf] >= 4).mean(); fp = (snr[u2 & ~hf] >= 4).mean()
+        check(ff > 0.8 and fp < 0.15, f"the planted field is found: SNR>=4 for {100*ff:.0f}% of field spikes, {100*fp:.0f}% of plain ones")
+        det = u2 & hf & (snr >= 4)
+        check(np.median(lag_us[det]) > 500 and abs(np.median(pos[det]) - 4) < 0.6,
+              f"its lag is after the spike (median {np.median(lag_us[det]):.0f} us) at channel ~4 (median {np.median(pos[det]):.2f})")
+        after = u2 & (cls > 0) & ((cls - 1) % 3 == 2)
+        check(after.sum() > 0.7 * (u2 & hf).sum() and hf[after].mean() > 0.9,
+              f"the 'after' classes hold the field spikes ({after.sum()} spikes, {100*hf[after].mean():.0f}% planted)")
+        check((f.values[u2, 7] == 1).sum() >= 1, "the 1-ms ISI pair got a flag")
+        # the other units' atoms when the input HAS a hierarchy: build one and rerun to a new tag
+        # (the parallel path and a pinned unit / off-channel set give the same classes)
+        r2 = run([base, "1"] + common[:-2] + ["--jobs", "2", "--units", "2,3", "--min-n", "10", "--out-tag", "par"], env, sd)
+        o2 = r2.stdout + r2.stderr
+        check(r2.returncode == 0 and "examining 2 unit(s)" in o2, "--units pins the units (unit 3 examined too), --jobs 2 runs", o2)
+        f2 = nio.read_fet_file(base + ".fet.manifold.1")
+        check(f2.ok and np.array_equal(f2.values[u2, 6], cls[u2]), "the parallel run gives unit 2 the same classes as the serial one")
+        check(np.unique(np.asarray(nio.read_clu_file(f"{base}.clc.stderiv.1.par")[1])[lab == 3]).size > 1, "unit 3 got children too")
+        # as a fiber-pipeline step (the knobs from the env) and as the klusters-manifold plan on a sub-session
+        pipe = os.path.join(ROOT, "scripts", "fiber-pipeline")
+        env2 = dict(env, FK_MANIFOLD_WINDOW_MIN="20", FK_MANIFOLD_STEP_MIN="10", FK_MANIFOLD_MIN_N="1000",
+                    FK_MANIFOLD_MIN_WINDOW_N="200", FK_MANIFOLD_NOISE_N="3000", FK_MANIFOLD_JOBS="1", FK_MANIFOLD_TIME_BINS="4")
+        r3 = subprocess.run([pipe, "1", "--method", "stderiv", "fiber-manifold"], cwd=sd, env=dict(env2, STEP_IN="cur"),
+                            capture_output=True, text=True, timeout=600)
+        o3 = r3.stdout + r3.stderr
+        check(r3.returncode == 0 and os.path.isfile(f"{base}.clc.stderiv.1.cur_manifold") and "--window-min 20" not in o3,
+              "fiber-pipeline fiber-manifold (STEP_IN=cur) runs the stage, the knobs from the env", o3)
+        # the klusters-manifold profile on a sub-session: an export of unit 2, in: '' -> tag manifold, --final-clu
+        fk = lambda *a: subprocess.run([sys.executable, "-c", "from fiber_kit.plan_steps import main; import sys; "  # noqa: E731
+                                        "sys.exit(main(sys.argv[1:]))", *a], cwd=sd, env=env2, capture_output=True, text=True, timeout=600)
+        sub = base + "--2--t"
+        r4 = fk("subsession", "export", base, "1", "--clu", f"{base}.clu.stderiv.1.cur", "--clusters", "2", "--out", sub)
+        check(r4.returncode == 0, "fk subsession export of unit 2", r4.stdout + r4.stderr)
+        final = sub + ".clu.1"
+        r5 = fk("run", "1", "--profile", "klusters-manifold", "--session", sub, "--final-clu", final, "--method", "stderiv",
+                "--FK_MANIFOLD_MIN_N=100")
+        o5 = r5.stdout + r5.stderr
+        check(r5.returncode == 0, "fk run --profile klusters-manifold --session <sub> exits 0", o5)
+        check(os.path.isfile(final) and os.path.isfile(sub + ".fet.manifold.1") and os.path.isfile(sub + ".clc.stderiv.1.manifold"),
+              "the sub-session got its final .clu, .clc at tag manifold and .fet.manifold.1 (for Klusters to carry back)")
+        if os.path.isfile(final):
+            _, ids = nio.read_clu_file(final)
+            check(np.asarray(ids).size == int((lab == 2).sum()) and np.all(np.asarray(ids) == 2), "the final .clu: one id per selected spike, unchanged")
+    print(f"test_manifold: {'PASS' if not fails else 'FAIL'} ({fails} failed)")
+    return 1 if fails else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

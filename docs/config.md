@@ -467,6 +467,29 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_PSAME_MIN_CHUNK_N` | `30` | `30` | `30` | 30.  CHUNK_AWARE: spikes a cluster needs in a chunk for that chunk's model. |
 | `FK_PSAME_MAX_GAP` | `1` | `1` | `1` | 1 (chunks).  CHUNK_AWARE: pairs with no shared chunk are tested across chunks at most this far apart; farther pairs are not merged. |
 
+## [G] FIBER-MANIFOLD -- the off-spike-channel field manifold of a unit  (refinement step; the
+
+| knob | fiber-kit-exp.yaml | fiber-kit-best.yaml | fiber-kit.yaml | meaning |
+|---|---|---|---|---|
+| `FK_MANIFOLD_WINDOW_MIN` | `20` | `20` | — | 20 (min).  Sliding window length; each window fits its own template. |
+| `FK_MANIFOLD_STEP_MIN` | `5` | `5` | — | 5 (min).  Window step; each spike takes the nearest window's fit. |
+| `FK_MANIFOLD_MIN_N` | `2000` | `2000` | — | 2000.  Spikes a unit needs to be examined (--units overrides). |
+| `FK_MANIFOLD_MIN_WINDOW_N` | `300` | `300` | — | 300.  Spikes a window needs for its own template; fewer: the nearest spikes. |
+| `FK_MANIFOLD_OFF_FRAC` | `0.4` | `0.4` | — | 0.4.  A channel is off-spike when its template trough is below this fraction of the deepest channel's (--off-channels pins the set instead, e.g. 3,4,5,6,7). |
+| `FK_MANIFOLD_MIN_OFF` | `3` | `3` | — | 3.  At least this many off-spike channels (the shallowest are added). |
+| `FK_MANIFOLD_SNR` | `4.0` | `4.0` | — | 4.0 (noise sd).  A field is present at or above this matched-filter SNR. |
+| `FK_MANIFOLD_LAG_MS` | `0.9` | `0.9` | — | 0.9 (ms).  Largest \|lag\| searched (the waveform window bounds it). |
+| `FK_MANIFOLD_DEAD_MS` | `0.6` | `0.6` | — | 0.6 (ms).  \|lag\| below this is 'coincident' (the detector's dead time). |
+| `FK_MANIFOLD_POS_BINS` | `3` | `3` | — | 3.  Position bins over the off-channel span (classes = bins x 3 timings + plain). |
+| `FK_MANIFOLD_MAX_CHILDREN` | `200` | `200` | — | 200.  Most children per unit; the time bins coarsen until it fits. |
+| `FK_MANIFOLD_TIME_BINS` | `12` | `12` | — | 12.  Time bins the children are split into (0 = none: one child per class). |
+| `FK_MANIFOLD_REFRAC_MS` | `2.0` | `2.0` | — | 2.0 (ms).  ISI below this flags the pair's farther-from-median member (0 = off). |
+| `FK_MANIFOLD_NOISE_N` | `20000` | `20000` | — | 20000.  Noise snippets for the SNR calibration (.nst draws or .fil snippets). |
+| `FK_MANIFOLD_WRITE_FET` | `1` | `1` | — | 1 \| 0.  Write the .fet.manifold.<g> feature space. |
+| `FK_MANIFOLD_SEED` | `0` | `0` | — |  |
+| `FK_MANIFOLD_JOBS` | `0` | `0` | — | 0 = one process per CPU over the units; 1 = serial.  FIBER_KIT_GPU=1 puts the matched-filter products on the GPU (CuPy) instead. |
+| `FK_MANIFOLD_SIGNAL` | `""` | `""` | — | "" = the group's .nst \| path to the .fil: per-window spike-free snippets for the noise covariance instead of the .nst (fiber-pipeline passes it as --signal). |
+
 ## Legacy names
 
 Still honoured for old configs; use the replacement.

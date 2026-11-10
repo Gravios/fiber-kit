@@ -351,7 +351,7 @@ STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-int
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
 PRE_STAGES=(fiber-flag-artifacts)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
 ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-psame-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
-POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr)                # post-sort review: runs AFTER the plan's final stage; plannable, not in `all`
+POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr fiber-manifold)   # post-sort review / refinement: runs AFTER the plan's final stage; plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}" "${POST_STAGES[@]}")
 
 # One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
@@ -380,6 +380,8 @@ ALT_SUMMARY=(
 POST_SUMMARY=(
     "resampled t-SNE consensus over similar clusters -> cells + island/rim quarantine clusters + .qrn review table"
     "split low-amplitude mixture units after noise whitening -> copies returned, novel groups quarantined + .lmx table"
+    "residual-derivative contamination score per cluster -> .rdr table (nothing moves)"
+    "off-spike-channel field manifold per unit, in sliding windows -> children (.clc/.clp) + .fet.manifold.<g> + .mft table"
 )
 
 list_stages() {   # -l/--list : short per-stage summary
@@ -776,6 +778,23 @@ fiber_lowmix() {   # post-sort: split low-amplitude mixture units -> .<in>_lowmi
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
+fiber_manifold() {   # refinement: the off-spike-channel field manifold of each unit -> .<in>_manifold (.clu copy + .clc/.clp children) + .fet.manifold.<elec> + .mft table
+    # Reads the clu at STEP_IN, the standard .spk, the group's .nst (or --signal / FK_MANIFOLD_SIGNAL: the .fil) for the
+    # noise covariance.  Never moves a spike between units.  FK_MANIFOLD_* knobs come from $FK_CONFIG / the env.
+    # A plan step's `in: ""` is the BASE clu (what a Klusters sub-session's seed is); only an unset
+    # STEP_IN (a direct `fiber-pipeline <elec> fiber-manifold`) defaults to exp_final.
+    local min; if [ -n "${STEP_IN+x}" ]; then min="$STEP_IN"; else min="exp_final"; fi
+    local mout="${STEP_OUT:-${min:+${min}_}manifold}"
+    echo "== fiber-manifold  ($(clu_path "$min") -> .$mout + $SESS.fet.manifold.$ELEC + $SESS.mft.$(clu_variant).$ELEC.$mout.tsv) =="
+    local sigargs=()
+    [ -n "${FK_MANIFOLD_SIGNAL:-}" ] && sigargs=(--signal "$FK_MANIFOLD_SIGNAL")
+    _run fiber-manifold "$SESS" "$ELEC" \
+        --clu-method "$(clu_variant)" --clu-stage "$min" \
+        --out-tag "$mout" \
+        "${sigargs[@]+"${sigargs[@]}"}" \
+        "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 fiber_rdr() {   # post-sort QC: residual-derivative contamination score per cluster -> <SESS>.rdr.<method>.<elec>.<in>.tsv
     # Reads the clu at STEP_IN, the standard .spk and the group's .nst (or the windows' lead-in when there is
     # none).  Writes a table only -- no .clu, nothing moves.  FK_RDR_* knobs come from $FK_CONFIG / the env;
@@ -795,7 +814,7 @@ fiber_rdr() {   # post-sort QC: residual-derivative contamination score per clus
 #   anything else  changes the spike set or the .res (fiber-refine's dedup, fiber-stochastic's own chunking)
 #                  and refuses to run while FK_CHUNKS is set.
 CHUNK_STAGES=" fiber-flag-artifacts fiber-session fiber-xcorr-merge fiber-realign fiber-rdr "
-SHIELD_STAGES=" fiber-cpos fiber-intrachunk fiber-link fiber-anchor-link fiber-backbone-link fiber-psame-merge fiber-consensus fiber-lowmix fiber-peel fiber-refit "
+SHIELD_STAGES=" fiber-cpos fiber-intrachunk fiber-link fiber-anchor-link fiber-backbone-link fiber-psame-merge fiber-consensus fiber-lowmix fiber-manifold fiber-peel fiber-refit "
 _chunks_guard() {   # 0 = run as is; 1 = run shielded; exits for a stage that cannot run on a chunk run
     case "${FK_CHUNKS:-}" in ""|all|ALL|none) return 0 ;; esac
     case "$CHUNK_STAGES" in *" $1 "*) return 0 ;; esac
@@ -815,6 +834,7 @@ _shield_tags() {    # "<in> <out>": the clu tags a shielded stage reads and writ
         fiber-anchor-link)   echo "${STEP_IN:-fiber_session} ${STEP_OUT:-anchor_linked}" ;;
         fiber-consensus)     echo "${STEP_IN:-exp_final} ${STEP_OUT:-consensus}" ;;
         fiber-lowmix)        echo "${STEP_IN:-exp_final} ${STEP_OUT:-${STEP_IN:-exp_final}_lowmix}" ;;
+        fiber-manifold)      if [ -n "${STEP_IN+x}" ]; then echo "$STEP_IN ${STEP_OUT:-${STEP_IN:+${STEP_IN}_}manifold}"; else echo "exp_final ${STEP_OUT:-exp_final_manifold}"; fi ;;
         fiber-psame-merge)   echo "${STEP_IN:-xcorr_merged} ${STEP_OUT:-psame_merged}" ;;
     esac
 }
@@ -866,6 +886,7 @@ run_stage_direct() {
         fiber-consensus)  fiber_consensus  "${ov[@]}" ;;
         fiber-lowmix)     fiber_lowmix     "${ov[@]}" ;;
         fiber-rdr)        fiber_rdr        "${ov[@]}" ;;
+        fiber-manifold)   fiber_manifold   "${ov[@]}" ;;
         *) echo "unknown stage: $1" >&2; usage >&2; exit 2 ;;
     esac
 }
@@ -895,6 +916,7 @@ run_plan_stage_direct() {
         fiber-consensus)  fiber_consensus  ;;
         fiber-lowmix)     fiber_lowmix     ;;
         fiber-rdr)        fiber_rdr        ;;
+        fiber-manifold)   fiber_manifold   ;;
         *) echo "unknown stage in plan: $1" >&2; exit 2 ;;
     esac
 }
@@ -913,7 +935,7 @@ except ImportError:                                   # a source checkout run wi
     from fiber_kit import plan_steps
 KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
          "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-psame-merge",
-         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix", "fiber-rdr"}
+         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix", "fiber-rdr", "fiber-manifold"}
 sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN
 }

@@ -1280,6 +1280,62 @@ Positional: `session`, `elec`
 | `--seed` | `0` |  |
 | `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
 | `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
+### `fiber-manifold`
+
+The off-spike-channel field manifold of a unit, in sliding windows, as children and as a feature space
+(a refinement stage; moves no spike between units).  After the unit's own template is subtracted,
+the channels it has little power on still carry the fields of neighbouring cells that fired within the
+window (before / with / after the spike) and the unit's own far field -- structure the per-channel PCA
+features give no budget.  Per spike one field event is fitted on those channels,
+A·g((t−τ)/w)·exp(−|ch−p|/λ) (g the unit's own dominant-channel shape; a matched filter, noise-whitened
+on the off channels from the group's `.nst` or `--signal`'s spike-free snippets, a coarse grid of lag ×
+position × decay then a refinement), in sliding windows of `--window-min` every `--step-min`, each with
+its own template (the per-sample median of the window's best-fitting spikes, so the unit's drift is
+followed and a minority's fields do not leak into it).  Children: time bin × class (plain, or position
+bin × before / coincident / after), at most `--max-children` per unit.  Writes `.clu` (unchanged),
+`.clc`/`.clp` at `<clu-stage>_manifold` (or `--out-tag`), `.fet.manifold.<g>` -- snr×100 | lag_µs |
+position×100 | decay×100 | amplitude | window | class | isi_flag | amp_dom | time, a feature space
+Klusters lists under *Space* -- and `.mft.<method>.<g>.<tag>.tsv` (children and windows).  The ISI
+flag marks, of each pair closer than `--refrac-ms`, the member farther from the unit's median waveform.
+Units run in parallel (`--jobs`, one process each); `FIBER_KIT_GPU=1` puts the matched-filter products on
+the GPU (CuPy).  g6 0312 unit 5 (311k spikes, 67 windows): 19% of spikes carry a field at SNR ≥ 4
+(noise 0.7%), 20 s serial.  Knobs `FK_MANIFOLD_*`; profile `klusters-manifold` runs it alone on a
+Klusters selection (`fk install klusters-plugin`: the `fiber-kit-manifold` plugin).
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--signal` | — | continuous filtered int16 file (BASE.fil) for per-window noise; default: the group's .nst, else the unit's own baseline |
+| `--signal-start` | `0` | absolute sample of the signal's first row |
+| `--total-channels` | — |  |
+| `--channels` | — | group channels, e.g. 40-47 (default: session yaml) |
+| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--spk-variant` | `standard` | waveforms the fields are read from (raw) |
+| `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
+| `--units` | — | comma-separated units to examine (default: every unit with >= --min-n) |
+| `--off-channels` | — | off-spike channels as group indices, e.g. 3,4,5,6,7 (default: by --off-frac) |
+| `--window-min` | `20.0` | sliding window length (minutes) [FK_MANIFOLD_WINDOW_MIN; default 20.0] |
+| `--step-min` | `5.0` | window step (minutes); each spike takes the nearest window's fit [FK_MANIFOLD_STEP_MIN; default 5.0] |
+| `--min-n` | `2000` | spikes a unit needs to be examined [FK_MANIFOLD_MIN_N; default 2000] |
+| `--min-window-n` | `300` | spikes a window needs for its own template; fewer: the neighbour's [FK_MANIFOLD_MIN_WINDOW_N; default 300] |
+| `--off-frac` | `0.4` | a channel is off-spike when its template trough is below this fraction of the deepest channel's (used when --off-channels is unset) [FK_MANIFOLD_OFF_FRAC; default 0.4] |
+| `--min-off` | `3` | at least this many off-spike channels (the shallowest are added) [FK_MANIFOLD_MIN_OFF; default 3] |
+| `--snr` | `4.0` | field present when the matched-filter SNR (noise-sd units) is at least this [FK_MANIFOLD_SNR; default 4.0] |
+| `--lag-ms` | `0.9` | largest \|lag\| searched (ms) [FK_MANIFOLD_LAG_MS; default 0.9] |
+| `--dead-ms` | `0.6` | \|lag\| below this is 'coincident' (the detector's dead time) [FK_MANIFOLD_DEAD_MS; default 0.6] |
+| `--pos-bins` | `3` | position bins over the off-channel span (classes = bins x 3 timings) [FK_MANIFOLD_POS_BINS; default 3] |
+| `--max-children` | `200` | most children per unit (time bins coarsen to fit) [FK_MANIFOLD_MAX_CHILDREN; default 200] |
+| `--time-bins` | `12` | time bins the plain class is split into (0 = one plain child) [FK_MANIFOLD_TIME_BINS; default 12] |
+| `--refrac-ms` | `2.0` | ISI below this flags the pair's farther-from-median member (0 = off) [FK_MANIFOLD_REFRAC_MS; default 2.0] |
+| `--noise-n` | `20000` | noise snippets for the SNR calibration (drawn from the .nst or the .fil) [FK_MANIFOLD_NOISE_N; default 20000] |
+| `--write-fet` | `1` | write the .fet.manifold.<g> feature space (1) or not (0) [FK_MANIFOLD_WRITE_FET; default 1] |
+| `--seed` | `0` | random seed (noise draws) [FK_MANIFOLD_SEED; default 0] |
+| `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
+| `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
+| `--fet-method` | `manifold` | method token of the written feature space |
 ### `fiber-bench`
 
 Run, score and compare pipeline-parameter variants under a config hash.  Sub-commands `run` (the config's
@@ -1485,7 +1541,7 @@ Write a shipped config profile (`--profile base|exp|best`, or a path) into the c
 
 | flag | default | description |
 |---|---|---|
-| `-p` (`--profile`) | — | profile: base (fiber-kit.yaml), exp (fiber-kit-exp.yaml), best (fiber-kit-best.yaml), or a path to a yaml (default: base; --exp = exp) |
+| `-p` (`--profile`) | — | profile: base (fiber-kit.yaml), exp (fiber-kit-exp.yaml), best (fiber-kit-best.yaml), klusters (fiber-kit-klusters.yaml), klusters-manifold (fiber-kit-klusters-manifold.yaml), or a path to a yaml (default: base; --exp = exp) |
 | `-o` (`--output`) | `fiber-kit.yaml` | destination path (default: ./fiber-kit.yaml) |
 | `-f` (`--force`) | flag (off) | overwrite the destination if it already exists |
 | `--exp` | flag (off) | the same as --profile exp (kept from earlier versions) |

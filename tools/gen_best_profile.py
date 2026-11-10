@@ -71,7 +71,7 @@ RUN_CONTROL = ["FK_CHUNKS", "FK_REALIGN_VARIANT", "FK_SESSION_SKIP_EXTANT", "FK_
 IN_PLAN = [("B", "fiber-flag-artifacts"), ("1", None), ("6", None), ("2", None), ("C", None), ("3", None),
            ("5", None), ("B", "fiber-xcorr-merge"), ("F", None), ("E", None)]
 NOT_IN_PLAN = [("4", None), ("A", None), ("B", "fiber-refine"), ("B", "fiber-peel"), ("B", "fiber-backbone-link"),
-               ("B", "fiber-stochastic"), ("D", None)]
+               ("B", "fiber-stochastic"), ("D", None), ("G", None)]
 
 BANNER_OPEN = re.compile(r"^# =+\s*$")
 BANNER = re.compile(r"^#\s+\[([A-Z0-9])\]\s+(.*\S)\s*$")

@@ -294,6 +294,11 @@ def _cmd_run(a):
         cmd += ["--final-clu", a.final_clu]
     if a.dry_run:
         cmd.append("--dry-run")
+    for k, v in a.knobs:                                     # --FK_<knob> value: exported, so it wins over the config
+        os.environ[k] = v
+    if a.knobs:
+        print("fk run: " + " ".join(f"{k}={v}" for k, v in a.knobs) + "  (from the command line; wins over the config)",
+              file=sys.stderr, flush=True)
     return subprocess.call(cmd)
 
 
@@ -374,8 +379,9 @@ def _cmd_completion(a):
     return 0
 
 
-KLUSTERS_PLUGIN_FILES = ("fiber-kit-recluster.xml",)
+KLUSTERS_PLUGIN_FILES = ("fiber-kit-recluster.xml", "fiber-kit-manifold.xml")
 KLUSTERS_PLUGIN_CONFIG = "fiber-kit-klusters.yaml"      # the profile installed beside the descriptor
+KLUSTERS_MANIFOLD_CONFIG = "fiber-kit-klusters-manifold.yaml"   # the refinement profile, beside the second descriptor
 
 
 def klusters_plugin_dir():
@@ -410,9 +416,12 @@ def _cmd_install(a):
     # pointed at that copy (@KLUSTERS_CONFIG@), so Klusters passes it at run time whatever session is
     # open.  An EDITED profile is kept (the user's tuning); --force replaces it with the shipped one.
     cfg_path = os.path.abspath(os.path.join(dest, KLUSTERS_PLUGIN_CONFIG))
+    man_path = os.path.abspath(os.path.join(dest, KLUSTERS_MANIFOLD_CONFIG))
     cfg_text = _profiles.profile_text("klusters")[2]
-    items = [(fn, (files("fiber_kit") / "klusters" / fn).read_text(encoding="utf-8").replace("@KLUSTERS_CONFIG@", cfg_path))
-             for fn in KLUSTERS_PLUGIN_FILES] + [(KLUSTERS_PLUGIN_CONFIG, cfg_text)]
+    man_text = _profiles.profile_text("klusters-manifold")[2]
+    items = [(fn, (files("fiber_kit") / "klusters" / fn).read_text(encoding="utf-8")
+              .replace("@KLUSTERS_CONFIG@", cfg_path).replace("@KLUSTERS_MANIFOLD_CONFIG@", man_path))
+             for fn in KLUSTERS_PLUGIN_FILES] + [(KLUSTERS_PLUGIN_CONFIG, cfg_text), (KLUSTERS_MANIFOLD_CONFIG, man_text)]
     for fn, text in items:
         q = os.path.join(dest, fn)
         if os.path.exists(q) and not a.force:
@@ -420,15 +429,16 @@ def _cmd_install(a):
                 cur = fh.read()
             if cur == text:
                 print(f"fk install: {q} is current"); continue
-            if fn == KLUSTERS_PLUGIN_CONFIG:
+            if fn in (KLUSTERS_PLUGIN_CONFIG, KLUSTERS_MANIFOLD_CONFIG):
                 print(f"fk install: {q} is edited -- kept (--force replaces it with the shipped profile)"); continue
             print(f"fk install: {q} exists and differs; --force overwrites it", file=sys.stderr)
             return 1
         with open(q, "w", encoding="utf-8") as fh:
             fh.write(text)
         print(f"fk install: wrote {q}")
-    print(f"fk install: Klusters runs the plugin with {cfg_path} -- edit it to change what a recluster runs.\n"
-          "fk install: in Klusters, Plugins > Reload Plugins; the plugin's defaults are in Preferences > Plugins.")
+    print(f"fk install: Klusters runs the plugin with {cfg_path} -- edit it to change what a recluster runs;\n"
+          f"fk install: the fiber-kit-manifold plugin (refinement of a selected unit) runs with {man_path}.\n"
+          "fk install: in Klusters, Plugins > Reload Plugins; the plugins' defaults are in Preferences > Plugins.")
     return 0
 
 
@@ -490,7 +500,24 @@ def main(argv=None):
                                            "(what Klusters' fiber-kit recluster does), or remove one: "
                                            "fk subsession export|clean ... (-h for the options)", add_help=False)
     ss.add_argument("rest", nargs=argparse.REMAINDER)
-    a = ap.parse_args(argv)
+    # `fk run ... --FK_<knob> value`: any FK_* knob on the command line (a Klusters plugin descriptor's
+    # parameters arrive this way); pulled out before argparse sees them, exported for the run.
+    argv = list(sys.argv[1:] if argv is None else argv)
+    knobs, rest = [], []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok.startswith("--FK_") and tok[2:].split("=", 1)[0].replace("_", "").isalnum():
+            if "=" in tok:
+                k, v = tok[2:].split("=", 1); knobs.append((k, v)); i += 1; continue
+            if i + 1 < len(argv):
+                knobs.append((tok[2:], argv[i + 1])); i += 2; continue
+            raise SystemExit(f"fk: {tok} needs a value")
+        rest.append(tok); i += 1
+    a = ap.parse_args(rest)
+    a.knobs = knobs
+    if knobs and a.cmd != "run":
+        ap.error("--FK_* knobs apply to `fk run` only")
     try:
         if a.cmd == "list":
             return _cmd_list(a)

@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  fiber-kit-manifold  -  a Klusters plugin descriptor (neurosuite-3 Klusters, src/klusters/docs/PLUGIN_API.md).
+
+  Kind `recluster`, input `subsession`: Klusters exports the SELECTED cluster(s) as a sub-session (the
+  temp-file method), fiber-kit's `fiber-manifold` stage fits the off-spike-channel field manifold of
+  each selected unit in sliding windows (drift-aware), and the result comes back as the unit's CHILDREN
+  (the final .clc/.clp, installed under the selected parent) plus a per-spike feature space,
+  <session>.fet.manifold.<group>, that Klusters lists under "Space" (its waveforms are the standard .spk):
+  snr*100 | lag_us | position*100 | decay*100 | amplitude | window | class | isi_flag | amp_dom | time.
+  The stage never moves a spike between units: the .clu it returns is the selection as it was.
+
+  Install:   fk install klusters-plugin   (copies this file and fiber-kit-klusters-manifold.yaml into
+             Klusters' plugin directory; then Plugins > Reload Plugins)
+  Run:       select the unit(s), then Plugins > fiber-kit-manifold, or make it the engine of the
+             Recluster ring (right-click > Recluster > Plugin > fiber-kit-manifold) and press Shift+R.
+  The knobs below are the stage's FK_MANIFOLD_* knobs; Klusters passes them as `fk run --FK_... value`,
+  which wins over the profile.  The remaining knobs are in the profile beside this file.
+-->
+<program>
+  <n>fiber-kit-manifold</n>
+  <parameters>
+    <parameter>
+      <n>FK_MANIFOLD_WINDOW_MIN</n>
+      <value>20</value>
+      <status>Optional</status>
+      <type>real</type>
+      <min>1</min>
+      <max>600</max>
+      <help>Sliding window length (minutes); each window fits its own template of the unit, so the unit's drift is followed.</help>
+    </parameter>
+    <parameter>
+      <n>FK_MANIFOLD_STEP_MIN</n>
+      <value>5</value>
+      <status>Optional</status>
+      <type>real</type>
+      <min>0.5</min>
+      <max>600</max>
+      <help>Window step (minutes); each spike takes the fit of the window whose centre is nearest.</help>
+    </parameter>
+    <parameter>
+      <n>FK_MANIFOLD_SNR</n>
+      <value>4</value>
+      <status>Optional</status>
+      <type>real</type>
+      <min>1</min>
+      <max>20</max>
+      <step>0.5</step>
+      <help>A field is present at or above this matched-filter SNR (noise-sd units). Noise gives ~1-3% at 4.</help>
+    </parameter>
+    <parameter>
+      <n>FK_MANIFOLD_MAX_CHILDREN</n>
+      <value>200</value>
+      <status>Optional</status>
+      <type>int</type>
+      <min>1</min>
+      <max>2000</max>
+      <help>Most children per unit (time bins coarsen until the classes fit).</help>
+    </parameter>
+    <parameter>
+      <n>FK_MANIFOLD_TIME_BINS</n>
+      <value>12</value>
+      <status>Optional</status>
+      <type>int</type>
+      <min>0</min>
+      <max>200</max>
+      <help>Time bins the children are split into (0 = one child per class over the whole span).</help>
+    </parameter>
+    <parameter>
+      <n>FK_MANIFOLD_OFF_FRAC</n>
+      <value>0.4</value>
+      <status>Optional</status>
+      <type>real</type>
+      <min>0.05</min>
+      <max>1</max>
+      <step>0.05</step>
+      <help>A channel is off-spike when the unit's template trough on it is below this fraction of the deepest channel's.</help>
+    </parameter>
+    <parameter>
+      <n>config</n>
+      <value>@KLUSTERS_MANIFOLD_CONFIG@</value>
+      <status>Optional</status>
+      <type>path</type>
+      <help>The fiber-kit.yaml this run uses (knobs AND the one-step plan). `fk install klusters-plugin` sets it to the fiber-kit-klusters-manifold.yaml installed beside this descriptor. Edit that file for the remaining FK_MANIFOLD_* knobs (position bins, dead time, ISI flag, jobs).</help>
+    </parameter>
+    <parameter>
+      <n>method</n>
+      <value>%variant</value>
+      <status>Optional</status>
+      <help>Waveform variant of the run (%variant = the open clustering's).</help>
+    </parameter>
+  </parameters>
+  <help>Fit the off-spike-channel field manifold of the selected unit(s) in sliding windows and install it
+as their children: per time bin, 'plain' (no field) and field classes by source position and timing
+(before / coincident with / after the spike).  Also writes the per-spike manifold coordinates as the
+feature space `manifold` (Space selector): SNR, lag, position, decay, amplitude, window, class, ISI flag,
+dominant-channel amplitude.  Nothing moves between units; the children are a view of one unit.</help>
+  <klusters>
+    <kind>recluster</kind>
+    <input>subsession</input>
+    <produces>triple</produces>
+    <integration>recluster-integrate</integration>
+    <selection>clusters</selection>
+    <command>fk run %group --session %base --final-clu %final %params</command>
+  </klusters>
+</program>

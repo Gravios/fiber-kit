@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.65.0"
+version = "0.66.0"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -62,6 +62,7 @@ fiber-decollide = "fiber_kit.fiber_decollide:main"
 fiber-envelope = "fiber_kit.fiber_envelope:main"
 fiber-consensus = "fiber_kit.fiber_consensus:main"
 fiber-lowmix = "fiber_kit.fiber_lowmix:main"
+fiber-manifold = "fiber_kit.fiber_manifold:main"
 fiber-template = "fiber_kit.fiber_template:main"
 fiber-link = "fiber_kit.fiber_link:main"
 fiber-backbone-link = "fiber_kit.fiber_backbone_link:main"
@@ -108,7 +109,7 @@ ndm_fiber-kit = "fiber_kit.ndm_fiber_kit:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml", "fiber-kit-best.yaml", "fiber-kit-klusters.yaml", "hippocampal_pathways.tsv", "klusters/*.xml"]
+fiber_kit = ["WORKFLOW.md", "fiber-kit.yaml", "fiber-kit-exp.yaml", "fiber-kit-best.yaml", "fiber-kit-klusters.yaml", "fiber-kit-klusters-manifold.yaml", "hippocampal_pathways.tsv", "klusters/*.xml"]
 
 [tool.ruff]
 line-length = 110

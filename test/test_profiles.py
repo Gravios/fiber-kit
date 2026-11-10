@@ -87,7 +87,7 @@ def main():
         r = fk("list", "config", cwd=tmp)
         check(r.returncode == 0 and "not present" in r.stdout and " best " in r.stdout, "fk list config: no ./fiber-kit.yaml yet")
         r = fk("list", "config", "--names", cwd=tmp)
-        check(r.stdout.split() == ["base", "exp", "best", "klusters"], f"fk list config --names ({r.stdout.split()})")
+        check(r.stdout.split() == ["base", "exp", "best", "klusters", "klusters-manifold"], f"fk list config --names ({r.stdout.split()})")
         r = fk("set", "config", "--profile", "best.yaml", cwd=tmp)
         same = os.path.exists(os.path.join(tmp, "fiber-kit.yaml")) and \
             read(os.path.join(tmp, "fiber-kit.yaml")) == read(os.path.join(PKG, "fiber-kit-best.yaml"))
@@ -146,6 +146,26 @@ def main():
         check(r.returncode == 0 and "wrote" in r.stdout and restored, "--force overwrites both, the profile back to the shipped one")
         r = fk("run", "6", "--profile", "klusters", "--dry-run", cwd=tmp)
         check(r.returncode == 0 and "fiber-rdr" not in r.stdout and "realign-final" in r.stdout, "fk run --profile klusters: the plan without rdr")
+        # the manifold plugin: its descriptor and profile are installed beside the recluster one
+        mxml = os.path.join(tmp, "plug", "fiber-kit-manifold.xml"); mcfg = os.path.join(tmp, "plug", "fiber-kit-klusters-manifold.yaml")
+        with open(mxml) as fh:
+            mx = fh.read()
+        check(os.path.isfile(mxml) and os.path.isfile(mcfg) and f"<value>{mcfg}</value>" in mx and "@KLUSTERS_MANIFOLD_CONFIG@" not in mx
+              and "<input>subsession</input>" in mx and "%final" in mx and "FK_MANIFOLD_WINDOW_MIN" in mx,
+              "fk install also writes the manifold descriptor, its profile beside it, the config default pointing there")
+        r = fk("run", "6", "--profile", "klusters-manifold", "--dry-run", cwd=tmp)
+        check(r.returncode == 0 and "fiber-manifold" in r.stdout and "fiber-session" not in r.stdout,
+              "fk run --profile klusters-manifold: the manifold stage alone")
+        # --FK_NAME value / --FK_NAME=value are exported to the run (they win over the config)
+        r = fk("run", "6", "--profile", "klusters-manifold", "--FK_MANIFOLD_WINDOW_MIN", "30", "--FK_MANIFOLD_JOBS=1", "--dry-run", cwd=tmp)
+        check(r.returncode == 0 and "FK_MANIFOLD_WINDOW_MIN=30 FK_MANIFOLD_JOBS=1" in r.stderr and "fiber-manifold" in r.stdout,
+              "fk run --FK_NAME value and --FK_NAME=value are exported to the run (and said so)")
+        r = subprocess.run([sys.executable, "-c", "from fiber_kit.fiber_manifold import main; main(['--help'])"],
+                           env=dict(os.environ, PYTHONPATH=os.path.join(ROOT, "src"), FK_CONFIG=os.devnull, FK_MANIFOLD_WINDOW_MIN="30"),
+                           capture_output=True, text=True)
+        check(r.returncode == 0 and "[FK_MANIFOLD_WINDOW_MIN; default 30" in r.stdout, "the stage takes an exported FK_ knob as its default")
+        r = fk("list", "--FK_MANIFOLD_JOBS=1", cwd=tmp)
+        check(r.returncode == 2 and "fk run" in r.stderr, "--FK_* is refused outside fk run")
         # completion
         for shell in ("bash", "zsh"):
             r = fk("completion", shell, cwd=tmp)

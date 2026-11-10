@@ -128,6 +128,7 @@ The embedded plan of `fiber-kit-exp.yaml` (0.60.0), in order:
 | 12 | realign-final | fiber-realign | exp_psame (in place) | final re-extraction for curation |
 | 13 | rdr | fiber-rdr | exp_psame -> `.rdr.<method>.<group>.exp_psame.tsv` | per-cluster contamination QC; flags only, no `.clu` |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
+| (opt) | fiber-manifold | exp_final -> exp_final_manifold (.clc/.clp + `.fet.manifold.<g>` + .mft) | refine a unit's children from the field manifold of its off-spike channels, in sliding windows; moves no spike between units ("Refining a unit", below) |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
 (`FK_REALIGN_VARIANT: stderiv_C5_D34`, the reference session's lag feature space -- inference never
@@ -289,8 +290,8 @@ log numbers them from 1.
 * Stages that support it natively (`--chunks`): fiber-flag-artifacts, fiber-session, fiber-xcorr-merge,
   fiber-realign, fiber-rdr.
 * Stages that only relabel spikes run **shielded** by fiber-pipeline: fiber-cpos, fiber-intrachunk,
-  fiber-link, fiber-anchor-link, fiber-backbone-link, fiber-consensus, fiber-lowmix, fiber-peel,
-  fiber-refit.  Before the stage, `fiber_chunks shield` sets the not-computed chunks' spikes to 0 in the
+  fiber-link, fiber-anchor-link, fiber-backbone-link, fiber-consensus, fiber-lowmix, fiber-manifold,
+  fiber-peel, fiber-refit.  Before the stage, `fiber_chunks shield` sets the not-computed chunks' spikes to 0 in the
   step's input `.clu` (their atoms to 0 in the `.clc`), the artifact bin every stage leaves out of its units,
   and saves the input beside it (`<file>.chunkshield`).  After the stage, `unshield` puts those spikes back
   into their reserved clusters in the `.clu` the stage wrote (in the `.clc`/`.clp`, as one atom per chunk
@@ -351,6 +352,41 @@ when the stage wrote a hierarchy -- to the given path, which is how a caller tha
 tags reads the result back.  `--session <base>` is the CLI spelling of `FK_DIR`/`FK_SESS`.  The realigned
 `.res` of the sub-session is not written back to the session (Klusters realigns the new clusters itself);
 `fiber_subsession.export()` is the reference implementation of the files Klusters writes.
+
+## Refining a unit: the field manifold of its off-spike channels
+
+A unit's own template explains its strong channels; the channels it has little power on still carry
+the fields of neighbouring cells that fired within the window (before, with or after the spike) and
+its own far field -- small, phasic, oscillatory events the per-channel PCA features give no budget to,
+yet frequent enough to make clear structure in a dense cluster.  `fiber-manifold` fits that structure
+per spike, A·g((t−τ)/w)·exp(−|ch−p|/λ) on the off-spike channels (a noise-whitened matched filter;
+docs/stages.md), in **sliding windows** (`FK_MANIFOLD_WINDOW_MIN` every `FK_MANIFOLD_STEP_MIN`), each
+window with its own template so the unit's drift is followed, and writes
+
+- `.clc`/`.clp` at `<stage>_manifold`: the unit's children = time bin × class (plain | position bin ×
+  before / coincident / after), at most `FK_MANIFOLD_MAX_CHILDREN`; every other unit keeps its atoms;
+  the `.clu` is unchanged -- **no spike moves between units**;
+- `.fet.manifold.<g>`: snr×100 | lag_µs | position×100 | decay×100 | amplitude | window | class |
+  isi_flag | amp_dom | time -- a feature space Klusters lists under *Space*, so the manifold can be
+  looked at (lag against position, amplitude against window) and lassoed like any other;
+- `.mft.<method>.<g>.<tag>.tsv`: the children and the per-window table.
+
+```bash
+fk run 6 --profile klusters-manifold --FK_MANIFOLD_WINDOW_MIN 30     # alone, on the session's final clu
+fiber-pipeline 6 fiber-manifold --units 5 --off-channels 3,4,5,6,7    # one unit, pinned off channels
+FIBER_KIT_GPU=1 fiber-manifold <base> 6 --clu-stage exp_final         # the matched filter on the GPU
+```
+
+Units run in parallel (`FK_MANIFOLD_JOBS`, one process each; the BLAS threads are split between them);
+`FIBER_KIT_GPU=1` puts the matched-filter products on the GPU instead (CuPy, `fiber_kit.backend`).
+`fk run --FK_<knob> value` (or `--FK_<knob>=value`) sets any knob for one run, over the config.
+
+**From Klusters**: select the unit (or its children) and run the `fiber-kit-manifold` plugin
+(`fk install klusters-plugin` installs its descriptor and the `klusters-manifold` profile --
+`fiber-kit-klusters-manifold.yaml`, the one step `fiber-manifold` with `in: ""` -- beside the recluster
+plugin's).  The plugin runs on the sub-session; Klusters integrates the children and carries the
+sub-session's `.fet.manifold.<g>` back as a session-level feature space (zeros for the other spikes; a
+second unit's run adds its rows to the same file), listed under *Space* (neurosuite-3 0946).
 
 ## Configuration
 
