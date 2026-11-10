@@ -69,6 +69,8 @@ _KNOBS = {
     "FK_MANIFOLD_STEP_MIN": ("step_min", float, 5.0, "window step (minutes); each spike takes the nearest window's fit"),
     "FK_MANIFOLD_MIN_N": ("min_n", int, 2000, "spikes a unit needs to be examined"),
     "FK_MANIFOLD_MIN_WINDOW_N": ("min_window_n", int, 300, "spikes a window needs for its own template; fewer: the neighbour's"),
+    "FK_MANIFOLD_CHANNELS": ("channels_set", str, "off", "channels the field is fitted on: off = the off-spike channels "
+                                                        "(by --off-frac / --off-channels), full = every channel of the group"),
     "FK_MANIFOLD_OFF_FRAC": ("off_frac", float, 0.4, "a channel is off-spike when its template trough is below this "
                                                      "fraction of the deepest channel's (used when --off-channels is unset)"),
     "FK_MANIFOLD_MIN_OFF": ("min_off", int, 3, "at least this many off-spike channels (the shallowest are added)"),
@@ -265,7 +267,9 @@ def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=
     dom = int(trough.argmax())
     order = np.argsort(-trough)
     strong = order[: max(1, min(5, int((trough >= a.off_frac * trough.max()).sum())))]
-    if off_fixed:
+    if a.channels_set == "full":
+        off = list(range(nc))                                    # the field over the whole group, the unit's own channels too
+    elif off_fixed:
         off = sorted(int(c) for c in off_fixed if 0 <= int(c) < nc)
     else:
         off = [c for c in range(nc) if trough[c] < a.off_frac * trough.max()]
@@ -322,8 +326,8 @@ def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=
         rows.append(dict(window=wi, t_min=lo / 60, t_max=hi / 60, n=int(m.size), trough_dom=float(-T[:, dom].min()),
                          field_frac=float((s >= a.snr).mean())))
     nf = float((noise_snr >= a.snr).mean()) if noise_snr is not None else float("nan")
-    log(f"[manifold] unit: {n} spikes, {len(centres)} windows of {a.window_min:g} min every {a.step_min:g}; off-spike "
-        f"channels {off} (dominant {dom}); field SNR >= {a.snr:g}: {100 * float((snr >= a.snr).mean()):.1f}% "
+    log(f"[manifold] unit: {n} spikes, {len(centres)} windows of {a.window_min:g} min every {a.step_min:g}; "
+        f"{'all' if a.channels_set == 'full' else 'off-spike'} channels {off} (dominant {dom}); field SNR >= {a.snr:g}: {100 * float((snr >= a.snr).mean()):.1f}% "
         f"(noise: {100 * nf:.1f}%)")
     return dict(snr=snr, par=par, amp=amp, amp_dom=amp_dom, window=win_of, rows=rows, off=off, dom=dom,
                 n_windows=len(centres), noise_frac=nf)
@@ -452,7 +456,8 @@ def main(argv=None):
     ap.add_argument("--off-channels", default=None, help="off-spike channels as group indices, e.g. 3,4,5,6,7 (default: by --off-frac)")
     for name, (dest, typ, fb, hlp) in _KNOBS.items():
         d = _knob_default(name, typ, fb, gcfg)
-        ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d, help=f"{hlp} [{name}; default {d}]")
+        kw = dict(choices=["off", "full"]) if name == "FK_MANIFOLD_CHANNELS" else {}
+        ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d, help=f"{hlp} [{name}; default {d}]", **kw)
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_manifold)")
     ap.add_argument("--fet-method", default="manifold", help="method token of the written feature space")
     cfgmod.check_choice_defaults(ap)

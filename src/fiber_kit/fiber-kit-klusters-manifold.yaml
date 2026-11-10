@@ -24,6 +24,7 @@ FK_MANIFOLD_WINDOW_MIN:  20       # (min) sliding window length; each window fit
 FK_MANIFOLD_STEP_MIN:    5        # (min) window step; each spike takes the nearest window's fit
 FK_MANIFOLD_MIN_N:       10       # the selection is examined whatever its size (a session run uses 2000)
 FK_MANIFOLD_MIN_WINDOW_N: 300     # spikes a window needs for its own template; fewer: the nearest spikes
+FK_MANIFOLD_CHANNELS:    off      # off | full: the off-spike channels, or every channel of the group
 FK_MANIFOLD_OFF_FRAC:    0.4      # off-spike channel = template trough below this fraction of the deepest
 FK_MANIFOLD_MIN_OFF:     3        # at least this many off-spike channels
 FK_MANIFOLD_SNR:         4.0      # (noise sd) a field is present at or above this matched-filter SNR

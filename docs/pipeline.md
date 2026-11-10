@@ -377,6 +377,13 @@ fiber-pipeline 6 fiber-manifold --units 5 --off-channels 3,4,5,6,7    # one unit
 FIBER_KIT_GPU=1 fiber-manifold <base> 6 --clu-stage exp_final         # the matched filter on the GPU
 ```
 
+`FK_MANIFOLD_CHANNELS` chooses the channels the field is fitted on: `off` (default) -- the unit's
+off-spike channels, so the unit's own template stays out of the fit and what is found is the
+neighbours' fields; `full` -- every channel of the group, the unit's own included, so the residual on its
+strong channels (shape and amplitude misfit, a collision on its own channels) is fitted with the same
+model and the position spans the whole group.  Sub-modes of the unit's own waveform show in `full` as
+coincident fields near the dominant channel (g6 0312 unit 5: 22% at SNR ≥ 4 against 19% on the off
+channels, 63% of them coincident); look at `off` first.
 Units run in parallel (`FK_MANIFOLD_JOBS`, one process each; the BLAS threads are split between them);
 `FIBER_KIT_GPU=1` puts the matched-filter products on the GPU instead (CuPy, `fiber_kit.backend`).
 `fk run --FK_<knob> value` (or `--FK_<knob>=value`) sets any knob for one run, over the config.

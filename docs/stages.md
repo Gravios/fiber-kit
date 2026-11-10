@@ -1291,7 +1291,9 @@ A·g((t−τ)/w)·exp(−|ch−p|/λ) (g the unit's own dominant-channel shape; 
 on the off channels from the group's `.nst` or `--signal`'s spike-free snippets, a coarse grid of lag ×
 position × decay then a refinement), in sliding windows of `--window-min` every `--step-min`, each with
 its own template (the per-sample median of the window's best-fitting spikes, so the unit's drift is
-followed and a minority's fields do not leak into it).  Children: time bin × class (plain, or position
+followed and a minority's fields do not leak into it).  `--channels-set full` fits the same
+model over every channel of the group instead (the unit's own misfit and collisions become fields;
+position over the whole group).  Children: time bin × class (plain, or position
 bin × before / coincident / after), at most `--max-children` per unit.  Writes `.clu` (unchanged),
 `.clc`/`.clp` at `<clu-stage>_manifold` (or `--out-tag`), `.fet.manifold.<g>` -- snr×100 | lag_µs |
 position×100 | decay×100 | amplitude | window | class | isi_flag | amp_dom | time, a feature space
@@ -1321,6 +1323,7 @@ Positional: `base`, `elec`
 | `--step-min` | `5.0` | window step (minutes); each spike takes the nearest window's fit [FK_MANIFOLD_STEP_MIN; default 5.0] |
 | `--min-n` | `2000` | spikes a unit needs to be examined [FK_MANIFOLD_MIN_N; default 2000] |
 | `--min-window-n` | `300` | spikes a window needs for its own template; fewer: the neighbour's [FK_MANIFOLD_MIN_WINDOW_N; default 300] |
+| `--channels-set` | `off` | channels the field is fitted on: off = the off-spike channels (by --off-frac / --off-channels), full = every channel of the group [FK_MANIFOLD_CHANNELS; default off] — choices: `off`, `full` |
 | `--off-frac` | `0.4` | a channel is off-spike when its template trough is below this fraction of the deepest channel's (used when --off-channels is unset) [FK_MANIFOLD_OFF_FRAC; default 0.4] |
 | `--min-off` | `3` | at least this many off-spike channels (the shallowest are added) [FK_MANIFOLD_MIN_OFF; default 3] |
 | `--snr` | `4.0` | field present when the matched-filter SNR (noise-sd units) is at least this [FK_MANIFOLD_SNR; default 4.0] |

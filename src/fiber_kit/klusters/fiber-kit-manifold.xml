@@ -67,6 +67,14 @@
       <help>Time bins the children are split into (0 = one child per class over the whole span).</help>
     </parameter>
     <parameter>
+      <n>FK_MANIFOLD_CHANNELS</n>
+      <value>off</value>
+      <status>Optional</status>
+      <type>choice</type>
+      <choices>off|full</choices>
+      <help>Channels the field is fitted on: off = the unit's off-spike channels only (the neighbours' fields; the unit's own template stays out of the fit), full = every channel of the group, the unit's own included (misfit and collisions on its own channels become fields too; position spans the whole group).</help>
+    </parameter>
+    <parameter>
       <n>FK_MANIFOLD_OFF_FRAC</n>
       <value>0.4</value>
       <status>Optional</status>

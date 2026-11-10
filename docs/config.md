@@ -475,6 +475,7 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_MANIFOLD_STEP_MIN` | `5` | `5` | — | 5 (min).  Window step; each spike takes the nearest window's fit. |
 | `FK_MANIFOLD_MIN_N` | `2000` | `2000` | — | 2000.  Spikes a unit needs to be examined (--units overrides). |
 | `FK_MANIFOLD_MIN_WINDOW_N` | `300` | `300` | — | 300.  Spikes a window needs for its own template; fewer: the nearest spikes. |
+| `FK_MANIFOLD_CHANNELS` | `off` | `off` | — | off \| full.  Channels the field is fitted on.  off = the off-spike channels (the neighbours' fields, the unit's own template kept out of the fit); full = every channel of the group, the unit's own included: the residual on the strong channels (shape and amplitude misfit, a collision on the unit's own channels) is fitted with the same field model, position over the whole group.  Pure sub-modes of the unit's own waveform show up in `full` as coincident fields at the dominant channel; look at `off` first. |
 | `FK_MANIFOLD_OFF_FRAC` | `0.4` | `0.4` | — | 0.4.  A channel is off-spike when its template trough is below this fraction of the deepest channel's (--off-channels pins the set instead, e.g. 3,4,5,6,7). |
 | `FK_MANIFOLD_MIN_OFF` | `3` | `3` | — | 3.  At least this many off-spike channels (the shallowest are added). |
 | `FK_MANIFOLD_SNR` | `4.0` | `4.0` | — | 4.0 (noise sd).  A field is present at or above this matched-filter SNR. |

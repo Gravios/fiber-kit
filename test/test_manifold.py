@@ -11,6 +11,7 @@ neighbours); a second small unit that is below --min-n):
     one atom; the .clu is unchanged (nothing moves between units);
   * the planted field is found: field spikes reach SNR >= 4 far more often than plain ones, their lag is
     positive (after) and their position near channel 4; the 'after' classes hold mostly field spikes;
+  * --channels-set full fits the field over every channel and still finds the planted one;
   * --units with --jobs 2 gives the same per-spike classes (the parallel path is bit-identical);
   * an ISI pair planted 1 ms apart gets a flag (the farther-from-median member);
   * fiber-pipeline runs it as a step (`fiber-manifold` with FK_MANIFOLD_* from the env) and as the
@@ -134,6 +135,17 @@ def main():
         check(after.sum() > 0.7 * (u2 & hf).sum() and hf[after].mean() > 0.9,
               f"the 'after' classes hold the field spikes ({after.sum()} spikes, {100*hf[after].mean():.0f}% planted)")
         check((f.values[u2, 7] == 1).sum() >= 1, "the 1-ms ISI pair got a flag")
+        # --channels-set full: the field over every channel of the group; the planted one is still found there
+        rf = run([base, "1"] + common + ["--channels-set", "full", "--out-tag", "full"], env, sd)
+        of = rf.stdout + rf.stderr
+        ffv = nio.read_fet_file(base + ".fet.manifold.1").values
+        s2, l2, p2 = ffv[:, 0] / 100, ffv[:, 1], ffv[:, 2] / 100
+        d2 = u2 & hf & (s2 >= 4)
+        check(rf.returncode == 0 and "all channels [0, 1, 2, 3, 4, 5]" in of, "--channels-set full fits on every channel", of)
+        check((s2[u2 & hf] >= 4).mean() > 0.8 and (s2[u2 & ~hf] >= 4).mean() < 0.15 and np.median(l2[d2]) > 500
+              and abs(np.median(p2[d2]) - 4) < 0.6, "... and still finds the planted field at its lag and channel")
+        rf = run([base, "1"] + common + ["--channels-set", "strong"], env, sd)
+        check(rf.returncode == 2 and "invalid choice" in rf.stderr, "--channels-set takes off | full only")
         # the other units' atoms when the input HAS a hierarchy: build one and rerun to a new tag
         # (the parallel path and a pinned unit / off-channel set give the same classes)
         r2 = run([base, "1"] + common[:-2] + ["--jobs", "2", "--units", "2,3", "--min-n", "10", "--out-tag", "par"], env, sd)

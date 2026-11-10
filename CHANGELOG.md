@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.1] — `fiber-manifold --channels-set off | full`
+- **`FK_MANIFOLD_CHANNELS`** (`--channels-set`, default `off`): the channels the field is fitted on.
+  `off` = the unit's off-spike channels (the neighbours' fields, the unit's own template kept out of the
+  fit); `full` = every channel of the group, the unit's own included -- the residual on its strong
+  channels (shape / amplitude misfit, a collision on its own channels) is fitted with the same model and
+  the position spans the whole group.  g6 0312 unit 5: 22.4% at SNR ≥ 4 on `full` against 19.6% on
+  `off`, 63% of them coincident, 5% coincident at the dominant channel.  A `choice` parameter of the
+  Klusters descriptor; in the `klusters-manifold` profile.  `test_manifold.py` +3 (26).
+
 ## [0.66.0] — `fiber-manifold`: a unit's off-spike-channel field manifold, in sliding windows, as children and a feature space
 - **`fiber-manifold`** (new stage, `src/fiber_kit/fiber_manifold.py`; section [G] of `fiber-kit-exp.yaml`,
   `FK_MANIFOLD_*`): after a unit's own template is subtracted, the channels it has little power on still
