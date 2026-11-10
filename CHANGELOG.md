@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.3] — the manifold plugin is a Klusters REFINE
+- **`fiber-kit-manifold.xml`** declares `<integration>refine</integration>`: Klusters (neurosuite-3 0948)
+  runs it on the atoms of the selected units -- the sub-session's seed `.clu` carries the parent ids and a
+  seed `.clc`/`.clp` the atoms -- and reads the final `.clc` back as the new atoms of the same parents,
+  so the parents keep their ids (a `recluster-integrate` plugin would have replaced them with new
+  ones).  `fiber-manifold` already honours a seed hierarchy at its input tag (the atoms of the units it
+  does not examine are kept; the `.clp` maps every child to its parent); `test_manifold.py` +4 (31)
+  exercises exactly that contract on a sub-session, `test_klusters_contract.py` +1 (17).
+  The wheel's *Recluster ▸ Plugin* ring carries it as **Refine**.
+
 ## [0.66.2] — the shipped Klusters descriptors were not well-formed XML
 - **Fix**: `fiber-kit-recluster.xml` and `fiber-kit-manifold.xml` carried `--` inside their header
   comment, which XML forbids; Klusters' parser refused both, so neither plugin appeared in its

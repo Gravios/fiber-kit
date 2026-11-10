@@ -49,7 +49,7 @@ def session(td):
     dur = 60 * 60 * SR
     n1, n2 = 2400, 200
     t1 = np.sort(rng.choice(np.arange(SR, dur - SR, 50), n1, replace=False))
-    t2 = np.sort(rng.choice(np.arange(SR, dur - SR, 50), n2, replace=False))
+    t2 = np.sort(rng.choice(np.arange(SR + 25, dur - SR, 50), n2, replace=False))   # never the same time as unit 2
     t1[1] = t1[0] + 20                                         # one ISI pair 1 ms apart
     s = np.arange(NSAMP) - (PK - 1)
     unit = -2500 * np.exp(-0.5 * (s / 2.0) ** 2) + 700 * np.exp(-0.5 * ((s - 6) / 3.0) ** 2)
@@ -179,6 +179,31 @@ def main():
         if os.path.isfile(final):
             _, ids = nio.read_clu_file(final)
             check(np.asarray(ids).size == int((lab == 2).sum()) and np.all(np.asarray(ids) == 2), "the final .clu: one id per selected spike, unchanged")
+        # the REFINE contract (Klusters 0948): the sub-session holds the atoms of units 2 and 3 (seed .clu = the
+        # parents, seed .clc/.clp = the atoms); the final .clc replaces the examined units' atoms by children
+        # and keeps the others; the .clp maps every child to its parent
+        sub2 = base + "--2-3--t"
+        r6 = fk("subsession", "export", base, "1", "--clu", f"{base}.clu.stderiv.1.cur", "--clusters", "2", "3", "--out", sub2)
+        check(r6.returncode == 0, "fk subsession export of units 2 and 3", r6.stdout + r6.stderr)
+        sres = np.fromfile(sub2 + ".res.1", dtype=nio.RES_DTYPE)
+        slab = lab[np.searchsorted(res, sres)]
+        atoms = np.where(slab == 2, np.where(np.arange(sres.size) % 2 == 0, 10, 11), 12).astype(np.int64)   # 2 -> {10, 11}, 3 -> {12}
+        np.r_[np.int32(3), atoms.astype(np.int32)].astype(np.int32).tofile(sub2 + ".clc.stderiv.1")
+        clp = np.zeros(12, np.int32); clp[9] = clp[10] = 2; clp[11] = 3
+        np.r_[np.int32(12), clp].astype(np.int32).tofile(sub2 + ".clp.stderiv.1")
+        final2 = sub2 + ".clu.klusters.1"            # what Klusters asks for: its .clc/.clp twins come along
+        r7 = fk("run", "1", "--profile", "klusters-manifold", "--session", sub2, "--final-clu", final2, "--method", "stderiv",
+                "--FK_MANIFOLD_MIN_N=1000", "--FK_MANIFOLD_OFF_FRAC=0.3")
+        o7 = r7.stdout + r7.stderr
+        check(r7.returncode == 0 and os.path.isfile(sub2 + ".clc.klusters.1") and os.path.isfile(sub2 + ".clp.klusters.1"),
+              "--final-clu delivered the .clc and .clp beside the final .clu", o7)
+        if os.path.isfile(sub2 + ".clc.klusters.1"):
+            _, c2 = nio.read_clu_file(sub2 + ".clc.klusters.1"); c2 = np.asarray(c2)
+            p2 = np.fromfile(sub2 + ".clp.klusters.1", np.int32)[1:]
+            new = np.unique(c2[slab == 2])
+            check(np.all(c2[slab == 3] == 12), "the unexamined unit's atom (12) is kept in the final .clc")
+            check(new.size > 1 and not np.isin(new, [10, 11, 12]).any(), f"the examined unit's atoms are replaced by {new.size} children")
+            check(all(p2[a - 1] == 2 for a in new) and p2[11] == 3, "the final .clp maps the children to parent 2 and atom 12 to 3")
     print(f"test_manifold: {'PASS' if not fails else 'FAIL'} ({fails} failed)")
     return 1 if fails else 0
 

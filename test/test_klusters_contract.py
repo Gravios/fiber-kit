@@ -104,6 +104,8 @@ def main():
         check(ch.findtext("type") == "choice" and ch.findtext("choices") == "off|full" and ch.findtext("value") == "off",
               "FK_MANIFOLD_CHANNELS is a choice off|full, default off (a combo box in Preferences > Plugins and the run dialog)")
         check("config" in names and "method" in names, "the descriptor carries config and method")
+        check(man.find("klusters").findtext("integration") == "refine",
+              "the manifold plugin integrates as `refine` (children of the same parents; Klusters 0948)")
 
     # the argv Klusters would run, after fk install, as a dry run
     env = {k: v for k, v in os.environ.items() if not k.startswith("FK_")}

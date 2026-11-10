@@ -388,12 +388,18 @@ Units run in parallel (`FK_MANIFOLD_JOBS`, one process each; the BLAS threads ar
 `FIBER_KIT_GPU=1` puts the matched-filter products on the GPU instead (CuPy, `fiber_kit.backend`).
 `fk run --FK_<knob> value` (or `--FK_<knob>=value`) sets any knob for one run, over the config.
 
-**From Klusters**: select the unit (or its children) and run the `fiber-kit-manifold` plugin
-(`fk install klusters-plugin` installs its descriptor and the `klusters-manifold` profile --
-`fiber-kit-klusters-manifold.yaml`, the one step `fiber-manifold` with `in: ""` -- beside the recluster
-plugin's).  The plugin runs on the sub-session; Klusters integrates the children and carries the
-sub-session's `.fet.manifold.<g>` back as a session-level feature space (zeros for the other spikes; a
-second unit's run adds its rows to the same file), listed under *Space* (neurosuite-3 0946).
+**From Klusters**: select the unit(s) (or their children), choose **Refine** in the wheel's
+*Recluster ▸ Plugin* ring (or *Actions ▸ Recluster ▸ Engine ▸ Refine: fiber-kit manifold*) and press
+`Shift+R`; or run *Plugins ▸ fiber-kit-manifold* with the dialog.  `fk install klusters-plugin`
+installs its descriptor and the `klusters-manifold` profile (`fiber-kit-klusters-manifold.yaml`, the
+one step `fiber-manifold` with `in: ""`) beside the recluster plugin's.  The descriptor declares
+`<integration>refine</integration>` (neurosuite-3 0948): Klusters runs it on the ATOMS of the selected
+units -- the sub-session's seed `.clu` carries the parent ids, so the stage sees each unit whole, and a
+seed `.clc`/`.clp` beside it the atoms, which the stage keeps for the units it does not examine -- and
+reads the final `.clc` back as the new atoms of the same parents: the parents keep their ids, only
+their children change, one child-layer undo step.  The sub-session's `.fet.manifold.<g>` is carried
+back as a session-level feature space (zeros for the other spikes; a second unit's run adds its rows
+to the same file), listed under *Space* (neurosuite-3 0946).
 
 ## Configuration
 

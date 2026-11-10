@@ -12,8 +12,9 @@
 
   Install:   fk install klusters-plugin   (copies this file and fiber-kit-klusters-manifold.yaml into
              Klusters' plugin directory; then Plugins > Reload Plugins)
-  Run:       select the unit(s), then Plugins > fiber-kit-manifold, or make it the engine of the
-             Recluster ring (right-click > Recluster > Plugin > fiber-kit-manifold) and press Shift+R.
+  Run:       select the unit(s), then Plugins > fiber-kit-manifold, or choose "Refine" in the wheel's
+             Recluster > Plugin ring (Actions > Recluster > Engine > Refine: fiber-kit manifold) and press
+             Shift+R.  The parents keep their ids; only their children change (neurosuite-3 0948).
   The knobs below are the stage's FK_MANIFOLD_* knobs; Klusters passes them as `fk run -FK_... value`,
   which wins over the profile.  The remaining knobs are in the profile beside this file.
 -->
@@ -107,7 +108,10 @@ dominant-channel amplitude.  Nothing moves between units; the children are a vie
     <kind>recluster</kind>
     <input>subsession</input>
     <produces>triple</produces>
-    <integration>recluster-integrate</integration>
+    <!-- refine: Klusters sends the ATOMS of the selected unit(s) (the seed .clu carries the parent
+         ids, a seed .clc/.clp the atoms) and reads the final .clc back as the new atoms of the same
+         parents, so the parents keep their ids; a recluster-integrate plugin would replace them. -->
+    <integration>refine</integration>
     <selection>clusters</selection>
     <command>fk run %group --session %base --final-clu %final %params</command>
   </klusters>
