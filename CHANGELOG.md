@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.2] — the shipped Klusters descriptors were not well-formed XML
+- **Fix**: `fiber-kit-recluster.xml` and `fiber-kit-manifold.xml` carried `--` inside their header
+  comment, which XML forbids; Klusters' parser refused both, so neither plugin appeared in its
+  *Plugins* menu or *Preferences → Plugins* (neurosuite-3 0947 now says so instead of staying silent).
+  The comments use a dash.
+- **`test/test_klusters_contract.py`** (16 checks): every shipped descriptor parses, follows the schema
+  Klusters reads (`<n>`/`<value>`, known `<type>`, `<choices>` for a choice, defaults within min/max,
+  the `<klusters>` block with `%params`/`%final`), every `FK_*` parameter of the manifold descriptor is
+  a knob the stage reads and `FK_MANIFOLD_CHANNELS` is the `off|full` choice; and the argv Klusters
+  assembles from the INSTALLED descriptor (its `paramArgs` rule, the run dialog holding
+  `FK_MANIFOLD_CHANNELS=full`) is accepted by `fk run` and reaches the stage.
+
 ## [0.66.1] — `fiber-manifold --channels-set off | full`
 - **`FK_MANIFOLD_CHANNELS`** (`--channels-set`, default `off`): the channels the field is fitted on.
   `off` = the unit's off-spike channels (the neighbours' fields, the unit's own template kept out of the

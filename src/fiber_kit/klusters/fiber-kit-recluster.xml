@@ -4,15 +4,15 @@
 
   Kind `recluster`: Klusters writes the selected clusters' (or atoms') spikes as a SUB-SESSION (the
   temp-file method: row subsets of the group's .res/.spk/.fet, a seed .clu, parameter copies, links to
-  the recording -- docs/pipeline.md "Reclustering a selection"), runs the <command> on it, and reads
+  the recording — docs/pipeline.md "Reclustering a selection"), runs the <command> on it, and reads
   the .clu named by %final back by spike order; its clusters replace the selection as a recluster does.
 
   Install:   fk install klusters-plugin        (copies this file into Klusters' plugin directory)
   Then:      Klusters > Plugins > fiber-kit-recluster  (or Actions > Recluster > Recluster with fiber-kit,
              Shift+Q, which uses the parameter defaults set in Preferences > Plugins).
 
-  The plan and knobs come from `config` -- the fiber-kit-klusters.yaml installed beside this file (tuned,
-  session-agnostic; edit it to change what Klusters runs) -- or from `profile`; the session folder's
+  The plan and knobs come from `config` — the fiber-kit-klusters.yaml installed beside this file (tuned,
+  session-agnostic; edit it to change what Klusters runs) — or from `profile`; the session folder's
   fiber-kit.yaml only when both are unset.
 -->
 <program>

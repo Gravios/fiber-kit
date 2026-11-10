@@ -14,7 +14,7 @@
              Klusters' plugin directory; then Plugins > Reload Plugins)
   Run:       select the unit(s), then Plugins > fiber-kit-manifold, or make it the engine of the
              Recluster ring (right-click > Recluster > Plugin > fiber-kit-manifold) and press Shift+R.
-  The knobs below are the stage's FK_MANIFOLD_* knobs; Klusters passes them as `fk run --FK_... value`,
+  The knobs below are the stage's FK_MANIFOLD_* knobs; Klusters passes them as `fk run -FK_... value`,
   which wins over the profile.  The remaining knobs are in the profile beside this file.
 -->
 <program>
