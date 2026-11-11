@@ -204,6 +204,45 @@ def whitener_from_cov(C, floor=1e-4):
     return (E / np.sqrt(ev)).astype(np.float32)
 
 
+def spline_interp_matrix(ns, factor):
+    """The (ns*factor, ns) matrix of the natural cubic spline through ns unit-spaced samples
+    evaluated at ticks k/factor (the last factor-1 ticks beyond the final sample clamp to it):
+    what Klusters' super-sampling does to a stored window (supersample.hpp).  Linear in the data,
+    so a covariance super-samples as L C L^T."""
+    n = int(ns)
+    L = np.zeros((n * factor, n))
+    t = np.arange(n * factor) / factor
+    for j in range(n):
+        y = np.zeros(n); y[j] = 1.0
+        # natural cubic spline second derivatives (tridiagonal, Burden & Faires)
+        m = np.zeros(n)
+        if n >= 3:
+            l = np.ones(n); mu = np.zeros(n); z = np.zeros(n)
+            for i in range(1, n - 1):
+                alpha = 3.0 * (y[i + 1] - 2.0 * y[i] + y[i - 1])
+                l[i] = 4.0 - mu[i - 1]; mu[i] = 1.0 / l[i]; z[i] = (alpha - z[i - 1]) / l[i]
+            for i in range(n - 2, 0, -1):
+                m[i] = z[i] - mu[i] * m[i + 1]
+        tt = np.clip(t, 0, n - 1)
+        i0 = np.minimum(tt.astype(int), n - 2); u = tt - i0; v = 1.0 - u
+        L[:, j] = v * y[i0] + u * y[i0 + 1] + ((v ** 3 - v) * m[i0] + (u ** 3 - u) * m[i0 + 1]) / 6.0
+    return L
+
+
+def supersample_cov(cov, ns, nc, factor):
+    """The .nst covariance (element t*nc + c) of a super-sampled space from the base one:
+    L C L^T per channel pair, with L the spline interpolation matrix."""
+    L = spline_interp_matrix(ns, factor)
+    C = cov.reshape(ns, nc, ns, nc)
+    Cu = np.einsum("kt,tcsd,ls->kcld", L, C, L).reshape(ns * factor * nc, ns * factor * nc)
+    # The interpolated ticks are functions of the samples, so L C L^T has rank ns*nc in a
+    # ns*factor*nc space; the ticks are stored as int16 (rounding variance 1/12) and cut
+    # with margin samples the window does not hold, so the null directions are not
+    # empty.  A diagonal at a few % of the mean variance keeps the whitener honest there.
+    d = np.trace(Cu) / Cu.shape[0]
+    return Cu + np.eye(Cu.shape[0]) * (1.0 / 12.0 + 0.03 * d)
+
+
 def sub_cov(cov, ns, nc, chans):
     """The (ns*nc, ns*nc) .nst covariance (element t*nc + c) restricted to channels `chans`."""
     idx = np.array([t * nc + c for t in range(ns) for c in chans])
@@ -257,7 +296,10 @@ def nearest_window(t, centres):
     return np.where(np.abs(t - centres[left]) <= np.abs(t - centres[j]), left, j) if len(centres) > 1 else np.zeros(len(t), int)
 
 
-def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=None):
+def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=None, srw=None):
+    """`sr` is the acquisition rate (the .res); `srw` the waveform tick rate -- the same, or
+    sr x factor in a super-sampled space (.spk.<variant>_U<factor>), where lags are ticks."""
+    srw = sr if srw is None else srw
     """Fit the field manifold of one unit in sliding windows.  Returns per-spike arrays (snr, par
     (tau, p, lam, w), amp, window, amp_dom) and a per-window table."""
     t = res[iu] / sr
@@ -286,7 +328,7 @@ def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=
     if not off:
         off = [int(order[-1])]
     g = unit_shape(Tall, dom)
-    lag_max = int(round(a.lag_ms * 1e-3 * sr))
+    lag_max = int(round(a.lag_ms * 1e-3 * srw))
     ps = np.arange(min(off) - 0.5, max(off) + 0.51, 0.5)
     # windows
     t0, t1 = float(t.min()), float(t.max())
@@ -318,7 +360,7 @@ def examine_unit(iu, res, spk, sr, ns, nc, a, noise_cov_fn, log, rng, off_fixed=
         C, Nz = noise_cov_fn(lo, hi, off)
         Wh = whitener_from_cov(C)
         if searcher is None or noise_cov_fn.per_window:
-            searcher = Searcher(g, Wh, off, lag_max, ps, sr)
+            searcher = Searcher(g, Wh, off, lag_max, ps, srw)
             if noise_snr is None or noise_cov_fn.per_window:
                 # the SNR the same bank gives pure noise: the .fil snippets, or draws from the covariance
                 nz = Nz if Nz is not None else rng.multivariate_normal(
@@ -470,6 +512,12 @@ def main(argv=None):
     cfg = sy.resolve_session_params(a.base, a.elec, channels=a.channels, ntotal=a.total_channels, verbose=False,
                                     require=("channels",))
     base = cfg["base"]; NS, NC, SR = int(cfg["nsamp"]), int(cfg["nchan"]), float(cfg["sr"])
+    # A super-sampled waveform space (Klusters' _U<factor>): factor ticks per acquisition
+    # sample -- the .spk is factor x nSamples long, lags are in ticks (rate SR x factor),
+    # the .res stays in acquisition samples.
+    UP = nio.supersample_of(a.spk_variant)
+    NS, PK = nio.waveform_geometry(NS, int(cfg.get("peak") or NS // 2), a.spk_variant)
+    SRW = SR * UP
     chans = cfg["channels"]; ntot = cfg.get("ntotal")
     res = (nio.read_res_at(base, a.elec, variant=a.res_variant) if a.res_variant else nio.read_res(base, a.elec))
     res = np.asarray(res, np.int64)
@@ -486,6 +534,12 @@ def main(argv=None):
     else:
         a.off_fixed = None
 
+    if UP > 1 and a.signal:
+        log(f"[manifold] --signal is at the acquisition rate; in the super-sampled space {a.spk_variant} the noise "
+            f"covariance comes from the matching .nst (else white)")
+        a.signal = ""
+    if UP > 1:
+        log(f"[manifold] super-sampled space {a.spk_variant}: {NS} ticks per waveform ({UP} per sample), lags in ticks")
     # ---- the noise covariance source
     sig = None
     nst = None
@@ -505,8 +559,21 @@ def main(argv=None):
             except ValueError as e:
                 log(f"[manifold] {e}: .nst not used")
                 nst = None
+        if nst is None and UP > 1:
+            # No .nst of the super-sampled space: super-sample the base space's (the
+            # interpolation is linear in the data, so C_up = L C L^T) -- the noise of
+            # interpolated ticks is correlated, and a white model would see fields in it.
+            rb = nio.resolve(base, "nst", a.elec, nio.waveform_token(a.spk_variant).replace(f"_U{UP}", ""))
+            if rb.found:
+                try:
+                    nb = nio.read_nst(rb.path)
+                    if nb["nsamp"] * UP == NS and nb["nchan"] == NC:
+                        nst = dict(nb, nsamp=NS, cov=supersample_cov(np.asarray(nb["cov"], float), nb["nsamp"], NC, UP))
+                        log(f"[manifold] noise covariance: {os.path.basename(rb.path)} super-sampled x{UP} (spline)")
+                except ValueError:
+                    nst = None
     rel = res - a.signal_start
-    pre = int(cfg.get("peak") or NS // 2)
+    pre = PK
 
     class NoiseCov:
         per_window = sig is not None
@@ -548,9 +615,9 @@ def main(argv=None):
             Xb = np.asarray(spk[iu[:2000]]).astype(np.float32)
             noise_cov_fn.sigma2 = float(Xb[:, :6, :].var())
         rng_u = np.random.default_rng(a.seed + int(u))
-        fit = examine_unit(iu, res, spk, SR, NS, NC, a, noise_cov_fn, log, rng_u, off_fixed=a.off_fixed)
+        fit = examine_unit(iu, res, spk, SR, NS, NC, a, noise_cov_fn, log, rng_u, off_fixed=a.off_fixed, srw=SRW)
         flags = isi_flags(iu, res, spk, SR, a.refrac_ms, rng_u)
-        cidx, names, cls, tb = segment(fit, res[iu] / SR, a, SR)
+        cidx, names, cls, tb = segment(fit, res[iu] / SR, a, SRW)
         return u, iu, fit, flags, cidx, names, cls, tb
 
     jobs = a.jobs if a.jobs > 0 else (os.cpu_count() or 1)
@@ -571,7 +638,7 @@ def main(argv=None):
         u, iu, fit, flags, cidx, names, cls, tb = r
         examined[u] = (iu, cidx, names)
         fet[iu, 0] = np.round(fit["snr"] * 100)
-        fet[iu, 1] = np.round(fit["par"][:, 0] / SR * 1e6)
+        fet[iu, 1] = np.round(fit["par"][:, 0] / SRW * 1e6)
         fet[iu, 2] = np.round(fit["par"][:, 1] * 100)
         fet[iu, 3] = np.round(fit["par"][:, 2] * 100)
         fet[iu, 4] = np.round(fit["amp"])

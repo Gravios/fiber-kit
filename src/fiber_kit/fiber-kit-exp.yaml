@@ -1459,7 +1459,9 @@ FK_MANIFOLD_STEP_MIN:    5        # 5 (min).  Window step; each spike takes the 
 FK_MANIFOLD_MIN_N:       2000     # 2000.  Spikes a unit needs to be examined (--units overrides).
 FK_MANIFOLD_MIN_WINDOW_N: 300     # 300.  Spikes a window needs for its own template; fewer: the nearest spikes.
 FK_MANIFOLD_SPK:         standard # standard.  The waveform space the fields are fitted in: any <base>.spk.<variant>.<g>
-                                  #   the session holds (standard = the raw waveforms; stderiv; a whitened space).  The
+                                  #   the session holds (standard = the raw waveforms; stderiv; a whitened space; a
+                                  #   super-sampled space Klusters built, standard_U4: factor x nSamples ticks, lags in
+                                  #   ticks, the base .nst super-sampled when the space has none).  The
                                   #   model is the same in any space (the unit's own dominant-channel shape in that space,
                                   #   a spatial decay); the noise covariance comes from the matching .nst.<variant>, else
                                   #   --signal's spike-free snippets, else the unit's own baseline as white noise.

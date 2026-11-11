@@ -88,16 +88,19 @@ ResolvedInput = namedtuple("ResolvedInput", ["path", "variant", "dotted", "found
 
 
 # lag/dims default to 0 so existing positional unpacking is unaffected.
-VariantSpec = namedtuple("VariantSpec", "family kind order lag dims", defaults=(0, 0))
+VariantSpec = namedtuple("VariantSpec", "family kind order lag dims supersample", defaults=(0, 0, 1))
 
 
 def parse_variant_token(variant):
-    """Decompose a variant token <family>[_<kind><order>], e.g. 'stderiv_C4'.
+    """Decompose a variant token <family>[_<kind><order>][_U<factor>][_D<lag><dims>], e.g. 'stderiv_C4'.
 
-    Returns VariantSpec(family, kind, order, lag, dims).  Suffixes peel from the
+    Returns VariantSpec(family, kind, order, lag, dims, supersample).  Suffixes peel from the
     RIGHT, so a token may carry more than one: stderiv_C5_D34 is the custom
     sdiffPairs pattern AND the lag feature space this module emits under
     --feat-lag (PC1 at -lag/0/+lag plus PC2, `dims` columns per channel).
+    _U<factor> (one digit, 2-9) marks a SUPER-SAMPLED waveform space (Klusters' super-sample
+    mode: factor ticks per acquisition sample, the .spk factor x nSamples long, the peak at
+    0-based tick (peakSampleIndex - 1) x factor); it belongs to the waveform token.
 
     kind is 'S' (plain spatial derivative)
     or 'C' (the session's custom sdiffPairs pattern), order is the spatial-derivative
@@ -110,7 +113,7 @@ def parse_variant_token(variant):
     masquerades as a known one.  Kept honest by test/custody_vectors.tsv, an
     identical copy of the canonical table those three are checked against.
     """
-    rest, kind, order, lag, dims = variant, None, None, 0, 0
+    rest, kind, order, lag, dims, up = variant, None, None, 0, 0, 1
     while True:
         cut = rest.rfind("_")
         if cut == -1:
@@ -120,18 +123,22 @@ def parse_variant_token(variant):
             break
         if suffix[0] == "D":
             if lag or len(suffix) != 3 or suffix[1] == "0":   # repeated, not _D<lag><dims>, lag 0
-                return VariantSpec(variant, None, None, 0, 0)
+                return VariantSpec(variant, None, None, 0, 0, 1)
             lag, dims = int(suffix[1]), int(suffix[2])
+        elif suffix[0] == "U":
+            if up != 1 or len(suffix) != 2 or int(suffix[1]) < 2:   # repeated, not one digit, 0 or 1
+                return VariantSpec(variant, None, None, 0, 0, 1)
+            up = int(suffix[1])
         elif suffix[0] in ("S", "C"):
             if kind or len(suffix) - 1 > 9:   # repeated, or an order longer than 9 digits
-                return VariantSpec(variant, None, None, 0, 0)
+                return VariantSpec(variant, None, None, 0, 0, 1)
             kind, order = suffix[0], int(suffix[1:])
         else:
-            return VariantSpec(variant, None, None, 0, 0)
+            return VariantSpec(variant, None, None, 0, 0, 1)
         rest = rest[:cut]
-    if kind is None and not lag:
-        return VariantSpec(variant, None, None, 0, 0)
-    return VariantSpec(rest, kind, order, lag, dims)
+    if kind is None and not lag and up == 1:
+        return VariantSpec(variant, None, None, 0, 0, 1)
+    return VariantSpec(rest, kind, order, lag, dims, up)
 
 
 def variant_family(variant):
@@ -429,7 +436,23 @@ def waveform_token(method):
     s = parse_variant_token(method)
     if not (1 <= int(s.lag or 0) <= 9):
         return method
-    return s.family + (f"_{s.kind}{s.order}" if s.kind else "")
+    return s.family + (f"_{s.kind}{s.order}" if s.kind else "") + (f"_U{s.supersample}" if s.supersample > 1 else "")
+
+
+def supersample_of(variant):
+    """The super-sampling factor a token carries (1 when none): standard_U4 -> 4,
+    stderiv_C5_U4_D34 -> 4.  Mirrors custody::supersampleOf / ndm_supersample_of."""
+    return int(parse_variant_token(variant).supersample)
+
+
+def waveform_geometry(nsamp, peak, variant):
+    """(nsamp, peak) of the .spk of `variant`: the session's, scaled by the token's
+    super-sampling factor -- factor x nSamples samples, the peak (1-based) at
+    (peak - 1) x factor + 1, as Klusters holds them (Data::applyWaveformSpaceGeometry)."""
+    f = supersample_of(variant)
+    if f <= 1:
+        return int(nsamp), int(peak)
+    return int(nsamp) * f, (int(peak) - 1) * f + 1
 
 
 def resolve(base, type_, group, method):

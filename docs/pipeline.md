@@ -378,7 +378,10 @@ FIBER_KIT_GPU=1 fiber-manifold <base> 6 --clu-stage exp_final         # the matc
 ```
 
 `FK_MANIFOLD_SPK` chooses the waveform space: any `.spk.<variant>.<g>` the session holds (`standard`,
-the raw waveforms, by default; `stderiv`; a whitened space) -- the model is the same in any space, the
+the raw waveforms, by default; `stderiv`; a whitened space; a **super-sampled** space Klusters built,
+`standard_U4` -- the token's `_U<factor>` sets the geometry, factor × nSamples ticks per waveform,
+lags are searched in ticks and reported in µs as before, and with no `.nst` of its own the base
+space's covariance is super-sampled by the same spline) -- the model is the same in any space, the
 unit's own dominant-channel shape in that space times a spatial decay, and the noise covariance comes
 from the matching `.nst.<variant>` (else `--signal`, else white).  Every `.spk` variant of the group
 goes into the Klusters sub-session, so the plugin can take any of them.

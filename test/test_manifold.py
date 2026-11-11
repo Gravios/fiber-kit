@@ -12,6 +12,8 @@ neighbours); a second small unit that is below --min-n):
   * the planted field is found: field spikes reach SNR >= 4 far more often than plain ones, their lag is
     positive (after) and their position near channel 4; the 'after' classes hold mostly field spikes;
   * --spk-variant runs the fit in another .spk space (the temporal derivative) and still finds the field;
+    a super-sampled space (standard_U2, Klusters' _U<factor> token) is read at 2 x nSamples ticks and the
+    lag column stays in microseconds;
   * --channels-set full fits the field over every channel and still finds the planted one;
   * --units with --jobs 2 gives the same per-spike classes (the parallel path is bit-identical);
   * an ISI pair planted 1 ms apart gets a flag (the farther-from-median member);
@@ -157,6 +159,23 @@ def main():
         check(rs.returncode == 0 and "noise covariance from" not in os_, "--spk-variant stderiv: fits in that space (no .nst for it: white noise)", os_)
         check((s3[u2 & hf] >= 4).mean() > 0.8 and (s3[u2 & ~hf] >= 4).mean() < 0.15 and np.median(l3[d3]) > 500
               and abs(np.median(p3[d3]) - 4) < 0.6, f"... and finds the planted field there ({100*(s3[u2 & hf] >= 4).mean():.0f}% / {100*(s3[u2 & ~hf] >= 4).mean():.0f}%, lag {np.median(l3[d3]):.0f} us, ch {np.median(p3[d3]):.2f})")
+        # a super-sampled space (Klusters' _U<factor>): 2 ticks per sample by the cubic spline of the stored
+        # windows; the stage takes the geometry from the token (2 x nSamples, lags in ticks) and the noise
+        # covariance from the base .nst super-sampled the same way
+        from fiber_kit.fiber_manifold import spline_interp_matrix
+        s0 = np.asarray(spk_std).astype(np.float64)                      # (n, NSAMP, NCH)
+        up = np.einsum("kt,ntc->nkc", spline_interp_matrix(NSAMP, 2), s0)   # the spline Klusters applies to a stored window
+        nio.write_spk(base, 1, up.round().clip(-32768, 32767).astype(np.int16), variant="standard_U2")
+        ru = run([base, "1"] + common + ["--spk-variant", "standard_U2", "--out-tag", "up2"], env, sd)
+        ou = ru.stdout + ru.stderr
+        fu = nio.read_fet_file(base + ".fet.manifold.1").values
+        s4, l4, p4 = fu[:, 0] / 100, fu[:, 1], fu[:, 2] / 100
+        d4 = u2 & hf & (s4 >= 4)
+        check(ru.returncode == 0 and f"super-sampled space standard_U2: {NSAMP * 2} ticks per waveform (2 per sample)" in ou,
+              "--spk-variant standard_U2: the geometry follows the token (2 x nSamples ticks)", ou)
+        check((s4[u2 & hf] >= 4).mean() > 0.8 and (s4[u2 & ~hf] >= 4).mean() < 0.15 and 600 < np.median(l4[d4]) < 1000
+              and abs(np.median(p4[d4]) - 4) < 0.6,
+              f"... the planted field found at its lag in MICROSECONDS, not ticks ({np.median(l4[d4]):.0f} us, ch {np.median(p4[d4]):.2f})")
         rs = run([base, "1"] + common + ["--spk-variant", "nosuch"], env, sd)
         check(rs.returncode != 0 and "no .spk for 'nosuch'" in rs.stderr, "an absent .spk variant is refused by name")
         rf = run([base, "1"] + common + ["--channels-set", "strong"], env, sd)

@@ -16,6 +16,7 @@
 #   method_token  <token>  <family>  <kind>  <order>   (kind/order empty when absent)
 #   is_stderiv    <method>  <0|1>
 #   waveform_token <token>  <waveform token>
+#   supersample_of <token>  <factor>          (1 when the token carries no _U<factor>)
 #   drops_last    <order>  <0|1>
 #
 # ── classify ────────────────────────────────────────────────────────────────
@@ -131,6 +132,12 @@ method_token	stderiv_C٣	stderiv_C٣
 method_token	stderiv_C123456789	stderiv	C	123456789
 method_token	stderiv_C1234567890	stderiv_C1234567890		
 method_token	stderiv_S99999999999999999999	stderiv_S99999999999999999999		
+method_token	standard_U4	standard		
+method_token	stderiv_C5_U4	stderiv	C	5
+method_token	stderiv_C5_U4_D34	stderiv	C	5
+method_token	stderiv_U1	stderiv_U1		
+method_token	stderiv_U12	stderiv_U12		
+method_token	stderiv_U4_U2	stderiv_U4_U2		
 # -- waveform_token: the waveform space of a feature-space token -------------
 #   waveform_token  <token>  <waveform token>
 # A _D<lag><dims> token names features over the waveforms of the token without
@@ -144,6 +151,22 @@ waveform_token	stderiv_S3_D90	stderiv_S3
 waveform_token	stderiv	stderiv
 waveform_token	stderiv_C5	stderiv_C5
 waveform_token	stderiv_D04	stderiv_D04
+waveform_token	stderiv_C5_U4_D34	stderiv_C5_U4
+waveform_token	standard_U2_D12	standard_U2
+waveform_token	standard_U4	standard_U4
+# -- supersample_of: the _U<factor> of a super-sampled waveform space ----------
+#   supersample_of  <token>  <factor>
+supersample_of	standard	1
+supersample_of	standard_U4	4
+supersample_of	standard_U2	2
+supersample_of	stderiv_C5_U4	4
+supersample_of	stderiv_C5_U4_D34	4
+supersample_of	stderiv_U4_C5	4
+supersample_of	stderiv_U1	1
+supersample_of	stderiv_U0	1
+supersample_of	stderiv_U12	1
+supersample_of	stderiv_U4_U2	1
+supersample_of	stderivfoo	1
 waveform_token	stderiv_D3	stderiv_D3
 waveform_token	stderiv_D134	stderiv_D134
 waveform_token	stderiv_X1_D34	stderiv_X1_D34

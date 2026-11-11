@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.5] — the `_U<factor>` super-sampled token; `fiber-manifold` in a super-sampled space
+- **Token grammar** (neurosuite-3 0949): `<family>[_<kind><order>][_U<factor>][_D<lag><dims>]`.
+  `_U<factor>` (one digit, 2-9) marks a super-sampled waveform space (Klusters' super-sample mode:
+  factor ticks per acquisition sample, the `.spk` factor × nSamples long, the peak at 0-based tick
+  (peakSampleIndex − 1) × factor); it belongs to the waveform token.  `neuro_io.parse_variant_token`
+  gains `supersample`, `waveform_token` keeps the suffix, `supersample_of` and `waveform_geometry`
+  are new; `test/custody_vectors.tsv` carries the canonical table's 19 new rows (contract.yaml hash
+  updated), `test_custody_token_conformance.py` runs the `supersample_of` kind.
+- **`fiber-manifold --spk-variant standard_U4`**: the geometry follows the token (factor × nSamples
+  ticks, the peak scaled), lags are searched in ticks (`FK_MANIFOLD_LAG_MS` × factor) and the lag
+  column stays in µs; with no `.nst` of the space, the base space's covariance is super-sampled by
+  the same natural cubic spline (`spline_interp_matrix`, `supersample_cov`; C_up = L C Lᵀ plus a
+  small diagonal for the rank the interpolation lacks and the int16 rounding) -- a white model
+  would have seen fields in the correlated noise of the interpolated ticks (39% false at ×2);
+  `--signal` is not used in such a space.  `test_manifold.py` +2 (37).
+
 ## [0.66.4] — `fiber-manifold` in any waveform space (`FK_MANIFOLD_SPK`)
 - **`FK_MANIFOLD_SPK`** (`--spk-variant`, default `standard`): the `.spk.<variant>.<g>` the fields are
   fitted in -- the raw waveforms, `stderiv`, a whitened space, any variant the session holds (every

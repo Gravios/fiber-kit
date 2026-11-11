@@ -106,6 +106,10 @@ with open(VECTORS) as fh:
             got = nio.waveform_token(f[1])
             check(got == f[2], f"waveform_token({f[1]!r}) == {f[2]!r} (got {got!r})")
 
+        elif kind == "supersample_of":
+            got = nio.supersample_of(f[1])
+            check(got == int(f[2]), f"supersample_of({f[1]!r}) == {f[2]} (got {got})")
+
         else:
             skipped[kind] = skipped.get(kind, 0) + 1
 
