@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.4] — `fiber-manifold` in any waveform space (`FK_MANIFOLD_SPK`)
+- **`FK_MANIFOLD_SPK`** (`--spk-variant`, default `standard`): the `.spk.<variant>.<g>` the fields are
+  fitted in -- the raw waveforms, `stderiv`, a whitened space, any variant the session holds (every
+  one goes into the Klusters sub-session).  The model is the same in any space (the unit's own
+  dominant-channel shape in that space, a spatial decay); the noise covariance comes from the matching
+  `.nst.<variant>`, else `--signal`, else white.  A named variant that is absent is refused by name
+  (custody's fallback to `standard` no longer applies to an explicit choice).  A `text` parameter of
+  the Klusters descriptor, a knob of the `klusters-manifold` profile; `test_manifold.py` +3 (34): the
+  planted field is found in the temporal-derivative space as well.
+
 ## [0.66.3] — the manifold plugin is a Klusters REFINE
 - **`fiber-kit-manifold.xml`** declares `<integration>refine</integration>`: Klusters (neurosuite-3 0948)
   runs it on the atoms of the selected units -- the sub-session's seed `.clu` carries the parent ids and a

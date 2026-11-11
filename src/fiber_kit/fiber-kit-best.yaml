@@ -1378,6 +1378,12 @@ FK_MANIFOLD_WINDOW_MIN:  20       # 20 (min).  Sliding window length; each windo
 FK_MANIFOLD_STEP_MIN:    5        # 5 (min).  Window step; each spike takes the nearest window's fit.
 FK_MANIFOLD_MIN_N:       2000     # 2000.  Spikes a unit needs to be examined (--units overrides).
 FK_MANIFOLD_MIN_WINDOW_N: 300     # 300.  Spikes a window needs for its own template; fewer: the nearest spikes.
+FK_MANIFOLD_SPK:         standard # standard.  The waveform space the fields are fitted in: any <base>.spk.<variant>.<g>
+                                  #   the session holds (standard = the raw waveforms; stderiv; a whitened space).  The
+                                  #   model is the same in any space (the unit's own dominant-channel shape in that space,
+                                  #   a spatial decay); the noise covariance comes from the matching .nst.<variant>, else
+                                  #   --signal's spike-free snippets, else the unit's own baseline as white noise.
+                                  #   The amplitude column of .fet.manifold is in that space's units.
 FK_MANIFOLD_CHANNELS:    off      # off | full.  Channels the field is fitted on.  off = the off-spike channels (the
                                   #   neighbours' fields, the unit's own template kept out of the fit); full = every
                                   #   channel of the group, the unit's own included: the residual on the strong channels

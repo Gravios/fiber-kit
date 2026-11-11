@@ -11,6 +11,7 @@ neighbours); a second small unit that is below --min-n):
     one atom; the .clu is unchanged (nothing moves between units);
   * the planted field is found: field spikes reach SNR >= 4 far more often than plain ones, their lag is
     positive (after) and their position near channel 4; the 'after' classes hold mostly field spikes;
+  * --spk-variant runs the fit in another .spk space (the temporal derivative) and still finds the field;
   * --channels-set full fits the field over every channel and still finds the planted one;
   * --units with --jobs 2 gives the same per-spike classes (the parallel path is bit-identical);
   * an ISI pair planted 1 ms apart gets a flag (the farther-from-median member);
@@ -144,6 +145,20 @@ def main():
         check(rf.returncode == 0 and "all channels [0, 1, 2, 3, 4, 5]" in of, "--channels-set full fits on every channel", of)
         check((s2[u2 & hf] >= 4).mean() > 0.8 and (s2[u2 & ~hf] >= 4).mean() < 0.15 and np.median(l2[d2]) > 500
               and abs(np.median(p2[d2]) - 4) < 0.6, "... and still finds the planted field at its lag and channel")
+        # --spk-variant: any .spk space the session holds (here the temporal derivative, with no .nst of its own)
+        spk_std = nio.open_spk_file(base + ".spk.standard.1", NSAMP, NCH)
+        d = np.diff(np.asarray(spk_std).astype(np.int32), axis=1, prepend=np.asarray(spk_std)[:, :1].astype(np.int32))
+        nio.write_spk(base, 1, d.clip(-32768, 32767).astype(np.int16), variant="stderiv")
+        rs = run([base, "1"] + common + ["--spk-variant", "stderiv", "--out-tag", "deriv"], env, sd)
+        os_ = rs.stdout + rs.stderr
+        fv = nio.read_fet_file(base + ".fet.manifold.1").values
+        s3, l3, p3 = fv[:, 0] / 100, fv[:, 1], fv[:, 2] / 100
+        d3 = u2 & hf & (s3 >= 4)
+        check(rs.returncode == 0 and "noise covariance from" not in os_, "--spk-variant stderiv: fits in that space (no .nst for it: white noise)", os_)
+        check((s3[u2 & hf] >= 4).mean() > 0.8 and (s3[u2 & ~hf] >= 4).mean() < 0.15 and np.median(l3[d3]) > 500
+              and abs(np.median(p3[d3]) - 4) < 0.6, f"... and finds the planted field there ({100*(s3[u2 & hf] >= 4).mean():.0f}% / {100*(s3[u2 & ~hf] >= 4).mean():.0f}%, lag {np.median(l3[d3]):.0f} us, ch {np.median(p3[d3]):.2f})")
+        rs = run([base, "1"] + common + ["--spk-variant", "nosuch"], env, sd)
+        check(rs.returncode != 0 and "no .spk for 'nosuch'" in rs.stderr, "an absent .spk variant is refused by name")
         rf = run([base, "1"] + common + ["--channels-set", "strong"], env, sd)
         check(rf.returncode == 2 and "invalid choice" in rf.stderr, "--channels-set takes off | full only")
         # the other units' atoms when the input HAS a hierarchy: build one and rerun to a new tag

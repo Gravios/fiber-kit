@@ -69,6 +69,9 @@ _KNOBS = {
     "FK_MANIFOLD_STEP_MIN": ("step_min", float, 5.0, "window step (minutes); each spike takes the nearest window's fit"),
     "FK_MANIFOLD_MIN_N": ("min_n", int, 2000, "spikes a unit needs to be examined"),
     "FK_MANIFOLD_MIN_WINDOW_N": ("min_window_n", int, 300, "spikes a window needs for its own template; fewer: the neighbour's"),
+    "FK_MANIFOLD_SPK": ("spk_variant", str, "standard", "the waveform space the fields are fitted in: any <base>.spk.<variant>.<g> "
+                                                        "(standard = the raw waveforms; stderiv, a whitened space...).  The noise "
+                                                        "covariance comes from the matching .nst, else --signal, else white"),
     "FK_MANIFOLD_CHANNELS": ("channels_set", str, "off", "channels the field is fitted on: off = the off-spike channels "
                                                         "(by --off-frac / --off-channels), full = every channel of the group"),
     "FK_MANIFOLD_OFF_FRAC": ("off_frac", float, 0.4, "a channel is off-spike when its template trough is below this "
@@ -450,7 +453,6 @@ def main(argv=None):
     ap.add_argument("--total-channels", type=int, default=None)
     ap.add_argument("--channels", default=None, help="group channels, e.g. 40-47 (default: session yaml)")
     nio.add_clu_args(ap, method_default="stderiv_C5_D34", stage_default="", stage_dest="clu_stage", stage_alias=None)
-    ap.add_argument("--spk-variant", default="standard", help="waveforms the fields are read from (raw)")
     ap.add_argument("--res-variant", default="", help="pin the .res variant ('' = the shared .res)")
     ap.add_argument("--units", default=None, help="comma-separated units to examine (default: every unit with >= --min-n)")
     ap.add_argument("--off-channels", default=None, help="off-spike channels as group indices, e.g. 3,4,5,6,7 (default: by --off-frac)")
@@ -474,8 +476,8 @@ def main(argv=None):
     _, clu = nio.resolve_clu(a, base, a.elec, n_spikes=res.size, stage_dest="clu_stage")
     clu = np.asarray(clu, np.int64)
     rs = nio.resolve(base, "spk", a.elec, a.spk_variant)
-    if not rs.found:
-        raise SystemExit(f"no .spk for '{a.spk_variant}' (looked for {rs.path})")
+    if not rs.found or (rs.variant or "standard") != a.spk_variant:     # a named space, not custody's fallback
+        raise SystemExit(f"no .spk for '{a.spk_variant}' (looked for {nio.session_path(base, 'spk', a.elec, variant=a.spk_variant)})")
     spk = nio.open_spk_file(rs.path, NS, NC)
     if spk.shape[0] != res.size:
         raise SystemExit(f".spk.{a.spk_variant} has {spk.shape[0]} spikes, .res {res.size}")

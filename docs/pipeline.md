@@ -377,6 +377,11 @@ fiber-pipeline 6 fiber-manifold --units 5 --off-channels 3,4,5,6,7    # one unit
 FIBER_KIT_GPU=1 fiber-manifold <base> 6 --clu-stage exp_final         # the matched filter on the GPU
 ```
 
+`FK_MANIFOLD_SPK` chooses the waveform space: any `.spk.<variant>.<g>` the session holds (`standard`,
+the raw waveforms, by default; `stderiv`; a whitened space) -- the model is the same in any space, the
+unit's own dominant-channel shape in that space times a spatial decay, and the noise covariance comes
+from the matching `.nst.<variant>` (else `--signal`, else white).  Every `.spk` variant of the group
+goes into the Klusters sub-session, so the plugin can take any of them.
 `FK_MANIFOLD_CHANNELS` chooses the channels the field is fitted on: `off` (default) -- the unit's
 off-spike channels, so the unit's own template stays out of the fit and what is found is the
 neighbours' fields; `full` -- every channel of the group, the unit's own included, so the residual on its

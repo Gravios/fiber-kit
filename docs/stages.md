@@ -1315,7 +1315,6 @@ Positional: `base`, `elec`
 | `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
 | `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
-| `--spk-variant` | `standard` | waveforms the fields are read from (raw) |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--units` | — | comma-separated units to examine (default: every unit with >= --min-n) |
 | `--off-channels` | — | off-spike channels as group indices, e.g. 3,4,5,6,7 (default: by --off-frac) |
@@ -1323,6 +1322,7 @@ Positional: `base`, `elec`
 | `--step-min` | `5.0` | window step (minutes); each spike takes the nearest window's fit [FK_MANIFOLD_STEP_MIN; default 5.0] |
 | `--min-n` | `2000` | spikes a unit needs to be examined [FK_MANIFOLD_MIN_N; default 2000] |
 | `--min-window-n` | `300` | spikes a window needs for its own template; fewer: the neighbour's [FK_MANIFOLD_MIN_WINDOW_N; default 300] |
+| `--spk-variant` | `standard` | the waveform space the fields are fitted in: any <base>.spk.<variant>.<g> (standard = the raw waveforms; stderiv, a whitened space...). The noise covariance comes from the matching .nst, else --signal, else white [FK_MANIFOLD_SPK; default standard] |
 | `--channels-set` | `off` | channels the field is fitted on: off = the off-spike channels (by --off-frac / --off-channels), full = every channel of the group [FK_MANIFOLD_CHANNELS; default off] — choices: `off`, `full` |
 | `--off-frac` | `0.4` | a channel is off-spike when its template trough is below this fraction of the deepest channel's (used when --off-channels is unset) [FK_MANIFOLD_OFF_FRAC; default 0.4] |
 | `--min-off` | `3` | at least this many off-spike channels (the shallowest are added) [FK_MANIFOLD_MIN_OFF; default 3] |
