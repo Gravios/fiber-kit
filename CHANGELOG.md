@@ -4,6 +4,12 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.2] — hybrid-search: the rkk stage ordered by what was measured
+- `plans/tune/hybrid-search.yaml`: on the three messiest clusters of the 0312 chunk, rkk restarts
+  without the starting-K sweep changed nothing, the sweep acted (completeness 0.26 → 0.76 at unchanged
+  purity, reserve 244 → 41) and restarts helped on top of it; the rkk stage now searches
+  `FK_SESSION_RKK_MIN` first, then `RKK_STARTS` [1, 4, 8], `RKK_REALIGN_ITERS` [2, 4].
+
 ## [0.67.1] — rkk effort knobs and the hybrid-search tune spec
 - **`FK_SESSION_RKK_STARTS`** (random restarts per starting K, best score wins), **`FK_SESSION_RKK_MIN`**
   (a starting-K sweep from this value up to `--rkk-max`, as the classic KlustaKwik driver does; 0 = one

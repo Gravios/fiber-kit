@@ -22,15 +22,23 @@
 #               standard x stderiv_C5_D34 (scale 1) > standard x stderiv_C5 > stderiv_C5 > stderiv_C5_D34,
 #               with the gain on units of half-width >= 6 samples and the only cost a few more small
 #               noise-led clusters -- hence FEAT_LAG searched HERE, with the hybrid, not after it.
-#   2. rkk      the splitter's effort: restarts, a starting-K sweep, more cluster<->realign passes,
+#   2. rkk      the splitter's effort: a starting-K sweep, restarts, more cluster<->realign passes,
 #               and the dimensionality it sees (the hybrid projection is 48 wide; the per-cluster SVD
-#               to rkk-dims / DIP_DIM may be dominated by neither block).
+#               to rkk-dims / DIP_DIM may be dominated by neither block).  MEASURED on the three
+#               messiest clusters of the 0312 chunk (2119 / 1713 / 1248 spikes, 5-8-noise mixes):
+#               restarts alone change nothing (4 starts at --rkk-max: identical labels); the K sweep is
+#               what acts, and restarts help on top of it -- completeness (share of a curated unit in
+#               its largest sub-cluster) 0.26 -> 0.76, 0.45 -> 0.59, 0.11 -> 0.24 at unchanged purity,
+#               the reserve 244 -> 41 / 307 -> 43 spikes, sub-clusters 15 -> 5.  Cost x20-30 per
+#               cluster.  So RKK_MIN is searched FIRST (it must be on for RKK_STARTS to matter) and
+#               RKK_STARTS after it; the plain restarts-only point is not in the grid.
 #   3. session  the two session knobs the hybrid may move (the dip gate and the inclusion core).
 #   4. merge / psame  the downstream merges, cheap, re-tuned on the new fibers.
 #
 # COST.  A hybrid or rkk knob re-sorts the chunks (one fiber-session each, ~10-15 min per 2 x 18-min chunks
-# on the lab machine, 40-55 min on 2 cores); the merge / psame knobs re-run only their step.  Stage 1 is at
-# most 2 + 3 + 3 + 2 = 10 trials per pass, stage 2 at most 3 + 3 + 3 + 2 + 2 = 13.
+# on the lab machine, 40-55 min on 2 cores; a sweep + 8 starts multiplies the fine split's share of that by
+# ~20); the merge / psame knobs re-run only their step.  Stage 1 is at most 2 + 3 + 3 + 2 = 10 trials per
+# pass, stage 2 at most 3 + 3 + 2 + 2 + 2 = 12.
 #
 # READ, beyond the objective (trials.tsv): int_acc / int_rec (the broad, high-rate units the exp search
 # lost, 0.468 -> 0.389 -- the hybrid's first job), all_frag80 (over-splitting: should stay within +10%
@@ -65,9 +73,9 @@ stages:
       FK_SESSION_FEAT_LAG:         [0, 3]                     # stderiv block: PC1-3 | PC1 at -3/0/+3 + PC2 (_D34)
   - name: rkk                                     # the splitter's effort and dimensionality
     knobs:
-      FK_SESSION_RKK_STARTS:       [1, 2, 4]                  # random restarts per starting K
-      FK_SESSION_RKK_MIN:          [0, 20, 35]                # 0 = one start at --rkk-max; else sweep K from here
-      FK_SESSION_RKK_REALIGN_ITERS: [2, 4, 6]                 # cluster<->realign passes
+      FK_SESSION_RKK_MIN:          [0, 20, 35]                # 0 = one start at --rkk-max; else sweep K from here (acts)
+      FK_SESSION_RKK_STARTS:       [1, 4, 8]                  # restarts per K: inert without the sweep, 8 > 4 with it
+      FK_SESSION_RKK_REALIGN_ITERS: [2, 4]                    # cluster<->realign passes
       "session:rkk-dims":          [6, 8]                     # per-cluster SVD dims the CEM runs on
       FK_SESSION_DIP_DIM:          [4, 6]
   - name: session
