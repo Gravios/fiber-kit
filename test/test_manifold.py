@@ -176,6 +176,8 @@ def main():
         check((s4[u2 & hf] >= 4).mean() > 0.8 and (s4[u2 & ~hf] >= 4).mean() < 0.15 and 600 < np.median(l4[d4]) < 1000
               and abs(np.median(p4[d4]) - 4) < 0.6,
               f"... the planted field found at its lag in MICROSECONDS, not ticks ({np.median(l4[d4]):.0f} us, ch {np.median(p4[d4]):.2f})")
+        rs = run([base, "1"] + common + ["--spk-variant", "%spk", "--out-tag", "tok"], env, sd)
+        check(rs.returncode == 0 and "did not substitute: using standard" in rs.stderr, "an unsubstituted %spk token falls back to standard")
         rs = run([base, "1"] + common + ["--spk-variant", "nosuch"], env, sd)
         check(rs.returncode != 0 and "no .spk for 'nosuch'" in rs.stderr, "an absent .spk variant is refused by name")
         rf = run([base, "1"] + common + ["--channels-set", "strong"], env, sd)

@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.6] — the manifold plugin follows the space Klusters shows
+- **`fiber-kit-manifold.xml`**: `FK_MANIFOLD_SPK` defaults to `%spk`, the context token neurosuite-3
+  0951 substitutes with the shown `.spk`'s method token (`standard`, `stderiv_C5`, `standard_U4` in
+  super-sample mode), so a refine run from Klusters fits in the space on screen; a named variant
+  still overrides it.  `test_klusters_contract.py` +1 (the argv Klusters assembles carries
+  `FK_MANIFOLD_SPK=standard_U4` from the context); an unsubstituted `%spk` (an older Klusters) falls
+  back to `standard`, `test_manifold.py` +1 (38).
+
 ## [0.66.5] — the `_U<factor>` super-sampled token; `fiber-manifold` in a super-sampled space
 - **Token grammar** (neurosuite-3 0949): `<family>[_<kind><order>][_U<factor>][_D<lag><dims>]`.
   `_U<factor>` (one digit, 2-9) marks a super-sampled waveform space (Klusters' super-sample mode:

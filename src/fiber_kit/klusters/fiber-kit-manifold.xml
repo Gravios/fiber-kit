@@ -69,10 +69,10 @@
     </parameter>
     <parameter>
       <n>FK_MANIFOLD_SPK</n>
-      <value>standard</value>
+      <value>%spk</value>
       <status>Optional</status>
       <type>text</type>
-      <help>The waveform space the fields are fitted in: the variant of a .spk the session holds (standard = raw; stderiv; a whitened space). Every .spk variant of the group is in the sub-session. The noise covariance comes from the matching .nst, else the unit's own baseline.</help>
+      <help>The waveform space the fields are fitted in. %spk = the space Klusters shows (its .spk's token: standard, stderiv_C5, standard_U4 in super-sample mode; neurosuite-3 0951), or name a variant of a .spk the session holds (standard = raw; stderiv; a whitened space). Every .spk variant of the group is in the sub-session. The noise covariance comes from the matching .nst (a super-sampled space: the base .nst super-sampled), else the unit's own baseline.</help>
     </parameter>
     <parameter>
       <n>FK_MANIFOLD_CHANNELS</n>

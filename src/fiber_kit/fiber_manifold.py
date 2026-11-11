@@ -515,6 +515,9 @@ def main(argv=None):
     # A super-sampled waveform space (Klusters' _U<factor>): factor ticks per acquisition
     # sample -- the .spk is factor x nSamples long, lags are in ticks (rate SR x factor),
     # the .res stays in acquisition samples.
+    if a.spk_variant.startswith("%"):            # a Klusters context token left unsubstituted (an older Klusters): the raw space
+        log(f"[manifold] --spk-variant {a.spk_variant!r} is a context token Klusters did not substitute: using standard")
+        a.spk_variant = "standard"
     UP = nio.supersample_of(a.spk_variant)
     NS, PK = nio.waveform_geometry(NS, int(cfg.get("peak") or NS // 2), a.spk_variant)
     SRW = SR * UP

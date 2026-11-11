@@ -396,7 +396,8 @@ Units run in parallel (`FK_MANIFOLD_JOBS`, one process each; the BLAS threads ar
 `FIBER_KIT_GPU=1` puts the matched-filter products on the GPU instead (CuPy, `fiber_kit.backend`).
 `fk run --FK_<knob> value` (or `--FK_<knob>=value`) sets any knob for one run, over the config.
 
-**From Klusters**: select the unit(s) (or their children), choose **Refine** in the wheel's
+**From Klusters**: the plugin fits in the waveform space Klusters shows (`FK_MANIFOLD_SPK` defaults to the
+`%spk` context token: `standard`, `stderiv_C5`, `standard_U4` in super-sample mode).  Select the unit(s) (or their children), choose **Refine** in the wheel's
 *Recluster ▸ Plugin* ring (or *Actions ▸ Recluster ▸ Engine ▸ Refine: fiber-kit manifold*) and press
 `Shift+R`; or run *Plugins ▸ fiber-kit-manifold* with the dialog.  `fk install klusters-plugin`
 installs its descriptor and the `klusters-manifold` profile (`fiber-kit-klusters-manifold.yaml`, the
