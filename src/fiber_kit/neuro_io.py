@@ -445,6 +445,21 @@ def supersample_of(variant):
     return int(parse_variant_token(variant).supersample)
 
 
+def base_rate_token(variant):
+    """The base-rate token of a super-sampled one: the _U<factor> dropped, kind and lag kept
+    (stderiv_C5_U4_D34 -> stderiv_C5_D34); unchanged without _U.  A .res under a _U token holds
+    timestamps in TICKS (sample x factor + phase: Klusters' super-sampled .res) and a _U .spk another
+    geometry, so the SHARED base-rate copy is the one under this token.  Mirrors
+    custody::baseRateToken / base_rate_token (ndm_resolve_io) / ndm_base_rate_token."""
+    s = parse_variant_token(variant)
+    if int(s.supersample) <= 1:
+        return variant
+    w = s.family + (f"_{s.kind}{s.order}" if s.kind else "")
+    if 1 <= int(s.lag or 0):
+        w += f"_D{s.lag}{s.dims}"
+    return w
+
+
 def waveform_geometry(nsamp, peak, variant):
     """(nsamp, peak) of the .spk of `variant`: the session's, scaled by the token's
     super-sampling factor -- factor x nSamples samples, the peak (1-based) at
@@ -472,6 +487,8 @@ def resolve(base, type_, group, method):
     if k == "MethodSpecific":
         path = f"{base}.{type_}.{method}.{g}"
         return ResolvedInput(path, method, True, os.path.exists(path))
+    if type_ == "res":                      # a .res is always the BASE-RATE one (a _U res holds ticks)
+        method = base_rate_token(method)
     wave = waveform_token(method)
     cands = [method]
     if wave != method and wave != "standard":
@@ -511,6 +528,9 @@ def resolve_any(base, type_, group, preferred=""):
 
     @return ResolvedInput(path, variant, dotted, found)
     """
+    # The ONE base-rate copy: a _U preferred is tried as its base-rate token and a _U-tagged copy is
+    # never scanned to (ticks / another geometry; base_rate_token).
+    preferred = base_rate_token(preferred) if preferred else preferred
     order = [preferred] if preferred else []
     order += [m for m in ("standard", "stderiv", "sdiff") if m != preferred]
     for m in order:
@@ -530,6 +550,8 @@ def resolve_any(base, type_, group, preferred=""):
             continue
         tok = name[len(head):len(name) - len(tail)]
         if not tok or "." in tok:            # a longer stage tag, not a bare token
+            continue
+        if supersample_of(tok) > 1:          # another geometry (a super-sampled copy)
             continue
         return ResolvedInput(os.path.join(d, name), tok, True, True)
 

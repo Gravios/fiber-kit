@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.7] — a `.res` under a `_U` token is in ticks; the shared `.res` stays base-rate
+- **`neuro_io.base_rate_token(variant)`**: the `_U<factor>` dropped, kind and lag kept
+  (`stderiv_C5_U4_D34` → `stderiv_C5_D34`).  Klusters (neurosuite-3 0958) now writes a
+  super-sampled session's spike times in **ticks** (`sample × factor + phase`) to
+  `<base>.res.<token>_U<f>.N`; it is never the shared base-rate `.res`: `resolve()` takes a `_U`
+  method's `.res` at the base rate (its `.spk` stays its own), `resolve_any()` tries a `_U`
+  preferred as its base-rate token and never scans to a `_U`-tagged copy.  `read_res` of a session
+  that carries both therefore still returns acquisition samples, as `fiber-manifold` assumes.
+  `custody_vectors.tsv` synced from neurosuite-3 (+19 rows, kind `base_rate_token`; contract hash
+  updated); `test_custody_token_conformance` 182 checks.
+
 ## [0.66.6] — the manifold plugin follows the space Klusters shows
 - **`fiber-kit-manifold.xml`**: `FK_MANIFOLD_SPK` defaults to `%spk`, the context token neurosuite-3
   0951 substitutes with the shown `.spk`'s method token (`standard`, `stderiv_C5`, `standard_U4` in

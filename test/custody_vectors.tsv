@@ -17,6 +17,7 @@
 #   is_stderiv    <method>  <0|1>
 #   waveform_token <token>  <waveform token>
 #   supersample_of <token>  <factor>          (1 when the token carries no _U<factor>)
+#   base_rate_token <token>  <token without _U> (kind and lag kept; unchanged without _U)
 #   drops_last    <order>  <0|1>
 #
 # ── classify ────────────────────────────────────────────────────────────────
@@ -90,6 +91,12 @@ resolve	spk.stderiv.5	spk	5	stderiv_D34	sess.spk.stderiv.5	1
 resolve	fet.stderiv_C5.5	fet	5	stderiv_C5_D34	sess.fet.stderiv_C5_D34.5	0
 resolve		spk	5	stderiv_C5_D34	sess.spk.stderiv_C5.5	0
 resolve	spk.stderiv.5	spk	5	stderiv_D345	sess.spk.stderiv_D345.5	0
+# A .res resolves at the BASE rate for a _U<factor> method (its own _U res is in
+# ticks; base_rate_token drops the _U, keeping kind and lag); its .spk is its own.
+resolve	res.standard_U4.5,res.standard.5	res	5	standard_U4	sess.res.standard.5	1
+resolve	res.standard_U4.5	res	5	standard_U4	sess.res.standard.5	0
+resolve	spk.standard_U4.5,spk.standard.5	spk	5	standard_U4	sess.spk.standard_U4.5	1
+resolve	res.stderiv_C5.5	res	5	stderiv_C5_U4_D34	sess.res.stderiv_C5.5	1
 
 # -- method tokens: <family>[_<kind><order>], e.g. stderiv_C4 -----------------
 method_token	stderiv	stderiv		
@@ -167,6 +174,17 @@ supersample_of	stderiv_U0	1
 supersample_of	stderiv_U12	1
 supersample_of	stderiv_U4_U2	1
 supersample_of	stderivfoo	1
+# -- base_rate_token: the _U<factor> dropped, kind and lag kept; else unchanged --
+#   base_rate_token  <token>  <base-rate token>
+base_rate_token	standard	standard
+base_rate_token	standard_U4	standard
+base_rate_token	stderiv_C5_U4	stderiv_C5
+base_rate_token	stderiv_C5_U4_D34	stderiv_C5_D34
+base_rate_token	stderiv_U2_D34	stderiv_D34
+base_rate_token	stderiv_C5_D34	stderiv_C5_D34
+base_rate_token	stderiv_U1	stderiv_U1
+base_rate_token	stderiv_U4_U2	stderiv_U4_U2
+base_rate_token	stderivfoo	stderivfoo
 waveform_token	stderiv_D3	stderiv_D3
 waveform_token	stderiv_D134	stderiv_D134
 waveform_token	stderiv_X1_D34	stderiv_X1_D34
@@ -241,3 +259,12 @@ resolve_any		res	5		sess.res.standard.5	0
 resolve_any		res	5	stderiv	sess.res.stderiv.5	0
 # group is part of the match: a copy for another group must not be returned
 resolve_any	res.stderiv.4	res	5		sess.res.standard.5	0
+# a _U<factor> copy is ANOTHER GEOMETRY (a super-sampled .res holds ticks, a
+# super-sampled .spk factor x the samples): never scanned to, and a _U preferred
+# is tried as its base-rate token (base_rate_token).  The base-rate copy wins.
+resolve_any	res.standard_U4.5	res	5		sess.res.standard.5	0
+resolve_any	res.standard_U4.5,res.standard.5	res	5	standard_U4	sess.res.standard.5	1
+resolve_any	res.standard_U4.5,res.stderiv.5	res	5	standard_U4	sess.res.stderiv.5	1
+resolve_any	res.standard_U4.5,res.5	res	5		sess.res.5	1
+resolve_any	spk.stderiv_C5_U2.5,spk.stderiv_C5.5	spk	5	stderiv_C5_U2	sess.spk.stderiv_C5.5	1
+resolve_any		res	5	stderiv_C5_U4_D34	sess.res.stderiv_C5_D34.5	0

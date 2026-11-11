@@ -110,6 +110,10 @@ with open(VECTORS) as fh:
             got = nio.supersample_of(f[1])
             check(got == int(f[2]), f"supersample_of({f[1]!r}) == {f[2]} (got {got})")
 
+        elif kind == "base_rate_token":
+            got = nio.base_rate_token(f[1])
+            check(got == f[2], f"base_rate_token({f[1]!r}) == {f[2]!r} (got {got!r})")
+
         else:
             skipped[kind] = skipped.get(kind, 0) + 1
 

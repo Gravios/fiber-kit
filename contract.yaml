@@ -28,7 +28,7 @@ formats:
   eap: {read: 1, write: 1}
   nst: {read: 1, write: 1}
 vectors:
-  custody_vectors.tsv: 4f9bb375324e77b5161caf8ac2efc65d
+  custody_vectors.tsv: 9c081db868dda8b37bf8d2ad00ccf505
   pca_method_vectors.tsv: f3f475f25582f3d9518b1ac7f5c36908
   sdiff_expr_vectors.tsv: a067fcdf129af0f2184cdbb0a3d2697d
   sdiff_grammar_vectors.tsv: 25f9cbf4f82e952a6e533ab29ca83702
