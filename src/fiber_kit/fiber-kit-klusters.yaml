@@ -386,6 +386,24 @@ FK_SESSION_FEAT_LAG:     0        # 0 = classic (PC1,PC2,PC3) | 2-4 (samples).  
                                   #   not: on 2 small chunks it reached the same or more clusters with more
                                   #   near-duplicate templates and dropped the lowest-amplitude units.  Treat
                                   #   as a linking-side win under test on the splitting side.
+FK_SESSION_FEAT_HYBRID:  0        # 0 | 1.  1 = HYBRID fine-split features: the stderiv features as configured
+                                  #   (lag space under FEAT_LAG, else PC1-3) PLUS the leading standard-basis PCs of
+                                  #   the paired RAW .spk.standard window of each spike, one realign shifting both
+                                  #   blocks (the stderiv channels vote, the raw block follows).  WHY: the
+                                  #   derivative spaces lose broad, low-energy units -- on 20120312 g6, d'(C5)/d'(std)
+                                  #   = 0.93 / 0.61 / 0.44 / 0.26 at 1x / 1.5x / 2x / 3x the pyramidal width, at
+                                  #   every amplitude, and the C5 operator is near-singular so the raw window
+                                  #   cannot be recovered from the stderiv one.  Needs .spk.standard and a standard
+                                  #   .pca beside the stderiv ones; otherwise logged OFF.  With --emit-fet the space
+                                  #   is named <method>_D<lag><per+pcs> (stderiv_C5_D36 at lag 3, 2 PCs); it has no
+                                  #   .pca (two bases), so Klusters shows it but cannot refeaturize/realign in it.
+                                  #   UNTUNED: see claude/hybrid-feature-tuning-plan-2026-11-11.md.
+FK_SESSION_HYBRID_PCS:   2        # 2 | 1-3.  Standard-basis components per channel in the raw block.  PC1 carries
+                                  #   the width/energy the derivative loses; PC2 adds raw shape; 3 is the classic
+                                  #   raw space (PC3 ~ alignment jitter).
+FK_SESSION_HYBRID_SCALE: 1.0      # 1.0 | 0.5-2.  Weight of the raw block after both blocks are put on equal total
+                                  #   feature variance (gain fit on 20k spikes).  <1 derivative-led (the raw block
+                                  #   only breaks ties), >1 raw-led.
 
 
 # ============================================================================

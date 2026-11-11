@@ -683,6 +683,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     fine = np.full(len(waves), -1, int); geoms = []; nid = 0
     for cf in np.unique(coarse[coarse >= 0]):
         cidx = np.flatnonzero(coarse == cf); wcf = waves[cidx]
+        # HYBRID feature space: the basis-aware fine splitters get the method windows with the paired
+        # raw windows appended as channels (fiber_pca.hybrid_stack); everything else keeps `wcf`.
+        hyb = basis is not None and basis.get("_hyb") is not None and waves_std is not None
+        wraw = waves_std[cidx] if hyb else None
+        H = (lambda w: _fpca.hybrid_stack(w, wraw)) if hyb else (lambda w: w)
         if deadapt:
             try:
                 from . import fiber_adapt as _fa
@@ -705,26 +710,27 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
         elif method == "rkk":
             if rkk_realign:                                # per-cluster realign EM loop
-                sub = _rkk_realign(wsplit, mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete, basis=basis)
+                sub = _rkk_realign(H(wsplit), mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete, basis=basis)
             else:                                          # legacy: one parent realign, fixed features
-                Fc = _fpca.cluster_features(fl.realign(wsplit), basis, realign=False, dims=rkk_dims) if basis is not None else None
+                Fc = _fpca.cluster_features(fl.realign(H(wsplit)), basis, realign=False, dims=rkk_dims) if basis is not None else None
                 if Fc is None:
                     wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
                     Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
                 sub = _rkk_labels(Fc, rkk_max, fine_mg, seed=42, delete=rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
-            sub = gmm_split(wsplit, pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
+            sub = gmm_split(H(wsplit), pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         if dipsplit and _HAVE_DIP:
             newg = []
+            wcfh = H(wcf)
             for grp in groups:                       # PCA each GROUP (within-unit variance)
                 if len(grp) < 2 * dip_min:
                     newg.append(grp); continue
                 if dip_realign:                      # realign EACH node to its own median (per step)
-                    pieces = _dipsplit_realign(wcf[grp], mask, dip_dim, dip_min, dip_alpha, basis=basis)
+                    pieces = _dipsplit_realign(wcfh[grp], mask, dip_dim, dip_min, dip_alpha, basis=basis)
                 else:                                # legacy: one parent realign, fixed features
-                    Fg = _fpca.cluster_features(fl.realign(wcf[grp]), basis, realign=False, dims=dip_dim) if basis is not None else None
+                    Fg = _fpca.cluster_features(fl.realign(wcfh[grp]), basis, realign=False, dims=dip_dim) if basis is not None else None
                     if Fg is None:
                         wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
                         Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
@@ -1493,7 +1499,11 @@ def _init_chunk_worker(cfg):
     _CTX["space_tf"] = fst.space_transform(
         nio.spk_variant(spkpath, cfg["base"], cfg["elec"]), cfg.get("sdiff_pairs")) if _use_fil else None
     _CTX["spk_std"] = None
-    if float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:      # inter-channel-timing gate needs RAW templates
+    _hyb = (cfg.get("cf", {}).get("basis") or {}).get("_hyb") is not None
+    if _hyb:                                                  # the hybrid raw block: stays open or the run fails
+        _CTX["spk_std"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
+                                          prefer=nio.prefer_standard())
+    elif float(cfg.get("cf", {}).get("off_thr", 0.0)) > 0:    # inter-channel-timing gate needs RAW templates
         try:
             _CTX["spk_std"], _ = nio.open_spk(cfg["base"], cfg["elec"], cfg["nsamp"], cfg["nchan"],
                                               prefer=nio.prefer_standard())
@@ -1829,6 +1839,22 @@ def add_core_arguments(ap):
                          "-N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3.  0 = classic.")
     ap.add_argument("--feat-lag-pc2", type=int, default=1,
                     help="with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only")
+    _gc = cfgmod.load_global_config() or {}
+    ap.add_argument("--feat-hybrid", type=int,
+                    default=int(os.environ.get("FK_SESSION_FEAT_HYBRID") or _gc.get("FK_SESSION_FEAT_HYBRID") or 0),
+                    help="FK_SESSION_FEAT_HYBRID. 1 = HYBRID fine-split features: the --method (stderiv) "
+                         "features as configured (lag space with --feat-lag) PLUS the leading standard-basis "
+                         "PCs of the paired RAW .spk.standard window of each spike, one realign shifting "
+                         "both.  The derivative spaces lose broad, low-energy units (the loss grows with "
+                         "spike width: d' x0.6 at 1.5x the pyramidal width, x0.44 at 2x) that the raw space "
+                         "keeps; the raw block puts them back.  Needs .spk.standard beside the method .spk.")
+    ap.add_argument("--hybrid-pcs", type=int,
+                    default=int(os.environ.get("FK_SESSION_HYBRID_PCS") or _gc.get("FK_SESSION_HYBRID_PCS") or 2),
+                    help="FK_SESSION_HYBRID_PCS. standard-basis components per channel in the raw block (1-3)")
+    ap.add_argument("--hybrid-scale", type=float,
+                    default=float(os.environ.get("FK_SESSION_HYBRID_SCALE") or _gc.get("FK_SESSION_HYBRID_SCALE") or 1.0),
+                    help="FK_SESSION_HYBRID_SCALE. weight of the raw block relative to the method block after "
+                         "the two are put on equal total variance (1 = equal; <1 derivative-led, >1 raw-led)")
     ap.add_argument("--exclude-clu", default=None,
                     help="per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- "
                          "e.g. fiber-flag-artifacts' output.  Excluded spikes never enter a chunk, so they "
@@ -2287,6 +2313,54 @@ def main():
         else:
             log(f"fine-split shape features: global basis '{cluster_basis.get('_variant') or a.method}' "
                 f"({cluster_basis['evec'].shape[0]}ch x {cluster_basis['evec'].shape[1]}comp)")
+    # HYBRID: the raw (.spk.standard) windows ride along as trailing channels of the fine-split
+    # arrays (fiber_pca.hybrid_stack) and the basis carries `_hyb`, so the same call sites that
+    # take `_lag` take the hybrid -- again no signature change and no call site to miss.  The
+    # aligner sums only the method channels (fl.set_align_channels), so the raw block follows the
+    # stderiv alignment instead of voting in it.
+    hybrid = False
+    if a.feat_hybrid and cluster_basis is not None:
+        std_basis = _fpca.read_cluster_basis(a.base, a.elec, "standard")
+        if nio.parse_variant_token(a.method).family == "standard":
+            det("hybrid", "OFF: --method is already the standard space")
+        elif std_basis is None:
+            det("hybrid", "OFF: no .pca (standard) basis to project the raw block on -- run ndm_pca "
+                          "for the standard space, or clear FK_SESSION_FEAT_HYBRID")
+        else:
+            try:
+                _sraw, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan, prefer=nio.prefer_standard())
+            except FileNotFoundError:
+                _sraw = None
+            if _sraw is None:
+                det("hybrid", "OFF: no .spk.standard beside the method .spk")
+            elif _sraw.shape[0] != nspk:
+                raise SystemExit(f"hybrid: .spk.standard holds {_sraw.shape[0]:,} spikes, the .res {nspk:,} "
+                                 "-- the raw block would pair the wrong spikes")
+            else:
+                cluster_basis["_hyb"] = _fpca.hybrid_basis(std_basis, pcs=a.hybrid_pcs, scale=a.hybrid_scale,
+                                                           nraw=a.nchan)
+                _gs = np.sort(np.random.default_rng(0).choice(nspk, min(nspk, 20000), replace=False))
+                fl.set_align_channels(a.nchan)
+                os.environ["FIBER_ALIGN_CHANNELS"] = str(a.nchan)          # reach forked/spawned pool workers
+                cluster_basis["_hyb"]["gain"] = _fpca.fit_hybrid_gain(np.asarray(spk[_gs], float),
+                                                                      np.asarray(_sraw[_gs], float), cluster_basis)
+                hybrid = True
+                hb = cluster_basis["_hyb"]
+                log(f"hybrid features: + standard basis {hb['basis']['evec'].shape[0]}ch x {hb['pcs']} "
+                    f"of the raw window, scale {hb['scale']:g} (gain {hb['gain']:.4g})")
+                det("", "the raw block is realigned with the stderiv shift and is not de-adapted; the local-SVD, "
+                        "energy-band and 'fiber' fine paths ignore it")
+                if a.emit_fet and not a.out_variant:
+                    lg = int(cluster_basis.get("_lag", 0) or 0)
+                    per = (3 + (1 if a.feat_lag_pc2 else 0)) if lg > 0 else cluster_basis["evec"].shape[1]
+                    if lg > 0 and per + hb["pcs"] <= 9 and cluster_basis["evec"].shape[0] == a.nchan:
+                        spec = nio.parse_variant_token(a.method)
+                        head = a.method if spec.lag == 0 else a.method[:a.method.rfind("_")]
+                        a.out_variant = f"{head}_D{lg}{per + hb['pcs']}"
+                        det("", f"--emit-fet names the hybrid space {a.out_variant} ({per} + {hb['pcs']} per channel)")
+                    else:
+                        raise SystemExit("hybrid --emit-fet: pass --out-variant to name the hybrid feature space "
+                                         "(it is not the --method space's .fet)")
     cf = build_cf(a, meth, cluster_basis)
     if float(cf.get("off_thr", 0.0)) > 0:                   # the timing veto reads the RAW .spk.standard
         try:
@@ -2541,21 +2615,23 @@ def main():
         if cluster_basis is None:
             log("--emit-fet: no global .pca basis resolved; skipped")
         else:
-            rs, d2u = int(cluster_basis["recShift"]), int(cluster_basis["data2use"])
             lg = int(cluster_basis.get("_lag", 0) or 0)
+            hyb = cluster_basis.get("_hyb")
+            raw_src = None
+            if hyb is not None:                      # the hybrid .fet: the raw block of the SAME spikes
+                raw_src, _ = nio.open_spk(a.base, a.elec, a.nsamp, a.nchan, prefer=nio.prefer_standard())
+                if raw_src.shape[0] != len(res_src):
+                    raise SystemExit(f"hybrid --emit-fet: .spk.standard holds {raw_src.shape[0]:,} spikes, "
+                                     f"the committed set {len(res_src):,}")
             cols = []
             for s0 in range(0, len(res_src), 20000):
                 e0 = min(len(res_src), s0 + 20000)
-                w = fl.realign(np.asarray(spk_src[s0:e0], np.float64))
-                nb = cluster_basis["evec"].shape[0]
-                if w.shape[2] == nb + 1:
-                    w = w[:, :, :nb]
-                if lg > 0 and rs - lg >= 0 and rs + d2u + lg <= w.shape[1]:
-                    cols.append(_fpca.lag_project(lambda sh: w[:, rs + sh:rs + sh + d2u, :],
-                                                  cluster_basis, lg,
-                                                  keep_pc2=bool(cluster_basis.get("_lag_pc2", True))))
-                else:
-                    cols.append(_fpca.project(_fpca.extract_windows(w, rs, d2u), cluster_basis))
+                w = np.asarray(spk_src[s0:e0], np.float64)
+                if raw_src is not None:
+                    w = _fpca.hybrid_stack(w, raw_src[s0:e0])
+                # the clustering path's features exactly: one realign (method channels vote), then
+                # the lag / classic / hybrid projection cluster_features builds
+                cols.append(_fpca.cluster_features(w, cluster_basis, realign=True))
             F = np.vstack(cols)
             # half-away-from-zero, matching ns3's llround (see the refeaturize rounding fix)
             Fi = np.sign(F) * np.floor(np.abs(F) + 0.5)
@@ -2570,7 +2646,10 @@ def main():
                        f"= {Fi.shape[1]} columns x {Fi.shape[0]} spikes)")
             det("", f"set nFeatures={nfeat_ch} for group {a.elec} in the session yaml, else Klusters "
                     f"sizes on nChannels x nFeatures and disagrees with this file")
-            if a.emit_pca:
+            if a.emit_pca and hyb is not None:
+                det("pca", "skipped: the hybrid space projects two bases (method and standard); no single "
+                           ".pca reproduces it, so Klusters shows this .fet but cannot refeaturize it")
+            elif a.emit_pca:
                 wb = _fpca.lag_basis(cluster_basis, lg,
                                      keep_pc2=bool(cluster_basis.get("_lag_pc2", True))) if lg > 0 \
                      else cluster_basis

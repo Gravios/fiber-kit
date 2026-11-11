@@ -374,6 +374,91 @@ def lag_project(windows_fn, basis, lag, *, keep_pc2=True):
     return out
 
 
+def hybrid_stack(w_method, w_raw):
+    """The hybrid waveform array: the method's (stderiv) windows with the PAIRED raw
+    (.spk.standard) windows of the same spikes appended as trailing channels, (N, T, nCh + nRaw).
+    One array so every aligner call in the fine split shifts both blocks by the same amount
+    (fiber_lib's align-channel lever keeps the raw block from voting in that alignment), and so
+    no feature-builder call site needs a second argument it could forget to pass."""
+    a = np.asarray(w_method, np.float64); b = np.asarray(w_raw, np.float64)
+    if a.shape[:2] != b.shape[:2]:
+        raise ValueError(f"hybrid_stack: {a.shape} and {b.shape} disagree in spikes or samples")
+    return np.concatenate([a, b], axis=2)
+
+
+def hybrid_basis(std_basis, *, pcs=2, scale=1.0, gain=1.0, nraw=None):
+    """The `_hyb` record carried ON the cluster basis (next to `_lag`): the standard basis cut to
+    its leading `pcs` components per channel, the block scale, and the gain that puts the raw
+    block on the method block's scale (set from data by fit_hybrid_gain).  `nraw` is the raw
+    channel count the stacked array carries (defaults to the basis's)."""
+    evec = np.asarray(std_basis["evec"], np.float64)
+    pcs = max(1, min(int(pcs), evec.shape[1]))
+    cut = dict(std_basis)
+    cut["evec"] = evec[:, :pcs, :].copy()
+    cut.pop("_lag", None); cut.pop("_lag_pc2", None)
+    return dict(basis=cut, pcs=pcs, scale=float(scale), gain=float(gain),
+                nraw=int(nraw if nraw is not None else evec.shape[0]))
+
+
+def _method_block(w, basis):
+    """The method block's features of an already-aligned (N, T, nCh) array: the lag space when
+    the basis carries `_lag`, else the classic projection.  None on a channel-count mismatch."""
+    nb = basis["evec"].shape[0]
+    if w.shape[2] != nb:
+        if w.shape[2] == nb + 1:
+            w = w[:, :, :nb]                              # stderiv: drop trailing dependent channel
+        else:
+            return None
+    rs, d2u = int(basis["recShift"]), int(basis["data2use"])
+    lag = int(basis.get("_lag", 0) or 0)                  # set by the caller; 0 = classic basis
+    if lag > 0 and rs - lag >= 0 and rs + d2u + lag <= w.shape[1]:
+        lb = lag_basis(basis, lag, keep_pc2=bool(basis.get("_lag_pc2", True)))
+        return project(extract_windows(w, int(lb["recShift"]), int(lb["data2use"])), lb)
+    if lag > 0:
+        warnings.warn(f"feature lag {lag} does not fit the PCA window "
+                      f"[{rs},{rs + d2u}) in {w.shape[1]} samples -- using the classic basis")
+    return project(extract_windows(w, rs, d2u), basis)
+
+
+def hybrid_features(w, basis):
+    """Features of a hybrid_stack'ed, already-aligned array under a basis carrying `_hyb`:
+    [method block | scale * gain * standard PCs of the raw block], or None when the array does
+    not carry the raw block (then the caller is on a plain method array and gets the method
+    block alone -- a hybrid basis never breaks a non-hybrid call)."""
+    hyb = basis["_hyb"]; nraw = int(hyb["nraw"])
+    if w.shape[2] <= nraw:
+        return _method_block(w, basis)
+    Fm = _method_block(w[:, :, :w.shape[2] - nraw], basis)
+    if Fm is None:
+        return None
+    sb = hyb["basis"]
+    raw = w[:, :, w.shape[2] - nraw:]
+    rs, d2u = int(sb["recShift"]), int(sb["data2use"])
+    if raw.shape[2] != sb["evec"].shape[0] or rs + d2u > raw.shape[1]:
+        return None
+    Fr = project(extract_windows(raw, rs, d2u), sb) * (float(hyb["scale"]) * float(hyb["gain"]))
+    return np.concatenate([Fm, Fr], axis=1)
+
+
+def fit_hybrid_gain(w_method, w_raw, basis):
+    """The gain that puts the raw block's features on the method block's scale: the ratio of the
+    two blocks' total feature SD over a sample of spikes (aligned once, together).  With it,
+    scale 1.0 means "the two blocks carry equal variance", so the top-`dims` SVD of
+    cluster_features cannot drop one block merely because its data units are smaller."""
+    try:
+        from . import fiber_lib as fl
+    except ImportError:
+        import fiber_lib as fl
+    hyb = basis["_hyb"]
+    w = fl.realign(hybrid_stack(w_method, w_raw))
+    Fm = _method_block(w[:, :, :w.shape[2] - int(hyb["nraw"])], basis)
+    sb = hyb["basis"]
+    Fr = project(extract_windows(w[:, :, w.shape[2] - int(hyb["nraw"]):],
+                                 int(sb["recShift"]), int(sb["data2use"])), sb)
+    sm = float(np.sqrt((Fm - Fm.mean(0)).var(0).sum())); sr = float(np.sqrt((Fr - Fr.mean(0)).var(0).sum()))
+    return sm / sr if sr > 0 else 1.0
+
+
 def cluster_features(spk, basis, *, realign=True, dims=None):
     """Project (optionally realigned) waveforms onto the GLOBAL ndm_pca basis, returning
     (N, nCh*nComp) cluster features in the .fet column order.  This is the shared-basis
@@ -398,22 +483,11 @@ def cluster_features(spk, basis, *, realign=True, dims=None):
     w = np.asarray(spk, np.float64)
     if realign:
         w = fl.realign(w)
-    nb = basis["evec"].shape[0]
-    if w.shape[2] != nb:
-        if w.shape[2] == nb + 1:
-            w = w[:, :, :nb]                              # stderiv: drop trailing dependent channel
-        else:
-            return None
-    rs, d2u = int(basis["recShift"]), int(basis["data2use"])
-    lag = int(basis.get("_lag", 0) or 0)                  # set by the caller; 0 = classic basis
-    if lag > 0 and rs - lag >= 0 and rs + d2u + lag <= w.shape[1]:
-        lb = lag_basis(basis, lag, keep_pc2=bool(basis.get("_lag_pc2", True)))
-        F = project(extract_windows(w, int(lb["recShift"]), int(lb["data2use"])), lb)
-    else:
-        if lag > 0:
-            warnings.warn(f"feature lag {lag} does not fit the PCA window "
-                          f"[{rs},{rs + d2u}) in {w.shape[1]} samples -- using the classic basis")
-        F = project(extract_windows(w, rs, d2u), basis)
+    # `_hyb` on the basis (hybrid_basis): the array may be a hybrid_stack of method + raw windows,
+    # and the features are [method block | scaled standard PCs of the raw block].
+    F = hybrid_features(w, basis) if basis.get("_hyb") else _method_block(w, basis)
+    if F is None:
+        return None
     if dims is not None and 0 < int(dims) < F.shape[1]:
         Fc = F - F.mean(0)
         U, S, _ = np.linalg.svd(Fc, full_matrices=False)

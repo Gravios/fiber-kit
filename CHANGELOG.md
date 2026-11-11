@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.0] — hybrid standard × stderiv fine-split features
+- **`fiber-session --feat-hybrid` (`FK_SESSION_FEAT_HYBRID`, with `FK_SESSION_HYBRID_PCS`,
+  `FK_SESSION_HYBRID_SCALE`)**: the fine-split features become `[stderiv block (lag space under
+  `--feat-lag`, else PC1-3) | scale × standard-basis PCs of the paired raw `.spk.standard` window]`.
+  Why: the derivative spaces lose broad, low-energy units -- d′(C5)/d′(standard) = 0.93 / 0.61 /
+  0.44 / 0.26 at 1× / 1.5× / 2× / 3× the pyramidal width on 20120312 g6, at every amplitude -- and
+  the C5 operator is near-singular, so the raw window has to be read, not reconstructed
+  (`analysis/derivative-penalty-g6-0312/`).  Plumbing: `fiber_pca.hybrid_stack` appends the raw
+  windows as trailing channels of the fine-split arrays and the basis carries `_hyb`
+  (`hybrid_basis`, `hybrid_features`, `fit_hybrid_gain`), so the same call sites that take `_lag`
+  take the hybrid; `fiber_lib.set_align_channels(n)` (`FIBER_ALIGN_CHANNELS`) makes the aligner's
+  xcorr and centroid seed vote on the first `n` channels only while the shift applies to all, so the
+  raw block follows the stderiv alignment.  `--emit-fet` names the space `<method>_D<lag><per+pcs>`
+  (`stderiv_C5_D36` at lag 3 with 2 PCs); no `.pca` is written for it (two bases), so Klusters shows
+  it but cannot refeaturize or realign in it, and a later standalone `fiber-realign` leaves its
+  `.fet` stale (the in-run `--realign` commit rewrites it).  Off by default; untuned
+  (`claude/hybrid-feature-tuning-plan-2026-11-11.md`).  `test/test_session_hybrid.py`.
+
 ## [0.66.8] — one tick `.res` per factor, named after the shared `.res`
 - **`neuro_io.supersampled_res(base, group, factor, preferred)`** / **`read_res_ticks`**: the
   group's tick `.res` at a factor is ONE file for every `_U<factor>` space, named after the shared

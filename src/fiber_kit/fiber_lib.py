@@ -304,6 +304,38 @@ def realign_subsample():
     return _REALIGN_SUBSAMPLE
 
 
+# ALIGNMENT CHANNELS: the number of leading channels the aligner's cross-correlation and centroid
+# seed sum over; the shift found is applied to EVERY channel.  0 (default) = all channels.  Set by
+# fiber-session's hybrid feature space, which carries the paired raw (.spk.standard) windows as
+# trailing channels of the stderiv array so that one realign shifts both blocks identically; the
+# raw block must not vote in the alignment (the stderiv alignment is the one the pipeline is tuned
+# on).  FIBER_ALIGN_CHANNELS reaches forked/spawned pool workers.
+def _env_align_channels():
+    try:
+        return max(0, int(_os.environ.get("FIBER_ALIGN_CHANNELS", "0") or 0))
+    except ValueError:
+        return 0
+
+
+_ALIGN_CHANNELS = _env_align_channels()
+
+
+def set_align_channels(n):
+    """Restrict the aligner's channel sum to the first `n` channels (0 = all).  See _ALIGN_CHANNELS."""
+    global _ALIGN_CHANNELS
+    _ALIGN_CHANNELS = max(0, int(n or 0))
+
+
+def align_channels():
+    return _ALIGN_CHANNELS
+
+
+def _align_view(W):
+    """The channels the aligner measures on: all of W, or its first _ALIGN_CHANNELS."""
+    n = _ALIGN_CHANNELS
+    return W if (n <= 0 or n >= W.shape[2]) else W[:, :, :n]
+
+
 def realign(waveforms, lo=6, hi=26, maxlag=4, iters=6, ref="median", subsample=None):
     """Realign each (nSamp,nCh) spike to a robust cluster reference.
 
@@ -485,7 +517,7 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
         # A/B lever: PURE centroid alignment, no xcorr refinement, to a FIXED reference (peak if
         # given else T//2) so different fragments' direction profiles are positioned comparably --
         # this preserves the trough-position-vs-asymmetry structure the refine would erase.
-        pos = _centroid_pos(W); tgt = float(peak) if peak is not None else float(T // 2)
+        pos = _centroid_pos(_align_view(W)); tgt = float(peak) if peak is not None else float(T // 2)
         total = ((pos - tgt + T / 2.0) % T - T / 2.0)
         cur = xp.fft.ifft(FW * xp.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
         out = _bk.asnumpy(cur)
@@ -493,7 +525,7 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
     lag = ((xp.arange(T) + T // 2) % T) - T // 2          # signed circular lags
     inwin = xp.abs(lag) <= maxlag
     if init == "centroid":
-        pos = _centroid_pos(W)                                         # centroid sample in [0,T)
+        pos = _centroid_pos(_align_view(W))                            # centroid sample in [0,T)
         if peak is not None:
             target = float(peak)
         else:
@@ -508,13 +540,14 @@ def align_xcorr(waves, ref="median", iters=6, maxlag=6, subsample=True, tol=1e-3
         total = xp.zeros(n); cur = W.copy()
     prev = float("inf")
     for it in range(iters):
-        templ = xp.median(cur, 0) if ref == "median" else cur.mean(0)
-        rv = float(((cur - templ) ** 2).mean())
+        curv = _align_view(cur)                                       # the channels that vote
+        templ = xp.median(curv, 0) if ref == "median" else curv.mean(0)
+        rv = float(((curv - templ) ** 2).mean())
         if it > 0 and prev - rv < tol * prev:
             break
         prev = rv
         Ft = xp.fft.fft(templ, axis=0)
-        xc = xp.fft.ifft(xp.fft.fft(cur, axis=1) * xp.conj(Ft)[None], axis=1).real.sum(2)  # (n,T)
+        xc = xp.fft.ifft(xp.fft.fft(curv, axis=1) * xp.conj(Ft)[None], axis=1).real.sum(2)  # (n,T)
         xcm = xp.where(inwin[None, :], xc, -np.inf); k = xcm.argmax(1); d = lag[k].astype(float)
         if subsample:
             r = xp.arange(n); km = (k - 1) % T; kp = (k + 1) % T
