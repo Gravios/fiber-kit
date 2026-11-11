@@ -81,7 +81,7 @@ Positional: `session`, `group`
 | `--rkk-max` | `50` |  |
 | `--rkk-realign` | flag (off) | interleave rkk (CEM) with per-cluster realignment (per-step; default on) |
 | `--no-rkk-realign` | flag (on) | legacy: one parent realign + fixed features for the rkk split |
-| `--rkk-realign-iters` | `2` | cluster<->realign passes in the rkk realign loop |
+| `--rkk-realign-iters` | `2` | FK_SESSION_RKK_REALIGN_ITERS. cluster<->realign passes in the rkk realign loop (each pass re-aligns every cluster to its own median and re-runs the CEM; stops early when the cluster count no longer changes) |
 | `--rkk-delete` | flag (off) | rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on) |
 | `--no-rkk-delete` | flag (on) | keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull to refine; use to stop session shedding fragments into the residual/artifact bin |
 | `--refit-iters` | `0` | iterate {realign each fiber's spikes to their own median -> refit template -> re-apply the inclusion gate} this many extra times. Recovers true members rejected for a bad sub-sample offset and tightens the template; re-judges from the full member set each pass. 0 = single pass (original). Marginal on clean fibers; helps contamination-heavy ones. |

@@ -1,0 +1,84 @@
+# fiber-tune search spec: the HYBRID fine-split feature space (standard x stderiv) and the rkk effort
+# knobs, searched on top of the exp-search winner.
+#
+#   fiber-tune search  <session> <elec> --spec plans/tune/hybrid-search.yaml           # resumable; --max-trials N
+#   fiber-tune show    <session> <elec> --spec plans/tune/hybrid-search.yaml
+#   fiber-tune confirm <session> <elec> --spec plans/tune/hybrid-search.yaml --top 3 --chunks all
+#
+# Results: <session dir>/fk-bench/tune/hybrid-search/{trials.jsonl, trials.tsv, summary.md, best.yaml}.
+#
+# TEMPLATE.  `config:` is fiber-kit-best.yaml, i.e. the previous fk-tune run's best.yaml folded into the
+# shipped profile (gen_best_profile.py: the exp-search winner on g6 0316 -- no-psame-chunk plan,
+# CFIBER_Q 0.85, INCL_ASSIGN 1, DIP_ALPHA 0.03, THETA_CELL 5, XCM_COS 0.94, psame theta 0.9 chunk-aware 1).
+# To start from a lab run's own best.yaml instead, point `config:` at fk-bench/tune/<name>/best.yaml.
+# Everything that search found inert (INCLUSION_K / DECONV_ASSIGN with INCL_ASSIGN 1, ALINK_AMP_THR /
+# MAX_GAP, psame knn / cannot-link / min-n) is left at the template's value and not searched again.
+#
+# WHAT IS SEARCHED, AND WHY IN THIS ORDER (upstream first; every later group is tuned on the upstream
+# winner):
+#   1. hybrid   the feature space of the fine split: hybrid on/off, the raw block's weight and width,
+#               and whether the stderiv block is the lag space (_D34) or classic PC1-3.  The one-chunk
+#               test on 20120312 g6 (claude/hybrid-feature-tuning-plan-2026-11-11.md) ranked
+#               standard x stderiv_C5_D34 (scale 1) > standard x stderiv_C5 > stderiv_C5 > stderiv_C5_D34,
+#               with the gain on units of half-width >= 6 samples and the only cost a few more small
+#               noise-led clusters -- hence FEAT_LAG searched HERE, with the hybrid, not after it.
+#   2. rkk      the splitter's effort: restarts, a starting-K sweep, more cluster<->realign passes,
+#               and the dimensionality it sees (the hybrid projection is 48 wide; the per-cluster SVD
+#               to rkk-dims / DIP_DIM may be dominated by neither block).
+#   3. session  the two session knobs the hybrid may move (the dip gate and the inclusion core).
+#   4. merge / psame  the downstream merges, cheap, re-tuned on the new fibers.
+#
+# COST.  A hybrid or rkk knob re-sorts the chunks (one fiber-session each, ~10-15 min per 2 x 18-min chunks
+# on the lab machine, 40-55 min on 2 cores); the merge / psame knobs re-run only their step.  Stage 1 is at
+# most 2 + 3 + 3 + 2 = 10 trials per pass, stage 2 at most 3 + 3 + 3 + 2 + 2 = 13.
+#
+# READ, beyond the objective (trials.tsv): int_acc / int_rec (the broad, high-rate units the exp search
+# lost, 0.468 -> 0.389 -- the hybrid's first job), all_frag80 (over-splitting: should stay within +10%
+# of the start), merges_pyr_pyr (the raw block can merge co-located narrow pyramidals: must not rise),
+# and accuracy per truth unit against its template half-width -- the gain belongs on hw >= 6, SNR < ~8
+# units; a gain elsewhere means a different mechanism than the one argued and is not grounds to adopt.
+name: hybrid-search
+config: ../../src/fiber_kit/fiber-kit-best.yaml  # the previous fk-tune best, as the shipped profile
+truth:
+  clu: /path/to/curated.clu.6                     # e.g. the 20120316 g6 truth (gt.clu / gt.res)
+  res: /path/to/curated.res.6                     # the .res the .clu indexes (same spike count)
+  units: ""                                       # "" = every unit > 1; or e.g. "2-34"
+  exclude: ""
+  tol: 5
+  int_rate: 5.0
+chunks: "2-3"                                     # the exp-search chunks, so rows compare with that table
+score_at: psame
+objective: "all_acc - 0.005*merges"
+passes: 2
+min_gain: 0.002
+search_realign: false                             # confirm re-runs the best with the realign steps
+set: {}
+start: {}                                         # the template's values: hybrid off, lag 0, rkk 1 start / no sweep
+plans:
+  best: base                                      # fiber-kit-best.yaml's plan (psame-chunk already dropped)
+stages:
+  - name: hybrid                                  # the fine-split feature space (each value re-sorts)
+    knobs:
+      FK_SESSION_FEAT_HYBRID:      [0, 1]                     # off | standard PCs of the raw window appended
+      FK_SESSION_HYBRID_SCALE:     [0.5, 1.0, 2.0]            # raw block weight at equal block variance; 0312: 1 > 0.5
+      FK_SESSION_HYBRID_PCS:       [1, 2, 3]                  # 1 = width/energy only (fewer noise-led clusters?), 3 = classic raw space
+      FK_SESSION_FEAT_LAG:         [0, 3]                     # stderiv block: PC1-3 | PC1 at -3/0/+3 + PC2 (_D34)
+  - name: rkk                                     # the splitter's effort and dimensionality
+    knobs:
+      FK_SESSION_RKK_STARTS:       [1, 2, 4]                  # random restarts per starting K
+      FK_SESSION_RKK_MIN:          [0, 20, 35]                # 0 = one start at --rkk-max; else sweep K from here
+      FK_SESSION_RKK_REALIGN_ITERS: [2, 4, 6]                 # cluster<->realign passes
+      "session:rkk-dims":          [6, 8]                     # per-cluster SVD dims the CEM runs on
+      FK_SESSION_DIP_DIM:          [4, 6]
+  - name: session
+    knobs:
+      FK_SESSION_DIP_ALPHA:        [0.02, 0.03]
+      FK_SESSION_INCLUSION_K:      [3.0, 3.5]
+  - name: merge
+    knobs:
+      FK_XCM_COS_THR:              [0.92, 0.94, 0.96]
+      FK_XCM_RVU_THR:              [0, 0.5]
+  - name: psame
+    knobs:
+      "psame:theta":               [0.8, 0.9, 0.95]
+      "psame:chunk-aware":         [0, 1]

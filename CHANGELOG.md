@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.1] — rkk effort knobs and the hybrid-search tune spec
+- **`FK_SESSION_RKK_STARTS`** (random restarts per starting K, best score wins), **`FK_SESSION_RKK_MIN`**
+  (a starting-K sweep from this value up to `--rkk-max`, as the classic KlustaKwik driver does; 0 = one
+  start at `--rkk-max`, the behaviour so far) and **`FK_SESSION_RKK_REALIGN_ITERS`** (the
+  `--rkk-realign-iters` default): the "let rkk work harder on a coarse fiber" knobs.  The CEM itself
+  always runs to convergence, so effort means more of the search around it; `klustakwik.py` had
+  `n_starts` and the sweep already, `_rkk_labels` now passes them.  On a 3-cluster toy a sweep 4..12 × 3
+  starts scores −755 against the single start's −685 and returns 3 clusters where the single start
+  returned 5.  `test/test_rkk_effort.py`.
+- **`plans/tune/hybrid-search.yaml`**: a fiber-tune spec on `fiber-kit-best.yaml` (the previous
+  fk-tune run's best.yaml folded into the profile) searching the hybrid feature space
+  (`FEAT_HYBRID` / `HYBRID_SCALE` / `HYBRID_PCS` / `FEAT_LAG`), the rkk effort and dimensionality
+  (`RKK_STARTS` / `RKK_MIN` / `RKK_REALIGN_ITERS` / `session:rkk-dims` / `DIP_DIM`), then DIP_ALPHA /
+  INCLUSION_K and the downstream merges; knobs the exp-search found inert are left at the template.
+  Checked by `test/test_gt_review.py`; `docs/bench.md`.
+
 ## [0.67.0] — hybrid standard × stderiv fine-split features
 - **`fiber-session --feat-hybrid` (`FK_SESSION_FEAT_HYBRID`, with `FK_SESSION_HYBRID_PCS`,
   `FK_SESSION_HYBRID_SCALE`)**: the fine-split features become `[stderiv block (lag space under

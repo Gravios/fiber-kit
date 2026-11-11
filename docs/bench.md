@@ -94,7 +94,10 @@ counted as contamination (it may be a real spike nobody sorted):
 
 An objective for clean, linked cores: `"pyr_link - 10*max(0, 0.95 - pyr_core_prec) + 0.2*pyr_cov"` (link
 what is kept, keep precision at 0.95, prefer keeping more); or count them: `"pyr_clean + pyr_link"`.
-`plans/tune/core-search.yaml` is a spec built on it.
+`plans/tune/core-search.yaml` is a spec built on it.  `plans/tune/hybrid-search.yaml` starts from
+`fiber-kit-best.yaml` (the previous fk-tune winner as the shipped profile) and searches the hybrid
+fine-split feature space (`FK_SESSION_FEAT_HYBRID` / `HYBRID_SCALE` / `HYBRID_PCS` / `FEAT_LAG`) and the rkk
+effort knobs (`FK_SESSION_RKK_STARTS` / `RKK_MIN` / `RKK_REALIGN_ITERS`), upstream first.
 
 Without truth (every run): `n_clusters`, `frac_c0`/`frac_c1` (shares in clusters 0 and 1),
 `median_size`, `frac_small`, refractory violations (`isi_viol_median`, `frac_isi_over_1pct`),

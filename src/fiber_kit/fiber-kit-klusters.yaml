@@ -269,6 +269,16 @@ FK_SESSION_RKK_SPLITS:   1        # 1 | 0/1.  rkk (klustakwik.py) tries split mo
                                   #   classic branch does.  0 = no split moves.
 FK_SESSION_RKK_PENALTY_MIX: 0.0   # 0.0 | 0-1.  rkk model-selection penalty: 0 = AIC (kiloklustakwik parity), 1 = BIC
                                   #   (the pre-parity rkk; fewer clusters).
+FK_SESSION_RKK_STARTS:   1        # 1 | 1-4.  Random restarts of the rkk CEM per starting K (the best AIC/BIC score
+                                  #   wins).  The CEM itself always runs to convergence; this and RKK_MIN are the
+                                  #   "let rkk work harder on a coarse fiber" knobs.  Each restart is one full CEM.
+FK_SESSION_RKK_MIN:      0        # 0 | 0 or 10-50.  >0 = also sweep the STARTING cluster count from this value up
+                                  #   to --rkk-max (50), as the classic KlustaKwik driver does (every K up to a span
+                                  #   of 12, then geometric), keeping the best-scoring run.  0 = one start at
+                                  #   --rkk-max (the behaviour so far).  Costs one CEM per K tried.
+FK_SESSION_RKK_REALIGN_ITERS: 2   # 2 | 2-6.  cluster<->realign passes of the rkk fine split: each pass realigns
+                                  #   every cluster to its own median, re-featurises and re-runs the CEM; stops
+                                  #   early once the cluster count stops changing.
 FK_SESSION_MERGE_METHOD: sliding  # sliding | template | profile.  Coarse merge method; INERT when MERGE_CORR=0.
 FK_SESSION_MERGE_CORR:   0        # 0 | 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk
                                   #   stitches later WITH its refractory gate.  Set 0.90 to restore the old session

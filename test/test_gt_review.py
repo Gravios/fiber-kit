@@ -8,7 +8,8 @@ core-search spec.
   * review(): a merged pair of cells -> "sort mixes two cells"; a cell split at random -> "sort did not
     link" by refractory evidence; a cell split in time -> "disjoint in time"; a curated unit that is two
     cells -> `unit`; an identical sort -> no disagreement rows (negative control);
-  * plans/tune/core-search.yaml loads and passes check_knobs against fiber-kit-exp.yaml.
+  * plans/tune/core-search.yaml loads and passes check_knobs against fiber-kit-exp.yaml;
+    plans/tune/hybrid-search.yaml likewise against fiber-kit-best.yaml.
 """
 import os, sys
 import numpy as np
@@ -126,6 +127,22 @@ def main():
     except SystemExit as e:
         okk = False; print("   ", e)
     check(okk, "core-search.yaml: every knob is in fiber-kit-exp.yaml, every step parameter names a step")
+    spec = ft.load_spec(os.path.join(ROOT, "plans", "tune", "hybrid-search.yaml"))
+    cfg_h = fb.load_config(spec["config"])
+    plans_h = {k: ft.derive_plan(cfg_h["pipeline"], v, spec["_here"]) for k, v in spec["plans"].items()}
+    try:
+        ft.check_knobs(spec, cfg_h, plans_h); okk = True
+    except SystemExit as e:
+        okk = False; print("   ", e)
+    check(okk, "hybrid-search.yaml: every knob is in fiber-kit-best.yaml, every step parameter names a step")
+    check(spec["config"].endswith("fiber-kit-best.yaml") and not any(st.get("name") == "psame-chunk" for st in plans_h["best"]),
+          "hybrid-search.yaml starts from the best profile (the previous fk-tune winner, psame-chunk dropped)")
+    kn = [k for st in spec["stages"] for k in st["knobs"]]
+    check(all(k in kn for k in ("FK_SESSION_FEAT_HYBRID", "FK_SESSION_HYBRID_SCALE", "FK_SESSION_HYBRID_PCS",
+                                "FK_SESSION_FEAT_LAG", "FK_SESSION_RKK_STARTS", "FK_SESSION_RKK_MIN",
+                                "FK_SESSION_RKK_REALIGN_ITERS")),
+          "hybrid-search.yaml searches the hybrid and the rkk effort knobs")
+    spec = ft.load_spec(os.path.join(ROOT, "plans", "tune", "core-search.yaml"))
     f = ft.compile_objective(spec["objective"])
     hi = f(dict(pyr_link=0.9, pyr_core_prec=0.96, pyr_cov=0.6, merges_pyr_pyr=0))
     lo = f(dict(pyr_link=0.9, pyr_core_prec=0.90, pyr_cov=0.9, merges_pyr_pyr=0))

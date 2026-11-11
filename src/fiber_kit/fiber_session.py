@@ -417,6 +417,13 @@ def _energy_band_split(wcf, mask, band_w=0.45, overlap=0.2, pca_k=6, max_sub=8,
 # restores BIC if a session needs the old cluster counts.
 _RKK_PENALTY_MIX = cfgmod.knob_value("FK_SESSION_RKK_PENALTY_MIX", float, 0.0)   # env > $FK_CONFIG > default (the
 _RKK_SPLITS      = cfgmod.knob_value("FK_SESSION_RKK_SPLITS", int, 1)            # yaml was ignored on a direct call)
+# rkk EFFORT knobs.  The CEM itself always runs to convergence (classic rule: until a full step moves no
+# point, split moves every 8 iterations, cap 500), so "more rkk" means more of the search around it:
+# random restarts per starting K (the best score wins) and a sweep of starting K from RKK_MIN up to
+# --rkk-max (the classic driver walks every K; here the sweep is geometric above a span of 12).  Both
+# cost one full CEM per extra (K, start).  RKK_MIN 0 = no sweep (start at --rkk-max only, as before).
+_RKK_STARTS      = cfgmod.knob_value("FK_SESSION_RKK_STARTS", int, 1)
+_RKK_MIN         = cfgmod.knob_value("FK_SESSION_RKK_MIN", int, 0)
 
 
 def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
@@ -431,7 +438,9 @@ def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
     min_clusters is pinned to max_clusters so a single starting K is used.  The classic driver
     sweeps every K in [MinClusters, MaxClusters] keeping the best score, which is O(K) full CEMs;
     that is affordable in OpenMP C++ and not here, and it would also silently change what
-    `max_clusters` has always meant at these call sites.
+    `max_clusters` has always meant at these call sites.  FK_SESSION_RKK_MIN > 0 opts back into
+    that sweep (from RKK_MIN up to max_clusters, geometric above a span of 12) and
+    FK_SESSION_RKK_STARTS > 1 adds random restarts per K: the rkk effort knobs.
 
     min_size is applied HERE rather than inside the CEM.  Classic KlustaKwik's only size rule is
     nClassMembers <= nDims (KK.cpp:189), far below the stage's fine min-group, so a cluster under
@@ -439,7 +448,8 @@ def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
     always assumed min_size did.  A deliberate deviation, in the caller, leaving the parity
     implementation itself untouched.
     """
-    lab = _rkk(F, max_clusters=max_clusters, min_clusters=max_clusters, seed=seed,
+    kmin = int(max_clusters) if int(_RKK_MIN or 0) <= 0 else max(2, min(int(_RKK_MIN), int(max_clusters)))
+    lab = _rkk(F, max_clusters=max_clusters, min_clusters=kmin, seed=seed, n_starts=max(1, int(_RKK_STARTS)),
                penalty_mix=_RKK_PENALTY_MIX, splits=bool(_RKK_SPLITS), noise=True)
     out = np.asarray(lab, int) - 1                     # 0 (noise) -> -1 ; 1..K -> 0..K-1
     if min_size and int(min_size) > 1:
@@ -1616,8 +1626,11 @@ def add_core_arguments(ap):
                     help="interleave rkk (CEM) with per-cluster realignment (per-step; default on)")
     ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false",
                     help="legacy: one parent realign + fixed features for the rkk split")
-    ap.add_argument("--rkk-realign-iters", type=int, default=2,
-                    help="cluster<->realign passes in the rkk realign loop")
+    ap.add_argument("--rkk-realign-iters", type=int,
+                    default=int(cfgmod.knob_value("FK_SESSION_RKK_REALIGN_ITERS", int, 2)),
+                    help="FK_SESSION_RKK_REALIGN_ITERS. cluster<->realign passes in the rkk realign loop (each "
+                         "pass re-aligns every cluster to its own median and re-runs the CEM; stops early when "
+                         "the cluster count no longer changes)")
     ap.add_argument("--rkk-delete", dest="rkk_delete", action="store_true", default=True,
                     help="rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on)")
     ap.add_argument("--no-rkk-delete", dest="rkk_delete", action="store_false",
