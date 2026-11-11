@@ -562,6 +562,32 @@ def resolve_any(base, type_, group, preferred=""):
     m = preferred or "standard"
     return ResolvedInput(f"{base}.{type_}.{m}.{group}", preferred, True, False)
 
+def supersampled_res(base, group, factor, preferred=""):
+    """The super-sampled .res of a group at `factor`: ONE file for every _U<factor> space (spike times are
+    one thing for all of them), named after the shared base-rate .res -- its token (standard for an
+    untagged one) with _U<factor>: <base>.res.<resToken>_U<factor>.<group>, int64 ticks (sample x factor
+    + phase).  Mirrors custody::supersampledRes / supersampled_res (ndm_resolve_io) / ndm_supersampled_res.
+    Returns ResolvedInput(path, variant, dotted, found)."""
+    shared = resolve_any(base, "res", group, preferred)
+    tok = shared.variant if shared.found else base_rate_token(preferred)
+    tok = tok or "standard"
+    s = parse_variant_token(tok)
+    lag = int(s.lag or 0)
+    opaque = (not s.kind) and not lag and s.family != tok
+    if 2 <= factor <= 9 and int(s.supersample) == 1 and not opaque:
+        method = s.family + (f"_{s.kind}{s.order}" if s.kind else "") + f"_U{factor}" + (f"_D{s.lag}{s.dims}" if lag else "")
+    else:
+        method = tok
+    path = f"{base}.res.{method}.{group}"
+    return ResolvedInput(path, method, True, os.path.exists(path))
+
+
+def read_res_ticks(base, elec, factor, preferred=""):
+    """The super-sampled spike times (ticks) of a group, or None when there is no tick res."""
+    r = supersampled_res(base, elec, factor, preferred)
+    return np.fromfile(r.path, RES_DTYPE) if r.found else None
+
+
 def sibling_variants(base, type_, group, tag="", family=None):
     """Method tokens that actually exist on disk for <base>.<type>.*.<group>[.<tag>].
 

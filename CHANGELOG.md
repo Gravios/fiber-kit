@@ -4,6 +4,13 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.66.8] — one tick `.res` per factor, named after the shared `.res`
+- **`neuro_io.supersampled_res(base, group, factor, preferred)`** / **`read_res_ticks`**: the
+  group's tick `.res` at a factor is ONE file for every `_U<factor>` space, named after the shared
+  base-rate `.res` (`.res.stderiv_S3.6` → `.res.stderiv_S3_U4.6`; `standard_U4` for an untagged
+  one) -- neurosuite-3 0962 corrects 0958's per-space naming.  `custody_vectors.tsv` synced (+7
+  rows, kind `supersampled_res`; contract hash updated).
+
 ## [0.66.7] — a `.res` under a `_U` token is in ticks; the shared `.res` stays base-rate
 - **`neuro_io.base_rate_token(variant)`**: the `_U<factor>` dropped, kind and lag kept
   (`stderiv_C5_U4_D34` → `stderiv_C5_D34`).  Klusters (neurosuite-3 0958) now writes a

@@ -18,6 +18,7 @@
 #   waveform_token <token>  <waveform token>
 #   supersample_of <token>  <factor>          (1 when the token carries no _U<factor>)
 #   base_rate_token <token>  <token without _U> (kind and lag kept; unchanged without _U)
+#   supersampled_res <existing-csv>  <group>  <factor>  <preferred>  <expect-basename>  <found 0|1>
 #   drops_last    <order>  <0|1>
 #
 # ── classify ────────────────────────────────────────────────────────────────
@@ -268,3 +269,13 @@ resolve_any	res.standard_U4.5,res.stderiv.5	res	5	standard_U4	sess.res.stderiv.5
 resolve_any	res.standard_U4.5,res.5	res	5		sess.res.5	1
 resolve_any	spk.stderiv_C5_U2.5,spk.stderiv_C5.5	spk	5	stderiv_C5_U2	sess.spk.stderiv_C5.5	1
 resolve_any		res	5	stderiv_C5_U4_D34	sess.res.stderiv_C5_D34.5	0
+# -- supersampled_res: ONE tick .res per factor for every _U space, named after the
+# shared base-rate .res (its token + _U<factor>; standard when it is untagged) --------
+#   supersampled_res  <existing-csv>  <group>  <factor>  <preferred>  <expect-basename>  <found 0|1>
+supersampled_res	res.stderiv_S3.6,res.stderiv_S3_U4.6	6	4		sess.res.stderiv_S3_U4.6	1
+supersampled_res	res.stderiv_S3.6	6	4	stderiv_C5_D34	sess.res.stderiv_S3_U4.6	0
+supersampled_res	res.stderiv_S3.6,res.standard_U4.6	6	4	standard_U4	sess.res.stderiv_S3_U4.6	0
+supersampled_res	res.6	6	2		sess.res.standard_U2.6	0
+supersampled_res	res.6,res.standard_U2.6	6	2		sess.res.standard_U2.6	1
+supersampled_res		6	4	stderiv_C5_U4	sess.res.stderiv_C5_U4.6	0
+supersampled_res		6	4		sess.res.standard_U4.6	0
