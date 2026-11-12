@@ -59,6 +59,9 @@ truth:
   exclude: ""
   tol: 5
   int_rate: 5.0
+  # core: {k: 3.0, min_n: 50}                     # score each unit on the spikes that fit its own template (docs/bench.md,
+                                                  #   "Truth core"): a contaminated interneuron no longer caps a cleaner sort's
+                                                  #   accuracy nor charges a merge to the cluster that isolates its contamination
 chunks: "2-3"                                     # the exp-search chunks, so rows compare with that table
 score_at: psame
 objective: "all_acc - 0.005*merges"

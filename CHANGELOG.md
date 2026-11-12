@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.8] — fiber-tune: score each truth unit on its core (`truth: core:`)
+- `truth_core` / `Truth(..., core=)`: per unit, the spikes within `k` robust SDs of the median residual RMS
+  from the unit's realigned median template (on the session's raw windows) are the core; the rest are
+  matched to no truth at all.  A curated interneuron holding other cells' spikes no longer caps the
+  accuracy of a sort that cleans it, nor charges a merge to the cluster that isolates its contamination.
+  Spec `truth: core: {k: 3.0, min_n: 50, variant: standard}`; the truth id carries it, so `rescore`
+  re-scores recorded trials without re-sorting; per-unit cores logged.  `test_truth_core.py`; docs/bench.md.
+
 ## [0.67.7] — fiber-realign: Klusters' correlation window (--kernel)
 - `klusters_offsets(kernel=, kernel_width=)`, `realign_kernel_weights`: the window Klusters' realign gained in
   neurosuite-3 patch 0971 (`--kernel none|gauss|hann|template`, `--kernel-width`), ported step for step.

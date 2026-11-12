@@ -101,12 +101,13 @@ import time
 import numpy as np
 
 try:
-    from . import fiber_bench as fb, fiber_chunks as fch, neuro_io as nio, session_yaml as sy
+    from . import fiber_bench as fb, fiber_chunks as fch, neuro_io as nio, session_yaml as sy, fiber_lib as fl
 except ImportError:                      # run as a script from src/fiber_kit
     import fiber_bench as fb
     import fiber_chunks as fch
     import neuro_io as nio
     import session_yaml as sy
+    import fiber_lib as fl
 
 _LP = "▸ fiber-tune"
 SPEC_KEYS = {"name", "config", "truth", "chunks", "score_at", "objective", "set", "start", "passes", "min_gain",
@@ -310,10 +311,68 @@ MIN_TRUTH_MATCH = 0.2
 SCORE_VERSION = "s2"
 
 
-class Truth:
-    """The truth file matched to one .res (re-matched when a workspace's realigned .res differs)."""
+# A truth label that is not a unit and not curator noise: a unit's spike OUTSIDE its core (truth: core).
+# Matched session spikes get -1 (no truth) in matched() and matched_all(): they count for no unit, as no
+# contamination and as no noise.
+CORE_OUT = -2
 
-    def __init__(self, tr, sr):
+
+def truth_core(glab, gres, units, spk, res, tol, k=3.0, min_n=50, per_unit=4000, log=None):
+    """Per truth spike, is it in its unit's CORE: the spikes whose waveform fits the unit's own median
+    template.  A curated unit is not pure -- a high-rate interneuron above all holds other cells' spikes
+    and collisions -- and scored as a label set it caps the accuracy of a sort that cleans it and charges
+    a merge to a sort that isolates what it holds of another cell (g6 0316, 2026-11-12).  The core keeps,
+    per unit, the spikes within k robust SDs (1.4826 MAD) of the median residual RMS from the realigned
+    median template, over the whole window, every channel; units with fewer than min_n matched windows
+    keep every spike.  `spk` (N, T, C) memmap of the session's raw windows, `res` its spike times: each
+    truth spike takes the window of the session spike it matches within tol (one-to-one, nearest first),
+    unmatched truth spikes stay in the core (nothing to judge them by).  Returns (core (len(glab),) bool,
+    rows: per unit dict(unit, n, matched, core, thr))."""
+    glab = np.asarray(glab); gres = np.asarray(gres, np.int64); res = np.asarray(res, np.int64)
+    core = np.ones(glab.size, bool)
+    # truth spike -> session spike index: match the session to the truth and invert
+    idx_t = fb.match_gt(res, gres, np.arange(gres.size), None, tol)      # per session spike: truth index or -1
+    t2s = np.full(gres.size, -1, np.int64)
+    hit = idx_t >= 0
+    t2s[idx_t[hit]] = np.flatnonzero(hit)
+    rows = []
+    for u in units:
+        tu = np.flatnonzero(glab == u)
+        su = t2s[tu]; have = su >= 0
+        if int(have.sum()) < min_n:
+            rows.append(dict(unit=int(u), n=int(tu.size), matched=int(have.sum()), core=int(tu.size), thr=float("nan")))
+            continue
+        rows_s = su[have]
+        o = np.argsort(rows_s); rows_s = rows_s[o]; tu_m = tu[have][o]      # ascending rows: one memmap pass
+        W = np.asarray(spk[rows_s], np.float32)
+        # template from a subsample (realigned), residual of every spike against it after its own realign
+        sub = fl.subsample(np.arange(len(W)), per_unit)
+        Wa = fl.realign(W[sub])
+        T = np.median(Wa, axis=0)
+        r = np.empty(len(W), np.float64)
+        for b0 in range(0, len(W), 20000):
+            Wb = fl.align_xcorr(np.concatenate([T[None], W[b0:b0 + 20000]]), iters=3)[1:]   # align to the template
+            r[b0:b0 + 20000] = np.sqrt(((Wb - T[None]) ** 2).mean((1, 2)))
+        med = float(np.median(r)); mad = float(np.median(np.abs(r - med))) * 1.4826
+        thr = med + float(k) * mad
+        ok = r <= thr
+        core[tu_m[~ok]] = False
+        rows.append(dict(unit=int(u), n=int(tu.size), matched=int(have.sum()), core=int(tu.size - (~ok).sum()), thr=thr))
+        if log:
+            log(f"    core unit {u:4d}: {int(tu.size):7,d} spikes, {int(have.sum()):7,d} with a window, "
+                f"{int((~ok).sum()):6,d} outside ({100.0 * (~ok).sum() / max(have.sum(), 1):4.1f} %), "
+                f"residual median {med:.1f} thr {thr:.1f}")
+    return core, rows
+
+
+class Truth:
+    """The truth file matched to one .res (re-matched when a workspace's realigned .res differs).
+
+    `core` (the spec's `truth: core:` mapping, k / min_n / variant) scores each unit on its CORE
+    (truth_core) rather than its label set; it needs `spk_of` = (base, elec, nsamp, nchan) to read the
+    session's raw windows once."""
+
+    def __init__(self, tr, sr, spk_of=None, log=None):
         if not tr.get("clu") or not tr.get("res"):
             raise SystemExit(f"{_LP} · `truth:` needs clu and res")
         _, self.glab = nio.read_clu_file(tr["clu"])
@@ -322,16 +381,42 @@ class Truth:
             raise SystemExit(f"{_LP} · truth: {os.path.basename(tr['clu'])} holds {self.glab.size:,} labels but "
                              f"{os.path.basename(tr['res'])} {self.gres.size:,} spike times -- not one spike set "
                              "(another group's .res, or a .res re-filtered after the .clu was written)")
-        # Which truth a trial was scored against, and with which metric set (SCORE_VERSION): a trial
-        # recorded under another truth or an older metric set is scored again (the sort is re-used).
-        self.id = (f"{os.path.basename(tr['clu'])}:{self.glab.size}:{int(self.glab.sum())}|"
-                   f"{os.path.basename(tr['res'])}:{self.gres.size}:{int(self.gres[:1000].sum())}|{SCORE_VERSION}")
         self.units = (fb.parse_units(tr.get("units"), tr.get("exclude", "")) if tr.get("units")
                       else sorted(int(u) for u in np.unique(self.glab) if u > 1 and
                                   int(u) not in fb.parse_units(tr.get("exclude", ""))))
         self.tol = int(tr.get("tol", 5))
         self.types = fb.type_units(self.gres, self.glab, self.units, sr, float(tr.get("int_rate", 5.0)),
                                    fb.parse_units(tr["interneurons"]) if tr.get("interneurons") else None)
+        self.core_rows = None
+        core = tr.get("core")
+        core_tag = ""
+        if core:
+            core = dict(core) if isinstance(core, dict) else {}
+            if not spk_of:
+                raise SystemExit(f"{_LP} · truth: core: needs the session's windows (base, elec, nsamp, nchan)")
+            base, elec, nsamp, nchan = spk_of
+            variant = str(core.get("variant") or "standard")
+            spk, r = nio.open_spk(base, elec, nsamp, nchan, prefer=[variant])
+            res = nio.read_res(base, elec)
+            if spk.shape[0] != res.size:
+                raise SystemExit(f"{_LP} · truth: core: {os.path.basename(r.path)} holds {spk.shape[0]:,} windows, "
+                                 f"the session's .res {res.size:,} spikes")
+            k = float(core.get("k", 3.0)); min_n = int(core.get("min_n", 50))
+            if log:
+                log(f"{_LP} · truth core: residual from each unit's median template on {os.path.basename(r.path)}, "
+                    f"k={k:g} robust SDs, min_n {min_n}")
+            ok, self.core_rows = truth_core(self.glab, self.gres, self.units, spk, res, self.tol, k, min_n, log=log)
+            self.glab = np.where(ok | ~np.isin(self.glab, self.units), self.glab, CORE_OUT)
+            n_out = int((self.glab == CORE_OUT).sum())
+            if log:
+                log(f"{_LP} · truth core: {n_out:,} of {int(np.isin(self.glab, self.units).sum() + n_out):,} unit "
+                    f"spikes outside their core are scored for no unit")
+            core_tag = f"|core:k={k:g},min_n={min_n},{variant}"
+        # Which truth a trial was scored against, and with which metric set (SCORE_VERSION): a trial
+        # recorded under another truth or an older metric set is scored again (the sort is re-used).
+        self.id = (f"{os.path.basename(tr['clu'])}:{self.glab.size}:{int(self.glab.sum())}|"
+                   f"{os.path.basename(tr['res'])}:{self.gres.size}:{int(self.gres[:1000].sum())}|{SCORE_VERSION}"
+                   + core_tag)
         self._cache = {}
 
     def matched_all(self, res):
@@ -344,6 +429,7 @@ class Truth:
         key = (res.size, int(res[:1000].sum()), int(res[-1000:].sum()))
         if key not in self._cache:
             g_all = fb.match_gt(res, self.gres, self.glab, None, self.tol)
+            g_all = np.where(g_all == CORE_OUT, -1, g_all)        # outside a unit's core: no truth at all
             g = np.where(np.isin(g_all, self.units), g_all, -1)
             n_truth = int(np.isin(self.glab, self.units).sum())
             n_hit = int((g >= 0).sum())
@@ -414,7 +500,8 @@ class Tuner:
         self._write_yaml(self.cfg_confirm_path, cfg, f"fiber-tune {spec['name']}: confirm base (full plan)")
         self.cfg_confirm = fb.load_config(self.cfg_confirm_path)
         self.objective = compile_objective(spec["objective"])
-        self.truth = None if dry_run else Truth(spec["truth"], self.sr)
+        self.truth = None if dry_run else Truth(spec["truth"], self.sr,
+                                                spk_of=(self.base, self.elec, sp["nsamp"], sp["nchan"]), log=self.log)
         self.trials = self._read_trials()
 
     # ── bookkeeping ──

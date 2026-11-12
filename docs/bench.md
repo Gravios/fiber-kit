@@ -169,7 +169,7 @@ fk set config --profile best                                              # or t
 ```
 
 **Spec** (yaml; `plans/tune/exp-search.yaml` is a worked example over the exp plan, in plan order, with both plans and per-step psame knobs): `config` (base config
-with a plan), `truth` (`clu`, `res`, optional `units`, `exclude`, `tol`, `int_rate`), `chunks` (the
+with a plan), `truth` (`clu`, `res`, optional `units`, `exclude`, `tol`, `int_rate`, `core`), `chunks` (the
 search's `FK_CHUNKS`), `score_at` (the plan step scored; default the last step with `out:`), `objective`,
 `set` (fixed overrides), `start` (where the search starts), `passes`, `min_gain`, `search_realign`, `plans`, and `stages`: knob
 groups, each a mapping of knob -> list of values, searched in order (upstream first).  Every knob must
@@ -182,6 +182,18 @@ which every trial scored nothing: `units_scored 0`, objective `-inf`.)  Each tri
 was scored against.  After `truth:` changes, a resumed search scores its trials again -- the sorts
 are re-used through the hashed tags, so this costs scoring, not sorting -- and `summary.md` shows only
 the trials scored against the current truth.
+
+**Truth core** (`truth: core: {k: 3.0, min_n: 50, variant: standard}`).  A curated unit is not pure: a
+high-rate interneuron above all holds other cells' spikes and collisions, and scored as a label set it
+caps the accuracy of a sort that cleans it and charges a *merge* to a sort that isolates what it holds of
+another cell.  With `core:` each unit is scored on the spikes that fit its own template: the session's
+raw windows (`.spk.<variant>`) of the unit's matched spikes are realigned, the median template taken, and
+the spikes within `k` robust SDs (1.4826 MAD) of the median residual RMS from it are the core; the rest
+count for no unit -- not for the unit, not as contamination of another cluster, not as noise.  Units with
+fewer than `min_n` matched windows keep every spike.  The median template is robust up to roughly half
+contamination; a unit more contaminated than that is not a unit the core can recover.  The per-unit cores
+and thresholds are logged at the start of the run, and the truth id carries the core, so trials scored
+without it are scored again when it is switched on (`rescore` does it without re-sorting).
 
 **Three kinds of knob**, searched alike: `FK_*` (a config knob; it reaches every step of its stage),
 `<step>:<param>` (one plan step's `params:` entry, the stage's CLI flag without `--` -- e.g. `psame:theta`,
