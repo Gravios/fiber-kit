@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.6] — fiber-realign: a commit leaves super-sampled (_U) spaces alone
+- `fiber-realign --variants all` (what fiber-session's end-of-run commit and `fiber-tune confirm` run)
+  listed the `_U<factor>` super-sampled spaces among the waveform variants to refresh and derived each as
+  its base-rate family: a 52-sample window written under the `_U4` name (a corrupt space, factor x
+  nSamples ticks expected), its tick `.res` and phase column never touched.  Reachable the moment a session
+  has a Klusters- or ndm-built `_U` space beside the spaces the pipeline commits (g6 0316, 2026-11-12).
+  `supersampled_variants_on_disk` / `_drop_supersampled`: `_U` tokens are skipped with a log line naming
+  the file and how to rebuild it (Klusters' Sync Feature Spaces, `ndm_extractspikes --supersample`); a
+  realign asked for IN a `_U` variant is refused with the base-rate token named.  `test_realign_supersampled.py`.
+
 ## [0.67.5] — fiber-bench: the session files a run reads are in its step hashes
 - `fiber_bench.input_fingerprint(base, elec)`: size + mtime of every `<base>.<spk|pca|nst|res>.<method>.<elec>`
   without a hash tag (stage outputs and `.fet` excluded) plus `<base>.xml` / `.yaml`, folded into every step's

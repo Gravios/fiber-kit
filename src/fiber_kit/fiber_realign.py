@@ -338,20 +338,62 @@ def open_waveforms(base, group, nsamp, nch, token):
     return nio.open_spk_file(r.path, nsamp, nch), r
 
 
+_SUPERSAMPLED_NOTE = ("a super-sampled space (factor x nSamples ticks, its own tick .res and phase column, cut "
+                      "with the interpolator it was built with): this commit cannot rebuild it and leaves it "
+                      "as it is -- rebuild it in Klusters (Sync Feature Spaces, or remove its files and "
+                      "super-sample again) or with ndm_extractspikes --supersample")
+
+
+def supersampled_variants_on_disk(base, group):
+    """The _U<factor> waveform tokens with a .spk for the group (Klusters' / ndm's super-sampled
+    spaces).  A commit never writes them: their windows are factor x nSamples TICKS of an interpolated
+    raw cut, their spike times a tick .res of their own, their .fet carries a phase column -- deriving
+    them as the base-rate variant (what _derive_from_fil would do by family) wrote a 52-sample window
+    under a _U4 name and left the tick .res behind (found on g6 0316, 2026-11-12, the day the session
+    first had _U4 spaces beside the ones fiber-session commits)."""
+    g = str(group)
+    stem, tail = f"{base}.spk.", f".{g}"
+    out = []
+    for pth in sorted(glob.glob(f"{stem}*{tail}")):
+        tok = pth[len(stem):-len(tail)]
+        if tok and "." not in tok and nio.supersample_of(tok) > 1:
+            out.append(tok)
+    return out
+
+
 def _variants_on_disk(base, group):
     """Every waveform variant with a .spk for the group: standard first, then each method-tagged
-    <base>.spk.<token>.<group> (no stage tag, not a _D feature-space alias -- those own no waveforms).
-    The `--variants all` set: a realign re-extracts EVERY waveform space from the .fil, so none is
-    left stale against the corrected .res."""
+    <base>.spk.<token>.<group> (no stage tag, not a _D feature-space alias -- those own no waveforms --
+    and not a _U super-sampled space: supersampled_variants_on_disk, which a commit leaves alone).
+    The `--variants all` set: a realign re-extracts EVERY base-rate waveform space from the .fil, so
+    none is left stale against the corrected .res."""
     g = str(group)
     stem, tail = f"{base}.spk.", f".{g}"
     toks = []
     for pth in sorted(glob.glob(f"{stem}*{tail}")):
         tok = pth[len(stem):-len(tail)]
-        if not tok or "." in tok or nio.parse_variant_token(tok).lag:
+        if not tok or "." in tok:
+            continue
+        spec = nio.parse_variant_token(tok)
+        if spec.lag or spec.supersample > 1:
             continue
         toks.append(tok)
     return ["standard"] + [t for t in toks if t != "standard"]
+
+
+def _drop_supersampled(want, base, group):
+    """Remove _U tokens from a commit's variant list, saying so once per token; a commit never writes
+    a super-sampled space (supersampled_variants_on_disk)."""
+    keep = []
+    for v in want:
+        if nio.supersample_of(v) > 1:
+            _log(f"variant '{v}': {_SUPERSAMPLED_NOTE}")
+        else:
+            keep.append(v)
+    behind = [v for v in supersampled_variants_on_disk(base, group) if v not in want]
+    for v in behind:
+        _det("stale", f".spk.{v}.{group} (and its tick .res / .fet) is not refreshed by this commit: {_SUPERSAMPLED_NOTE}")
+    return keep
 
 
 def _resolve_variant_token(base, group, variant):
@@ -530,6 +572,9 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
     # the clu names the variant exactly (.clu.stderiv.N -> .spk.stderiv.N); load THAT file, not a
     # preference search.  prefer must be a list of variant tokens (a bare string would be walked
     # character-by-character).  There is no canonical .spk -- only .spk.<variant>.N.
+    if nio.supersample_of(variant or "standard") > 1:
+        raise SystemExit(f"[realign] variant '{variant}' is {_SUPERSAMPLED_NOTE}; realign its base-rate "
+                         f"token ({nio.base_rate_token(variant)}) -- Klusters realigns in a super-sampled space")
     spk, r = open_waveforms(base, elec, nsamp, nch, variant or "standard")
     spk_path = r.path
     res = nio.read_res(base, elec)
@@ -850,8 +895,10 @@ def main(argv=None):
                          "--reextract, or --shift-spk when that is set)")
     ap.add_argument("--fil", default=None, help="filtered signal path (default <base>.fil)")
     ap.add_argument("--variants", default=None,
-                    help="'all' = every waveform variant with a .spk for the group (+ the --variant's "
-                         "waveform token); or a comma list of feature spaces to refresh from .fil (default: standard + "
+                    help="'all' = every base-rate waveform variant with a .spk for the group (+ the --variant's "
+                         "waveform token; a super-sampled _U<factor> space is never written by a commit -- Klusters' "
+                         "Sync Feature Spaces or ndm_extractspikes --supersample rebuilds it); or a comma list of "
+                         "feature spaces to refresh from .fil (default: standard + "
                          "stderiv if present).  Each is re-derived from the re-extracted raw window: "
                          "standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the "
                          "session's own spikeDetection.channelGroups[N].sdiffPairs pattern "
@@ -1051,7 +1098,7 @@ def main(argv=None):
         else:
             want = ["standard"] + [v for v in ("stderiv",) if _variant_present(base, group, v)]
         refreshed = {}                                     # resolved token -> committed waveform
-        want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
+        want = _drop_supersampled(list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want)), base, group)
         want, done = (list(R["want"]), list(R["done"])) if R is not None else (want, [])
         _journal_save(J, res_corr, off, ioff, mode="shift", want=want, done=done, refeaturize=bool(a.refeaturize))
         for v in want:
@@ -1110,7 +1157,7 @@ def main(argv=None):
         # waveforms were built from a custom sdiffPairs pattern -- then write the
         # result under a token claiming otherwise.  Deciding on the resolved token is
         # what makes the refusal below reachable at all.
-        want = list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want))
+        want = _drop_supersampled(list(dict.fromkeys(_resolve_variant_token(base, group, v) for v in want)), base, group)
         refreshed = {}                                     # resolved token -> committed waveform
         want, done = (list(R["want"]), list(R["done"])) if R is not None else (want, [])
         _journal_save(J, res_corr, off, ioff, mode="reextract", want=want, done=done,
