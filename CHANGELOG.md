@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.9] — fiber-realign: Hamming window, on by default (+-16 samples)
+- `--kernel hamming` (0.54 + 0.46 cos over +-width; Klusters 0972), and the window is now the DEFAULT:
+  `FK_REALIGN_KERNEL hamming`, `FK_REALIGN_KERNEL_WIDTH 16` (samples of the recording, 0.49 ms at 32,552 Hz).
+  Measured on the 0312 g6 sub-session (113,516 spikes, 21 curated units >= 200 spikes, the commit judged on
+  its re-cut raw windows): in the standard space the trough-position SD per unit 0.80 -> 0.78 samples at
+  +-16 (0.76 at +-10, 0.74 with the template window), on the 12,235 spikes with a second trough in their
+  window 1.08 -> 1.05 (1.01 / 0.98), central residual 197.0 -> 196.3, 81-90 % of units tighter; in the
+  stderiv_C5 space no measurable change (the derivative already localises the energy).  `none` restores
+  the pre-0.67.9 kernel.  `test_realign_kernel.py` covers the window.
+
 ## [0.67.8] — fiber-tune: score each truth unit on its core (`truth: core:`)
 - `truth_core` / `Truth(..., core=)`: per unit, the spikes within `k` robust SDs of the median residual RMS
   from the unit's realigned median template (on the session's raw windows) are the core; the rest are

@@ -142,7 +142,9 @@ def realign_kernel_weights(kernel, width, pk, T, templ=None):
         return np.exp(-0.5 * (d / (hw / 2.0)) ** 2)
     if kernel == "hann":
         return np.where(np.abs(d) <= hw, 0.5 * (1.0 + np.cos(np.pi * d / hw)), 0.0)
-    raise ValueError(f"unknown realign kernel '{kernel}' (none, gauss, hann, template)")
+    if kernel == "hamming":
+        return np.where(np.abs(d) <= hw, 0.54 + 0.46 * np.cos(np.pi * d / hw), 0.0)
+    raise ValueError(f"unknown realign kernel '{kernel}' (none, gauss, hann, hamming, template)")
 
 
 def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
@@ -932,16 +934,18 @@ def main(argv=None):
     ap.add_argument("--rmin", type=float, default=_kd("FK_REALIGN_RMIN", float, 0.4),
                     help="klusters --recenter-rms: minimum mean resultant length of the energy profile; below "
                          "it the recenter is skipped (Klusters --rmin, default 0.4) [FK_REALIGN_RMIN]")
-    ap.add_argument("--kernel", choices=["none", "gauss", "hann", "template"],
-                    default=_kd("FK_REALIGN_KERNEL", str, "none"),
+    ap.add_argument("--kernel", choices=["none", "gauss", "hann", "hamming", "template"],
+                    default=_kd("FK_REALIGN_KERNEL", str, "hamming"),
                     help="klusters: the correlation window (Klusters --kernel, Preferences > Realignment > Correlation "
-                         "window): none = the whole window; gauss / hann = a bell of --kernel-width samples each side of "
-                         "the peak sample; template = the template's own energy profile.  Under a window the score is "
-                         "normalised by the energy the window admits at each lag, so a second spike in the window (a "
-                         "collision) cannot steer the lag [FK_REALIGN_KERNEL]")
-    ap.add_argument("--kernel-width", type=int, default=_kd("FK_REALIGN_KERNEL_WIDTH", int, 0),
-                    help="klusters --kernel-width: half-width of the gauss / hann window in samples; 0 = half the peak "
-                         "position (Klusters' automatic) [FK_REALIGN_KERNEL_WIDTH]")
+                         "window): hamming (default) / hann / gauss = a bell of --kernel-width samples each side of the "
+                         "peak sample; template = the template's own energy profile; none = the whole window (the "
+                         "pre-0.67.9 kernel).  Under a window the score is normalised by the energy the window admits "
+                         "at each lag, so a second spike in the window (a collision) cannot steer the lag "
+                         "[FK_REALIGN_KERNEL]")
+    ap.add_argument("--kernel-width", type=int, default=_kd("FK_REALIGN_KERNEL_WIDTH", int, 16),
+                    help="klusters --kernel-width: half-width of the gauss / hann / hamming window in samples of the "
+                         "recording (default 16 = 0.49 ms at 32,552 Hz; 0 = half the peak position, Klusters' automatic) "
+                         "[FK_REALIGN_KERNEL_WIDTH]")
     ap.add_argument("--upsample", type=int, default=1,
                     help="klusters: cubic-spline upsample factor for sub-sample matching "
                          "(2 = half-sample lags); .res is rounded back to whole samples at save")

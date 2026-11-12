@@ -628,13 +628,18 @@ FK_REALIGN_RECENTER_RMS: 1        # 1 | 0/1.  klusters algo: Klusters realign MO
                                   #   the compiled Klusters code: identical shift on every spike of the g6 36-47 min
                                   #   sort (19,543), standard and stderiv_C5_D34, in both modes.
 FK_REALIGN_RMIN:         0.4      # 0.4.  Klusters --rmin: minimum mean resultant length to trust the energy centroid.
-FK_REALIGN_KERNEL:       none     # none | gauss | hann | template.  Klusters --kernel (Preferences > Realignment > Correlation
-                                  #   window): the part of the window the xcorr scores and normalises on.  none = every sample
-                                  #   (the classic kernel, parity with the GPU back ends); gauss / hann = a bell of
-                                  #   FK_REALIGN_KERNEL_WIDTH samples each side of the peak sample; template = the cluster
-                                  #   template's own energy profile.  Under a window a second spike in the tail or lead-in (a
-                                  #   collision) neither feeds the score nor its normalisation, so it cannot steer the lag.
-FK_REALIGN_KERNEL_WIDTH: 0        # 0 | 1-.  Half-width of the gauss / hann window in samples; 0 = half the peak position.
+FK_REALIGN_KERNEL:       hamming  # hamming | hann | gauss | template | none.  Klusters --kernel (Preferences > Realignment >
+                                  #   Correlation window): the part of the window the xcorr scores and normalises on.  A bell of
+                                  #   FK_REALIGN_KERNEL_WIDTH samples each side of the peak sample (hamming: 0.54 + 0.46 cos);
+                                  #   template = the cluster template's own energy profile; none = every sample (the pre-0.67.9
+                                  #   kernel, parity with Klusters' GPU back ends).  Under a window a second spike in the tail or
+                                  #   lead-in (a collision) neither feeds the score nor its normalisation, so it cannot steer
+                                  #   the lag.  0312 g6, 21 curated units, standard space: trough-position SD 0.80 -> 0.78
+                                  #   samples (+-16), 0.76 (+-10), 0.74 (template); on the 11 % of spikes with a second trough in
+                                  #   their window 1.08 -> 1.05 / 1.01 / 0.98; 81-90 % of units tighter.  Stderiv space: no change.
+FK_REALIGN_KERNEL_WIDTH: 16       # 16 | 1-.  Half-width in samples of the recording (16 = 0.49 ms at 32,552 Hz; 0 = half the peak
+                                  #   position).  +-10 measured slightly tighter than +-16 on 0312; keep the width near the
+                                  #   spike's own extent at the session's rate (~10 at 20 kHz).
 FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the curator's Klusters setting, used here).
                                   #   Klusters --threshold: a spike whose best normalised xcorr is below this is not moved
                                   #   in that pass.  g6 36-47 min, RMS mode: 0.10 moves 30.6 % (stderiv) / 93.6 %
