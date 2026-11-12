@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.3] — hybrid-search: start with the hybrid on, try off last
+- `plans/tune/hybrid-search.yaml`: the first 0316 run (chunks 2-3) tried `FK_SESSION_FEAT_HYBRID 1` at the
+  defaults first; it did not beat the start, and coordinate ascent then searched `HYBRID_SCALE` /
+  `HYBRID_PCS` with the hybrid OFF -- six re-sorts identical to the start (0.4159 to the last digit).
+  The spec now `start:`s with the hybrid on and tries `FEAT_HYBRID 0` as the LAST value of the stage,
+  against the best scale / pcs / lag found; a rerun in the same `fk-bench/tune/hybrid-search/` reuses the
+  two sorts it already has (hash-matched).  `test_gt_review.py` checks the order.
+
 ## [0.67.2] — hybrid-search: the rkk stage ordered by what was measured
 - `plans/tune/hybrid-search.yaml`: on the three messiest clusters of the 0312 chunk, rkk restarts
   without the starting-K sweep changed nothing, the sweep acted (completeness 0.26 → 0.76 at unchanged

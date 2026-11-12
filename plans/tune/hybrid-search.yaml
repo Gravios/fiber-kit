@@ -16,12 +16,17 @@
 #
 # WHAT IS SEARCHED, AND WHY IN THIS ORDER (upstream first; every later group is tuned on the upstream
 # winner):
-#   1. hybrid   the feature space of the fine split: hybrid on/off, the raw block's weight and width,
-#               and whether the stderiv block is the lag space (_D34) or classic PC1-3.  The one-chunk
-#               test on 20120312 g6 (claude/hybrid-feature-tuning-plan-2026-11-11.md) ranked
-#               standard x stderiv_C5_D34 (scale 1) > standard x stderiv_C5 > stderiv_C5 > stderiv_C5_D34,
-#               with the gain on units of half-width >= 6 samples and the only cost a few more small
-#               noise-led clusters -- hence FEAT_LAG searched HERE, with the hybrid, not after it.
+#   1. hybrid   the feature space of the fine split: the raw block's weight and width, whether the
+#               stderiv block is the lag space (_D34) or classic PC1-3, and LAST whether the hybrid is on
+#               at all.  The one-chunk test on 20120312 g6 (claude/hybrid-feature-tuning-plan-2026-11-11.md)
+#               ranked standard x stderiv_C5_D34 (scale 1) > standard x stderiv_C5 > stderiv_C5 >
+#               stderiv_C5_D34, with the gain on units of half-width >= 6 samples and the only cost a few
+#               more small noise-led clusters -- hence FEAT_LAG searched HERE, with the hybrid, not after it.
+#               The search STARTS with the hybrid on (`start:`): coordinate ascent tries one knob at a time,
+#               so with FEAT_HYBRID [0, 1] first and the default-hybrid trial losing, every SCALE / PCS
+#               trial after it ran with the hybrid OFF -- six identical re-sorts of the start (the first
+#               0316 run, 2026-11-12: seven rows at 0.4159 to the last digit).  Off is now the last value
+#               tried, against the best hybrid setting; its sort is the one every earlier run made.
 #   2. rkk      the splitter's effort: a starting-K sweep, restarts, more cluster<->realign passes,
 #               and the dimensionality it sees (the hybrid projection is 48 wide; the per-cluster SVD
 #               to rkk-dims / DIP_DIM may be dominated by neither block).  MEASURED on the three
@@ -61,16 +66,16 @@ passes: 2
 min_gain: 0.002
 search_realign: false                             # confirm re-runs the best with the realign steps
 set: {}
-start: {}                                         # the template's values: hybrid off, lag 0, rkk 1 start / no sweep
+start: {FK_SESSION_FEAT_HYBRID: 1}                # hybrid ON at the template's scale 1 / 2 PCs / lag 0; rkk 1 start, no sweep
 plans:
   best: base                                      # fiber-kit-best.yaml's plan (psame-chunk already dropped)
 stages:
   - name: hybrid                                  # the fine-split feature space (each value re-sorts)
     knobs:
-      FK_SESSION_FEAT_HYBRID:      [0, 1]                     # off | standard PCs of the raw window appended
       FK_SESSION_HYBRID_SCALE:     [0.5, 1.0, 2.0]            # raw block weight at equal block variance; 0312: 1 > 0.5
       FK_SESSION_HYBRID_PCS:       [1, 2, 3]                  # 1 = width/energy only (fewer noise-led clusters?), 3 = classic raw space
       FK_SESSION_FEAT_LAG:         [0, 3]                     # stderiv block: PC1-3 | PC1 at -3/0/+3 + PC2 (_D34)
+      FK_SESSION_FEAT_HYBRID:      [0, 1]                     # LAST: off (the plain space; its sort is reused) vs the best hybrid above
   - name: rkk                                     # the splitter's effort and dimensionality
     knobs:
       FK_SESSION_RKK_MIN:          [0, 20, 35]                # 0 = one start at --rkk-max; else sweep K from here (acts)

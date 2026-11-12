@@ -142,6 +142,10 @@ def main():
                                 "FK_SESSION_FEAT_LAG", "FK_SESSION_RKK_STARTS", "FK_SESSION_RKK_MIN",
                                 "FK_SESSION_RKK_REALIGN_ITERS")),
           "hybrid-search.yaml searches the hybrid and the rkk effort knobs")
+    hyb = [k for st in spec["stages"] if st.get("name") == "hybrid" for k in st["knobs"]]
+    check(ft._same(spec["start"].get("FK_SESSION_FEAT_HYBRID"), 1) and hyb and hyb[-1] == "FK_SESSION_FEAT_HYBRID",
+          "hybrid-search.yaml starts with the hybrid ON and tries off LAST (coordinate ascent would otherwise "
+          "search scale / pcs / lag with the hybrid off once the default-hybrid trial lost)")
     spec = ft.load_spec(os.path.join(ROOT, "plans", "tune", "core-search.yaml"))
     f = ft.compile_objective(spec["objective"])
     hi = f(dict(pyr_link=0.9, pyr_core_prec=0.96, pyr_cov=0.6, merges_pyr_pyr=0))
