@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.4] — merge-stage templates keyed by the cluster, not by the run's random stream
+- `fiber-xcorr-merge`, `fiber-anchor-link`, `fiber-psame-merge`: the `SPK_CAP` sample a cluster's template
+  (anchor-link: fragment template; psame: model cap, mean and geometry fit) is built from was drawn from one
+  `default_rng(seed)` shared by the whole run, so which spikes a cluster got depended on how many draws came
+  before it -- on every other cluster of the partition.  Traced on g6 0316 chunks 2-3 (the hybrid-search
+  trials `93098823` / `a579931f`): from spike-identical linked clusters, one run's xcm fused units 34+32+33
+  into a 2,740-spike cluster and 19+14+8 into another, the other kept them apart -- 0.036 of the tune
+  objective (18 x `min_gain`), attributed to the hybrid feature space until the chains were compared stage
+  by stage.  Now `fiber_lib.content_rng(idx)` / `fiber_lib.subsample(idx, cap)` seed the draw from the
+  cluster's own sorted spike set: a template is a function of the cluster alone.  Knobs
+  `FK_XCM_SAMPLE_KEYED`, `FK_ALINK_SAMPLE_KEYED`, `FK_PSAME_SAMPLE_KEYED` (1; 0 = the old shared stream),
+  listed in the profiles so fiber-bench's stage hashes change and cached link/merge outputs are rebuilt
+  while the sorts are reused.  `test/test_sample_keyed.py`.
+- Every fiber-tune table scored at or after `exp_linked` so far carries merge-stage noise of this size
+  between re-sorting trials; `fiber-tune search` in an existing tune directory re-runs the link/merge
+  steps of every recorded trial (cheap: ~1-2 min per trial) and rescores.
+
 ## [0.67.3] — hybrid-search: start with the hybrid on, try off last
 - `plans/tune/hybrid-search.yaml`: the first 0316 run (chunks 2-3) tried `FK_SESSION_FEAT_HYBRID 1` at the
   defaults first; it did not beat the start, and coordinate ascent then searched `HYBRID_SCALE` /

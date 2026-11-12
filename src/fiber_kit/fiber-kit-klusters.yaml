@@ -763,6 +763,7 @@ FK_ALINK_SLIDE:          2        # 2 | 1-6 (samples).  +/- lag search.  LOWER t
 FK_ALINK_IOU_THR:        0.3      # 0.3 | 0.3-0.5.  Per (sample x channel) interval-IoU counted at >= this.
 FK_ALINK_MIN_FRAG:       15       # 15 | 15-40.  Min spikes for a fragment to carry a template (else left as its own cell).
 FK_ALINK_SPK_CAP:        1500     # 1500 | 600-3000.  Spikes per fragment for the template.
+FK_ALINK_SAMPLE_KEYED:   1        # 1.  The SPK_CAP sample keyed by the fragment's own spikes (a template depends on the fragment alone); 0 = the run's shared stream (pre-0.67.4).
 FK_ALINK_ANCHOR_STAGE:   fiber_session  # fiber_session | fs_clean.  Stage whose .clc ATOMS fiber-session's overlap anchors
                                   #   index.  The linker runs on exp_chunk UNITS, so each anchor atom is mapped to the
                                   #   unit holding >= ANCHOR_MAJORITY of its spikes; pairs already in one unit drop out.
@@ -779,6 +780,7 @@ FK_XCM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto
 FK_XCM_MIN_N:            15       # 40 | 8-100.  Min spikes for a cluster to participate (else carried as-is).  15 since
                                   #   0.52.0 (on the fibers: min-n 8 / 15 / 25 / 40 -> 0.387 / 0.405 / 0.389 / 0.372).
 FK_XCM_SPK_CAP:          300      # 300.  Spikes per cluster used to build/realign the template.
+FK_XCM_SAMPLE_KEYED:     1        # 1.  The SPK_CAP sample keyed by the cluster's own spikes, so a cosine depends on the two clusters alone; 0 = the run's shared stream, where a borderline merge flipped with changes elsewhere in the sort (g6 0316: 34+32+33).
 FK_XCM_BAND_THR:         0.5      # 0.5 | 0.0-0.8.  Median+/-sigma BAND-OVERLAP co-gate (fiber-backbone-link's method), ON:
                                   #   a candidate merge must also have band-overlap IoU >= this.  0=off (roll-cosine only).
 FK_XCM_RVU_THR:          0.5      # 0 | 0.45-0.6 (0 = off).  Per-channel RESIDUAL-VARIANCE uniformity: residual = each
@@ -849,6 +851,7 @@ FK_PSAME_CANNOT_LINK:    0.3      # 0.3 | 0-0.7.  Groups may not merge if any pa
 FK_PSAME_KNN:            8        # 8.  Candidates per cluster (most similar by roll-cosine).
 FK_PSAME_COS_FLOOR:      0.75     # 0.75.  Candidates need at least this roll-cosine (the calibration's range).
 FK_PSAME_MIN_N:          50       # 50.  Smaller clusters keep their labels.
+FK_PSAME_SAMPLE_KEYED:   1        # 1.  Per-cluster samples (model cap, mean, geometry fit) keyed by the cluster's own spikes; 0 = the run's shared stream (pre-0.67.4).
 FK_PSAME_SHIFT:          4        # 4 (samples).  Roll-cosine half-window.
 FK_PSAME_W_RC:           22.2143  # calibrated logistic weights (raw scale), g6 0316 stderiv_C5
 FK_PSAME_W_DBIC:         0.6144

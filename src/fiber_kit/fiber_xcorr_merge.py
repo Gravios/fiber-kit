@@ -57,6 +57,12 @@ _KNOBS = {
     "FK_XCM_REFRAC_MIN_EXP": ("refrac_min_exp", float, 5.0),
     "FK_XCM_MIN_N": ("min_n", int, 40),
     "FK_XCM_SPK_CAP": ("spk_cap", int, 300),
+    # 1: a cluster's SPK_CAP template sample is drawn from a generator seeded by the cluster's own spike set
+    # (fiber_lib.subsample), so its template -- and every cosine / veto built on it -- depends on the cluster
+    # alone.  0: the run's shared stream, where the sample depended on every cluster drawn before it and a
+    # borderline merge flipped with changes elsewhere in the sort (g6 0316: 34+32+33 fused from inputs
+    # identical to a run that kept them apart).
+    "FK_XCM_SAMPLE_KEYED": ("sample_keyed", int, 1),
     "FK_XCM_CX_SCALE": ("complexity_scale", float, 0.0),
     "FK_XCM_BAND_THR": ("band_thr", float, 0.5),
     "FK_XCM_OFF_THR": ("off_thr", float, 0.0),
@@ -133,6 +139,9 @@ def _klusters_align(w, ref_sample, min_score=0.10):
     return fr.roll_spikes(w, ioff).astype(float)
 
 
+_SAMPLE_KEYED = True                      # FK_XCM_SAMPLE_KEYED (main); module-level so every template path sees it
+
+
 def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12, align_min_score=0.10):
     """Realigned median template of a cluster (STANDARD spk).  Called for every cluster
     and again after every merge -- this is the 'realignment after each merger'.
@@ -140,9 +149,8 @@ def _tmpl(spk, idx, *, cap, ref_sample, rng, align="peak", rvu_win=12, align_min
     align='peak': each spike to its own peak (fiber_lib.realign); align='klusters': the sample is
     aligned as Klusters' realign aligns a cluster -- every spike to the cluster's template by xcorr --
     so a merged cluster whose fragments sat at different offsets gets one consistent alignment."""
-    if idx.size > cap:
-        idx = rng.choice(idx, cap, replace=False)
-    raw = np.asarray(spk[np.sort(idx)])
+    idx = fl.subsample(idx, cap, rng, keyed=_SAMPLE_KEYED)
+    raw = np.asarray(spk[idx])
     al = _klusters_align(raw, ref_sample, align_min_score) if align == "klusters" else fl.realign(np.asarray(raw, float))
     w = fg.mutual_center_spikes(fg.denoise(al), ref_sample=ref_sample)
     T = np.median(w, 0)
@@ -289,7 +297,7 @@ def agglomerate(spk, ids, idx0, times0, duration, *, cos_thr, shift, refrac, ref
             return 0
         row = C[src_k].copy(); row[[src_k, partner]] = -np.inf; row[~alive] = -np.inf
         refs = [partner] + [int(r) for r in np.argsort(-row)[:max(knn_refs - 1, 0)] if np.isfinite(row[r])]
-        pool = [rng.choice(idx[r], min(idx[r].size, cap), replace=False) for r in refs]
+        pool = [fl.subsample(idx[r], cap, rng, keyed=_SAMPLE_KEYED) for r in refs]
         loc = np.concatenate([src] + pool)
         lab = np.concatenate([np.zeros(src.size, int)] + [np.full(p.size, q + 1) for q, p in enumerate(pool)])
         new, _, _, _ = _fc.knn_pass(lambda ix: np.asarray(spk[loc[np.asarray(ix)]], np.float32), lab,
@@ -421,6 +429,8 @@ def main():
     if a.merge_align not in ("peak", "klusters"):
         raise SystemExit(f"{_LP} · --merge-align must be peak or klusters, not {a.merge_align!r}")
     rng = np.random.default_rng(a.seed)
+    global _SAMPLE_KEYED
+    _SAMPLE_KEYED = bool(a.sample_keyed)
 
     cfg = sy.resolve_session_params(a.session, a.elec)
     base = cfg["base"]; elec = a.elec; SR = cfg["sr"]
@@ -553,7 +563,7 @@ def main():
             # RAW mean templates -- the same recipe fiber-session fits on (realign, no denoise/centering)
             rt = {}
             for u, ix in zip(big, idx0):
-                sel = np.sort(rng.choice(ix, a.spk_cap, replace=False) if ix.size > a.spk_cap else ix)
+                sel = fl.subsample(ix, a.spk_cap, rng, keyed=_SAMPLE_KEYED)
                 rt[(ch_of[u], u)] = fl.realign(np.asarray(spk[sel], float)).mean(0).ravel()
             if len(rt) >= K + 2 and npair:
                 X = np.array(list(rt.values())); mu = X.mean(0)

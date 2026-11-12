@@ -770,6 +770,7 @@ FK_PSAME_CANNOT_LINK:    0.3      # 0.3 | 0-0.7.  Groups may not merge if any pa
 FK_PSAME_KNN:            8        # 8.  Candidates per cluster (most similar by roll-cosine).
 FK_PSAME_COS_FLOOR:      0.75     # 0.75.  Candidates need at least this roll-cosine (the calibration's range).
 FK_PSAME_MIN_N:          50       # 50.  Smaller clusters keep their labels.
+FK_PSAME_SAMPLE_KEYED:   1        # 1.  Per-cluster samples (model cap, mean, geometry fit) keyed by the cluster's own spikes; 0 = the run's shared stream (pre-0.67.4).
 FK_PSAME_SHIFT:          4        # 4 (samples).  Roll-cosine half-window.
 FK_PSAME_W_RC:           22.2143  # calibrated logistic weights (raw scale), g6 0316 stderiv_C5
 FK_PSAME_W_DBIC:         0.6144

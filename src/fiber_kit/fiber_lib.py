@@ -300,6 +300,33 @@ def set_realign_subsample(on):
     _REALIGN_SUBSAMPLE = bool(on)
 
 
+def content_rng(idx, salt=0):
+    """A Generator seeded by the CONTENT of a spike set (its sorted indices), not by a shared stream.
+
+    Every stage that subsamples a cluster for its template used one np.random.default_rng(seed) for the
+    whole run, so which spikes a cluster got depended on how many draws came before it -- on every other
+    cluster of the partition.  Two identical clusters in two sorts then got different templates, and a
+    borderline merge flipped with changes elsewhere (g6 0316 chunks 2-3: units 34+32+33 fused by
+    fiber-xcorr-merge in one run and kept apart in another from spike-identical inputs, 0.036 of the
+    tune objective).  Seeded from the spike set itself, a cluster's sample is a function of the cluster
+    alone, whatever else the sort holds."""
+    a = np.ascontiguousarray(np.sort(np.asarray(idx, np.int64)))
+    import hashlib
+    h = hashlib.blake2b(a.tobytes(), digest_size=8, person=b"fk-sample")
+    return np.random.default_rng(int.from_bytes(h.digest(), "little") ^ (int(salt) & 0xFFFFFFFF))
+
+
+def subsample(idx, cap, rng=None, keyed=True, salt=0):
+    """`cap` spikes of `idx` without replacement, sorted; all of them when idx.size <= cap.  keyed (the
+    default): drawn with content_rng(idx) -- the same set for the same cluster in any run; else with
+    `rng` (the stage's shared stream, the pre-0.67.4 behaviour)."""
+    idx = np.sort(np.asarray(idx))
+    if cap is None or idx.size <= cap:
+        return idx
+    g = content_rng(idx, salt) if keyed or rng is None else rng
+    return np.sort(g.choice(idx, int(cap), replace=False))
+
+
 def realign_subsample():
     return _REALIGN_SUBSAMPLE
 

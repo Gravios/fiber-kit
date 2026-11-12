@@ -87,6 +87,7 @@ _KNOBS = {
     "FK_ALINK_HI_NSPK": ("hi_nspk", int, 300),
     "FK_ALINK_MAX_GAP": ("max_gap", int, 4),
     "FK_ALINK_SPK_CAP": ("spk_cap", int, 1500),
+    "FK_ALINK_SAMPLE_KEYED": ("sample_keyed", int, 1),   # 1: the SPK_CAP sample keyed by the fragment's own spikes (fiber_lib.subsample); 0: the run's shared stream
     "FK_ALINK_WARP_THR": ("warp_thr", float, 0.0),
     "FK_ALINK_AMP_THR": ("amp_thr", float, 0.85),
     "FK_ALINK_MIN_FRAG": ("min_frag", int, 15),
@@ -163,12 +164,11 @@ def translate_anchor_pairs(pairs, anchor_clc, frag_clu, min_frac=0.6):
     return out, st
 
 
-def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng):
-    """Fragment template: realign -> denoise -> mutual-centre, then median +/- sigma."""
-    idx = np.asarray(idx)
-    if idx.size > spk_cap:
-        idx = rng.choice(idx, spk_cap, replace=False)
-    w = fg.mutual_center_spikes(fg.denoise(fl.realign(np.asarray(spk[np.sort(idx)], float))),
+def build_frag(spk, idx, *, spk_cap, ref_sample, sr, rng, keyed=True):
+    """Fragment template: realign -> denoise -> mutual-centre, then median +/- sigma.  keyed: the spk_cap
+    sample is drawn from the fragment's own spike set (fiber_lib.subsample), not the run's shared stream."""
+    idx = fl.subsample(np.asarray(idx), spk_cap, rng, keyed=keyed)
+    w = fg.mutual_center_spikes(fg.denoise(fl.realign(np.asarray(spk[idx], float))),
                                 ref_sample=ref_sample)
     med = np.median(w, 0)
     sd = w.std(0, ddof=1) if len(w) > 1 else np.zeros_like(med)
@@ -516,7 +516,7 @@ def main():
         idx = np.flatnonzero(frag_clu == at)
         if idx.size < a.min_frag:
             continue
-        frags.append(build_frag(spk, idx, spk_cap=a.spk_cap, ref_sample=PK, sr=SR, rng=rng))
+        frags.append(build_frag(spk, idx, spk_cap=a.spk_cap, ref_sample=PK, sr=SR, rng=rng, keyed=bool(a.sample_keyed)))
         keep.append(at); byc[chunk_of_atom[at]].append(len(frags) - 1)
     row = {at: i for i, at in enumerate(keep)}
     nspk = np.array([int((frag_clu == at).sum()) for at in keep])

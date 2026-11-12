@@ -72,9 +72,9 @@ import os
 import numpy as np
 
 try:
-    from . import neuro_io as nio, session_yaml as sy, config as cfgmod
+    from . import neuro_io as nio, session_yaml as sy, config as cfgmod, fiber_lib as fl
 except ImportError:
-    import neuro_io as nio, session_yaml as sy, config as cfgmod
+    import neuro_io as nio, session_yaml as sy, config as cfgmod, fiber_lib as fl
 
 _LP = "▸ fiber-psame-merge"
 TAUS = np.array([0.03, 0.1, 0.3, 0.6, 1.2])          # s; adaptation time constants searched
@@ -87,6 +87,7 @@ _KNOBS = {
     "FK_PSAME_KNN": ("knn", int, 8),
     "FK_PSAME_COS_FLOOR": ("cos_floor", float, 0.75),
     "FK_PSAME_MIN_N": ("min_n", int, 50),
+    "FK_PSAME_SAMPLE_KEYED": ("sample_keyed", int, 1),   # 1: per-cluster samples (model cap, mean, geometry fit) keyed by the cluster's own spikes; 0: the run's shared stream
     "FK_PSAME_SHIFT": ("shift", int, 4),
     "FK_PSAME_W_RC": ("w_rc", float, 22.2143),
     "FK_PSAME_W_DBIC": ("w_dbic", float, 0.6144),
@@ -196,7 +197,7 @@ def project(spk, idx, mu, V):
 # ── the merge ───────────────────────────────────────────────────────────────
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
                 w_rc=22.2143, w_dbic=0.6144, bias=-17.773, geo_term=None, w_geo=0.0, cap=None, rng=None,
-                group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print):
+                group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print, keyed=True):
     """Sequential P(same) merge.  spk: (N, nsamp, nchan) memmap of the scoring variant; times (s) per spike;
     clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups'
     raw templates.
@@ -214,10 +215,10 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
 
     def refresh(u):
         idx = np.flatnonzero(clu == u)
-        sub = np.sort(rng.choice(idx, min(1000, idx.size), replace=False))
+        sub = fl.subsample(idx, 1000, rng, keyed=keyed, salt=1)
         mean[u] = np.asarray(spk[sub], float).mean(0)
         if chunk_of is None:
-            use = idx if cap is None or idx.size <= cap else np.sort(rng.choice(idx, cap, replace=False))
+            use = fl.subsample(idx, cap, rng, keyed=keyed)
             model[u] = CellModel(project(spk, use, mu, V), times[use])
             return
         cmod[u], cmean[u], cn[u] = {}, {}, {}
@@ -225,7 +226,7 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
             ik = idx[chunk_of[idx] == k]
             if k < 0 or ik.size < min_chunk_n:
                 continue
-            use = ik if cap is None or ik.size <= cap else np.sort(rng.choice(ik, cap, replace=False))
+            use = fl.subsample(ik, cap, rng, keyed=keyed)
             cmod[u][int(k)] = CellModel(project(spk, use, mu, V), times[use])
             cmean[u][int(k)] = np.asarray(spk[use[:1000]], float).mean(0); cn[u][int(k)] = int(ik.size)
 
@@ -348,9 +349,9 @@ def main():
             key = frozenset(mem)
             if key not in fits:
                 idx = np.flatnonzero(np.isin(clu, list(mem)))     # the INPUT labels: a group = its members' spikes
-                idx = np.sort(rng.choice(idx, min(1500, idx.size), replace=False))
+                idx = fl.subsample(idx, 1500, rng, keyed=bool(a.sample_keyed))
                 X = np.asarray(raw[idx], float); x = X.mean(0)
-                p = rng.permutation(len(X)); h = len(p) // 2
+                p = (fl.content_rng(idx, salt=2) if a.sample_keyed else rng).permutation(len(X)); h = len(p) // 2
                 nz = float(((X[p[:h]].mean(0) - X[p[h:]].mean(0)) ** 2).sum() / 4 / max((x ** 2).sum(), 1e-30))
                 fits[key] = (x, sg.fit(x, S), nz)
             return fits[key]
@@ -380,7 +381,7 @@ def main():
           + (" | + shared geometry" if a.geo else ""))
     new, merges = psame_merge(spk, res / float(sr), clu, theta=a.theta, cannot_link=a.cannot_link, knn=a.knn,
                               cos_floor=a.cos_floor, min_n=a.min_n, shift=a.shift, w_rc=w_rc, w_dbic=w_dbic,
-                              bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng,
+                              bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng, keyed=bool(a.sample_keyed),
                               group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap)
     nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=a.out_tag)
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))

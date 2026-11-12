@@ -634,6 +634,7 @@ Positional: `args`
 | `--hi-nspk` | `300` | FK_ALINK_HI_NSPK (default 300) |
 | `--max-gap` | `4` | FK_ALINK_MAX_GAP (default 4) |
 | `--spk-cap` | `1500` | FK_ALINK_SPK_CAP (default 1500) |
+| `--sample-keyed` | `1` | FK_ALINK_SAMPLE_KEYED (default 1) |
 | `--warp-thr` | `0.0` | FK_ALINK_WARP_THR (default 0.0) |
 | `--amp-thr` | `0.85` | FK_ALINK_AMP_THR (default 0.85) |
 | `--min-frag` | `15` | FK_ALINK_MIN_FRAG (default 15) |
@@ -731,6 +732,7 @@ Positional: `session`, `elec`
 | `--refrac-min-exp` | `5.0` | FK_XCM_REFRAC_MIN_EXP (default 5.0) |
 | `--min-n` | `40` | FK_XCM_MIN_N (default 40) |
 | `--spk-cap` | `300` | FK_XCM_SPK_CAP (default 300) |
+| `--sample-keyed` | `1` | FK_XCM_SAMPLE_KEYED (default 1) |
 | `--complexity-scale` | `0.0` | FK_XCM_CX_SCALE (default 0.0) |
 | `--band-thr` | `0.5` | FK_XCM_BAND_THR (default 0.5) |
 | `--off-thr` | `0.0` | FK_XCM_OFF_THR (default 0.0) |
@@ -774,6 +776,7 @@ Positional: `session`, `elec`
 | `--knn` | `8` | FK_PSAME_KNN (default 8) |
 | `--cos-floor` | `0.75` | FK_PSAME_COS_FLOOR (default 0.75) |
 | `--min-n` | `50` | FK_PSAME_MIN_N (default 50) |
+| `--sample-keyed` | `1` | FK_PSAME_SAMPLE_KEYED (default 1) |
 | `--shift` | `4` | FK_PSAME_SHIFT (default 4) |
 | `--w-rc` | `22.2143` | FK_PSAME_W_RC (default 22.2143) |
 | `--w-dbic` | `0.6144` | FK_PSAME_W_DBIC (default 0.6144) |

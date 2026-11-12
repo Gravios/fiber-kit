@@ -38,7 +38,7 @@ pipeline:
   #       rkk-max: 50
   #       rkk-realign: false              # interleave rkk (CEM) with per-cluster realignment (per-step; default on)
   #       no-rkk-realign: true            # legacy: one parent realign + fixed features for the rkk split
-  #       rkk-realign-iters: 2            # cluster<->realign passes in the rkk realign loop
+  #       rkk-realign-iters: 2            # FK_SESSION_RKK_REALIGN_ITERS. cluster<->realign passes in the rkk realign loop (each pass re-aligns every cluster to its own median and re-runs the CEM; stops early when the cluster count no longer changes)
   #       rkk-delete: false               # rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on)
   #       no-rkk-delete: true             # keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull to refine; use to stop session shedding fragments into the residual/artifact bin
   #       refit-iters: 0                  # iterate {realign each fiber's spikes to their own median -> refit template -> re-apply the inclusion gate} this many extra times. Recovers true members rejected for a bad sub-sample offset and tightens the template; re-judges from the full member set each pass. 0 = single pass (original). Marginal on clean fibers; helps contamination-heavy ones.
@@ -141,6 +141,9 @@ pipeline:
   #       emit-fet: false                 # write <base>.fet.<out-variant or method>.<elec> -- the FULL-WIDTH session-wide projection on the global basis (the feature space the fine split used, before its per-chunk reduction), so Klusters can display it.
   #       feat-lag: 0                     # FK_SESSION_FEAT_LAG. >0 = fine-split shape features become PC1 sampled at -N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3. 0 = classic.
   #       feat-lag-pc2: 1                 # with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only
+  #       feat-hybrid: 0                  # FK_SESSION_FEAT_HYBRID. 1 = HYBRID fine-split features: the --method (stderiv) features as configured (lag space with --feat-lag) PLUS the leading standard-basis PCs of the paired RAW .spk.standard window of each spike, one realign shifting both. The derivative spaces lose broad, low-energy units (the loss grows with spike width: d' x0.6 at 1.5x the pyramidal width, x0.44 at 2x) that the raw space keeps; the raw block puts them back. Needs .spk.standard beside the method .spk.
+  #       hybrid-pcs: 2                   # FK_SESSION_HYBRID_PCS. standard-basis components per channel in the raw block (1-3)
+  #       hybrid-scale: 1.0               # FK_SESSION_HYBRID_SCALE. weight of the raw block relative to the method block after the two are put on equal total variance (1 = equal; <1 derivative-led, >1 raw-led)
   #       exclude-clu: ""                 # per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0.
   #       in-stage: ""                    # input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused
   #       in-method: ""                   # variant token of the input-stage clu (default: --method), e.g. the --out-variant alias a curated clu was saved under
@@ -544,6 +547,7 @@ pipeline:
   #       refrac-min-exp: 5.0             # FK_XCM_REFRAC_MIN_EXP (default 5.0)
   #       min-n: 40                       # FK_XCM_MIN_N (default 40)
   #       spk-cap: 300                    # FK_XCM_SPK_CAP (default 300)
+  #       sample-keyed: 1                 # FK_XCM_SAMPLE_KEYED (default 1)
   #       complexity-scale: 0.0           # FK_XCM_CX_SCALE (default 0.0)
   #       band-thr: 0.5                   # FK_XCM_BAND_THR (default 0.5)
   #       off-thr: 0.0                    # FK_XCM_OFF_THR (default 0.0)
@@ -583,6 +587,7 @@ pipeline:
   #       knn: 8                          # FK_PSAME_KNN (default 8)
   #       cos-floor: 0.75                 # FK_PSAME_COS_FLOOR (default 0.75)
   #       min-n: 50                       # FK_PSAME_MIN_N (default 50)
+  #       sample-keyed: 1                 # FK_PSAME_SAMPLE_KEYED (default 1)
   #       shift: 4                        # FK_PSAME_SHIFT (default 4)
   #       w-rc: 22.2143                   # FK_PSAME_W_RC (default 22.2143)
   #       w-dbic: 0.6144                  # FK_PSAME_W_DBIC (default 0.6144)
@@ -729,7 +734,7 @@ pipeline:
   #       rkk-max: 50
   #       rkk-realign: false              # interleave rkk (CEM) with per-cluster realignment (per-step; default on)
   #       no-rkk-realign: true            # legacy: one parent realign + fixed features for the rkk split
-  #       rkk-realign-iters: 2            # cluster<->realign passes in the rkk realign loop
+  #       rkk-realign-iters: 2            # FK_SESSION_RKK_REALIGN_ITERS. cluster<->realign passes in the rkk realign loop (each pass re-aligns every cluster to its own median and re-runs the CEM; stops early when the cluster count no longer changes)
   #       rkk-delete: false               # rkk (CEM) culls sub-min-group sub-clusters during the per-fiber fine split (default on)
   #       no-rkk-delete: true             # keep small non-singular rkk sub-clusters -- session should OVER-cluster, leaving the cull to refine; use to stop session shedding fragments into the residual/artifact bin
   #       refit-iters: 0                  # iterate {realign each fiber's spikes to their own median -> refit template -> re-apply the inclusion gate} this many extra times. Recovers true members rejected for a bad sub-sample offset and tightens the template; re-judges from the full member set each pass. 0 = single pass (original). Marginal on clean fibers; helps contamination-heavy ones.
@@ -832,6 +837,9 @@ pipeline:
   #       emit-fet: false                 # write <base>.fet.<out-variant or method>.<elec> -- the FULL-WIDTH session-wide projection on the global basis (the feature space the fine split used, before its per-chunk reduction), so Klusters can display it.
   #       feat-lag: 0                     # FK_SESSION_FEAT_LAG. >0 = fine-split shape features become PC1 sampled at -N/0/+N samples plus PC2 (4 per channel) instead of PC1,PC2,PC3. 0 = classic.
   #       feat-lag-pc2: 1                 # with --feat-lag: 1 (default) keep PC2 as a 4th column per channel, 0 = lags only
+  #       feat-hybrid: 0                  # FK_SESSION_FEAT_HYBRID. 1 = HYBRID fine-split features: the --method (stderiv) features as configured (lag space with --feat-lag) PLUS the leading standard-basis PCs of the paired RAW .spk.standard window of each spike, one realign shifting both. The derivative spaces lose broad, low-energy units (the loss grows with spike width: d' x0.6 at 1.5x the pyramidal width, x0.44 at 2x) that the raw space keeps; the raw block puts them back. Needs .spk.standard beside the method .spk.
+  #       hybrid-pcs: 2                   # FK_SESSION_HYBRID_PCS. standard-basis components per channel in the raw block (1-3)
+  #       hybrid-scale: 1.0               # FK_SESSION_HYBRID_SCALE. weight of the raw block relative to the method block after the two are put on equal total variance (1 = equal; <1 derivative-led, >1 raw-led)
   #       exclude-clu: ""                 # per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0.
   #       in-stage: ""                    # input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused
   #       in-method: ""                   # variant token of the input-stage clu (default: --method), e.g. the --out-variant alias a curated clu was saved under

@@ -185,6 +185,7 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_ALINK_MAX_GAP` | `4` | `4` | — | 4 \| 1-4 (chunks).  Bridge a cell silent for up to this many chunks.  Rounds relax the gap progressively; the yield comes from relaxing it, not from iterating at a fixed one. |
 | `FK_ALINK_MIN_FRAG` | `15` | `15` | — | 15 \| 15-40.  Min spikes for a fragment to carry a template (else left as its own cell). |
 | `FK_ALINK_SPK_CAP` | `1500` | `1500` | — | 1500 \| 600-3000.  Spikes per fragment for the template. |
+| `FK_ALINK_SAMPLE_KEYED` | `1` | `1` | — | 1.  The SPK_CAP sample keyed by the fragment's own spikes (a template depends on the fragment alone); 0 = the run's shared stream (pre-0.67.4). |
 | `FK_ALINK_ANCHOR_STAGE` | `fiber_session` | `fiber_session` | — | fiber_session \| fs_clean.  Stage whose .clc ATOMS fiber-session's overlap anchors index.  The linker runs on exp_chunk UNITS, so each anchor atom is mapped to the unit holding >= ANCHOR_MAJORITY of its spikes; pairs already in one unit drop out. Before 0.39.2 the atom ids were read as unit ids: arbitrary seeded links. |
 | `FK_ALINK_ANCHOR_MAJORITY` | `0.6` | `0.6` | — | 0.6 \| 0.5-0.8. |
 
@@ -317,6 +318,7 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_XCM_REFRAC_MIN_EXP` | `5.0` | `5.0` | — | 5.0.  Min expected coincidences for the veto to have power (else it abstains). |
 | `FK_XCM_MIN_N` | `15` | `15` | — | 40 \| 8-100.  Min spikes for a cluster to participate (else carried as-is).  15 since 0.52.0 (on the fibers: min-n 8 / 15 / 25 / 40 -> 0.387 / 0.405 / 0.389 / 0.372). |
 | `FK_XCM_SPK_CAP` | `300` | `300` | — | 300.  Spikes per cluster used to build/realign the template. |
+| `FK_XCM_SAMPLE_KEYED` | `1` | `1` | — | 1.  The SPK_CAP sample keyed by the cluster's own spikes, so a cosine depends on the two clusters alone; 0 = the run's shared stream, where a borderline merge flipped with changes elsewhere in the sort (g6 0316: 34+32+33). |
 | `FK_XCM_BAND_THR` | `0.5` | `0.5` | — | 0.5 \| 0.0-0.8.  Median+/-sigma BAND-OVERLAP co-gate (fiber-backbone-link's method), ON: a candidate merge must also have band-overlap IoU >= this.  0=off (roll-cosine only). |
 | `FK_XCM_RVU_THR` | `0.5` | `0.5` | — | 0 \| 0.45-0.6 (0 = off).  Per-channel RESIDUAL-VARIANCE uniformity: residual = each aligned spike minus the merged candidate's template, within +/- FK_XCM_RVU_WIN samples of the peak; on each channel the residual variance across those samples should be flat (noise).  Two co-shaped cells of different amplitude leave a residual that peaks with the spike.  Non-uniformity = std/mean of that profile; ANY channel above this fails the candidate (each channel has its own veto).  This absolute test also catches a fragment that is ALREADY mixed.  Measured: pure single clusters 0.21 / 0.29 / 0.53 (p10/50/90), same-unit merged pairs <= 0.41 (p90); the merged look-alike pairs on group 7: 0.43-0.70. |
 | `FK_XCM_RVU_RISE` | `0.05` | `0.05` | — | 0 \| 0.03-0.10 (0 = off).  The same test relative to the parts: fail if any channel's non-uniformity rises above the larger of the two clusters' by more than this. Same-unit pairs: rise <= 0.045 (p90, median 0.001); look-alike pairs 0.10-0.43. |
@@ -459,6 +461,7 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_PSAME_KNN` | `8` | `8` | `8` | 8.  Candidates per cluster (most similar by roll-cosine). |
 | `FK_PSAME_COS_FLOOR` | `0.75` | `0.75` | `0.75` | 0.75.  Candidates need at least this roll-cosine (the calibration's range). |
 | `FK_PSAME_MIN_N` | `50` | `50` | `50` | 50.  Smaller clusters keep their labels. |
+| `FK_PSAME_SAMPLE_KEYED` | `1` | `1` | `1` | 1.  Per-cluster samples (model cap, mean, geometry fit) keyed by the cluster's own spikes; 0 = the run's shared stream (pre-0.67.4). |
 | `FK_PSAME_SHIFT` | `4` | `4` | `4` | 4 (samples).  Roll-cosine half-window. |
 | `FK_PSAME_W_RC` | `22.2143` | `22.2143` | `22.2143` | calibrated logistic weights (raw scale), g6 0316 stderiv_C5 |
 | `FK_PSAME_W_DBIC` | `0.6144` | `0.6144` | `0.6144` |  |
