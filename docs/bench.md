@@ -31,7 +31,7 @@ like any other stage.  The hash (8 hex digits of a SHA-1) covers:
 | fiber-flag-artifacts | `FK_FLAG_*` |
 | fiber-xcorr-merge, fiber-rdr, ... | their own prefix (`FK_XCM_*`, `FK_RDR_*`, ...), plus the hash of the step that made their `in:` |
 | fiber-intrachunk, fiber-anchor-link | their own prefix and `FK_CONS_*` (they host the consolidation pass too); fiber-consensus has `FK_CONSENSUS_*` only |
-| every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT`, `FK_CHUNKS`, `FK_SESSION_CHUNK_MIN` |
+| every step | its plan `params:`, its stage name, `FK_REALIGN_VARIANT`, `FK_CHUNKS`, `FK_SESSION_CHUNK_MIN`, and the **input fingerprint**: size and mtime of every `<base>.<spk|pca|nst|res>.<method>.<group>` without a hash tag, plus `<base>.xml` / `.yaml` (0.67.5; `--no-input-hash` leaves it out) |
 
 A step that **annotates** its input rather than writing a new `.clu` -- `fiber-cpos` with `out:` equal to its
 `in:`, as the exp plan's `cpos-clean` -- keeps its input's tag: its `.cpos` table is named for the
@@ -40,8 +40,17 @@ done when the `.cpos` table exists.
 
 So the same parameters always give the same tag, a changed merge knob reuses the cached session output,
 and a changed session knob gives every later step a new tag.  A step whose output already exists is
-skipped: a sweep can be stopped and resumed.  The hash covers parameters, not code; the fiber-kit
-version is recorded with each run (`fk-bench/runs.jsonl`).
+skipped: a sweep can be stopped and resumed.  The hash covers parameters and the session files a run
+reads, not code; the fiber-kit version is recorded with each run (`fk-bench/runs.jsonl`).
+
+The input fingerprint is what makes a cached output safe to reuse: a `.spk` or `.res` rewritten between
+two runs (a Klusters or `fiber-realign` pass, a re-extraction) gives every step a new tag, so a sort made
+from the old files is never combined with merge stages that read the new ones.  (g6 0316, 2026-11-12: the
+`.spk` files were realigned between two fiber-tune runs; the second reused the first's sorts and re-ran the
+merge stages on the new windows, and no row of its table was comparable to any other.)  The price is that
+a rewrite with identical content also re-runs; `--no-input-hash` restores the pre-0.67.5 tags when that is
+known to be the case.  A `fiber-tune confirm` workspace copies the inputs with their mtimes, so the hash
+planned on the session is the hash the workspace run makes.
 
 ## Chunk runs
 

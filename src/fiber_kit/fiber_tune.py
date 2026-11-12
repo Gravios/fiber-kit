@@ -458,7 +458,8 @@ class Tuner:
         cfg = dict(self.cfg_search if cfg_base is None else cfg_base); cfg.update(self.split(overrides, full))
         if self.spec["chunks"]:
             cfg["FK_CHUNKS"] = str(self.spec["chunks"])
-        return fb.build_run(cfg, upto or self.score_at, keep_realign=keep_realign, allow_inplace=allow_inplace)
+        return fb.build_run(cfg, upto or self.score_at, keep_realign=keep_realign, allow_inplace=allow_inplace,
+                            inputs=fb.input_fingerprint(self.base, self.elec))
 
     # ── one trial ──
     def evaluate(self, overrides, phase="search", note=""):
@@ -567,7 +568,7 @@ class Tuner:
             if os.path.isdir(p) or os.path.lexists(q) or _WS_SKIP.search(f):
                 continue
             if _WS_COPY.search(f):
-                if subprocess.run(["cp", "--reflink=auto", p, q], capture_output=True).returncode != 0:
+                if subprocess.run(["cp", "--reflink=auto", "-p", p, q], capture_output=True).returncode != 0:
                     shutil.copy2(p, q)
                 copied += os.path.getsize(q)
             else:

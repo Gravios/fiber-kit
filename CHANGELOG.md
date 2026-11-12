@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.5] — fiber-bench: the session files a run reads are in its step hashes
+- `fiber_bench.input_fingerprint(base, elec)`: size + mtime of every `<base>.<spk|pca|nst|res>.<method>.<elec>`
+  without a hash tag (stage outputs and `.fet` excluded) plus `<base>.xml` / `.yaml`, folded into every step's
+  hash by `build_run(..., inputs=)`; `fiber-bench run` and `fiber-tune` pass it, `--no-input-hash` leaves it
+  out.  Why: on g6 0316 (2026-11-12) the `.spk` files were realigned between two `fiber-tune` runs; the second
+  reused the first's cached sorts (made from the old windows) and re-ran the merge stages on the new ones --
+  its "start" rows mixed two spike files and its fresh re-sorts disagreed with its cached ones (0.4026 vs
+  0.3487 for the same config), and nothing in the table was comparable.  A rewritten input now gives every
+  step a new tag.  `fiber-tune`'s confirm workspace copies with `cp -p`, so the planned hash is the one the
+  workspace run makes.  `test/test_bench_inputs.py`; `docs/bench.md`.
+
 ## [0.67.4] — merge-stage templates keyed by the cluster, not by the run's random stream
 - `fiber-xcorr-merge`, `fiber-anchor-link`, `fiber-psame-merge`: the `SPK_CAP` sample a cluster's template
   (anchor-link: fragment template; psame: model cap, mean and geometry fit) is built from was drawn from one

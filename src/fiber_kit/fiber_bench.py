@@ -46,6 +46,7 @@ import hashlib
 import itertools
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -117,19 +118,62 @@ def _h(obj):
     return hashlib.sha1(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:8]
 
 
-def step_hash(step, cfg, upstream):
-    return _h({"stage": step["stage"], "params": step.get("params") or {},
-               "knobs": stage_params(step["stage"], cfg), "upstream": sorted(upstream)})
+_INPUT_KINDS = ("spk", "pca", "nst", "res")
+_HASH_TAG = re.compile(r"_[0-9a-f]{8}$")
+
+
+def input_fingerprint(base, elec):
+    """{file: [size, mtime_ns]} of the session files a run READS for group `elec`: every
+    <base>.<spk|pca|nst|res>.<method>.<elec> whose method carries no fiber-bench hash tag (so a stage's
+    own outputs are not inputs; .fet is left out too -- fiber-session --emit-fet writes one, and every .fet
+    derives from a .spk/.pca that is in), plus <base>.xml / <base>.yaml.  Part of every step hash: a run made from
+    other inputs is another run.  Found the hard way on g6 0316 (2026-11-12): the .spk files were rewritten
+    between two fiber-tune runs (a realign), the second run reused the first's cached sorts -- made from the
+    old .spk -- and re-ran the merge stages on the new .spk, and nothing in its table was comparable to
+    anything.  Size + mtime, as make does: a rewrite with identical content also busts the cache, which is
+    the cheap side to err on."""
+    out = {}
+    d, stem = os.path.dirname(base) or ".", os.path.basename(base)
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return out
+    pre = stem + "."
+    for n in sorted(names):
+        if not n.startswith(pre):
+            continue
+        rest = n[len(pre):]
+        parts = rest.split(".")
+        ok = (rest in ("xml", "yaml")) or (len(parts) == 3 and parts[0] in _INPUT_KINDS and parts[2] == str(elec)
+                                           and not _HASH_TAG.search(parts[1]))
+        if not ok:
+            continue
+        try:
+            st = os.stat(os.path.join(d, n))
+        except OSError:
+            continue
+        out[n] = [st.st_size, st.st_mtime_ns]
+    return out
+
+
+def step_hash(step, cfg, upstream, inputs=None):
+    d = {"stage": step["stage"], "params": step.get("params") or {},
+         "knobs": stage_params(step["stage"], cfg), "upstream": sorted(upstream)}
+    if inputs:
+        d["inputs"] = inputs
+    return _h(d)
 
 
 def _truthy(v):
     return str(v).strip().lower() not in ("", "0", "false", "off", "no", "none")
 
 
-def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False):
+def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False, inputs=None):
     """Hash the plan in `cfg` (its `pipeline:` list) up to and including step `upto` (a step name or a
     stage; default: the first fiber-session step).  Returns (cfg_out, steps, final_hash), where steps
-    carry 'hash', 'out_tag' and the rewritten 'in'.  cfg_out has the hashed plan and the flag stage tag."""
+    carry 'hash', 'out_tag' and the rewritten 'in'.  cfg_out has the hashed plan and the flag stage tag.
+    `inputs` (input_fingerprint) enters every step's hash, so outputs made from other session files are
+    never reused."""
     cfg = dict(cfg)
     if not keep_realign:
         cfg["FK_SESSION_REALIGN"] = "off"
@@ -155,7 +199,7 @@ def build_run(cfg, upto=None, keep_realign=False, allow_inplace=False):
             up.append(by_out.get(s["in"], ("external", s["in"]))[0])
         if st == "fiber-session" and _truthy(cfg.get("FK_SESSION_EXCLUDE", 0)) and flag_hash:
             up.append(flag_hash)
-        h = step_hash(s, cfg, up)
+        h = step_hash(s, cfg, up, inputs)
         s["hash"] = h
         if s.get("in") and s["in"] in by_out:
             s["in"] = by_out[s["in"]][1]
@@ -243,10 +287,12 @@ def cmd_run(a):
     if a.chunks is not None:                                        # --chunks: one more override, in the hash
         _fch.parse(a.chunks)                                        # validate early
         combos = [dict(c, FK_CHUNKS=str(a.chunks)) for c in combos]
-    print(f"{_LP} · {len(combos)} variant(s) of {os.path.basename(a.config)} up to step {a.upto or 'fiber-session'}")
+    inputs = None if getattr(a, "no_input_hash", False) else input_fingerprint(base, a.elec)
+    print(f"{_LP} · {len(combos)} variant(s) of {os.path.basename(a.config)} up to step {a.upto or 'fiber-session'}"
+          + (f" · {len(inputs)} input file(s) in the hash" if inputs else " · inputs NOT in the hash"))
     for ov in combos:
         cfg = dict(cfg0); cfg.update(ov)
-        cfg_run, steps, h = build_run(cfg, a.upto, a.keep_realign, a.allow_inplace)
+        cfg_run, steps, h = build_run(cfg, a.upto, a.keep_realign, a.allow_inplace, inputs)
         meth = cfg_run.get("FK_REALIGN_VARIANT") or method
         todo = []
         for s in steps:
@@ -813,6 +859,9 @@ def main(argv=None):
     p.add_argument("--sweep", default=None, help="yaml: a list of override dicts, or a dict of value lists")
     p.add_argument("--upto", default=None, help="last plan step to run (name or stage; default the first fiber-session)")
     p.add_argument("--keep-realign", action="store_true", help="keep FK_SESSION_REALIGN (rewrites .res/.spk in place!)")
+    p.add_argument("--no-input-hash", action="store_true",
+                   help="leave the session files' size+mtime out of the step hashes (pre-0.67.5 tags; reuses outputs "
+                        "whatever the .spk/.res/.pca have become since)")
     p.add_argument("--allow-inplace", action="store_true", help="allow in-place fiber-realign steps in the run")
     p.add_argument("--force", action="store_true", help="re-run steps whose output exists")
     p.add_argument("--keep-going", action="store_true", help="continue the sweep after a failed run")

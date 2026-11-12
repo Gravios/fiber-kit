@@ -169,7 +169,7 @@ def main():
             with open(cfgp, "w") as fh:
                 fh.write("FK_REALIGN_VARIANT: stderiv\nFK_SESSION_EXCLUDE: 0\npipeline:\n"
                          "  - {stage: fiber-session, name: session, out: fs}\n")
-            _, st_, h_ = fb.build_run(fb.load_config(cfgp))
+            _, st_, h_ = fb.build_run(fb.load_config(cfgp), inputs=fb.input_fingerprint(base, 1))   # the tag `run` will use
             nio.write_clu_file(f"{base}.clu.stderiv.1.{st_[-1]['out_tag']}", sortlab)
             rc = fb.main(["run", base, "1", "--config", cfgp])
             reg = fb.read_registry(base)
