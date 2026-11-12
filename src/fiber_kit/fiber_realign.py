@@ -121,8 +121,33 @@ def rms_recenter_shift(energy, peak, rmin=0.4):
     return _lround(d), float(c), rlen, True
 
 
+def realign_kernel_weights(kernel, width, pk, T, templ=None):
+    """Klusters' correlation window (klustersdoc_realign.cpp realignKernelWeights): per-sample weights
+    w[s] in the template's frame (its peak at `pk`).  gauss: exp(-((s-pk)/(width/2))^2/2); hann: the raised
+    cosine over [pk-width, pk+width], 0 outside; template: the channel-summed energy of `templ` (T, C),
+    3-sample box smoothed, / max, floored at 0.02.  None / 'none' -> None (the whole window)."""
+    if not kernel or kernel == "none":
+        return None
+    if kernel == "template":
+        if templ is None:
+            raise ValueError("the template kernel needs the template")
+        e = (np.asarray(templ, np.float64) ** 2).sum(1)
+        w = np.array([e[max(0, s - 1):s + 2].mean() for s in range(T)])
+        if not w.max() > 0:
+            return None
+        return np.maximum(0.02, w / w.max()).astype(np.float64)
+    hw = float(max(1, int(width)))
+    d = np.arange(T, dtype=np.float64) - float(pk)
+    if kernel == "gauss":
+        return np.exp(-0.5 * (d / (hw / 2.0)) ** 2)
+    if kernel == "hann":
+        return np.where(np.abs(d) <= hw, 0.5 * (1.0 + np.cos(np.pi * d / hw)), 0.0)
+    raise ValueError(f"unknown realign kernel '{kernel}' (none, gauss, hann, template)")
+
+
 def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
-                     min_score=0.70, upsample=1, noise_label=0, recenter=False, rmin=0.4):
+                     min_score=0.70, upsample=1, noise_label=0, recenter=False, rmin=0.4,
+                     kernel=None, kernel_width=None):
     """Klusters-faithful per-spike realignment: KlustersDoc::realignSpikes (klustersdoc_realign.cpp)
     around the libklustersshared kernel (realign_xcorr_omp.cpp), step for step.  Per unit, up to
     `iters` times:
@@ -145,6 +170,13 @@ def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
     shifted so the circular centroid of its channel-summed energy lands on `peak`, unless the profile's
     mean resultant length is below `rmin` (energy not single-lobed) -- rms_recenter_shift.
 
+    kernel / kernel_width: Klusters' correlation window (--kernel gauss|hann|template, --kernel-width;
+    realign_kernel_weights).  Under a window the score is the correlation of the template with the part of
+    the spike the window admits, normalised by THAT part's energy at each lag (xcorr_omp_compute_weighted),
+    so a second spike in the window -- a collision -- neither feeds the score nor its normalisation; a lag
+    with no energy under the window is skipped.  kernel_width None = max(2, pk // 2) (Klusters' automatic
+    half-width), x upsample on the upsampled grid.
+
     Defaults are Klusters' (threshold 0.70, 2 iterations, max_shift = max(1, peak // 2) clamped to
     T - 1).  Units below `min_n` spikes and `noise_label` are left unshifted (Klusters realigns whatever
     cluster is selected).  With upsample > 1 the windows are cubic-spline interpolated first (a fiber-kit
@@ -164,6 +196,9 @@ def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
     ms = int(min(max(ms, 1), T - 1))
     lags = np.arange(-ms, ms + 1)
     arT = np.arange(T)
+    kw_width = (max(2, pk // 2) if kernel_width is None else int(kernel_width) * f)
+    kw_width = int(min(max(kw_width, 1), T - 1))
+    kernel = None if kernel in (None, "", "none") else str(kernel)
     W_all = spk.astype(np.int64) if exact else spk.astype(np.float64)
     spkE = (W_all.astype(np.float64) ** 2).sum((1, 2))
     sqrtSpkE = np.sqrt(spkE)
@@ -186,16 +221,31 @@ def klusters_offsets(spk, labels, peak, max_shift=None, iters=2, min_n=20,
             ts = pk - tpk
             if ts:
                 templ = templ[(arT - ts) % T]                     # circular: src = (t - tShift) % T
-            tnorm = np.sqrt((templ * templ).sum())
-            denom = tnorm * sqrtSpkE[idx]
+            kw = realign_kernel_weights(kernel, kw_width, pk, T, templ) if kernel else None
             best = np.full(n, -np.inf, np.float32)
             blag = np.zeros(n, np.int64)
             alf = al.astype(np.float64)
-            for L in lags:
-                num = np.einsum("ntc,tc->n", alf[:, (arT + L) % T, :], templ)
-                score = np.where(denom > 1e-12, num / np.where(denom > 1e-12, denom, 1.0), 0.0).astype(np.float32)
-                upd = score > best
-                best[upd] = score[upd]; blag[upd] = L
+            if kw is None:
+                tnorm = np.sqrt((templ * templ).sum())
+                denom = tnorm * sqrtSpkE[idx]
+                for L in lags:
+                    num = np.einsum("ntc,tc->n", alf[:, (arT + L) % T, :], templ)
+                    score = np.where(denom > 1e-12, num / np.where(denom > 1e-12, denom, 1.0), 0.0).astype(np.float32)
+                    upd = score > best
+                    best[upd] = score[upd]; blag[upd] = L
+            else:
+                tnorm = np.sqrt((kw[:, None] * templ * templ).sum())
+                any_lag = np.zeros(n, bool)
+                for L in lags:
+                    seg = alf[:, (arT + L) % T, :]
+                    num = np.einsum("ntc,tc->n", seg * kw[None, :, None], templ)
+                    denom = tnorm * np.sqrt((kw[None, :, None] * seg * seg).sum((1, 2)))
+                    okd = denom > 1e-12
+                    score = np.where(okd, num / np.where(okd, denom, 1.0), -np.inf).astype(np.float32)
+                    any_lag |= okd
+                    upd = score > best
+                    best[upd] = score[upd]; blag[upd] = L
+                best = np.where(any_lag, best, 0.0).astype(np.float32); blag = np.where(any_lag, blag, 0)
             sh = np.where(best >= np.float32(min_score), blag, 0)
             if not sh.any():
                 break
@@ -553,7 +603,7 @@ def window_index(filmm, cfg, group, res, nsamp, nch, base, tokens=("standard",),
 def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             min_n=20, method="klusters", peak=None, min_score=0.70, upsample=1,
             variant="standard", verbose=True, recenter=False, rmin=0.4, align_index=None,
-            chunks=None, sr=None, chunk_min=12.0):
+            chunks=None, sr=None, chunk_min=12.0, kernel=None, kernel_width=None):
     """Read the .spk of the VARIANT the clu/res points to, .res, .clu; compute per-spike
     offsets and corrected .res.
 
@@ -614,7 +664,7 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
             raise ValueError("klusters method needs the canonical peak sample (cfg['peak'])")
         align_peak = timestamp_index(peak) if align_index is None else int(align_index)
         off, ioff = klusters_offsets(spk, labels_align, align_peak, max_shift, iters, min_n, min_score, upsample,
-                                     recenter=recenter, rmin=rmin)
+                                     recenter=recenter, rmin=rmin, kernel=kernel, kernel_width=kernel_width)
     else:
         off, ioff = fl.template_offsets(spk, labels_align, max_shift, iters, min_n)
         align_peak = None
@@ -627,7 +677,9 @@ def realign(base, elec, nsamp, nch, clu_path=None, max_shift=None, iters=2,
         up = f" upsample={upsample}x" if (method == "klusters" and upsample > 1) else ""
         if method == "klusters":
             up += (f" threshold={min_score:g} iters={iters} max_shift="
-                   f"{max_shift if max_shift is not None else 'peak//2'}" + (f" recenter-rms rmin={rmin:g}" if recenter else ""))
+                   f"{max_shift if max_shift is not None else 'peak//2'}" + (f" recenter-rms rmin={rmin:g}" if recenter else "")
+                   + (f" kernel={kernel}" + (f" width={kernel_width if kernel_width is not None else 'auto'}"
+                                             if kernel in ("gauss", "hann") else "") if kernel and kernel != "none" else ""))
         pk = f" peak={align_peak:.2f}" if align_peak is not None else ""
         _log(f"realign {method}{up}  variant={variant or 'canonical'}{pk}")
         _det("input", f"{n:,} spikes · {np.unique(labels[labels > 1]).size:,} units · {spk_path}")
@@ -880,6 +932,16 @@ def main(argv=None):
     ap.add_argument("--rmin", type=float, default=_kd("FK_REALIGN_RMIN", float, 0.4),
                     help="klusters --recenter-rms: minimum mean resultant length of the energy profile; below "
                          "it the recenter is skipped (Klusters --rmin, default 0.4) [FK_REALIGN_RMIN]")
+    ap.add_argument("--kernel", choices=["none", "gauss", "hann", "template"],
+                    default=_kd("FK_REALIGN_KERNEL", str, "none"),
+                    help="klusters: the correlation window (Klusters --kernel, Preferences > Realignment > Correlation "
+                         "window): none = the whole window; gauss / hann = a bell of --kernel-width samples each side of "
+                         "the peak sample; template = the template's own energy profile.  Under a window the score is "
+                         "normalised by the energy the window admits at each lag, so a second spike in the window (a "
+                         "collision) cannot steer the lag [FK_REALIGN_KERNEL]")
+    ap.add_argument("--kernel-width", type=int, default=_kd("FK_REALIGN_KERNEL_WIDTH", int, 0),
+                    help="klusters --kernel-width: half-width of the gauss / hann window in samples; 0 = half the peak "
+                         "position (Klusters' automatic) [FK_REALIGN_KERNEL_WIDTH]")
     ap.add_argument("--upsample", type=int, default=1,
                     help="klusters: cubic-spline upsample factor for sub-sample matching "
                          "(2 = half-sample lags); .res is rounded back to whole samples at save")
@@ -1031,7 +1093,8 @@ def main(argv=None):
             base, group, nsamp, nch, a.clu, a.max_shift, a.iters, a.min_n,
             method=a.align_method, peak=peak, min_score=a.min_score, upsample=a.upsample,
             variant=out_variant, recenter=bool(a.recenter_rms), rmin=a.rmin, align_index=align_index,
-            chunks=_fch.parse(a.chunks), sr=cfg["sr"], chunk_min=a.chunk_length)
+            chunks=_fch.parse(a.chunks), sr=cfg["sr"], chunk_min=a.chunk_length,
+            kernel=a.kernel, kernel_width=(a.kernel_width or None))
         if _fch.parse(a.chunks) is not None:
             _det("chunks", _fch.describe(_fch.parse(a.chunks), a.chunk_length) + "; their spikes are not moved")
             labels = _fch.mark_inactive(labels, res, cfg["sr"], _fch.parse(a.chunks), a.chunk_length)

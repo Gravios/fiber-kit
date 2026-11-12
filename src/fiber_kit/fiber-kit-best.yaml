@@ -628,6 +628,13 @@ FK_REALIGN_RECENTER_RMS: 1        # 1 | 0/1.  klusters algo: Klusters realign MO
                                   #   the compiled Klusters code: identical shift on every spike of the g6 36-47 min
                                   #   sort (19,543), standard and stderiv_C5_D34, in both modes.
 FK_REALIGN_RMIN:         0.4      # 0.4.  Klusters --rmin: minimum mean resultant length to trust the energy centroid.
+FK_REALIGN_KERNEL:       none     # none | gauss | hann | template.  Klusters --kernel (Preferences > Realignment > Correlation
+                                  #   window): the part of the window the xcorr scores and normalises on.  none = every sample
+                                  #   (the classic kernel, parity with the GPU back ends); gauss / hann = a bell of
+                                  #   FK_REALIGN_KERNEL_WIDTH samples each side of the peak sample; template = the cluster
+                                  #   template's own energy profile.  Under a window a second spike in the tail or lead-in (a
+                                  #   collision) neither feeds the score nor its normalisation, so it cannot steer the lag.
+FK_REALIGN_KERNEL_WIDTH: 0        # 0 | 1-.  Half-width of the gauss / hann window in samples; 0 = half the peak position.
 FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the curator's Klusters setting, used here).
                                   #   Klusters --threshold: a spike whose best normalised xcorr is below this is not moved
                                   #   in that pass.  g6 36-47 min, RMS mode: 0.10 moves 30.6 % (stderiv) / 93.6 %

@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.7] — fiber-realign: Klusters' correlation window (--kernel)
+- `klusters_offsets(kernel=, kernel_width=)`, `realign_kernel_weights`: the window Klusters' realign gained in
+  neurosuite-3 patch 0971 (`--kernel none|gauss|hann|template`, `--kernel-width`), ported step for step.
+  Under a window the score is the template's correlation with the part of the spike the window admits,
+  normalised by that part's energy at each lag, so a collision in the tail or lead-in cannot steer the lag;
+  `none` is the classic kernel, bit-identical to before.  CLI `--kernel` / `--kernel-width`, knobs
+  `FK_REALIGN_KERNEL` (none) / `FK_REALIGN_KERNEL_WIDTH` (0 = half the peak position), in the profiles and
+  so in fiber-session's end-of-run commit and `fiber-tune confirm`.  `test_realign_kernel.py` reproduces the
+  C++ test vector (two collided spikes: whole window loses them, Gaussian +-4 and template align both).
+
 ## [0.67.6] — fiber-realign: a commit leaves super-sampled (_U) spaces alone
 - `fiber-realign --variants all` (what fiber-session's end-of-run commit and `fiber-tune confirm` run)
   listed the `_U<factor>` super-sampled spaces among the waveform variants to refresh and derived each as
