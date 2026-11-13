@@ -424,6 +424,18 @@ _RKK_SPLITS      = cfgmod.knob_value("FK_SESSION_RKK_SPLITS", int, 1)           
 # cost one full CEM per extra (K, start).  RKK_MIN 0 = no sweep (start at --rkk-max only, as before).
 _RKK_STARTS      = cfgmod.knob_value("FK_SESSION_RKK_STARTS", int, 1)
 _RKK_MIN         = cfgmod.knob_value("FK_SESSION_RKK_MIN", int, 0)
+# Starting-K cap for SMALL groups.  The CEM starts at --rkk-max (50) clusters whatever the group size; with
+# N points spread over 50 random clusters each holds N/50, and the M-step deletes every cluster with
+# n <= nDims (KK.cpp:189) -- at N <= ~120 and 6 dims that is ALL of them, in the first step, and the whole
+# group lands in the noise cluster (measured on 0312 g6: single curated units at 25-100 spikes -> 0 clusters,
+# 100 % reserve, at any min_size; at K0 <= 20 the same groups cluster).  A 12-minute chunk holds 144 spikes
+# of a 0.2 Hz unit, so this is where the fine split silently loses small units.  RKK_PTS_PER_START > 0 caps
+# a RETRY at K0 = N // RKK_PTS_PER_START (>= 2) when the first CEM returns no cluster at all: 3 x (dims + 1)
+# = 21 gives every starting cluster three times the survival count.  A retry, not a general cap: capping K0
+# for every small group was measured to send 30-60 % of a 150-250-spike unit to the noise cluster (broad
+# starting Gaussians leave the unit's tails to the uniform reject density), where the legacy start keeps
+# 90 %; only the groups the legacy start loses entirely are touched.  0 = off (legacy).
+_RKK_PTS_PER_START = cfgmod.knob_value("FK_SESSION_RKK_PTS_PER_START", int, 0)
 
 
 def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
@@ -451,6 +463,11 @@ def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
     kmin = int(max_clusters) if int(_RKK_MIN or 0) <= 0 else max(2, min(int(_RKK_MIN), int(max_clusters)))
     lab = _rkk(F, max_clusters=max_clusters, min_clusters=kmin, seed=seed, n_starts=max(1, int(_RKK_STARTS)),
                penalty_mix=_RKK_PENALTY_MIX, splits=bool(_RKK_SPLITS), noise=True)
+    if int(_RKK_PTS_PER_START or 0) > 0 and not (np.asarray(lab) > 0).any():
+        k0 = max(2, min(int(max_clusters), len(F) // int(_RKK_PTS_PER_START)))
+        if k0 < int(max_clusters):                     # the start died out: retry with survivable clusters
+            lab = _rkk(F, max_clusters=k0, min_clusters=k0, seed=seed, n_starts=max(1, int(_RKK_STARTS)),
+                       penalty_mix=_RKK_PENALTY_MIX, splits=bool(_RKK_SPLITS), noise=True)
     out = np.asarray(lab, int) - 1                     # 0 (noise) -> -1 ; 1..K -> 0..K-1
     if min_size and int(min_size) > 1:
         for c in np.unique(out[out >= 0]):
@@ -654,6 +671,101 @@ def _offset_edge_filter(edges, fine, waves_std, off_thr, amp_frac=0.3):
     return keep
 
 
+def _neigh_recluster(fine, waves, waves_std, basis, mask, dims, min_size, *, k=3, cos_thr=0.7, min_n=20,
+                     passes=1, seed=0, shed=None):
+    """Neighbourhood re-cluster: rkk (one seeded CEM, splits on) over the UNION of a random set of
+    neighbouring clusters instead of one cluster at a time.  Per-cluster rkk can only split; a
+    boundary drawn by the coarse pass between two fibers of one unit, or through a unit whose
+    spikes were parcelled to two neighbours, is never revisited.  Here each cluster u (random
+    order) draws 1..k untouched neighbours (template cosine >= cos_thr), the union is realigned
+    per cluster and featurised on the clustering basis (hybrid block included), and KlustaKwik
+    runs from the CURRENT labels.  The result replaces the input only when KK's own penalised
+    score improved (klustakwik_refine returns both), so a worse local optimum cannot be adopted.
+    Spikes KK sends to its noise cluster keep their old label (this pass moves spikes between
+    clusters and splits or merges them; it never unsorts).  Returns the new `fine` and the count
+    of accepted neighbourhoods; stats go to `shed` (neigh_tried / neigh_accepted / neigh_moved)."""
+    try:
+        from .klustakwik import klustakwik_refine
+    except ImportError:
+        from klustakwik import klustakwik_refine
+    rng = np.random.default_rng(seed)
+    fine = fine.copy()
+    accepted_total = 0
+    for _p in range(max(1, int(passes))):
+        units = [int(u) for u in np.unique(fine[fine >= 0]) if int((fine == u).sum()) >= min_n]
+        if len(units) < 2:
+            break
+        # templates on the masked channels, each cluster realigned to its own median
+        T = []
+        for u in units:
+            w = fl.realign(waves[fine == u])
+            t = np.median(w[:, mask, :], 0).ravel(); t = t - t.mean()
+            T.append(t / (np.linalg.norm(t) + 1e-12))
+        T = np.array(T); Cm = T @ T.T; np.fill_diagonal(Cm, -1.0)
+        touched = set(); nid = int(fine.max()) + 1; accepted = 0
+        for ui in rng.permutation(len(units)):
+            u = units[ui]
+            if u in touched:
+                continue
+            nb = [units[j] for j in np.flatnonzero(Cm[ui] >= cos_thr) if units[j] not in touched]
+            if not nb:
+                continue
+            kk_ = int(rng.integers(1, min(int(k), len(nb)) + 1))
+            pick = [u] + [int(v) for v in rng.choice(nb, kk_, replace=False)]
+            idx = np.flatnonzero(np.isin(fine, pick))
+            if shed is not None: shed['neigh_tried'] = shed.get('neigh_tried', 0) + 1
+            wu = waves[idx]
+            if waves_std is not None and basis is not None and basis.get("_hyb") is not None:
+                wu = _fpca.hybrid_stack(wu, waves_std[idx])
+            Wal = np.array(wu, dtype=float)
+            for v in pick:                                      # per-cluster alignment, as _rkk_realign
+                loc = np.flatnonzero(fine[idx] == v)
+                if len(loc) >= 8:
+                    Wal[loc] = fl.align_xcorr(wu[loc], ref="median", iters=6, maxlag=6)
+            F = _fpca.cluster_features(Wal, basis, realign=False, dims=dims) if basis is not None else None
+            if F is None:
+                w = Wal[:, mask, :].reshape(len(idx), -1); w = w - w.mean(0)
+                U, S, _ = np.linalg.svd(w, full_matrices=False); F = U[:, :dims] * S[:dims]
+            remap = {v: i for i, v in enumerate(pick)}
+            init = np.array([remap[int(v)] for v in fine[idx]])
+            lab, s0, s1 = klustakwik_refine(F, init, penalty_mix=_RKK_PENALTY_MIX, splits=bool(_RKK_SPLITS))
+            touched.update(pick)
+            if not (s1 < s0):                                   # KK's own criterion did not improve
+                continue
+            new = np.asarray(lab, int) - 1                      # 0 noise -> -1
+            # sub-min_size survivors and noise keep their old cluster: this pass never unsorts
+            for c in np.unique(new[new >= 0]):
+                if int((new == c).sum()) < int(min_size):
+                    new[new == c] = -1
+            out = fine[idx].copy()
+            moved = 0; used = set()
+            # each new cluster inherits the id of the old cluster holding most of it (largest first),
+            # once per old id; the rest get fresh ids
+            labs, sizes = np.unique(new[new >= 0], return_counts=True)
+            for c in labs[np.argsort(-sizes)]:
+                m = new == c
+                old_ids, cnt = np.unique(fine[idx][m], return_counts=True)
+                major = int(old_ids[np.argmax(cnt)])
+                if major in used:
+                    tgt = nid; nid += 1
+                else:
+                    tgt = major
+                used.add(tgt)
+                moved += int((fine[idx][m] != tgt).sum())
+                out[m] = tgt
+            if moved == 0:
+                continue
+            fine[idx] = out
+            accepted += 1
+            if shed is not None:
+                shed['neigh_accepted'] = shed.get('neigh_accepted', 0) + 1
+                shed['neigh_moved'] = shed.get('neigh_moved', 0) + moved
+        accepted_total += accepted
+        if accepted == 0:
+            break
+    return fine, accepted_total
+
+
 def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15, coarse_seed_density=0.0,
                        fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
                        n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, keep_small=False, keep_small_min=5,
@@ -674,6 +786,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                        adapt_clean=False, adapt_z=3.0, adapt_isi_ms=10.0,
                        adapt_clean_corr=0.4, adapt_clean_snr=0.5, adapt_taumax=0.5,
                        collision_flag=False, collision_gain=0.09, collision_shift=8,
+                       neigh_passes=0, neigh_k=3, neigh_cos=0.7, neigh_seed=0,
                        quality_metrics=False, quality_dims=10):
     """Coarse fibers (for linking), refined WITHIN the chunk into sub-units so each
     fiber keeps its own geometry per chunk.  Split = method ('gmm' BIC mixture |
@@ -1044,6 +1157,16 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
             if nsplit == 0 and nmerge == 0:
                 break
+    # ── Block N (opt-in): neighbourhood re-cluster -- rkk over the union of a random set of neighbouring
+    #    clusters, from the current labels, accepted on KK's own score.  Revisits boundaries the
+    #    per-cluster passes above cannot (they only ever split one cluster or merge two whole ones). ──
+    if neigh_passes > 0 and len(geoms) > 1:
+        src_fine = fine.copy(); src_geoms = geoms
+        fine, nacc = _neigh_recluster(fine, waves, waves_std, basis, mask, rkk_dims, fine_mg, k=neigh_k,
+                                      cos_thr=neigh_cos, min_n=2 * resplit_min_n, passes=neigh_passes,
+                                      seed=neigh_seed, shed=shed)
+        if nacc:
+            fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
     # ── collision flag: route recoverable collisions OUT of the noise cluster.
     #    The inclusion radius already sent collisions to noise; the two-template
     #    matching-pursuit gain (fiber_collision) separates recoverable collisions
@@ -1676,6 +1799,18 @@ def add_core_arguments(ap):
                          "baseline-whitened space: identity whitener, so the radial coordinate is the raw feature "
                          "norm and the angular metric is raw cosine (no per-channel covariance normalisation)")
     ap.add_argument("--merge-corr", type=float, default=0.0, help="consolidate fibers above this (0=off; 0.95 template / 0.90 sliding)")
+    _gc0 = cfgmod.load_global_config() or {}
+    ap.add_argument("--neigh-passes", type=int,
+                    default=int(os.environ.get("FK_SESSION_NEIGH_PASSES") or _gc0.get("FK_SESSION_NEIGH_PASSES") or 0),
+                    help="FK_SESSION_NEIGH_PASSES. passes of the neighbourhood re-cluster (Block N): rkk over the "
+                         "union of a random set of 1..--neigh-k neighbouring clusters (template cosine >= --neigh-cos), "
+                         "seeded from the current labels, adopted only when KK's penalised score improves.  0 = off.")
+    ap.add_argument("--neigh-k", type=int, default=int(os.environ.get("FK_SESSION_NEIGH_K") or _gc0.get("FK_SESSION_NEIGH_K") or 3),
+                    help="FK_SESSION_NEIGH_K. most neighbours drawn per seed cluster")
+    ap.add_argument("--neigh-cos", type=float, default=float(os.environ.get("FK_SESSION_NEIGH_COS") or _gc0.get("FK_SESSION_NEIGH_COS") or 0.7),
+                    help="FK_SESSION_NEIGH_COS. template cosine (masked channels, each realigned) that makes two clusters neighbours")
+    ap.add_argument("--neigh-seed", type=int, default=int(os.environ.get("FK_SESSION_NEIGH_SEED") or _gc0.get("FK_SESSION_NEIGH_SEED") or 0),
+                    help="FK_SESSION_NEIGH_SEED. seed of the neighbourhood draw")
     ap.add_argument("--resplit-passes", type=int, default=0,
                     help="iterative residual-gated re-split (em_swap on target-channel residual) + correlation merge; "
                          "0=off.  Replaces the Block-A/B consolidation when >0.")
@@ -1963,7 +2098,7 @@ def build_cf(a, meth, cluster_basis):
         deadapt=a.deadapt, deadapt_min_corr=a.deadapt_min_corr,
         adapt_clean=a.adapt_clean, adapt_z=a.adapt_z, adapt_isi_ms=a.adapt_isi_ms,
         adapt_clean_corr=a.adapt_clean_corr, adapt_clean_snr=a.adapt_clean_snr,
-        adapt_taumax=a.adapt_taumax, collision_flag=a.collision_flag,
+        adapt_taumax=a.adapt_taumax, neigh_passes=a.neigh_passes, neigh_k=a.neigh_k, neigh_cos=a.neigh_cos, neigh_seed=a.neigh_seed, collision_flag=a.collision_flag,
         collision_gain=a.collision_gain, collision_shift=a.collision_shift,
         quality_metrics=a.quality_metrics, quality_dims=a.quality_dims)
 

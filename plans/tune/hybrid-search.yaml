@@ -16,7 +16,7 @@
 #
 # WHAT IS SEARCHED, AND WHY IN THIS ORDER (upstream first; every later group is tuned on the upstream
 # winner):
-#   1. hybrid   the feature space of the fine split: the raw block's weight and width, whether the
+#   1. hybrid   (2026-11-13: settled, see below; the stage is now the on/off control, last)  the feature space of the fine split: the raw block's weight and width, whether the
 #               stderiv block is the lag space (_D34) or classic PC1-3, and LAST whether the hybrid is on
 #               at all.  The one-chunk test on 20120312 g6 (claude/hybrid-feature-tuning-plan-2026-11-11.md)
 #               ranked standard x stderiv_C5_D34 (scale 1) > standard x stderiv_C5 > stderiv_C5 >
@@ -45,6 +45,15 @@
 # ~20); the merge / psame knobs re-run only their step.  Stage 1 is at most 2 + 3 + 3 + 2 = 10 trials per
 # pass, stage 2 at most 3 + 3 + 2 + 2 + 2 = 12.
 #
+# 2026-11-13.  The clean run on 0316 chunks 2-3 (fiber-kit 0.67.5+) chose scale 2 / 3 PCs / lag 0 (0.376 vs
+# plain 0.345, core truth 0.391 vs 0.359); `start:` is now that winner, and the hybrid stage keeps only the
+# on/off control (last).  The full-plan confirm found the margin undone by psame's dbic on realigned windows
+# (fixed in 0.67.12, FK_PSAME_ALIGN_PAIRS); confirm again after it.  NEW, searched FIRST: Block N, the
+# neighbourhood re-cluster (FK_SESSION_NEIGH_*; 0312 g6 chunks 0-1: 0.582 -> 0.600 (1 pass) -> 0.609 (2),
+# int_acc 0.509 -> 0.568, ARI 0.564 -> 0.654, no unit worse), and the rkk die-out retry
+# (FK_SESSION_RKK_PTS_PER_START; a group of <= ~120 spikes gets no cluster at all from the start at
+# --rkk-max, and a 12-min chunk holds 144 spikes of a 0.2 Hz unit).  Both re-sort the chunks per value.
+#
 # READ, beyond the objective (trials.tsv): int_acc / int_rec (the broad, high-rate units the exp search
 # lost, 0.468 -> 0.389 -- the hybrid's first job), all_frag80 (over-splitting: should stay within +10%
 # of the start), merges_pyr_pyr (the raw block can merge co-located narrow pyramidals: must not rise),
@@ -69,16 +78,16 @@ passes: 2
 min_gain: 0.002
 search_realign: false                             # confirm re-runs the best with the realign steps
 set: {}
-start: {FK_SESSION_FEAT_HYBRID: 1}                # hybrid ON at the template's scale 1 / 2 PCs / lag 0; rkk 1 start, no sweep
+start: {FK_SESSION_FEAT_HYBRID: 1, FK_SESSION_HYBRID_SCALE: 2.0, FK_SESSION_HYBRID_PCS: 3}   # the clean run's winner
 plans:
   best: base                                      # fiber-kit-best.yaml's plan (psame-chunk already dropped)
 stages:
-  - name: hybrid                                  # the fine-split feature space (each value re-sorts)
+  - name: neigh                                   # Block N and the small-group retry (each value re-sorts)
     knobs:
-      FK_SESSION_HYBRID_SCALE:     [0.5, 1.0, 2.0]            # raw block weight at equal block variance; 0312: 1 > 0.5
-      FK_SESSION_HYBRID_PCS:       [1, 2, 3]                  # 1 = width/energy only (fewer noise-led clusters?), 3 = classic raw space
-      FK_SESSION_FEAT_LAG:         [0, 3]                     # stderiv block: PC1-3 | PC1 at -3/0/+3 + PC2 (_D34)
-      FK_SESSION_FEAT_HYBRID:      [0, 1]                     # LAST: off (the plain space; its sort is reused) vs the best hybrid above
+      FK_SESSION_NEIGH_PASSES:     [0, 1, 2]                  # 0312: 0.582 / 0.600 / 0.609
+      FK_SESSION_NEIGH_K:          [2, 3, 4]                  # neighbours drawn per seed cluster (1..K)
+      FK_SESSION_NEIGH_COS:        [0.6, 0.7, 0.8]            # who counts as a neighbour
+      FK_SESSION_RKK_PTS_PER_START: [0, 21]                   # retry a died-out start with K capped at N // 21
   - name: rkk                                     # the splitter's effort and dimensionality
     knobs:
       FK_SESSION_RKK_MIN:          [0, 20, 35]                # 0 = one start at --rkk-max; else sweep K from here (acts)
@@ -98,3 +107,7 @@ stages:
     knobs:
       "psame:theta":               [0.8, 0.9, 0.95]
       "psame:chunk-aware":         [0, 1]
+      FK_PSAME_ALIGN_PAIRS:        [1, 0]                     # dbic on pair-aligned windows (0.67.12) vs raw
+  - name: hybrid                                  # the control: the plain space against the tuned hybrid
+    knobs:
+      FK_SESSION_FEAT_HYBRID:      [1, 0]

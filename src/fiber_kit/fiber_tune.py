@@ -474,6 +474,8 @@ def score_labels(clu, gt, truth, gt_all=None):
 
 # ───────────────────────────── trials ─────────────────────────────
 class Tuner:
+    _inputs = None                      # the inputs id of this run (set in __init__; None = not checked, as in tests)
+
     def __init__(self, session, elec, spec, clu_method="stderiv_C5_D34", dry_run=False, log=print):
         self.spec, self.elec, self.dry_run, self.log = spec, int(elec), dry_run, log
         sp = sy.resolve_session_params(session, elec)
@@ -536,7 +538,7 @@ class Tuner:
         t = getattr(self, "truth", None)
         if t is not None and r.get("truth") != t.id:
             return False
-        return r.get("inputs") is None or r.get("inputs") == self._inputs
+        return r.get("inputs") is None or self._inputs is None or r.get("inputs") == self._inputs
 
     def latest_search(self):
         """The search trials of the most recent `fiber-tune search` run: from the last 'start' record on.
@@ -770,7 +772,7 @@ class Tuner:
         for r in list(self.trials):
             if not r.get("ok") or self._current(r) or r.get("hash") in done or not r.get("tag"):
                 continue
-            if r.get("inputs") not in (None, self._inputs):
+            if r.get("inputs") not in (None, self._inputs) and self._inputs is not None:
                 continue                                   # sorted from other session files: another experiment
             path = r.get("clu_path") or f"{self.base}.clu.{meth}.{self.elec}.{r['tag']}"
             if not os.path.exists(path):

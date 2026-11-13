@@ -259,6 +259,18 @@ FK_SESSION_RKK_MIN:      0        # 0 | 0 or 10-50.  >0 = also sweep the STARTIN
                                   #   to --rkk-max (50), as the classic KlustaKwik driver does (every K up to a span
                                   #   of 12, then geometric), keeping the best-scoring run.  0 = one start at
                                   #   --rkk-max (the behaviour so far).  Costs one CEM per K tried.
+FK_SESSION_RKK_PTS_PER_START: 0   # 0 | 0 or 14-40.  >0 = when the CEM's first start returns NO cluster, retry it with
+                                  #   the starting K capped at N // this (>= 2).  The start at --rkk-max (50) gives a
+                                  #   group of N spikes N/50 per starting cluster, and the M-step deletes every
+                                  #   cluster with n <= dims (6): at N <= ~120 that is all of them, in the first
+                                  #   step, and the whole group lands in the reject cluster -- 0 clusters, 100 %
+                                  #   reserve, at any min group (0312 g6: single curated units at 25-100 spikes).  A
+                                  #   12-min chunk holds 144 spikes of a 0.2 Hz unit.  21 = 3 x (dims + 1): the
+                                  #   retried start keeps 65-95 % of a 60-100-spike unit in one cluster; groups the
+                                  #   first start clusters are untouched.  A general cap (every group) was measured
+                                  #   to send 30-60 % of 150-250-spike units to the reject cluster: hence the retry.
+                                  #   Off until a chunk run has measured what the recovered groups are (the tune
+                                  #   spec searches [0, 21]); 21 is the value to try.
 FK_SESSION_RKK_REALIGN_ITERS: 2   # 2 | 2-6.  cluster<->realign passes of the rkk fine split: each pass realigns
                                   #   every cluster to its own median, re-featurises and re-runs the CEM; stops
                                   #   early once the cluster count stops changing.
@@ -327,6 +339,18 @@ FK_SESSION_RESPLIT_DETREND_EPISODE: 1  # 0 | 1.  Strip the EPISODE-POSITION axis
                                  #   Cancels ~69% of the split-induced asymmetry on g5 and never worsens it.
 FK_SESSION_RESPLIT_DETREND_WIN: 90.0   # half-window (ms) for the episode-position count
 FK_SESSION_RESPLIT_DETREND_MIN_N: 100  # skip the detrend below this many spikes (covariance too noisy)
+FK_SESSION_NEIGH_PASSES: 0        # 0 | 0-2.  Block N, the neighbourhood re-cluster: rkk over the UNION of a random
+                                  #   set of neighbouring clusters, seeded from the current labels, adopted only when
+                                  #   KlustaKwik's own penalised score improves.  Per-cluster rkk can only split; a
+                                  #   boundary the coarse pass drew through one unit is never revisited.  0312 g6
+                                  #   chunks 0-1 (hybrid scale 2 / 3 PCs): acc 0.582 -> 0.600 (1 pass) -> 0.609
+                                  #   (2 passes), int_acc 0.509 -> 0.568, ARI 0.564 -> 0.654, no unit worse by
+                                  #   > 0.01; the big interneuron 0.67 -> 0.85 from 2 fragments to 1.  Each pass
+                                  #   adds one seeded CEM per neighbourhood (~10-20 % of the session's time).
+FK_SESSION_NEIGH_K:      3        # 3 | 1-4.  Most neighbours drawn per seed cluster (1..K at random).
+FK_SESSION_NEIGH_COS:    0.7      # 0.7 | 0.5-0.9.  Template cosine (masked channels, each cluster realigned) above
+                                  #   which two clusters are neighbours.
+FK_SESSION_NEIGH_SEED:   0        # 0.  Seed of the neighbourhood draw.
 FK_SESSION_LINK:         1        # 0 | 0/1.  0 = --no-link: fiber-session does NOT assemble per-chunk fragments across
                                   #   chunks; the downstream stages (intrachunk/link) do all the stitching.  1 = restore the
                                   #   overlap-anchor per-fiber set-up linking (fiber SET-UP, not cross-fiber merging).

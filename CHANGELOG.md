@@ -4,6 +4,35 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.13] — fiber-session: Block N (neighbourhood re-cluster), the rkk die-out retry; hybrid-search spec
+- **Block N** (`FK_SESSION_NEIGH_PASSES` 0-2, `_K` 3, `_COS` 0.7, `_SEED`; default off): after the resplit
+  block, each cluster in random order draws 1..K untouched neighbours (template cosine >= COS), the union is
+  realigned per cluster and featurised on the clustering basis (hybrid block included), and KlustaKwik runs
+  ONE seeded CEM from the current labels (`klustakwik.klustakwik_refine`, which returns the penalised score
+  before and after on the same normalised data).  The new partition is adopted only when KK's own score
+  improved; spikes KK sends to its noise cluster keep their old label (the pass moves, splits and merges, it
+  never unsorts); new clusters inherit the id of the old cluster holding most of them.  Per-cluster rkk can
+  only split, so a boundary the coarse pass drew through one unit was never revisited.  0312 g6 chunks 0-1
+  (hybrid scale 2 / 3 PCs, Hamming pre-aligned, units >= 300 spikes): acc 0.582 -> 0.600 (1 pass) -> 0.609
+  (2), int_acc 0.509 -> 0.568, ARI 0.564 -> 0.654, completeness 0.738 -> 0.808, core precision 0.720 ->
+  0.751, merges 4.5 -> 4.5, no unit worse by > 0.01; the big interneuron 0.67 -> 0.85 from two fragments to
+  one.  `test_neigh_recluster.py`.
+- **rkk die-out retry** (`FK_SESSION_RKK_PTS_PER_START`, default 0; 21 to try): the CEM starts at --rkk-max
+  (50) clusters whatever the group size, and the M-step deletes every cluster with n <= dims -- at N <= ~120
+  spikes that is all of them in the first step, and the whole group lands in the reject cluster (0312 g6:
+  single curated units at 25-100 spikes -> 0 clusters, 100 % reserve, at any min group; a 12-min chunk holds
+  144 spikes of a 0.2 Hz unit).  With the knob > 0, a first start that returns no cluster is retried with K
+  capped at N // knob (>= 2): a 60-100-spike unit then keeps 65-95 % of itself in one cluster; groups the
+  first start clusters are untouched (identical labels).  A general cap was measured to send 30-60 % of
+  150-250-spike units to the reject cluster, hence a retry.  `test_rkk_small_group.py`;
+  `analysis/rkk-min-spikes-g6-0312/` has the full count sweep (pairs at cosine <= 0.42 separate at 150-250
+  spikes per unit; cosine >= 0.8 never, at any count).
+- `plans/tune/hybrid-search.yaml`: `start:` is the clean run's winner (hybrid on, scale 2, 3 PCs); a `neigh`
+  stage (NEIGH_PASSES / K / COS, RKK_PTS_PER_START) is searched first; `FK_PSAME_ALIGN_PAIRS [1, 0]` joins
+  the psame stage; the hybrid stage is the on/off control, last.
+- fiber-tune (0.67.10 follow-up): `Tuner._inputs` defaults to None so a Tuner built without `__init__`
+  (test_gt_review.py) skips the inputs check instead of failing.
+
 ## [0.67.12] — fiber-psame-merge: dbic on pair-aligned windows (`FK_PSAME_ALIGN_PAIRS`, on)
 - The ΔBIC evidence is now scored with B's windows rolled by the shift that maximises the pair's roll-cos
   (`rollcos_shift`, `project(..., roll=)`), so it is about shape, as rc already was, and not about where each

@@ -138,14 +138,16 @@ def main():
     check(spec["config"].endswith("fiber-kit-best.yaml") and not any(st.get("name") == "psame-chunk" for st in plans_h["best"]),
           "hybrid-search.yaml starts from the best profile (the previous fk-tune winner, psame-chunk dropped)")
     kn = [k for st in spec["stages"] for k in st["knobs"]]
-    check(all(k in kn for k in ("FK_SESSION_FEAT_HYBRID", "FK_SESSION_HYBRID_SCALE", "FK_SESSION_HYBRID_PCS",
-                                "FK_SESSION_FEAT_LAG", "FK_SESSION_RKK_STARTS", "FK_SESSION_RKK_MIN",
-                                "FK_SESSION_RKK_REALIGN_ITERS")),
-          "hybrid-search.yaml searches the hybrid and the rkk effort knobs")
-    hyb = [k for st in spec["stages"] if st.get("name") == "hybrid" for k in st["knobs"]]
-    check(ft._same(spec["start"].get("FK_SESSION_FEAT_HYBRID"), 1) and hyb and hyb[-1] == "FK_SESSION_FEAT_HYBRID",
-          "hybrid-search.yaml starts with the hybrid ON and tries off LAST (coordinate ascent would otherwise "
-          "search scale / pcs / lag with the hybrid off once the default-hybrid trial lost)")
+    check(all(k in kn for k in ("FK_SESSION_FEAT_HYBRID", "FK_SESSION_NEIGH_PASSES", "FK_SESSION_NEIGH_K",
+                                "FK_SESSION_NEIGH_COS", "FK_SESSION_RKK_PTS_PER_START", "FK_SESSION_RKK_STARTS",
+                                "FK_SESSION_RKK_MIN", "FK_SESSION_RKK_REALIGN_ITERS", "FK_PSAME_ALIGN_PAIRS")),
+          "hybrid-search.yaml searches Block N, the rkk retry, the rkk effort knobs and the psame pair alignment")
+    check(ft._same(spec["start"].get("FK_SESSION_FEAT_HYBRID"), 1) and ft._same(spec["start"].get("FK_SESSION_HYBRID_SCALE"), 2.0)
+          and ft._same(spec["start"].get("FK_SESSION_HYBRID_PCS"), 3),
+          "hybrid-search.yaml starts from the clean run's winner (hybrid on, scale 2, 3 PCs)")
+    check(spec["stages"][0].get("name") == "neigh" and spec["stages"][-1].get("name") == "hybrid"
+          and list(spec["stages"][-1]["knobs"]) == ["FK_SESSION_FEAT_HYBRID"],
+          "hybrid-search.yaml searches Block N first and keeps the hybrid on/off control last")
     spec = ft.load_spec(os.path.join(ROOT, "plans", "tune", "core-search.yaml"))
     f = ft.compile_objective(spec["objective"])
     hi = f(dict(pyr_link=0.9, pyr_core_prec=0.96, pyr_cov=0.6, merges_pyr_pyr=0))

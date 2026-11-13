@@ -369,3 +369,26 @@ if __name__ == "__main__":
     out = a.out or nio.session_path(a.base, "clu", a.elec, variant=a.method, tag="kk")
     nio.write_clu_file(out, (lab + 1).astype(np.int32))
     print(f"{len(np.unique(lab))} clusters (label 0 = noise) -> {out}")
+
+
+def klustakwik_refine(X, init_labels, penalty_mix=PENALTY_MIX, splits=True, noise=True, seed=RANDOM_SEED):
+    """One seeded CEM from `init_labels` (0-based, -1 = noise) and the penalised scores BEFORE and
+    AFTER it, on the same normalised data, so a caller can accept the refinement only when the
+    criterion KlustaKwik itself minimises improved.  Returns (labels, score_init, score_final):
+    labels in the classic convention (0 = noise, 1..K real), as klustakwik() returns them.
+    `score_init` is the init partition's score after one M-step (its own fitted Gaussians) and
+    E-step; clusters the M-step deletes (n <= nDims) are already gone in it."""
+    X = np.ascontiguousarray(X, dtype=float)
+    _lo = X.min(0); _rng_ = X.max(0) - _lo
+    X = (X - _lo) / np.where(_rng_ > 0, _rng_, 1.0)
+    init = np.asarray(init_labels, int)
+    kk = _KK(X, max(int(init.max()) + 2, 2), penalty_mix, NOISE_POINT if noise else 0,
+             rng=np.random.default_rng(seed))
+    kk.cls = np.where(init >= 0, init + 1, 0).astype(int)
+    kk.alive[:] = False
+    kk.alive[np.unique(kk.cls)] = True
+    kk.alive[0] = True
+    kk.mstep(); kk.estep()
+    score_init = kk.compute_score()
+    score_final = kk.run_em_loop(enable_splits=splits)
+    return _compact(kk.cls), float(score_init), float(score_final)
