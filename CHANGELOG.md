@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.10] — fiber-tune: confirm and the summary rank the latest run, trials carry an inputs id
+- Every trial record is stamped with `inputs`, a digest of fiber-bench's input fingerprint (the session
+  files the run reads); `_current` requires it to match the files on disk now, as it already required the
+  truth id.  `confirm` picks the start and the `--top` best from the LATEST search run only (from its last
+  `start` record on) and from current rows; the summary's search table does the same and says how many
+  earlier rows it leaves out; `rescore` skips rows sorted from other files.  Why: on g6 0316 the stale first
+  run's rows (0.416, sorted from the pre-realign .spk) outranked the clean run's (0.376) in one trials.tsv
+  and `confirm --top 3 --chunks all` spent 4 x 44 min on them -- plain-config rows (`FK_SESSION_FEAT_HYBRID`
+  0) whose SCALE/PCS knobs were no-ops, so four identical runs (acc 0.412, objective 0.367 on the full plan,
+  which is at least the plain control).  `test_tune.py` covers the inputs stamp and the latest-run selection.
+
 ## [0.67.9] — fiber-realign: Hamming window, on by default (+-16 samples)
 - `--kernel hamming` (0.54 + 0.46 cos over +-width; Klusters 0972), and the window is now the DEFAULT:
   `FK_REALIGN_KERNEL hamming`, `FK_REALIGN_KERNEL_WIDTH 16` (samples of the recording, 0.49 ms at 32,552 Hz).

@@ -222,9 +222,20 @@ try:
 except SystemExit as e:
     check("a session .res that is not the truth's spike set is refused", "Nothing was scored" in str(e), str(e))
 # a trial recorded against another truth is not re-used, and not summarised
-tn = object.__new__(ft.Tuner); tn.truth = T
+tn = object.__new__(ft.Tuner); tn.truth = T; tn._inputs = "aaaa"
 check("trials scored against another truth are not current",
       tn._current(dict(truth=T.id)) and not tn._current(dict(truth="x")) and not tn._current({}))
+# a trial sorted from other session files (another inputs id) is not current either; unstamped rows pass
+check("trials sorted from other session files are not current",
+      tn._current(dict(truth=T.id, inputs="aaaa")) and not tn._current(dict(truth=T.id, inputs="bbbb")))
+# confirm / the summary rank the LATEST search run: from the last 'start' record on
+tn.trials = [dict(phase="search", note="start", ok=True, objective=0.5, truth=T.id),
+             dict(phase="search", note="", ok=True, objective=0.9, truth=T.id),          # stale first run, best overall
+             dict(phase="confirm", ok=True, objective=0.4, truth=T.id),
+             dict(phase="search", note="start", ok=True, objective=0.3, truth=T.id),
+             dict(phase="search", note="", ok=True, objective=0.35, truth=T.id)]
+L = tn.latest_search()
+check("latest_search is the last run only", [r["objective"] for r in L] == [0.3, 0.35])
 
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

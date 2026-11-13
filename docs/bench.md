@@ -220,6 +220,15 @@ best with the full plan, realign steps included, each in a private workspace
 file system allows), everything else is symlinked, stage outputs are not carried over.  The copies are
 removed after scoring unless `--keep-ws`; the workspace's stage outputs stay for inspection.
 
+**Which trials `confirm` ranks.**  The latest `fiber-tune search` run of the spec only (the records from
+its last `start` on), and of those only the rows that are *current*: scored against this spec's truth and
+sorted from the session files on disk now.  Every record carries an `inputs` id (a digest of fiber-bench's
+input fingerprint) from 0.67.10 on; a realigned `.spk` turns every earlier row into another experiment,
+and on g6 0316 (2026-11-13) such rows -- the stale first run, 0.416 against the clean run's 0.376 -- topped
+a shared `trials.tsv` and `confirm --top 3` spent three hours re-running plain-config rows whose knobs were
+no-ops.  `summary.md`'s search table follows the same rule and says how many earlier rows it leaves out;
+`trials.tsv` keeps everything.
+
 The realign matters: on g6 0316 (one 6-min chunk, identical parameters) the search scored ARI 0.675 /
 accuracy 0.376 and the workspace run ARI 0.503 / accuracy 0.417, because fiber-session's end-of-run realign
 and the realign steps change the spikes every later stage sees.  Treat the search's ranking as a shortlist

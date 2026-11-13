@@ -88,6 +88,7 @@ steps included, no FK_CHUNKS) -- and summary.md.
 import argparse
 import ast
 import datetime
+import hashlib
 import json
 import math
 import operator
@@ -503,6 +504,7 @@ class Tuner:
         self.truth = None if dry_run else Truth(spec["truth"], self.sr,
                                                 spk_of=(self.base, self.elec, sp["nsamp"], sp["nchan"]), log=self.log)
         self.trials = self._read_trials()
+        self._inputs = self.inputs_id()
 
     # ── bookkeeping ──
     @staticmethod
@@ -519,10 +521,30 @@ class Tuner:
                 out = [json.loads(x) for x in fh if x.strip()]
         return out
 
+    def inputs_id(self):
+        """Short digest of fiber-bench's input fingerprint (the session files a run reads): the identity of
+        the DATA a trial was sorted from, stamped on every record."""
+        fp = fb.input_fingerprint(self.base, self.elec)
+        return hashlib.blake2b(json.dumps(fp, sort_keys=True).encode(), digest_size=6).hexdigest()
+
     def _current(self, r):
-        """Whether a recorded trial was scored against this spec's truth (records without one predate the check)."""
+        """Whether a recorded trial is comparable to a trial made now: scored against this spec's truth AND
+        sorted from the session files on disk now (records without either field predate the check).  A
+        realigned .spk makes every earlier row another experiment: on g6 0316 (2026-11-13) the stale first
+        run's rows (0.416, sorted from the old .spk) outranked the clean run's (0.376) in one trials.tsv, and
+        `confirm --top 3` spent three hours on them -- all plain-config rows whose knobs were no-ops."""
         t = getattr(self, "truth", None)
-        return t is None or r.get("truth") == t.id
+        if t is not None and r.get("truth") != t.id:
+            return False
+        return r.get("inputs") is None or r.get("inputs") == self._inputs
+
+    def latest_search(self):
+        """The search trials of the most recent `fiber-tune search` run: from the last 'start' record on.
+        Rows stamped with no inputs id (fiber-kit < 0.67.10) cannot be told from re-sorted ones by their
+        fingerprint, so confirm and the summary rank the latest run only, never the whole file."""
+        S = [r for r in self.trials if r.get("phase") == "search"]
+        starts = [i for i, r in enumerate(S) if r.get("note") == "start"]
+        return S[starts[-1]:] if starts else S
 
     def _record(self, rec):
         self.trials.append(rec)
@@ -569,7 +591,8 @@ class Tuner:
         path = f"{self.base}.clu.{meth}.{self.elec}.{tag}"
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, hash=h, tag=tag,
                    overrides=overrides, note=note, when=datetime.datetime.now().isoformat(timespec="seconds"),
-                   fiber_kit=fb._fk_version(), truth=self.truth.id if getattr(self, "truth", None) else None)
+                   fiber_kit=fb._fk_version(), truth=self.truth.id if getattr(self, "truth", None) else None,
+                   inputs=self._inputs)
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
         if not os.path.exists(path):
@@ -684,7 +707,7 @@ class Tuner:
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, mode="workspace",
                    hash=h, tag=tag, overrides=dict(overrides), note=note, chunks=self.spec["chunks"], workspace=ws,
                    when=datetime.datetime.now().isoformat(timespec="seconds"), fiber_kit=fb._fk_version(),
-                   truth=self.truth.id if getattr(self, "truth", None) else None, **(extra or {}))
+                   truth=self.truth.id if getattr(self, "truth", None) else None, inputs=self._inputs, **(extra or {}))
         path = f"{wbase}.clu.{meth}.{self.elec}.{tag}"
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
@@ -706,9 +729,14 @@ class Tuner:
         return rec
 
     def confirm(self, top=3, chunks=None, keep_ws=False):
-        ok = [r for r in self.trials if r.get("phase") == "search" and r.get("ok")]
+        ok = [r for r in self.latest_search() if r.get("ok") and self._current(r)]
         if not ok:
-            raise SystemExit(f"{_LP} · no search trials in {self.dir}: run `fiber-tune search` first")
+            raise SystemExit(f"{_LP} · no search trials of the latest run in {self.dir} match this truth and "
+                             f"these session files: run `fiber-tune search` first")
+        older = len([r for r in self.trials if r.get("phase") == "search" and r.get("ok")]) - len(ok)
+        if older:
+            self.log(f"{_LP} · confirm: ranking the latest search run only ({len(ok)} trial(s)); {older} earlier "
+                     f"row(s) left out -- other inputs, other truth or an earlier run of the same spec")
         seen, picks = set(), []
         start = next((r for r in ok if r.get("note") == "start"), None)
         for r in ([start] if start else []) + sorted(ok, key=lambda r: -r["objective"]):
@@ -742,6 +770,8 @@ class Tuner:
         for r in list(self.trials):
             if not r.get("ok") or self._current(r) or r.get("hash") in done or not r.get("tag"):
                 continue
+            if r.get("inputs") not in (None, self._inputs):
+                continue                                   # sorted from other session files: another experiment
             path = r.get("clu_path") or f"{self.base}.clu.{meth}.{self.elec}.{r['tag']}"
             if not os.path.exists(path):
                 miss += 1; continue
@@ -766,7 +796,9 @@ class Tuner:
                 row[k] = (r.get("metrics") or {}).get(k, "")
             rows.append(row)
         fb._tsv_write(os.path.join(self.dir, "trials.tsv"), rows)
-        S = [r for r in self.trials if r.get("ok") and self._current(r)]
+        latest = {id(r) for r in self.latest_search()}
+        S = [r for r in self.trials if r.get("ok") and self._current(r)
+             and (r.get("phase") != "search" or id(r) in latest)]
         lines = [f"# fiber-tune {self.spec['name']}", "",
                  f"- base config: `{self.spec['config']}`", f"- objective: `{self.spec['objective']}`",
                  f"- scored at: `{self.score_at}`; search chunks: `{self.spec['chunks'] or 'all'}`",
@@ -774,8 +806,14 @@ class Tuner:
                  f"{len([r for r in S if r['phase'] == 'confirm'])} confirm", ""]
         stale = len([r for r in self.trials if r.get("ok") and not self._current(r)])
         if stale:
-            lines[-1:-1] = [f"- {stale} earlier trial(s) scored against another truth or metric set are not shown "
-                            "(trials.tsv lists them; `fiber-tune rescore` scores them again)"]
+            lines[-1:-1] = [f"- {stale} earlier trial(s) scored against another truth, other session files or an "
+                            "older metric set are not shown (trials.tsv lists them; `fiber-tune rescore` scores "
+                            "the truth/metric ones again)"]
+        earlier = len([r for r in self.trials if r.get("ok") and r.get("phase") == "search" and self._current(r)
+                       and id(r) not in latest])
+        if earlier:
+            lines[-1:-1] = [f"- search table: the latest `fiber-tune search` run only; {earlier} trial(s) of earlier "
+                            "runs of this spec are in trials.tsv"]
         for ph in ("search", "confirm"):
             R = sorted([r for r in S if r["phase"] == ph], key=lambda r: -r["objective"])[:15]
             if not R:
