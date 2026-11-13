@@ -479,6 +479,7 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_PSAME_CHUNK_AWARE` | `0` | `0` | `0` | 0 \| 0/1.  1 = score each pair CHUNK-LOCALLY: the union is tested inside every FK_SESSION_CHUNK_MIN chunk both clusters occupy, else across their two nearest chunks (<= MAX_GAP apart; farther pairs never merge).  g6, final step without psame-chunk: purity 0.779-0.793 -> 0.800-0.808, completeness -0.03. |
 | `FK_PSAME_MIN_CHUNK_N` | `30` | `30` | `30` | 30.  CHUNK_AWARE: spikes a cluster needs in a chunk for that chunk's model. |
 | `FK_PSAME_MAX_GAP` | `1` | `1` | `1` | 1 (chunks).  CHUNK_AWARE: pairs with no shared chunk are tested across chunks at most this far apart; farther pairs are not merged. |
+| `FK_PSAME_ALIGN_PAIRS` | `1` | `1` | `1` | 1 \| 0/1.  1 = the dbic evidence is scored with B's windows rolled by the pair's roll-cos shift, so it is about shape (as rc is) and not about where each cluster's realign put its peak.  An in-place per-cluster realign before psame leaves two fragments of one unit at an offset; on raw windows the union model then calls them two cells (g6 0316: the same xcm sort scored 0.397 after realign-3 and 0.440 on un-realigned windows).  0 = pre-0.67.11. |
 
 ## [G] FIBER-MANIFOLD -- the off-spike-channel field manifold of a unit  (refinement step; the
 

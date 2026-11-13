@@ -101,6 +101,7 @@ _KNOBS = {
     "FK_PSAME_CHUNK_AWARE": ("chunk_aware", int, 0),
     "FK_PSAME_MIN_CHUNK_N": ("min_chunk_n", int, 30),
     "FK_PSAME_MAX_GAP": ("max_gap", int, 1),
+    "FK_PSAME_ALIGN_PAIRS": ("align_pairs", int, 1),   # 1: dbic on B's windows rolled by the pair's roll-cos shift (shape evidence, realign-invariant); 0: raw windows (pre-0.67.11)
 }
 
 
@@ -168,13 +169,21 @@ def dbic(mA, mB):
     return float((2 * (U.loglik() - mA.loglik() - mB.loglik()) + k * np.log(n)) / n)
 
 
-def rollcos(a, b, shift=4):
-    """Max over circular shifts of the cosine of two mean waveforms (channel means removed)."""
-    a = a - a.mean(0); na = np.sqrt((a * a).sum()); best = -1.0
+def rollcos_shift(a, b, shift=4):
+    """(max cosine, the shift of b that gives it) over circular shifts of two mean waveforms (channel
+    means removed).  The shift is what the pair's windows have to be rolled by to compare like with like."""
+    a = a - a.mean(0); na = np.sqrt((a * a).sum()); best = (-1.0, 0)
     for s in range(-shift, shift + 1):
         bb = np.roll(b, s, 0); bb = bb - bb.mean(0)
-        best = max(best, float((a * bb).sum() / max(na * np.sqrt((bb * bb).sum()), 1e-12)))
+        c = float((a * bb).sum() / max(na * np.sqrt((bb * bb).sum()), 1e-12))
+        if c > best[0]:
+            best = (c, s)
     return best
+
+
+def rollcos(a, b, shift=4):
+    """Max over circular shifts of the cosine of two mean waveforms (channel means removed)."""
+    return rollcos_shift(a, b, shift)[0]
 
 
 def pca_basis(spk, n=N_PC, nfit=60000, rng=None):
@@ -187,31 +196,42 @@ def pca_basis(spk, n=N_PC, nfit=60000, rng=None):
     return mu, V.astype(np.float32)
 
 
-def project(spk, idx, mu, V):
+def project(spk, idx, mu, V, roll=0):
     # NOT centred on the global mean: the cell model a T + (a - <a>) S has no offset term, so a cell
     # x = a c must stay proportional to its template (centring adds -mu to every spike, which the
-    # model would then scale with the amplitude)
-    return np.asarray(spk[np.sort(idx)], np.float32).reshape(len(idx), -1) @ V
+    # model would then scale with the amplitude).  roll: samples to roll every window by first (the
+    # pair alignment of dbic; see psame_merge align_pairs).
+    W = np.asarray(spk[np.sort(idx)], np.float32)
+    if roll:
+        W = np.roll(W, int(roll), axis=1)
+    return W.reshape(len(idx), -1) @ V
 
 
 # ── the merge ───────────────────────────────────────────────────────────────
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
                 w_rc=22.2143, w_dbic=0.6144, bias=-17.773, geo_term=None, w_geo=0.0, cap=None, rng=None,
-                group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print, keyed=True):
+                group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print, keyed=True,
+                align_pairs=True):
     """Sequential P(same) merge.  spk: (N, nsamp, nchan) memmap of the scoring variant; times (s) per spike;
     clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups'
     raw templates.
     group_of: {cluster: group} -- only clusters of the same group may merge (--per-chunk).
     chunk_of: chunk index per spike -- score pairs chunk-locally (--chunk-aware; see the header).
-    Returns (new clu, list of accepted merges as dicts)."""
+    align_pairs: dbic is scored with B's windows rolled by the shift that maximises the pair's roll-cos,
+    so the evidence is about SHAPE, as rc already is.  Without it, two fragments of one unit that sit at an
+    offset to each other -- which is what an in-place per-cluster realign (each cluster to its own median)
+    leaves behind -- read as two cells to the union model: on g6 0316 (2026-11-13) the same xcm output
+    scored 0.397 after the plan's realign-3 and 0.440 on the un-realigned windows (hybrid sort), with
+    units 9/10/14/15 and the big interneuron flipping between merged and not, and plain sorts flipped
+    other units.  Returns (new clu, list of accepted merges as dicts)."""
     rng = rng or np.random.default_rng(0)
     clu = np.asarray(clu).astype(np.int64).copy()
     mu, V = pca_basis(spk, rng=rng)
     ids = [int(u) for u, c in zip(*np.unique(clu[clu > 1], return_counts=True)) if c >= min_n]
     if len(ids) < 2:
         return clu, []
-    model, mean = {}, {}
-    cmod, cmean, cn = {}, {}, {}                      # chunk-aware: per cluster, per chunk
+    model, mean, muse = {}, {}, {}
+    cmod, cmean, cn, cuse = {}, {}, {}, {}            # chunk-aware: per cluster, per chunk
 
     def refresh(u):
         idx = np.flatnonzero(clu == u)
@@ -219,16 +239,22 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
         mean[u] = np.asarray(spk[sub], float).mean(0)
         if chunk_of is None:
             use = fl.subsample(idx, cap, rng, keyed=keyed)
-            model[u] = CellModel(project(spk, use, mu, V), times[use])
+            model[u] = CellModel(project(spk, use, mu, V), times[use]); muse[u] = use
             return
-        cmod[u], cmean[u], cn[u] = {}, {}, {}
+        cmod[u], cmean[u], cn[u], cuse[u] = {}, {}, {}, {}
         for k in np.unique(chunk_of[idx]):
             ik = idx[chunk_of[idx] == k]
             if k < 0 or ik.size < min_chunk_n:
                 continue
             use = fl.subsample(ik, cap, rng, keyed=keyed)
-            cmod[u][int(k)] = CellModel(project(spk, use, mu, V), times[use])
+            cmod[u][int(k)] = CellModel(project(spk, use, mu, V), times[use]); cuse[u][int(k)] = use
             cmean[u][int(k)] = np.asarray(spk[use[:1000]], float).mean(0); cn[u][int(k)] = int(ik.size)
+
+    def dbic_pair(mA, mB, use_b, s):
+        """dbic with B's windows rolled by s (the pair's best roll-cos shift) when align_pairs."""
+        if not align_pairs or s == 0:
+            return dbic(mA, mB)
+        return dbic(mA, CellModel(project(spk, use_b, mu, V, roll=s), times[use_b]))
 
     for u in ids:
         refresh(u)
@@ -241,20 +267,23 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
     def score(a, b):
         how = "lifetime"
         if chunk_of is None:
-            rc = rollcos(mean[a], mean[b], shift)
-            d = dbic(model[a], model[b])
+            rc, s_ = rollcos_shift(mean[a], mean[b], shift)
+            d = dbic_pair(model[a], model[b], muse[b], s_)
         else:
             sh = sorted(set(cmod[a]) & set(cmod[b]))
             if sh:
                 w = np.array([min(cn[a][k], cn[b][k]) for k in sh], float)
-                rc = float(np.average([rollcos(cmean[a][k], cmean[b][k], shift) for k in sh], weights=w))
-                d = float(np.average([dbic(cmod[a][k], cmod[b][k]) for k in sh], weights=w)); how = "shared"
+                rs = [rollcos_shift(cmean[a][k], cmean[b][k], shift) for k in sh]
+                rc = float(np.average([r for r, _ in rs], weights=w))
+                d = float(np.average([dbic_pair(cmod[a][k], cmod[b][k], cuse[b][k], s_) for k, (_, s_) in zip(sh, rs)],
+                                     weights=w)); how = "shared"
             else:
                 near = [(abs(ka - kb), ka, kb) for ka in cmod[a] for kb in cmod[b]]
                 if not near or min(near)[0] > max_gap:
                     return 0.0, dict(rc=float("nan"), dbic=float("nan"), geo_z=0.0, how="far")
                 _, ka, kb = min(near)
-                rc = rollcos(cmean[a][ka], cmean[b][kb], shift); d = dbic(cmod[a][ka], cmod[b][kb]); how = "adjacent"
+                rc, s_ = rollcos_shift(cmean[a][ka], cmean[b][kb], shift)
+                d = dbic_pair(cmod[a][ka], cmod[b][kb], cuse[b][kb], s_); how = "adjacent"
         z = geo_term(members[a], members[b]) if geo_term is not None else 0.0
         p = 1.0 / (1.0 + np.exp(-(bias + w_rc * rc + w_dbic * d + w_geo * z)))
         return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how)
@@ -282,7 +311,7 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
             del cand[(a, b)]; continue
         clu[clu == b] = a; ids.remove(b); members[a] |= members.pop(b)
         merges.append(dict(into=a, merged=b, p=p, **terms))
-        for d_ in (mean, model, cmod, cmean, cn):
+        for d_ in (mean, model, muse, cmod, cmean, cn, cuse):
             d_.pop(b, None)
         refresh(a)
         cand = {k: v for k, v in cand.items() if a not in k and b not in k}
@@ -378,11 +407,12 @@ def main():
         print(f"{_LP} · chunk-aware: pairs scored inside shared {a.chunk_min:g}-min chunks "
               f"(>= {a.min_chunk_n} spikes each), else across chunks <= {a.max_gap} apart")
     print(f"{_LP} · {base} elec {a.elec} | {var} .spk | theta {a.theta} cannot-link {a.cannot_link}"
-          + (" | + shared geometry" if a.geo else ""))
+          + (" | + shared geometry" if a.geo else "") + (" | dbic on pair-aligned windows" if a.align_pairs else ""))
     new, merges = psame_merge(spk, res / float(sr), clu, theta=a.theta, cannot_link=a.cannot_link, knn=a.knn,
                               cos_floor=a.cos_floor, min_n=a.min_n, shift=a.shift, w_rc=w_rc, w_dbic=w_dbic,
                               bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng, keyed=bool(a.sample_keyed),
-                              group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap)
+                              group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap,
+                              align_pairs=bool(a.align_pairs))
     nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=a.out_tag)
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
     print(f"{_LP} · {len(merges)} merges ({n_in} -> {n_out} clusters); wrote "

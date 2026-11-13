@@ -794,6 +794,7 @@ Positional: `session`, `elec`
 | `--chunk-aware` | `0` | FK_PSAME_CHUNK_AWARE (default 0) |
 | `--min-chunk-n` | `30` | FK_PSAME_MIN_CHUNK_N (default 30) |
 | `--max-gap` | `1` | FK_PSAME_MAX_GAP (default 1) |
+| `--align-pairs` | `1` | FK_PSAME_ALIGN_PAIRS (default 1) |
 ### `fiber-relink`
 
 Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).

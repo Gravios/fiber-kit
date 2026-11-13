@@ -4,6 +4,19 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.12] — fiber-psame-merge: dbic on pair-aligned windows (`FK_PSAME_ALIGN_PAIRS`, on)
+- The ΔBIC evidence is now scored with B's windows rolled by the shift that maximises the pair's roll-cos
+  (`rollcos_shift`, `project(..., roll=)`), so it is about shape, as rc already was, and not about where each
+  cluster's realign put its peak.  Why: in the full plan an in-place per-cluster realign (`realign-3`) runs
+  before psame and leaves two fragments of one unit at an offset to each other; on raw windows the union
+  model reads that offset as a shape difference and calls them two cells.  On g6 0316 (2026-11-13) the same
+  hybrid xcm sort scored 0.397 through the plan's psame (after realign-3) and 0.440 on un-realigned windows
+  (units 9/10/14/15 and the big interneuron merged or not), and the plain sort flipped other units
+  (21, 28 vs 9, 14, 15) for a net 0.406 vs 0.399 -- the search-time hybrid margin (+0.03) was being
+  undone by this, not by the features.  `FK_PSAME_ALIGN_PAIRS 0` restores the raw-window dbic.
+  `test_psame.py`: an offset fragment collapses dbic on raw windows (0.31 -> -3.0) and merges again
+  pair-aligned.
+
 ## [0.67.11] — fiber-session: energy-aware hybrid knobs (measured: not an improvement)
 - `FK_SESSION_HYBRID_GAIN_FIT` (all | low | high): the energy half of the sample the block-equalising gain is
   fit over.  Over `all` the top energy quartile (4x the per-spike feature variance of the bottom one) sets the

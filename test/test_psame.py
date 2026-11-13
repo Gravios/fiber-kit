@@ -93,6 +93,30 @@ check("B stays apart from A", not set(np.unique(new[lab == 1])) & set(np.unique(
 check("C stays alone", len(np.unique(new[lab == 2])) == 1 and not set(np.unique(new[lab == 2])) & set(np.unique(new[lab != 2])))
 check("input labels untouched", (clu == clu_in).all())
 
+# pair alignment.  A's second fragment realigned to its own median at a 2-sample offset (what an in-place
+# per-cluster realign leaves between two fragments of one unit): the union model sees a shape difference
+# and dbic collapses; with align_pairs the windows are rolled back by the roll-cos shift and dbic stands.
+spk_off = spk.copy(); spk_off[clu == 3] = np.roll(spk_off[clu == 3], 2, axis=1)
+M3o = ps.CellModel(ps.project(spk_off, np.flatnonzero(clu == 3), mu, V), times[clu == 3])
+d_off = ps.dbic(M[2], M3o)
+rc_o, s_o = ps.rollcos_shift(spk_off[clu == 2].mean(0), spk_off[clu == 3].mean(0))
+M3a = ps.CellModel(ps.project(spk_off, np.flatnonzero(clu == 3), mu, V, roll=s_o), times[clu == 3])
+d_al = ps.dbic(M[2], M3a)
+check("an offset between A's fragments collapses dbic on raw windows", d_off < d_true - 0.5, f"{d_off:.3f} vs {d_true:.3f}")
+check("roll-cos finds the offset", s_o == -2 and rc_o >= rc_true - 0.02, f"shift {s_o}, rc {rc_o:.3f}")
+check("dbic on pair-aligned windows recovers", d_al > d_true - 0.5, f"{d_al:.3f} vs {d_true:.3f}")
+# inside psame_merge the PCA basis is fit on the data as given (the shifted fragment included), which costs
+# the aligned pair a few tenths of dbic against the unshifted run (0.31 -> -0.19 here; raw windows -3.0), so
+# the merge is tested at theta 0.3 (p = 0.32 for the aligned pair, ~0 for the raw one)
+new_raw, m_raw = ps.psame_merge(spk_off, times, clu, theta=0.3, cannot_link=0.0, knn=3, cos_floor=0.5, min_n=50,
+                                w_rc=0.0, w_dbic=4.0, bias=0.0, log=lambda *_: None, align_pairs=False)
+new_al, m_al = ps.psame_merge(spk_off, times, clu, theta=0.3, cannot_link=0.0, knn=3, cos_floor=0.5, min_n=50,
+                              w_rc=0.0, w_dbic=4.0, bias=0.0, log=lambda *_: None, align_pairs=True)
+check("align_pairs 0: the offset fragments are not merged", len(np.unique(new_raw[lab == 0])) == 2, str(m_raw))
+check("align_pairs 1: the offset fragments merge, B and C stay apart", len(np.unique(new_al[lab == 0])) == 1
+      and not set(np.unique(new_al[lab == 1])) & set(np.unique(new_al[lab == 0]))
+      and len(np.unique(new_al[lab == 2])) == 1, str(m_al))
+
 # chunk modes.  A's two fragments are cut at 150 s (A1 earlier, A2 later); the session has four 75-s chunks.
 kw = dict(theta=0.5, cannot_link=0.3, knn=3, cos_floor=0.5, min_n=50, w_rc=0.0, w_dbic=4.0, bias=0.0, log=lambda *_: None)
 grp = {2: 0, 3: 1, 4: 0, 5: 0}                                    # per-chunk: A1 and A2 in different chunks
