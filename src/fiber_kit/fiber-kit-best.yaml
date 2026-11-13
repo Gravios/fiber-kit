@@ -433,6 +433,13 @@ FK_SESSION_HYBRID_PCS:   2        # 2 | 1-3.  Standard-basis components per chan
 FK_SESSION_HYBRID_SCALE: 1.0      # 1.0 | 0.5-2.  Weight of the raw block after both blocks are put on equal total
                                   #   feature variance (gain fit on 20k spikes).  <1 derivative-led (the raw block
                                   #   only breaks ties), >1 raw-led.
+FK_SESSION_HYBRID_GAIN_FIT: all   # all | low | high.  Energy half of the spikes the block-equalising gain is
+                                  #   fit over.  Over all, the top quartile (4x the per-spike feature variance of
+                                  #   the bottom one) sets the gain and the low three quartiles load more on the
+                                  #   derivative block than the nominal share (0.45 vs 0.50 at scale 1, 0312 g6).
+FK_SESSION_HYBRID_DERIV_BASIS: session  # session | high.  Basis of the derivative block: the .pca.<method> basis,
+                                  #   or refit per channel on the high-energy half of a 20k sample -- the low
+                                  #   half's derivative variance is nearly flat across components (noise).
 
 
 # ============================================================================

@@ -4,6 +4,19 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.11] — fiber-session: energy-aware hybrid knobs (measured: not an improvement)
+- `FK_SESSION_HYBRID_GAIN_FIT` (all | low | high): the energy half of the sample the block-equalising gain is
+  fit over.  Over `all` the top energy quartile (4x the per-spike feature variance of the bottom one) sets the
+  gain and the low three quartiles load 0.45 on the raw block at scale 1 (nominal 0.50; 0312 g6).
+  `FK_SESSION_HYBRID_DERIV_BASIS` (session | high): the derivative block's basis refit per channel on the
+  high-energy half (`fiber_pca.refit_basis`, `energy_half`) -- the low half's derivative variance is nearly
+  flat across components (0.10/0.13/0.10 of it on the session basis, a third in all) where the standard
+  space keeps 0.58.  Both default off.  Measured on 0312 g6 chunks 0-1 (Hamming pre-aligned, hybrid scale 2 /
+  3 PCs, units >= 300 spikes): base 0.582, deriv basis high 0.572, gain fit low 0.579, both 0.577 -- every
+  well-sorted unit identical, the fragmented small ones a little worse; the imbalance is too small to matter and
+  the clusters that move have the least signal.  `analysis/pca-low-vs-high-energy-g6-0312/loading.py`,
+  `test_hybrid_energy.py`.
+
 ## [0.67.10] — fiber-tune: confirm and the summary rank the latest run, trials carry an inputs id
 - Every trial record is stamped with `inputs`, a digest of fiber-bench's input fingerprint (the session
   files the run reads); `_current` requires it to match the files on disk now, as it already required the

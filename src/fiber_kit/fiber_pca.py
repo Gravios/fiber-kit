@@ -440,17 +440,62 @@ def hybrid_features(w, basis):
     return np.concatenate([Fm, Fr], axis=1)
 
 
-def fit_hybrid_gain(w_method, w_raw, basis):
+def energy_half(w_raw, half):
+    """Boolean mask of the spikes in the `half` ('low' | 'high') of raw-window energy (per-channel
+    mean removed, log10 of the summed squares; the median splits).  'all' -> every spike."""
+    if half in (None, "", "all"):
+        return np.ones(len(w_raw), bool)
+    w = np.asarray(w_raw, np.float64)
+    e = ((w - w.mean(1, keepdims=True)) ** 2).sum((1, 2))
+    med = np.median(e)
+    return e <= med if half == "low" else e > med
+
+
+def refit_basis(basis, windows):
+    """A copy of `basis` with the per-channel components refit by PCA on `windows`
+    (N, data2use, nCh) -- same window, same component count, same centering flag.  Used to fit
+    the method (stderiv) block's basis on the HIGH-energy half only: in the derivative space the
+    low-energy spikes' variance is nearly flat across components (a third of it lands on the
+    session basis, 0.10/0.13/0.10 on 0312 g6), so a basis fit on everyone spends a direction on
+    their noise; the high half's components are the structured ones."""
+    out = dict(basis)
+    evec = np.asarray(basis["evec"], np.float64)
+    nCh, nComp, _ = evec.shape
+    means = np.zeros((nCh, windows.shape[1]))
+    ev = np.zeros_like(evec)
+    for ch in range(nCh):
+        X = np.asarray(windows[:, :, ch], np.float64)
+        means[ch] = X.mean(0)
+        Xc = X - means[ch] if basis["centered"] else X
+        _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
+        V = Vt[:nComp]
+        # keep the session basis's sign convention so a swapped sign cannot read as a change
+        for k in range(nComp):
+            if float(V[k] @ evec[ch, k]) < 0:
+                V[k] = -V[k]
+        ev[ch] = V
+    out["evec"], out["means"] = ev, means
+    return out
+
+
+def fit_hybrid_gain(w_method, w_raw, basis, fit="all"):
     """The gain that puts the raw block's features on the method block's scale: the ratio of the
     two blocks' total feature SD over a sample of spikes (aligned once, together).  With it,
     scale 1.0 means "the two blocks carry equal variance", so the top-`dims` SVD of
-    cluster_features cannot drop one block merely because its data units are smaller."""
+    cluster_features cannot drop one block merely because its data units are smaller.
+    `fit` ('all' | 'low' | 'high'): the energy half of the sample the ratio is taken over.  Over
+    'all' the ratio is set by the big spikes (the top quartile holds ~4x the per-spike feature
+    variance of the bottom one, 0312 g6) and the low three quartiles end up loading more on the
+    derivative block than the nominal share; 'low' equalises the blocks for them instead."""
     try:
         from . import fiber_lib as fl
     except ImportError:
         import fiber_lib as fl
     hyb = basis["_hyb"]
     w = fl.realign(hybrid_stack(w_method, w_raw))
+    keep = energy_half(w[:, :, w.shape[2] - int(hyb["nraw"]):], fit)
+    if keep.sum() >= 50:
+        w = w[keep]
     Fm = _method_block(w[:, :, :w.shape[2] - int(hyb["nraw"])], basis)
     sb = hyb["basis"]
     Fr = project(extract_windows(w[:, :, w.shape[2] - int(hyb["nraw"]):],

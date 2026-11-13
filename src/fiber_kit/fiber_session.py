@@ -1868,6 +1868,16 @@ def add_core_arguments(ap):
                     default=float(os.environ.get("FK_SESSION_HYBRID_SCALE") or _gc.get("FK_SESSION_HYBRID_SCALE") or 1.0),
                     help="FK_SESSION_HYBRID_SCALE. weight of the raw block relative to the method block after "
                          "the two are put on equal total variance (1 = equal; <1 derivative-led, >1 raw-led)")
+    ap.add_argument("--hybrid-gain-fit", choices=("all", "low", "high"),
+                    default=str(os.environ.get("FK_SESSION_HYBRID_GAIN_FIT") or _gc.get("FK_SESSION_HYBRID_GAIN_FIT") or "all"),
+                    help="FK_SESSION_HYBRID_GAIN_FIT. energy half of the spikes the block-equalising gain is fit "
+                         "over: all (default) | low | high.  Over all, the big spikes set the gain and the "
+                         "low-energy spikes load more on the derivative block than the nominal share.")
+    ap.add_argument("--hybrid-deriv-basis", choices=("session", "high"),
+                    default=str(os.environ.get("FK_SESSION_HYBRID_DERIV_BASIS") or _gc.get("FK_SESSION_HYBRID_DERIV_BASIS") or "session"),
+                    help="FK_SESSION_HYBRID_DERIV_BASIS. basis of the method (derivative) block: session (the "
+                         ".pca.<method> basis, default) | high (refit per channel on the high-energy half of a "
+                         "spike sample -- the low half's derivative variance is nearly unstructured).")
     ap.add_argument("--exclude-clu", default=None,
                     help="per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- "
                          "e.g. fiber-flag-artifacts' output.  Excluded spikes never enter a chunk, so they "
@@ -2355,12 +2365,26 @@ def main():
                 _gs = np.sort(np.random.default_rng(0).choice(nspk, min(nspk, 20000), replace=False))
                 fl.set_align_channels(a.nchan)
                 os.environ["FIBER_ALIGN_CHANNELS"] = str(a.nchan)          # reach forked/spawned pool workers
-                cluster_basis["_hyb"]["gain"] = _fpca.fit_hybrid_gain(np.asarray(spk[_gs], float),
-                                                                      np.asarray(_sraw[_gs], float), cluster_basis)
+                _wm, _wr = np.asarray(spk[_gs], float), np.asarray(_sraw[_gs], float)
+                if a.hybrid_deriv_basis == "high" and not cluster_basis.get("_lag"):
+                    _st = fl.realign(_fpca.hybrid_stack(_wm, _wr))
+                    _hi = _fpca.energy_half(_st[:, :, _st.shape[2] - a.nchan:], "high")
+                    _nb = cluster_basis["evec"].shape[0]
+                    _hyb_rec = cluster_basis["_hyb"]
+                    cluster_basis = _fpca.refit_basis(
+                        cluster_basis, _fpca.extract_windows(_st[_hi][:, :, :_nb], int(cluster_basis["recShift"]),
+                                                             int(cluster_basis["data2use"])))
+                    cluster_basis["_hyb"] = _hyb_rec
+                    det("hybrid", f"derivative block basis refit on the high-energy half ({int(_hi.sum()):,} of "
+                                  f"{len(_hi):,} sampled spikes)")
+                elif a.hybrid_deriv_basis == "high":
+                    det("hybrid", "deriv-basis high: ignored in the lag space (the lag basis is derived from the session basis)")
+                cluster_basis["_hyb"]["gain"] = _fpca.fit_hybrid_gain(_wm, _wr, cluster_basis, fit=a.hybrid_gain_fit)
                 hybrid = True
                 hb = cluster_basis["_hyb"]
                 log(f"hybrid features: + standard basis {hb['basis']['evec'].shape[0]}ch x {hb['pcs']} "
-                    f"of the raw window, scale {hb['scale']:g} (gain {hb['gain']:.4g})")
+                    f"of the raw window, scale {hb['scale']:g} (gain {hb['gain']:.4g}, fit on {a.hybrid_gain_fit}"
+                    f"{', deriv basis: high half' if a.hybrid_deriv_basis == 'high' else ''})")
                 det("", "the raw block is realigned with the stderiv shift and is not de-adapted; the local-SVD, "
                         "energy-band and 'fiber' fine paths ignore it")
                 if a.emit_fet and not a.out_variant:
