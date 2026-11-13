@@ -1452,6 +1452,7 @@ Positional: `base`, `elec`
 | `--fet-variant` | — | variant of the .fet to embed (default: --clu-method) |
 | `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
 | `--sr` | — |  |
+| `--tsne-backend` | `auto` | FK_CONSENSUS_TSNE_BACKEND. auto (default) = RAPIDS cuML on the GPU when importable, else openTSNE on the CPU; the runs then go serially on the one device instead of the worker pool — choices: `auto`, `opentsne`, `cuml` |
 | `--quarantine-only` | `0` | 1 = clean, do not merge: kept spikes keep their input labels, quarantined spikes go to noise (1); the .clc/.clp hierarchy is carried; island / rim clusters are written to a <tag>_qreview stage for review. For use right after fiber-session, before intrachunk and the linkers [FK_CONSENSUS_QUARANTINE_ONLY; default 0] |
 | `--res-variant` | `""` | pin the .res variant (e.g. stderiv_S3); '' = resolve the shared .res the way fiber-session and the other stages do [FK_CONSENSUS_RES_VARIANT; default ] |
 | `--neighbourhood-theta` | `12.0` | envelope d' cut for automatic neighbourhoods (ignored with --units) [FK_CONSENSUS_NEIGHBOURHOOD_THETA; default 12.0] |

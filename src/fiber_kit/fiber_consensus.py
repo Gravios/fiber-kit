@@ -73,6 +73,43 @@ def _need(mod):
         raise SystemExit(f"fiber-consensus needs '{mod}' (pip install fiber-kit[consensus])") from e
 
 
+_TSNE_BACKEND = "auto"            # auto | opentsne | cuml  (set from --tsne-backend; see _tsne_backend)
+
+
+def _tsne_backend(name=None):
+    """Resolve the t-SNE backend: 'cuml' when RAPIDS cuML and a CUDA device are importable (the GPU
+    t-SNE: a 7k-point embedding in well under a second against ~13-25 s on one CPU thread), else
+    'opentsne'.  'auto' prefers the GPU.  Resolved once per process and cached (spawned workers
+    resolve their own)."""
+    global _TSNE_BACKEND
+    name = name or _TSNE_BACKEND
+    if name in ("opentsne", "cuml"):
+        return name
+    try:
+        import cuml  # noqa: F401
+        import cupy
+        if cupy.cuda.runtime.getDeviceCount() > 0:
+            _TSNE_BACKEND = "cuml"
+            return "cuml"
+    except Exception:
+        pass
+    _TSNE_BACKEND = "opentsne"
+    return "opentsne"
+
+
+def _tsne_fit_cuml(X, perplexity, seed, exaggeration=None, ee_iter=250, n_iter=500):
+    """cuML's t-SNE (FFT interpolation, the openTSNE default too), parameters mapped: random init,
+    early exaggeration 12 for `ee_iter` iterations, `n_iter` main iterations (cuML counts the two
+    phases together), the same perplexity cap.  Returns an (n, 2) float64 numpy array."""
+    from cuml.manifold import TSNE
+    kw = {} if exaggeration is None else dict(late_exaggeration=float(exaggeration))
+    t = TSNE(n_components=2, perplexity=float(min(perplexity, (len(X) - 1) / 3.0)), method="fft",
+             init="random", random_state=int(seed), early_exaggeration=12.0, exaggeration_iter=int(ee_iter),
+             n_iter=int(ee_iter) + int(n_iter), learning_rate_method="adaptive", output_type="numpy",
+             verbose=False, **kw)
+    return np.asarray(t.fit_transform(np.ascontiguousarray(X, dtype=np.float32)), dtype=np.float64)
+
+
 def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None, ee_iter=250, n_iter=500):
     """One openTSNE embedding.  ee_iter / n_iter: the early-exaggeration and main-phase iteration counts
     (openTSNE's defaults are 250 / 500).  Measured on a 9,655-spike g6 neighbourhood (32-dim .fet, 40
@@ -80,6 +117,8 @@ def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None, ee_iter=250, n_i
     the same consensus -- communities at ARI 0.73 to the full schedule's, which is where two full
     schedules land against each other too (BH vs FFT gradients: 0.74; the first 20 of 40 runs: 0.71) --
     at 1.8x the speed."""
+    if _tsne_backend() == "cuml":
+        return _tsne_fit_cuml(X, perplexity, seed, exaggeration, ee_iter, n_iter)
     from openTSNE import TSNE
     kw = {} if exaggeration is None else dict(exaggeration=exaggeration)
     return np.asarray(TSNE(perplexity=min(perplexity, (len(X) - 1) / 3.0), n_jobs=n_jobs, random_state=seed,
@@ -115,13 +154,15 @@ def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log
     2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2)).
     workers > 1 (0 = every core) runs the embeddings in parallel processes; the subsets and seeds are
     drawn up front, so the result does not depend on the worker count."""
-    _need("openTSNE")
     X = np.asarray(X, float)
     n = len(X); rng = np.random.default_rng(seed)
     m = max(k + 2, int(round(frac * n)))
     subsets = [np.sort(rng.choice(n, min(m, n), replace=False)) for _ in range(int(runs))]
     args = [(X, s, perplexity, seed * 1000 + r, k, n_jobs, ee_iter, n_iter) for r, s in enumerate(subsets)]
-    pool = _pool(workers)
+    gpu = _tsne_backend() == "cuml"
+    if not gpu:
+        _need("openTSNE")
+    pool = None if gpu else _pool(workers)             # one device: the GPU runs go serially in-process
     if pool is None:
         out = []
         for r, a_ in enumerate(args):
@@ -301,9 +342,11 @@ def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0
     agree: (n,) fraction of runs voting for the winning category, nan where not quarantined)."""
     cell = np.asarray(cell); q = np.asarray(quarantine, bool); n = cell.size
     if maps is None:
-        _need("openTSNE")
+        gpu = _tsne_backend() == "cuml"
+        if not gpu:
+            _need("openTSNE")
         X = np.asarray(X, float)
-        pool = _pool(workers)
+        pool = None if gpu else _pool(workers)
         if pool is None:
             maps = [_tsne_fit(X, perplexity, seed + 500 + r, n_jobs, None, ee_iter, n_iter) for r in range(runs)]
         else:
@@ -577,6 +620,10 @@ def main(argv=None):
                     help="comma-separated units to study together (repeat with ';' for several groups); "
                          "default: every envelope d' neighbourhood")
     ap.add_argument("--sr", type=float, default=None)
+    ap.add_argument("--tsne-backend", choices=("auto", "opentsne", "cuml"),
+                    default=str(cfgmod.knob_value("FK_CONSENSUS_TSNE_BACKEND", str, "auto", gcfg)),
+                    help="FK_CONSENSUS_TSNE_BACKEND. auto (default) = RAPIDS cuML on the GPU when importable, else "
+                         "openTSNE on the CPU; the runs then go serially on the one device instead of the worker pool")
     for name, (dest, typ, fb, hlp) in _KNOBS.items():
         d = _knob_default(name, typ, fb, gcfg)
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
@@ -584,6 +631,9 @@ def main(argv=None):
     ap.add_argument("--out-tag", default=None, help="stage tag of the output .clu (default: <clu-stage>.consensus)")
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
+    global _TSNE_BACKEND
+    _TSNE_BACKEND = a.tsne_backend
+    bk = _tsne_backend()
     try:
         from . import session_yaml as sy
     except ImportError:
@@ -611,6 +661,9 @@ def main(argv=None):
             return np.asarray(sig[rows][:, chans], np.float32)
     view = _View()
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
+    log(f"t-SNE backend: {bk}" + (" (GPU; runs serial on the device)" if bk == "cuml"
+                                 else f" (CPU; {a.workers or 'every'} worker process(es))")
+        + f", schedule {a.tsne_ee_iter} + {a.tsne_iter} iterations")
     res_abs = (nio.read_res_at(a.base, a.elec, variant=a.res_variant) if a.res_variant
                else nio.read_res(a.base, a.elec))
     _, clu = nio.resolve_clu(a, a.base, a.elec, n_spikes=res_abs.size, stage_dest="clu_stage")

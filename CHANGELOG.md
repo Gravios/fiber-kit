@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.15] — fiber-consensus: cuML (GPU) t-SNE backend, `FK_CONSENSUS_TSNE_BACKEND`
+- `auto` (default) uses RAPIDS cuML's t-SNE when `cuml` and a CUDA device import, else openTSNE; `opentsne`
+  / `cuml` force one.  Parameters mapped one to one (FFT gradients, random init, early exaggeration 12 for
+  TSNE_EE_ITER iterations, TSNE_ITER main iterations, the perplexity cap); the runs and the watershed maps go
+  serially on the one device instead of the worker pool.  The backend is logged at start.  NOT measured here
+  (no GPU on the dev box): compare one neighbourhood's communities with the CPU's before trusting it (two
+  CPU schedules agree at ARI ~0.73; UMAP, tried as a cheaper embedding, agrees at 0.54-0.58 and loses 0.04-
+  0.05 ARI against the curated units, so it is not a substitute -- `analysis/consensus-tsne-schedule-g6-0312/`).
+
 ## [0.67.14] — fiber-consensus: t-SNE schedule knobs, short schedule in the profiles (1.8x faster)
 - `FK_CONSENSUS_TSNE_EE_ITER` / `FK_CONSENSUS_TSNE_ITER`: the early-exaggeration and main-phase iteration
   counts of every t-SNE run (consensus runs and watershed maps); code default 250 / 500 (openTSNE's), the

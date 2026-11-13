@@ -1384,6 +1384,14 @@ FK_CONSENSUS_TSNE_ITER:  250      # 250 | 250-500.  Main-phase iterations per ru
                                   #   is where two full schedules land against each other (BH vs FFT gradients 0.74,
                                   #   the first 20 of 40 runs 0.71); ARI to the curated units 0.40 vs 0.41.  1.8x
                                   #   faster; 250 / 500 = pre-0.67.14.
+FK_CONSENSUS_TSNE_BACKEND: auto   # auto | opentsne | cuml.  auto = RAPIDS cuML's t-SNE on the GPU when `cuml` and a CUDA
+                                  #   device import (pip install "cuml-cu12>=25.4" --extra-index-url=https://pypi.nvidia.com;
+                                  #   Blackwell needs the CUDA 12.8+ wheels), else openTSNE on the CPU.  Parameters mapped
+                                  #   one to one (FFT gradients, random init, early exaggeration 12 for TSNE_EE_ITER, the
+                                  #   perplexity cap); on the GPU the runs go serially on the one device instead of the
+                                  #   worker pool.  Unmeasured in this repo (no GPU on the dev box): check one
+                                  #   neighbourhood's communities against the CPU's (ARI ~0.73 is the band two CPU
+                                  #   schedules occupy) before trusting a GPU run.
 FK_CONSENSUS_THETA_CELL: 7.0      # 7 | 5-10 (envelope d').  Merge cut joining Louvain communities into cells, with
                                   #   merge-inflation > 0.1 as a cannot-link.  One cell's noise ball is cut by t-SNE
                                   #   into stable-looking islands; this re-joins them.  Lower = more cells.
