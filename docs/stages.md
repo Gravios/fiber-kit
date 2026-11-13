@@ -1460,6 +1460,8 @@ Positional: `base`, `elec`
 | `--frac` | `0.7` | fraction of the neighbourhood's spikes in each run [FK_CONSENSUS_FRAC; default 0.7] |
 | `--k` | `15` | 2-D neighbours per spike [FK_CONSENSUS_K; default 15] |
 | `--perplexity` | `30.0` | t-SNE perplexity (runs and watershed maps) [FK_CONSENSUS_PERPLEXITY; default 30.0] |
+| `--tsne-ee-iter` | `250` | t-SNE early-exaggeration iterations per run (openTSNE 250) [FK_CONSENSUS_TSNE_EE_ITER; default 250] |
+| `--tsne-iter` | `500` | t-SNE main-phase iterations per run (openTSNE 500; 250 measured to give the same consensus at 1.8x the speed) [FK_CONSENSUS_TSNE_ITER; default 500] |
 | `--theta-cell` | `7.0` | envelope d' cut joining communities into cells [FK_CONSENSUS_THETA_CELL; default 7.0] |
 | `--refrac-ms` | `1.5` | refractory cannot-link in the cell merge: communities whose trains coincide within (0.6, REFRAC] ms at chance are two neurons (power-aware; 0 = off) [FK_CONSENSUS_REFRAC_MS; default 1.5] |
 | `--refrac-min-exp` | `3.0` | coincidences that must be expected before the refractory test may veto [FK_CONSENSUS_REFRAC_MIN_EXP; default 3.0] |

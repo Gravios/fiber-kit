@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.14] — fiber-consensus: t-SNE schedule knobs, short schedule in the profiles (1.8x faster)
+- `FK_CONSENSUS_TSNE_EE_ITER` / `FK_CONSENSUS_TSNE_ITER`: the early-exaggeration and main-phase iteration
+  counts of every t-SNE run (consensus runs and watershed maps); code default 250 / 500 (openTSNE's), the
+  profiles set 125 / 250.  Measured on a 9,655-spike g6 neighbourhood (0312, units 12/27/49, 32-dim .fet, 40
+  runs at 70 %, 1 thread): a run is 25 s of which 90 % is gradient iterations (affinities 2 s, so precomputing
+  the high-dim kNN once was not the lever; PCA-12 input saved 15 % but moved the embedding, kNN overlap 0.29);
+  125 / 250 takes 13 s and gives the same consensus -- Louvain communities at ARI 0.73 to the full schedule's,
+  which is where two full schedules land against each other (Barnes-Hut vs FFT gradients 0.74, the first 20
+  of 40 runs 0.71), ARI to the curated units 0.40 vs 0.41.  The first openTSNE call in a process is a ~20 s
+  numba compile, paid once per spawned worker.  `analysis/consensus-tsne-schedule-g6-0312/`.
+
 ## [0.67.13] — fiber-session: Block N (neighbourhood re-cluster), the rkk die-out retry; hybrid-search spec
 - **Block N** (`FK_SESSION_NEIGH_PASSES` 0-2, `_K` 3, `_COS` 0.7, `_SEED`; default off): after the resplit
   block, each cluster in random order draws 1..K untouched neighbours (template cosine >= COS), the union is

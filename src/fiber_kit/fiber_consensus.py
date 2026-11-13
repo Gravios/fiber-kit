@@ -73,17 +73,24 @@ def _need(mod):
         raise SystemExit(f"fiber-consensus needs '{mod}' (pip install fiber-kit[consensus])") from e
 
 
-def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None):
+def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None, ee_iter=250, n_iter=500):
+    """One openTSNE embedding.  ee_iter / n_iter: the early-exaggeration and main-phase iteration counts
+    (openTSNE's defaults are 250 / 500).  Measured on a 9,655-spike g6 neighbourhood (32-dim .fet, 40
+    runs at 70 %): 90 % of a run is gradient iterations (affinities 2 s of 25 s), and 125 / 250 gives
+    the same consensus -- communities at ARI 0.73 to the full schedule's, which is where two full
+    schedules land against each other too (BH vs FFT gradients: 0.74; the first 20 of 40 runs: 0.71) --
+    at 1.8x the speed."""
     from openTSNE import TSNE
     kw = {} if exaggeration is None else dict(exaggeration=exaggeration)
     return np.asarray(TSNE(perplexity=min(perplexity, (len(X) - 1) / 3.0), n_jobs=n_jobs, random_state=seed,
-                           initialization="random", verbose=False, **kw).fit(X))
+                           initialization="random", verbose=False, early_exaggeration_iter=int(ee_iter),
+                           n_iter=int(n_iter), **kw).fit(X))
 
 
-def _one_run(X, s, perplexity, seed, k, n_jobs):
+def _one_run(X, s, perplexity, seed, k, n_jobs, ee_iter=250, n_iter=500):
     """One subsampled run (a top-level function so a worker process can run it)."""
     from sklearn.neighbors import NearestNeighbors
-    Y = _tsne_fit(X[s], perplexity, seed, n_jobs)
+    Y = _tsne_fit(X[s], perplexity, seed, n_jobs, ee_iter=ee_iter, n_iter=n_iter)
     _, ii = NearestNeighbors(n_neighbors=k + 1).fit(Y).kneighbors(Y)
     return s, s[ii[:, 1:]], Y.astype(np.float32)
 
@@ -102,7 +109,8 @@ def _pool(workers):
     return ProcessPoolExecutor(w, mp_context=mp.get_context("spawn"))
 
 
-def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None, workers=1):
+def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None, workers=1,
+              ee_iter=250, n_iter=500):
     """R subsampled t-SNE embeddings of X (n, d).  Returns a list of (subset indices (m,),
     2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2)).
     workers > 1 (0 = every core) runs the embeddings in parallel processes; the subsets and seeds are
@@ -112,7 +120,7 @@ def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log
     n = len(X); rng = np.random.default_rng(seed)
     m = max(k + 2, int(round(frac * n)))
     subsets = [np.sort(rng.choice(n, min(m, n), replace=False)) for _ in range(int(runs))]
-    args = [(X, s, perplexity, seed * 1000 + r, k, n_jobs) for r, s in enumerate(subsets)]
+    args = [(X, s, perplexity, seed * 1000 + r, k, n_jobs, ee_iter, n_iter) for r, s in enumerate(subsets)]
     pool = _pool(workers)
     if pool is None:
         out = []
@@ -286,7 +294,7 @@ def categorise_basins(basin, cell, quarantine, island_frac=0.5):
 
 
 def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0.5, perplexity=30.0,
-                         seed=0, n_jobs=1, maps=None, log=None, workers=1):
+                         seed=0, n_jobs=1, maps=None, log=None, workers=1, ee_iter=250, n_iter=500):
     """Watershed category of every quarantined spike, voted over `runs` full t-SNE maps of X (or the
     given `maps`, a list of (n, 2) arrays).  Returns dict(category: (n,) str, '' where not quarantined;
     dest: (n,) destination cell (own cell for own-rim, the basin owner for other-cell, -1 otherwise);
@@ -297,10 +305,10 @@ def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0
         X = np.asarray(X, float)
         pool = _pool(workers)
         if pool is None:
-            maps = [_tsne_fit(X, perplexity, seed + 500 + r, n_jobs) for r in range(runs)]
+            maps = [_tsne_fit(X, perplexity, seed + 500 + r, n_jobs, None, ee_iter, n_iter) for r in range(runs)]
         else:
             with pool:
-                maps = list(pool.map(_tsne_fit, *zip(*[(X, perplexity, seed + 500 + r, n_jobs)
+                maps = list(pool.map(_tsne_fit, *zip(*[(X, perplexity, seed + 500 + r, n_jobs, None, ee_iter, n_iter)
                                                        for r in range(runs)])))
         if log:
             log(f"  {runs} watershed maps")
@@ -324,7 +332,7 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
                             perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
                             dev_z=2.0, rules=("collision", "perimeter"), ws_runs=5, ws_grid=256,
                             ws_island=0.5, refrac_ms=1.5, refrac_min_exp=3.0, seed=0, n_jobs=1, workers=1,
-                            log=print):
+                            ee_iter=250, n_iter=500, log=print):
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
@@ -346,7 +354,7 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     X = np.asarray(features, float)[idx]
     X = (X - X.mean(0)) / X.std(0).clip(1e-9)
     rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log,
-                   workers=workers)
+                   workers=workers, ee_iter=ee_iter, n_iter=n_iter)
     com = coneighbour_communities(rr, idx.size, seed=seed)
     lab = np.zeros(len(clu), int); lab[idx] = com + 2
     envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
@@ -386,7 +394,8 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
         + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
     if ws_runs > 0 and q.any():
         ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
-                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs, workers=workers)
+                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs, workers=workers,
+                                  ee_iter=ee_iter, n_iter=n_iter)
         cat = ws["category"]
         log("  categories: " + ", ".join(f"{(cat == c).sum()} {c}" for c in WS_CATEGORIES)
             + f"; median vote agreement {np.nanmedian(ws['agree']):.2f}")
@@ -503,6 +512,9 @@ _KNOBS = {
     "FK_CONSENSUS_FRAC": ("frac", float, 0.7, "fraction of the neighbourhood's spikes in each run"),
     "FK_CONSENSUS_K": ("k", int, 15, "2-D neighbours per spike"),
     "FK_CONSENSUS_PERPLEXITY": ("perplexity", float, 30.0, "t-SNE perplexity (runs and watershed maps)"),
+    "FK_CONSENSUS_TSNE_EE_ITER": ("tsne_ee_iter", int, 250, "t-SNE early-exaggeration iterations per run (openTSNE 250)"),
+    "FK_CONSENSUS_TSNE_ITER": ("tsne_iter", int, 500, "t-SNE main-phase iterations per run (openTSNE 500; 250 measured "
+                                                      "to give the same consensus at 1.8x the speed)"),
     "FK_CONSENSUS_THETA_CELL": ("theta_cell", float, 7.0, "envelope d' cut joining communities into cells"),
     "FK_CONSENSUS_REFRAC_MS": ("refrac_ms", float, 1.5,
                                "refractory cannot-link in the cell merge: communities whose trains coincide "
@@ -650,7 +662,7 @@ def main(argv=None):
                                         dev_z=a.dev_z, rules=rules, ws_runs=a.ws_runs, ws_grid=a.ws_grid,
                                         ws_island=a.ws_island, refrac_ms=a.refrac_ms,
                                         refrac_min_exp=a.refrac_min_exp, seed=a.seed, n_jobs=a.jobs, workers=a.workers,
-                                        log=log)
+                                        ee_iter=a.tsne_ee_iter, n_iter=a.tsne_iter, log=log)
             cmap, nxt = cell_ids(r["cell"], clu[r["idx"]], r["quarantine"], nxt, keep=bool(a.keep_ids))
             if not a.quarantine_only:                 # merge mode: the cells become the output units
                 out[r["idx"]] = [cmap[int(c)] for c in r["cell"]]
