@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.17] — fiber-session: `FK_SESSION_JOBS`, and `--jobs 0` = one worker per chunk
+- `--jobs` now resolves from `FK_SESSION_JOBS` (env > global config > 1), so the chunk pool is reachable from
+  a profile instead of only from a hand-typed command line -- nothing in fiber-bench or fiber-tune ever passed
+  `-j`, so every pipeline and tune sort has been serial.  `0` means one worker per chunk, bounded by
+  `sched_getaffinity` (a cgroup or taskset quota, not `cpu_count`); `_resolve_jobs` is a module-level helper
+  and never returns more than one worker per chunk, since chunks are the unit of parallelism.
+- Why it matters on a big box: with `--jobs 1` the only parallelism left is BLAS inside one chunk, on matrices
+  (a chunk's windows, 6-12-dim features, the per-cluster CEM) far too small to repay a wide fork/join barrier,
+  and NumPy's bundled OpenBLAS has a build-time thread ceiling -- commonly 64 -- that no fiber-kit setting
+  raises (`openblas_get_config()` prints `MAX_THREADS`).  Pool workers pin BLAS to one thread each, so N
+  workers use N threads rather than N*N.  Budget ~1-2 GiB resident per worker (a 70k-spike 18-min g6 chunk is
+  0.22 GiB per float64 window array, several in flight; the `.spk`/`.res` memmaps are shared page cache).
+- The log line now names the worker count, says when `--jobs` was capped by the chunk count, and states that
+  BLAS is pinned per worker.  `FK_SESSION_JOBS: 1` in the four profiles, so no cached sort changes.
+- CAVEAT, documented with the knob: the serial path leaves BLAS threaded while the pool pins it, so `> 1` can
+  differ from `1` in the last bits of a reduction.  It is a speed knob, not a tuning one, and it is not part
+  of fiber-bench's step hash.  `test_session_jobs.py`.
+
 ## [0.67.16] — hybrid-search spec: Block N on by default in `start:`, its PASSES last; the 2026-11-14 findings
 - The 2026-11-14 search on 0316 g6 chunks 2-3 (45 trials, 2 passes, core truth) put `FK_SESSION_NEIGH_PASSES`
   FIRST in the `neigh` stage; 1 and 2 both lost to the start, so coordinate ascent kept 0 and then searched

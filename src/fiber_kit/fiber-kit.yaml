@@ -336,6 +336,21 @@ FK_REFINE_SPLIT_VAR_MULT:       1.5      # 1.5 | 1.3-2.0.  Split only clusters w
 FK_REFINE_SPLIT_MIN_CORR: 0.93    # 0.93 | 0.90-0.95.  Keep a split only if each piece is internally coherent
                                   #   (within-piece template correlation >= this); else the split was noise.
 FK_REFINE_CHUNK_MINUTES: 12       # 12 | 8-20 (min).  Refine chunk length; match FK_SESSION_CHUNK_MIN.
+FK_SESSION_JOBS:         1        # 1 | 0 or 1-N (processes).  fiber-session's worker processes over chunks:
+                                  #   1 = serial (the default and what every cached sort was made with), 0 = one
+                                  #   per chunk capped at the CPUs the process may use, N = that many.  This is
+                                  #   the axis that scales.  With 1 the only parallelism left is BLAS inside one
+                                  #   chunk, on matrices (a chunk's windows, 6-12-dim features, per-cluster CEM)
+                                  #   far too small to repay a wide fork/join barrier -- and NumPy's bundled
+                                  #   OpenBLAS has a build-time thread ceiling, commonly 64, that no fiber-kit
+                                  #   setting raises (openblas_get_config() prints MAX_THREADS).  Pool workers pin
+                                  #   BLAS to one thread each (one unit of parallelism per process), so N workers
+                                  #   use N threads, not N*N.  Budget ~1-2 GiB resident per worker (a 70k-spike
+                                  #   18-min chunk of g6 is 0.22 GiB per float64 window array, several in flight;
+                                  #   the .spk/.res memmaps are shared page cache).  CAVEAT: the serial path
+                                  #   leaves BLAS threaded and the pool pins it, so >1 can differ from 1 in the
+                                  #   last bits of a reduction; it is a speed knob, not a tuning one, and it is
+                                  #   NOT part of fiber-bench's step hash.
 FK_REFINE_CHUNK_JOBS:    1        # 1 | 1-N (processes).  Parallel worker processes over chunks in drift-aware mode
                                   #   (chunk-minutes>0).  Chunks are independent (own whitener + refine), so this is
                                   #   the main speedup for a chunked run; the cross-window link runs serially after.

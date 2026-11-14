@@ -1582,6 +1582,21 @@ def _final_ids(pre, post):
 _CTX = {}
 
 
+def _resolve_jobs(jobs, ntasks):
+    """Worker processes for the chunk loop: `jobs` as given, or with jobs <= 0 one per chunk bounded by the
+    CPUs this process may actually use (sched_getaffinity, not cpu_count -- a cgroup or taskset quota is the
+    number that matters on a shared box).  Never more than one worker per chunk: chunks are the unit of
+    parallelism here, so a bigger --jobs on a 25-chunk session just idles the rest of the machine."""
+    jobs = int(jobs)
+    if jobs <= 0:
+        try:
+            ncpu = len(os.sched_getaffinity(0))
+        except AttributeError:                        # not Linux
+            ncpu = os.cpu_count() or 1
+        jobs = min(int(ntasks), ncpu)
+    return max(1, min(jobs, int(ntasks)) if ntasks else 1)
+
+
 def _limit_worker_threads():
     """Pin BLAS/OpenMP to one thread per worker process.
 
@@ -2053,8 +2068,14 @@ def add_core_arguments(ap):
                          "fibers = linked global ids) via FiberHierarchy, instead of a flat .clu only. "
                          "--no-emit-hierarchy writes just the flat .clu (legacy). Ignored with --out.")
     ap.add_argument("--gpu", action="store_true", help="run the realign/whiten kernels on GPU (CuPy; needs the [gpu] extra)")
-    ap.add_argument("--jobs", "-j", type=int, default=1,
-                    help="parallel worker processes over chunks (default 1 = serial; chunks are independent)")
+    ap.add_argument("--jobs", "-j", type=int,
+                    default=int(os.environ.get("FK_SESSION_JOBS") or _gc.get("FK_SESSION_JOBS") or 1),
+                    help="FK_SESSION_JOBS. parallel worker processes over chunks (1 = serial, the default; "
+                         "0 = one per chunk, capped at the CPUs this process may use).  Chunks are "
+                         "independent, and this is the axis that scales: with --jobs 1 the only parallelism "
+                         "is BLAS inside one chunk, whose matrices are far too small to repay a 64-way "
+                         "fork/join barrier -- and NumPy's bundled OpenBLAS has a build-time thread ceiling "
+                         "(openblas_get_config() prints MAX_THREADS) that no fiber-kit setting can raise.")
     ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid", "off"], default=None,
                     help="feature-building alignment: xcorr (default), centroid (pure, no refine -- "
                          "adds the trough-position-vs-asymmetry structure to the clustering/linking "
@@ -2588,7 +2609,7 @@ def main():
             shed_total[k] = shed_total.get(k, 0) + int(v)
         print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore_of[c]:>7,} core   \u2192  {len(geoms):>4} fibers")
 
-    jobs = max(1, int(a.jobs))
+    jobs = _resolve_jobs(a.jobs, len(tasks))
     if jobs == 1 or len(tasks) <= 1:
         log(f"clustering {len(tasks)} chunks")
         _init_chunk_worker(cfg)                       # serial: identical to the former inline loop
@@ -2596,8 +2617,10 @@ def main():
             _store(_process_chunk(task))
     else:
         from concurrent.futures import ProcessPoolExecutor
-        nworkers = min(jobs, len(tasks))
-        log(f"clustering {len(tasks)} chunks on {nworkers} processes")
+        nworkers = jobs
+        log(f"clustering {len(tasks)} chunks on {nworkers} processes"
+            + (f" (--jobs {a.jobs}, capped by the chunk count)" if int(a.jobs) > len(tasks) else "")
+            + "; BLAS pinned to one thread per worker")
         with ProcessPoolExecutor(max_workers=nworkers,
                                  initializer=_init_pool_worker, initargs=(cfg,)) as ex:
             for result in ex.map(_process_chunk, tasks):
