@@ -4,6 +4,38 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.21] — tune spec: the search now runs the realign it is judged on, and the alignment gate is searched
+- **The search and the confirm were not running the same pipeline.**  `search-base.yaml` is
+  `flag > session > clean > cpos-clean > link > merge > psame` with no `fiber-realign` step, and
+  `search_realign: false` also forces `FK_SESSION_REALIGN` off; `confirm-base.yaml` interleaves
+  `realign-1/-2/-3` and turns the end-of-run commit back on.  Every knob was therefore tuned on a
+  pipeline that never moves the data and then judged on one that re-cuts it between every stage.
+  `plans/tune/hybrid-search.yaml` sets `search_realign: true`.  No code change — the facility was
+  already there and its docstring already carried the consequence (one 6-min 0316 chunk at identical
+  parameters: search ARI 0.675 / acc 0.376, workspace run ARI 0.503 / acc 0.417).
+- Measured on 0316 g6 (138,319 spikes, 42x8 windows, the profile's realign settings;
+  `analysis/realign-influence-g6-0316/`): the realign is label-conditioned — each spike is rolled onto
+  the template of whatever cluster currently holds it — so it is a function of the labelling under test.
+  89.2 % of spikes get a nonzero committed shift (mean -0.85, sd 1.86, max |21|); the fragments of one
+  truth unit end up with mean shifts a median 1.83 samples apart (25/30 units >= 1 sample), so the merge
+  stages must undo an offset the realign introduced; of 23,094 spikes seated in a cluster another unit
+  dominates, 52 % are committed to a different time than their own unit would give (mean |d| 1.03
+  samples); and it is not idempotent at fixed labels (a second pass still moves 3.6 %).
+- Ruled out by the same measurement, and recorded so they are not re-chased: cumulative interpolation
+  loss (the commit is integer — `roll_spikes` or a re-extraction at the corrected sample, never a
+  resample), the chunk restriction (a chunks 2-3 realign agrees with the all-chunk one on 94.7 % of the
+  shared spikes, median |d| 0, and no cluster falls below `min_n`), and `PARK_DUPS` attrition (7 spikes).
+- New `realign` tuning stage, searched FIRST: `FK_REALIGN_MIN_SCORE [0.10, 0.70, 0.40]` and
+  `FK_REALIGN_MAX_SHIFT ["", 4]`.  The profile's 0.10 is the curator's Klusters setting, not Klusters'
+  factory 0.70, so the gate is effectively open.  A 0.70 gate would freeze 61.3 % of foreign-seated
+  spikes against 34.4 % of own-unit ones, and it is selective for the low-amplitude broad units —
+  89.3 % of unit 2's foreign-seated spikes (amp 1782, half-width 9, 0.06 Hz) score below 0.70, as do
+  88.0 % of unit 34's and 96.5 % of unit 6's, while the high-amplitude units' foreign spikes mostly
+  clear it (unit 13 9.5 %, unit 10 12.4 %).  Both knobs are INERT unless `search_realign: true`: the
+  search plan has no realign step, and fiber-session's own rkk cluster<->realign loop uses
+  `fl.align_xcorr` (ref=median, iters 6, maxlag 6) and reads none of them — the FEAT_HYBRID /
+  NEIGH_PASSES stage-order trap a third time, which is why the two changes arrive together.
+
 ## [0.67.20] — fiber-bench: performance knobs out of the step hash; fiber-tune: `confirm --extra`
 - `stage_params` drops a `_PERF_KNOBS` set (`FK_SESSION_JOBS`, `FK_SESSION_JOB_MEM_GIB`) from the step hash:
   without this, 0.67.17/0.67.19 adding those keys to the profiles would have invalidated every cached

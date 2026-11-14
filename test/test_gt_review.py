@@ -9,7 +9,8 @@ core-search spec.
     link" by refractory evidence; a cell split in time -> "disjoint in time"; a curated unit that is two
     cells -> `unit`; an identical sort -> no disagreement rows (negative control);
   * plans/tune/core-search.yaml loads and passes check_knobs against fiber-kit-exp.yaml;
-    plans/tune/hybrid-search.yaml likewise against fiber-kit-best.yaml.
+    plans/tune/hybrid-search.yaml likewise against fiber-kit-best.yaml, searches the realign gate
+    first with search_realign on (0.67.21), and keeps the hybrid on/off control last.
 """
 import os, sys
 import numpy as np
@@ -145,9 +146,15 @@ def main():
     check(ft._same(spec["start"].get("FK_SESSION_FEAT_HYBRID"), 1) and ft._same(spec["start"].get("FK_SESSION_HYBRID_SCALE"), 2.0)
           and ft._same(spec["start"].get("FK_SESSION_HYBRID_PCS"), 3),
           "hybrid-search.yaml starts from the clean run's winner (hybrid on, scale 2, 3 PCs)")
-    check(spec["stages"][0].get("name") == "neigh" and spec["stages"][-1].get("name") == "hybrid"
+    check(spec["stages"][0].get("name") == "realign" and spec["stages"][1].get("name") == "neigh"
+          and spec["stages"][-1].get("name") == "hybrid"
           and list(spec["stages"][-1]["knobs"]) == ["FK_SESSION_FEAT_HYBRID"],
-          "hybrid-search.yaml searches Block N first and keeps the hybrid on/off control last")
+          "hybrid-search.yaml searches the realign gate first, then Block N, and keeps the hybrid control last")
+    check(spec["search_realign"] is True
+          and all(k in kn for k in ("FK_REALIGN_MIN_SCORE", "FK_REALIGN_MAX_SHIFT")),
+          "hybrid-search.yaml searches the realign knobs AND runs the realign in the search -- they are "
+          "no-ops without search_realign (the search plan has no fiber-realign step, and fiber-session's "
+          "rkk realign loop uses fl.align_xcorr and reads none of them)")
     spec = ft.load_spec(os.path.join(ROOT, "plans", "tune", "core-search.yaml"))
     f = ft.compile_objective(spec["objective"])
     hi = f(dict(pyr_link=0.9, pyr_core_prec=0.96, pyr_cov=0.6, merges_pyr_pyr=0))

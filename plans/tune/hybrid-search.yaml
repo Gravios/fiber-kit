@@ -45,6 +45,31 @@
 # ~20); the merge / psame knobs re-run only their step.  Stage 1 is at most 2 + 3 + 3 + 2 = 10 trials per
 # pass, stage 2 at most 3 + 3 + 2 + 2 + 2 = 12.
 #
+# 2026-11-14 (realign).  MEASURED on 0316 g6 (138,319 spikes, 42x8 windows, the profile's realign
+# settings; analysis/realign-influence-g6-0316/): the search and the confirm were not running the same
+# pipeline.  search-base.yaml is flag > session > clean > cpos-clean > link > merge > psame with NO
+# realign step and FK_SESSION_REALIGN forced off (search_realign: false); confirm-base.yaml interleaves
+# realign-1/-2/-3 and turns the end-of-run commit back on.  The realign is LABEL-CONDITIONED -- every
+# spike is rolled onto the template of whatever cluster currently holds it -- so it is not a fixed
+# pre-processing step but a function of the labelling the knob under test produced:
+#   * 89.2 % of spikes get a nonzero committed integer shift (mean -0.85, sd 1.86, max |21| on a
+#     42-sample window); FK_REALIGN_MIN_SCORE 0.10 (the curator's setting, not Klusters' 0.70) leaves
+#     the gate effectively open, and FK_REALIGN_MAX_SHIFT "" allows +-10 per pass, accumulating;
+#   * each cluster gets its OWN time origin: the fragments of one truth unit end up with mean committed
+#     shifts a median 1.83 samples apart (25 of 30 fragmented units >= 1 sample, max 5.70), so the merge
+#     stages must undo an offset the realign introduced -- more fragmentation, more to undo;
+#   * a mis-assignment is written into the DATA, not just the labels: of 23,094 spikes seated in a
+#     cluster another unit dominates, 52 % are committed to a different time than their own unit would
+#     give them (mean |d| 1.03 samples), and nothing downstream restores it;
+#   * it is not even idempotent at fixed labels -- a second pass on the committed windows still moves
+#     3.6 % of spikes (iters 2 does not converge, and RECENTER_RMS can oscillate).
+# Ruled out by the same measurement: cumulative interpolation loss (the commit is integer -- roll_spikes
+# or a re-extraction at the corrected sample, never a resample), the chunk restriction (a chunks 2-3
+# realign commits the same shift as the all-chunk one for 94.7 % of the shared spikes, median |d| 0, and
+# NO cluster falls below min_n), and PARK_DUPS attrition (7 spikes).  fiber-tune's own docstring already
+# had the consequence: one 6-min 0316 chunk at identical parameters scored ARI 0.675 / acc 0.376 in the
+# search and ARI 0.503 / acc 0.417 in a workspace run.  Hence `search_realign: true` below.
+#
 # 2026-11-14.  Search on 0316 chunks 2-3 (45 trials, 2 passes, core truth): best 0.3889 = the hybrid winner
 # plus RKK_MIN 35 and XCM_COS_THR 0.96 (acc 0.419, merges 6, 175 clusters) against the start's 0.3818.  Block N
 # lost (see the neigh stage: the stage order made its K / COS no-ops, now fixed), RKK_PTS_PER_START was a no-op,
@@ -89,7 +114,14 @@ score_at: psame
 objective: "all_acc - 0.005*merges"
 passes: 2
 min_gain: 0.002
-search_realign: false                             # confirm re-runs the best with the realign steps
+search_realign: true                              # 2026-11-14: was false.  With it false the search plan has
+                   #   NO realign step and FK_SESSION_REALIGN off, so every knob was tuned on a pipeline
+                   #   that never moves the data and then judged on one that re-cuts it between every
+                   #   stage (header).  That is the remaining candidate for three search winners in a row
+                   #   reversing on the full plan -- and it also makes the realign stage below measurable
+                   #   at all.  COST: no step is shared between trials (each trial re-sorts the chunks in
+                   #   its own 1.34 GB workspace), so a pass costs roughly as much as the same number of
+                   #   confirms.  Set back to false to trade faithfulness for throughput.
 set: {}
 start: {FK_SESSION_FEAT_HYBRID: 1, FK_SESSION_HYBRID_SCALE: 2.0, FK_SESSION_HYBRID_PCS: 3,
         FK_SESSION_NEIGH_PASSES: 1}                            # Block N ON, so its K / COS are searched for real (below)
@@ -99,6 +131,36 @@ start: {FK_SESSION_FEAT_HYBRID: 1, FK_SESSION_HYBRID_SCALE: 2.0, FK_SESSION_HYBR
 plans:
   best: base                                      # fiber-kit-best.yaml's plan (psame-chunk already dropped)
 stages:
+  - name: realign                                 # the alignment the later stages inherit (each value re-sorts)
+    knobs:
+      # FIRST: every later stage reads the .res/.spk this step commits.  INERT unless search_realign is
+      # true -- the search plan has no fiber-realign step, and fiber-session's own rkk cluster<->realign
+      # loop uses fl.align_xcorr (ref=median, iters 6, maxlag 6) and reads NONE of these knobs, so with
+      # search_realign: false every value here is a no-op.  That is the FEAT_HYBRID / NEIGH_PASSES trap
+      # a third time; it is why the two arrived together.
+      FK_REALIGN_MIN_SCORE:        [0.10, 0.70, 0.40]          # leave a spike where it is if its best
+                                                              #   normalised xcorr to its cluster's template
+                                                              #   is below this.  0.10 = the curator's
+                                                              #   Klusters setting (the start), 0.70 =
+                                                              #   Klusters' factory default.  First-pass
+                                                              #   scores on 0316 g6: a 0.70 gate freezes
+                                                              #   61.3 % of foreign-seated spikes against
+                                                              #   34.4 % of own-unit ones -- and it is
+                                                              #   SELECTIVE for the low-amplitude broad
+                                                              #   units: of unit 2's 177 foreign-seated
+                                                              #   spikes (amp 1782, half-width 9, 0.06 Hz)
+                                                              #   89.3 % score below 0.70, as do 88.0 % of
+                                                              #   unit 34's and 96.5 % of unit 6's, while
+                                                              #   the high-amplitude units' foreign spikes
+                                                              #   mostly clear it (unit 13 9.5 %, unit 10
+                                                              #   12.4 %) -- those are real collisions.
+                                                              #   Whether freezing a third of the own-unit
+                                                              #   spikes costs more than protecting the
+                                                              #   broad ones is exactly what this measures.
+      FK_REALIGN_MAX_SHIFT:        ["", 4]                     # "" = Klusters' max(1, (peak-1)//2) = 10 per
+                                                              #   pass, cumulative across passes (|21|
+                                                              #   observed, half the 42-sample window); 4
+                                                              #   keeps it to detection jitter
   - name: neigh                                   # Block N and the small-group retry (each value re-sorts)
     knobs:
       # `start:` has PASSES 1, so these two are searched with Block N ON and PASSES comes LAST -- the same
