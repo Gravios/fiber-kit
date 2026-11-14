@@ -101,9 +101,17 @@ def load_config(path):
         return _yaml_load(fh) or {}
 
 
+# Knobs that change only HOW LONG a stage takes, never what it writes, so they must stay out of the step
+# hash: adding one to a profile would otherwise invalidate every cached artifact and force a full re-sort.
+# FK_REFINE_CHUNK_JOBS, FK_CONSENSUS_WORKERS / _JOBS, FK_MANIFOLD_JOBS and the other older *_JOBS keys are
+# deliberately NOT listed: they are already inside existing hashes, and removing them would invalidate the
+# same artifacts this set exists to protect.  They are 1 in every shipped profile.
+_PERF_KNOBS = frozenset({"FK_SESSION_JOBS", "FK_SESSION_JOB_MEM_GIB"})
+
+
 def stage_params(stage, cfg):
-    """The FK_* keys (sorted) that `stage` reads, plus the global keys."""
-    keys = [k for k in cfg if isinstance(k, str) and k.startswith("FK_")]
+    """The FK_* keys (sorted) that `stage` reads, plus the global keys, minus the performance-only knobs."""
+    keys = [k for k in cfg if isinstance(k, str) and k.startswith("FK_") and k not in _PERF_KNOBS]
     if stage == "fiber-session":
         own = [k for k in keys if not k.startswith(_FOREIGN_TO_SESSION)]
     else:

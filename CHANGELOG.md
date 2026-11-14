@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.20] — fiber-bench: performance knobs out of the step hash; fiber-tune: `confirm --extra`
+- `stage_params` drops a `_PERF_KNOBS` set (`FK_SESSION_JOBS`, `FK_SESSION_JOB_MEM_GIB`) from the step hash:
+  without this, 0.67.17/0.67.19 adding those keys to the profiles would have invalidated every cached
+  artifact and forced a full re-sort.  The older `*_JOBS` / `*_WORKERS` keys are deliberately not listed --
+  they are already inside existing hashes, and removing them would invalidate the same artifacts this set
+  exists to protect.
+- `fiber-tune confirm --extra JSON` (repeatable) confirms configurations the search did not rank highest, and
+  `--top 0` runs exactly the start plus those.  A re-baseline of several configurations under one code version
+  needs this: ranking by the search objective cannot reach a row that the search scored badly (the plain
+  control) or scored as a no-op (`DIP_ALPHA 0.02`, whose effect only appears across many chunks).
+- `plans/tune/hybrid-search.yaml`: `start:` no longer carries `RKK_MIN 35` / `XCM_COS_THR 0.96` -- the full-plan
+  confirm rejected them (0.3701 / acc 0.420 / ARI 0.280 / 10 merges against the start's 0.3892 / 0.429 / 0.378
+  / 8) -- and `chunks` widens from `2-3` to `2-7`, because three search winners in a row have now reversed on
+  the full plan: on two chunks anchor-link, xcorr-merge and psame have almost no cross-chunk work to get wrong.
+
 ## [0.67.19] — fiber-session: `FK_SESSION_JOB_MEM_GIB` bounds `--jobs 0`, because memory is the real limit
 - Measured while testing 0.67.17: a chunk worker holds 2.5-3.4 GiB of anon RSS for a 50k-spike 12-min g6
   chunk with the hybrid stack (its chunk's windows, their realigned copies and the per-cluster work in

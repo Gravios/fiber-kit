@@ -730,13 +730,18 @@ class Tuner:
                     os.remove(q)                           # the copies; stage outputs stay for inspection
         return rec
 
-    def confirm(self, top=3, chunks=None, keep_ws=False):
+    def confirm(self, top=3, chunks=None, keep_ws=False, extra_configs=()):
+        """Run the full plan on the start, the `top` best search configurations, and any `extra_configs`
+        (each a dict of overrides, `{}` meaning the base profile untouched).  `top=0` with `extra_configs`
+        confirms exactly the configurations named: what a three-way re-baseline needs, since the rows the
+        search ranks highest are not necessarily the ones in question."""
         ok = [r for r in self.latest_search() if r.get("ok") and self._current(r)]
-        if not ok:
+        if not ok and not extra_configs:
             raise SystemExit(f"{_LP} · no search trials of the latest run in {self.dir} match this truth and "
-                             f"these session files: run `fiber-tune search` first")
+                             f"these session files: run `fiber-tune search` first, or name configurations "
+                             f"with --extra")
         older = len([r for r in self.trials if r.get("phase") == "search" and r.get("ok")]) - len(ok)
-        if older:
+        if older and top:
             self.log(f"{_LP} · confirm: ranking the latest search run only ({len(ok)} trial(s)); {older} earlier "
                      f"row(s) left out -- other inputs, other truth or an earlier run of the same spec")
         seen, picks = set(), []
@@ -745,6 +750,10 @@ class Tuner:
             key = json.dumps(r["overrides"], sort_keys=True)
             if key not in seen and (len(picks) < top + (1 if start else 0)):
                 seen.add(key); picks.append(r)
+        for ov in extra_configs:                       # named on the command line, ranked by nothing
+            key = json.dumps(ov, sort_keys=True)
+            if key not in seen:
+                seen.add(key); picks.append(dict(overrides=ov, hash=None, objective=float("nan")))
         if chunks is not None:
             self.spec = dict(self.spec, chunks="" if chunks in ("", "all") else str(chunks))
         self.log(f"{_LP} · confirm: {len(picks)} configuration(s), full plan up to {self.score_at!r} (realign "
@@ -756,7 +765,8 @@ class Tuner:
                                 extra=dict(search_hash=r["hash"], search_objective=r["objective"]))
             out.append(rec)
             if rec.get("ok"):
-                self.log(f"    {self._line(rec)}  (search: {r['objective']:.4f})")
+                sv = r["objective"]
+                self.log(f"    {self._line(rec)}" + (f"  (search: {sv:.4f})" if sv == sv else "  (--extra)"))
         self.write_tables()
         return out
 
@@ -855,7 +865,13 @@ def main(argv=None):
     p.add_argument("--dry-run", action="store_true", help="print the stage commands of the first trial only")
     p = sub.add_parser("confirm", help="re-run the best configurations with the full plan in private workspaces")
     common(p)
-    p.add_argument("--top", type=int, default=3, help="best distinct configurations to confirm (plus the start)")
+    p.add_argument("--top", type=int, default=3, help="best distinct configurations to confirm (plus the start); "
+                                                      "0 = only the start and any --extra")
+    p.add_argument("--extra", action="append", default=[], metavar="JSON",
+                   help="a configuration to confirm whatever the search ranked, as a JSON object of overrides "
+                        "({} = the base profile untouched).  Repeatable.  With --top 0 the confirm runs exactly "
+                        "the start plus these -- what a re-baseline of several configurations under one code "
+                        "version needs.")
     p.add_argument("--chunks", default=None, help="chunks for the confirmation (default: the spec's; 'all' = every chunk)")
     p.add_argument("--keep-ws", action="store_true", help="keep the workspaces' copied .res/.spk/.fet files")
     p.add_argument("--dry-run", action="store_true", help="print the stage commands only")
@@ -872,7 +888,13 @@ def main(argv=None):
             t.evaluate(dict(spec["start"]), note="dry-run"); return 0
         t.search(a.max_trials)
     elif a.cmd == "confirm":
-        t.confirm(a.top, a.chunks, a.keep_ws)
+        try:
+            extra = [json.loads(x) for x in (a.extra or [])]
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"{_LP} · --extra is not JSON: {e}")
+        if any(not isinstance(x, dict) for x in extra):
+            raise SystemExit(f"{_LP} · --extra takes JSON objects of overrides, e.g. '{{\"FK_SESSION_DIP_ALPHA\": 0.02}}'")
+        t.confirm(a.top, a.chunks, a.keep_ws, extra_configs=extra)
     elif a.cmd == "rescore":
         t.rescore()
         with open(os.path.join(t.dir, "summary.md")) as fh:

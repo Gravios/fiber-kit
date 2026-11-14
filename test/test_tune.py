@@ -237,5 +237,24 @@ tn.trials = [dict(phase="search", note="start", ok=True, objective=0.5, truth=T.
 L = tn.latest_search()
 check("latest_search is the last run only", [r["objective"] for r in L] == [0.3, 0.35])
 
+# confirm's pick list: the start, the top-N by objective, then any --extra configurations verbatim
+tn.spec = {"chunks": "2-3"}; tn.score_at = "psame"; tn.log = lambda *a, **k: None
+tn._line = lambda rec: ""
+picks = []
+tn.run_full = lambda ov, phase, note=None, keep_ws=False, extra=None: (picks.append(ov), dict(ok=False))[1]
+tn.write_tables = lambda: None
+tn.trials = [dict(phase="search", note="start", ok=True, objective=0.3, truth=T.id, overrides={}, hash="a"),
+             dict(phase="search", note="", ok=True, objective=0.5, truth=T.id,
+                  overrides={"FK_SESSION_RKK_MIN": 35}, hash="b"),
+             dict(phase="search", note="", ok=True, objective=0.4, truth=T.id,
+                  overrides={"FK_SESSION_DIP_ALPHA": 0.02}, hash="c")]
+tn.confirm(top=1)
+check("confirm takes the start and the best", picks == [{}, {"FK_SESSION_RKK_MIN": 35}], str(picks))
+picks.clear(); tn.confirm(top=0, extra_configs=[{"FK_SESSION_FEAT_HYBRID": 0}, {"FK_SESSION_DIP_ALPHA": 0.02}])
+check("--top 0 with --extra confirms exactly the start plus those",
+      picks == [{}, {"FK_SESSION_FEAT_HYBRID": 0}, {"FK_SESSION_DIP_ALPHA": 0.02}], str(picks))
+picks.clear(); tn.confirm(top=1, extra_configs=[{"FK_SESSION_RKK_MIN": 35}])
+check("an --extra that repeats a pick is not run twice", picks == [{}, {"FK_SESSION_RKK_MIN": 35}], str(picks))
+
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

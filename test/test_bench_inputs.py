@@ -46,5 +46,17 @@ with tempfile.TemporaryDirectory() as d:
     with open(os.path.join(d, "rat.clu.stderiv_C5.6.fiber_session_0123abcd"), "wb") as fh:
         fh.write(b"z" * 99)
     check(fb.build_run(cfg, upto="fiber-xcorr-merge", inputs=fb.input_fingerprint(base, 6))[2] == h1, "nor does a stage output")
+# FK_SESSION_JOBS / JOB_MEM_GIB change only the runtime, so a profile may gain or change them without
+# invalidating a single cached artifact.
+_st = {"stage": "fiber-session", "params": {}}
+_cf = {"FK_SESSION_DIP_ALPHA": 0.03, "FK_SESSION_FEAT_HYBRID": 1}
+_h0 = fb.step_hash(_st, _cf, [])
+check(all(fb.step_hash(_st, {**_cf, **x}, []) == _h0
+          for x in ({"FK_SESSION_JOBS": 0}, {"FK_SESSION_JOBS": 64, "FK_SESSION_JOB_MEM_GIB": 6.0})),
+      "the performance knobs are outside the step hash")
+check(fb.step_hash(_st, {**_cf, "FK_SESSION_DIP_ALPHA": 0.02}, []) != _h0, "a real knob still moves the hash")
+check("FK_SESSION_JOBS" not in fb.stage_params("fiber-session", {**_cf, "FK_SESSION_JOBS": 8}),
+      "stage_params drops the performance knobs")
+
 print(f"test_bench_inputs: {'PASS' if not fails else 'FAIL'} ({fails} failed)")
 sys.exit(1 if fails else 0)

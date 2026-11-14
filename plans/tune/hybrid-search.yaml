@@ -80,7 +80,11 @@ truth:
   # core: {k: 3.0, min_n: 50}                     # score each unit on the spikes that fit its own template (docs/bench.md,
                                                   #   "Truth core"): a contaminated interneuron no longer caps a cleaner sort's
                                                   #   accuracy nor charges a merge to the cluster that isolates its contamination
-chunks: "2-3"                                     # the exp-search chunks, so rows compare with that table
+chunks: "2-7"      # 2026-11-14: widened from 2-3.  Three search winners in a row have reversed on the
+                   #   full plan (the hybrid, then RKK_MIN 35 + XCM_COS_THR 0.96) because anchor-link,
+                   #   xcorr-merge and psame have almost no cross-chunk work on two chunks.  Six chunks
+                   #   cost little more wall-clock with FK_SESSION_JOBS 0 (six workers instead of two).
+                   #   (2-3 were the exp-search chunks; rows no longer compare with that table.)
 score_at: psame
 objective: "all_acc - 0.005*merges"
 passes: 2
@@ -88,8 +92,10 @@ min_gain: 0.002
 search_realign: false                             # confirm re-runs the best with the realign steps
 set: {}
 start: {FK_SESSION_FEAT_HYBRID: 1, FK_SESSION_HYBRID_SCALE: 2.0, FK_SESSION_HYBRID_PCS: 3,
-        FK_SESSION_RKK_MIN: 35, FK_XCM_COS_THR: 0.96,          # the 2026-11-14 search's winners (+0.0033, +0.0038)
         FK_SESSION_NEIGH_PASSES: 1}                            # Block N ON, so its K / COS are searched for real (below)
+# NOT in start: the 2026-11-14 search's own winners, RKK_MIN 35 (+0.0033) and XCM_COS_THR 0.96 (+0.0038).
+# The confirm rejected them on the full plan: 0.3701 / acc 0.420 / ARI 0.280 / 10 merges against the start's
+# 0.3892 / 0.429 / 0.378 / 8.  Both raise the cluster size on two chunks and over-merge across twelve.
 plans:
   best: base                                      # fiber-kit-best.yaml's plan (psame-chunk already dropped)
 stages:
