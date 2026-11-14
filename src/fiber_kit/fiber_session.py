@@ -1582,19 +1582,59 @@ def _final_ids(pre, post):
 _CTX = {}
 
 
-def _resolve_jobs(jobs, ntasks):
+def _mem_available_gib():
+    """MemAvailable of this process's cgroup, else the host's, in GiB; None when it cannot be read."""
+    for p, key in (("/sys/fs/cgroup/memory.max", None), ("/proc/meminfo", "MemAvailable:")):
+        try:
+            with open(p) as fh:
+                txt = fh.read()
+        except OSError:
+            continue
+        if key is None:                               # cgroup v2 limit, minus what this cgroup already uses
+            if txt.strip() == "max":
+                continue
+            try:
+                lim = int(txt.strip())
+                with open("/sys/fs/cgroup/memory.current") as fh:
+                    return max(0.0, (lim - int(fh.read().strip())) / 2 ** 30)
+            except (OSError, ValueError):
+                continue
+        for line in txt.splitlines():
+            if line.startswith(key):
+                return int(line.split()[1]) / 2 ** 20  # kB -> GiB
+    return None
+
+
+def _resolve_jobs(jobs, ntasks, mem_per_job_gib=0.0, log=None):
     """Worker processes for the chunk loop: `jobs` as given, or with jobs <= 0 one per chunk bounded by the
     CPUs this process may actually use (sched_getaffinity, not cpu_count -- a cgroup or taskset quota is the
     number that matters on a shared box).  Never more than one worker per chunk: chunks are the unit of
-    parallelism here, so a bigger --jobs on a 25-chunk session just idles the rest of the machine."""
+    parallelism here, so a bigger --jobs on a 25-chunk session just idles the rest of the machine.
+
+    With `mem_per_job_gib` > 0 the auto mode is also bounded by MemAvailable / that estimate.  A worker holds
+    its chunk's windows, their realigned copies and the per-cluster work in flight: MEASURED 2.5-3.4 GiB of
+    anon RSS for a 50k-spike 12-min g6 chunk with the hybrid stack (two of them OOM-killed a 7 GiB cgroup),
+    so the default estimate is deliberately generous.  An explicit --jobs N is never reduced: the caller who
+    names a number owns the memory."""
     jobs = int(jobs)
+    ntasks = int(ntasks)
     if jobs <= 0:
         try:
             ncpu = len(os.sched_getaffinity(0))
         except AttributeError:                        # not Linux
             ncpu = os.cpu_count() or 1
-        jobs = min(int(ntasks), ncpu)
-    return max(1, min(jobs, int(ntasks)) if ntasks else 1)
+        jobs = min(ntasks, ncpu)
+        if mem_per_job_gib and mem_per_job_gib > 0:
+            avail = _mem_available_gib()
+            if avail is not None:
+                cap = max(1, int(avail // float(mem_per_job_gib)))
+                if cap < jobs:
+                    if log:
+                        log(f"--jobs auto: {jobs} -> {cap} (MemAvailable {avail:.0f} GiB / "
+                            f"{mem_per_job_gib:g} GiB per worker; raise FK_SESSION_JOB_MEM_GIB, or pass "
+                            f"--jobs N to override the memory cap)")
+                    jobs = cap
+    return max(1, min(jobs, ntasks) if ntasks else 1)
 
 
 def _limit_worker_threads():
@@ -2076,6 +2116,11 @@ def add_core_arguments(ap):
                          "is BLAS inside one chunk, whose matrices are far too small to repay a 64-way "
                          "fork/join barrier -- and NumPy's bundled OpenBLAS has a build-time thread ceiling "
                          "(openblas_get_config() prints MAX_THREADS) that no fiber-kit setting can raise.")
+    ap.add_argument("--job-mem-gib", type=float,
+                    default=float(os.environ.get("FK_SESSION_JOB_MEM_GIB") or _gc.get("FK_SESSION_JOB_MEM_GIB") or 4.0),
+                    help="FK_SESSION_JOB_MEM_GIB. resident memory to budget per chunk worker, GiB, used only "
+                         "to bound --jobs 0 (0 = no memory cap).  Measured 2.5-3.4 GiB for a 50k-spike 12-min "
+                         "g6 chunk with the hybrid stack; an explicit --jobs N is never reduced.")
     ap.add_argument("--feature-align", dest="feature_align", choices=["xcorr", "centroid", "off"], default=None,
                     help="feature-building alignment: xcorr (default), centroid (pure, no refine -- "
                          "adds the trough-position-vs-asymmetry structure to the clustering/linking "
@@ -2609,7 +2654,7 @@ def main():
             shed_total[k] = shed_total.get(k, 0) + int(v)
         print(f"{IND}chunk {c+1:>3}/{nchunks}   {ncore_of[c]:>7,} core   \u2192  {len(geoms):>4} fibers")
 
-    jobs = _resolve_jobs(a.jobs, len(tasks))
+    jobs = _resolve_jobs(a.jobs, len(tasks), a.job_mem_gib, log)
     if jobs == 1 or len(tasks) <= 1:
         log(f"clustering {len(tasks)} chunks")
         _init_chunk_worker(cfg)                       # serial: identical to the former inline loop

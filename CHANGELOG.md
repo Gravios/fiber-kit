@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.19] — fiber-session: `FK_SESSION_JOB_MEM_GIB` bounds `--jobs 0`, because memory is the real limit
+- Measured while testing 0.67.17: a chunk worker holds 2.5-3.4 GiB of anon RSS for a 50k-spike 12-min g6
+  chunk with the hybrid stack (its chunk's windows, their realigned copies and the per-cluster work in
+  flight), and TWO of them OOM-killed a 7 GiB cgroup.  0.67.17's "~1-2 GiB per worker" was an estimate from
+  array sizes and it was too low; one worker per chunk on a 25-chunk session wants ~100 GiB, not ~40.
+- `--jobs 0` is now additionally bounded by `MemAvailable // FK_SESSION_JOB_MEM_GIB` (default 4.0 GiB; 0
+  disables the cap), read from this process's cgroup v2 limit when there is one, else `/proc/meminfo`, and the
+  log says when the memory cap bit.  An explicit `--jobs N` is never reduced: whoever names a number owns the
+  memory.  Scale the budget with the chunk's spike count, not the core count.
+- `test_session_jobs.py` covers the memory cap, the 0 = no-cap case, unknown memory, and the one-worker floor.
+
 ## [0.67.18] — fiber-consensus: the pool is capped by the task count and reused across a neighbourhood's bursts
 - `_pool(workers, ntasks)` never starts more workers than there are tasks.  Before, `workers 0` meant
   `cpu_count()` for every burst, so on a 64-core box the watershed's 5 maps started 64 processes to keep 5

@@ -208,6 +208,12 @@ FK_SESSION_WHITEN_SOURCE: auto   # auto | nst | fil | spk.  Noise whitener sourc
                                  #   .spk's waveform space (needs the .fil); spk = per-chunk pre-peak samples of the
                                  #   snippets (no file needed; any variant, incl. fiber-adlp's, which no transform names).
                                  #   auto = nst when the .spk's .nst exists, else fil.
+FK_SESSION_JOB_MEM_GIB:  4.0      # 4.0 | 2-8 (GiB) or 0.  Resident memory budgeted per chunk worker, used ONLY to
+                                  #   bound FK_SESSION_JOBS 0 (MemAvailable // this); 0 = no memory cap, and an
+                                  #   explicit worker count is never reduced.  Measured: 2.5-3.4 GiB of anon RSS
+                                  #   for a 50k-spike 12-min g6 chunk with the hybrid stack -- two such workers
+                                  #   OOM-killed a 7 GiB cgroup, so one worker per chunk on a 25-chunk session
+                                  #   wants ~100 GiB.  Scale with the chunk's spike count, not the core count.
 FK_SESSION_JOBS:         1        # 1 | 0 or 1-N (processes).  fiber-session's worker processes over chunks:
                                   #   1 = serial (the default and what every cached sort was made with), 0 = one
                                   #   per chunk capped at the CPUs the process may use, N = that many.  This is
@@ -217,9 +223,9 @@ FK_SESSION_JOBS:         1        # 1 | 0 or 1-N (processes).  fiber-session's w
                                   #   OpenBLAS has a build-time thread ceiling, commonly 64, that no fiber-kit
                                   #   setting raises (openblas_get_config() prints MAX_THREADS).  Pool workers pin
                                   #   BLAS to one thread each (one unit of parallelism per process), so N workers
-                                  #   use N threads, not N*N.  Budget ~1-2 GiB resident per worker (a 70k-spike
-                                  #   18-min chunk of g6 is 0.22 GiB per float64 window array, several in flight;
-                                  #   the .spk/.res memmaps are shared page cache).  CAVEAT: the serial path
+                                  #   use N threads, not N*N.  Memory is the real limit: see
+                                  #   FK_SESSION_JOB_MEM_GIB above (measured 2.5-3.4 GiB per worker), which bounds
+                                  #   the 0 = auto mode.  CAVEAT: the serial path
                                   #   leaves BLAS threaded and the pool pins it, so >1 can differ from 1 in the
                                   #   last bits of a reduction; it is a speed knob, not a tuning one, and it is
                                   #   NOT part of fiber-bench's step hash.

@@ -23,3 +23,16 @@ def test_never_zero_or_negative():
     assert fs._resolve_jobs(0, 1) == 1
     assert fs._resolve_jobs(0, 0) == 1
     assert fs._resolve_jobs(99, 0) == 1
+
+
+def test_auto_is_bounded_by_available_memory(monkeypatch):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: set(range(64)), raising=False)
+    monkeypatch.setattr(fs, "_mem_available_gib", lambda: 40.0)
+    assert fs._resolve_jobs(0, 25, 4.0) == 10          # 40 GiB / 4 per worker
+    assert fs._resolve_jobs(0, 25, 0.0) == 25          # 0 = no memory cap
+    assert fs._resolve_jobs(0, 25, 1.0) == 25          # the chunk count still caps it
+    assert fs._resolve_jobs(25, 25, 4.0) == 25         # an explicit --jobs is never reduced
+    monkeypatch.setattr(fs, "_mem_available_gib", lambda: None)
+    assert fs._resolve_jobs(0, 25, 4.0) == 25          # unknown memory -> no cap
+    monkeypatch.setattr(fs, "_mem_available_gib", lambda: 1.0)
+    assert fs._resolve_jobs(0, 25, 4.0) == 1           # never below one worker
