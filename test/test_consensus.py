@@ -110,7 +110,10 @@ def test_exp_yaml_wires_every_consensus_knob():
     with open(os.path.join(HERE, "..", "src", "fiber_kit", "fiber-kit-exp.yaml")) as fh:
         d = yaml.safe_load(fh)
     keys = {k for k in d if k.startswith("FK_CONSENSUS_")}
-    assert keys - {"FK_CONSENSUS_SIGNAL"} == set(fc._KNOBS), keys ^ set(fc._KNOBS)
+    # SIGNAL is the stage's positional --signal; TSNE_BACKEND has its own add_argument (a choices= flag,
+    # so it cannot live in the scalar _KNOBS table) and is read with _knob_default like the rest.
+    assert keys - {"FK_CONSENSUS_SIGNAL", "FK_CONSENSUS_TSNE_BACKEND"} == set(fc._KNOBS), \
+        keys ^ set(fc._KNOBS)
     for k, (_, typ, _fb, _) in fc._KNOBS.items():         # the yaml value parses as the knob's type
         if d[k] not in (None, ""):
             typ(d[k])

@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.18] — fiber-consensus: the pool is capped by the task count and reused across a neighbourhood's bursts
+- `_pool(workers, ntasks)` never starts more workers than there are tasks.  Before, `workers 0` meant
+  `cpu_count()` for every burst, so on a 64-core box the watershed's 5 maps started 64 processes to keep 5
+  busy and the 40 consensus runs started 24 workers that got no work at all.
+- One pool per `consensus_neighbourhood` call, shared by the runs and the watershed maps, instead of one
+  created and torn down per burst: a spawned worker costs ~1-1.5 s of interpreter start and imports, and that
+  was paid twice per neighbourhood.  `tsne_runs` / `watershed_categories` take an optional `pool=` and shut
+  down only a pool they created themselves.
+- CORRECTION to 0.67.14's note: there is NO numba JIT penalty on the first embedding in a process.  openTSNE's
+  gradient code is compiled Cython; measured, three successive fits in one process took 19.5 / 17.2 / 18.2 s.
+  The per-worker cost is the ~1-1.5 s of imports, not ~20 s of compilation.
+- Occupancy note for a many-core box: a burst cannot use more cores than it has tasks, so with
+  `FK_CONSENSUS_WORKERS 0` the run burst tops out at `FK_CONSENSUS_RUNS` cores (40 of 64) and the watershed at
+  `FK_CONSENSUS_WS_RUNS` (5 of 64).  Raising both to the core count costs no wall clock -- 64 runs on 64
+  workers take as long as 40 -- and makes the consensus and the basins more stable.  Neighbourhoods are still
+  processed one at a time, and the serial sections between the bursts (envelope fit, Louvain, the quarantine
+  rules) are single-threaded: cross-neighbourhood parallelism is the remaining structural win.
+- `test_consensus.py`: the knob-coverage test allows `FK_CONSENSUS_TSNE_BACKEND` (a `choices=` flag, so it
+  cannot live in the scalar `_KNOBS` table); it had been failing in script mode since 0.67.15.
+
 ## [0.67.17] — fiber-session: `FK_SESSION_JOBS`, and `--jobs 0` = one worker per chunk
 - `--jobs` now resolves from `FK_SESSION_JOBS` (env > global config > 1), so the chunk pool is reachable from
   a profile instead of only from a hand-typed command line -- nothing in fiber-bench or fiber-tune ever passed

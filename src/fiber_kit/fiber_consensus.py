@@ -116,7 +116,9 @@ def _tsne_fit(X, perplexity, seed, n_jobs=1, exaggeration=None, ee_iter=250, n_i
     runs at 70 %): 90 % of a run is gradient iterations (affinities 2 s of 25 s), and 125 / 250 gives
     the same consensus -- communities at ARI 0.73 to the full schedule's, which is where two full
     schedules land against each other too (BH vs FFT gradients: 0.74; the first 20 of 40 runs: 0.71) --
-    at 1.8x the speed."""
+    at 1.8x the speed.  (openTSNE's gradient code is compiled Cython, NOT numba: three successive fits in
+    one process took 19.5 / 17.2 / 18.2 s, so there is no first-call compile to amortise and a worker's
+    startup cost is just ~1-1.5 s of imports.)"""
     if _tsne_backend() == "cuml":
         return _tsne_fit_cuml(X, perplexity, seed, exaggeration, ee_iter, n_iter)
     from openTSNE import TSNE
@@ -134,13 +136,21 @@ def _one_run(X, s, perplexity, seed, k, n_jobs, ee_iter=250, n_iter=500):
     return s, s[ii[:, 1:]], Y.astype(np.float32)
 
 
-def _pool(workers):
+def _pool(workers, ntasks=None):
     """Process pool for independent t-SNE fits, or None for serial.  workers: 1 = serial, 0 = every
-    core.  spawn, not fork: openTSNE / BLAS threads in the parent make a forked child unsafe."""
+    core.  spawn, not fork: openTSNE / BLAS threads in the parent make a forked child unsafe.
+
+    `ntasks` caps the worker count: a spawned worker costs ~1-1.5 s of interpreter start and imports
+    (measured; there is no JIT penalty -- openTSNE's gradient code is compiled Cython, and three
+    successive fits in one process took 19.5 / 17.2 / 18.2 s), so starting 64 of them for the 5
+    watershed maps pays 64 startups to keep 5 busy.  The embeddings are drawn up front, so the result
+    does not depend on the worker count."""
     import multiprocessing as mp
     import os as _os
     from concurrent.futures import ProcessPoolExecutor
     w = (_os.cpu_count() or 1) if not workers else int(workers)
+    if ntasks:
+        w = min(w, int(ntasks))
     if w <= 1:
         return None
     for v in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "NUMBA_NUM_THREADS"):
@@ -149,7 +159,7 @@ def _pool(workers):
 
 
 def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log=None, workers=1,
-              ee_iter=250, n_iter=500):
+              ee_iter=250, n_iter=500, pool=None):
     """R subsampled t-SNE embeddings of X (n, d).  Returns a list of (subset indices (m,),
     2-D kNN of each subset spike as GLOBAL indices (m, k), 2-D coordinates (m, 2)).
     workers > 1 (0 = every core) runs the embeddings in parallel processes; the subsets and seeds are
@@ -162,7 +172,11 @@ def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log
     gpu = _tsne_backend() == "cuml"
     if not gpu:
         _need("openTSNE")
-    pool = None if gpu else _pool(workers)             # one device: the GPU runs go serially in-process
+    own = pool is None                                 # one device: the GPU runs go serially in-process
+    if gpu:
+        pool = None
+    elif own:
+        pool = _pool(workers, len(args))
     if pool is None:
         out = []
         for r, a_ in enumerate(args):
@@ -170,13 +184,16 @@ def tsne_runs(X, runs=40, frac=0.7, k=15, perplexity=30.0, seed=0, n_jobs=1, log
             if log and (r + 1) % 10 == 0:
                 log(f"  t-SNE run {r + 1}/{runs}")
         return out
-    with pool:
+    try:
         futs = [pool.submit(_one_run, *a_) for a_ in args]
         out = []
         for r, f in enumerate(futs):
             out.append(f.result())
             if log and (r + 1) % 10 == 0:
                 log(f"  t-SNE run {r + 1}/{runs}")
+    finally:
+        if own:
+            pool.shutdown()
     return out
 
 
@@ -335,7 +352,8 @@ def categorise_basins(basin, cell, quarantine, island_frac=0.5):
 
 
 def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0.5, perplexity=30.0,
-                         seed=0, n_jobs=1, maps=None, log=None, workers=1, ee_iter=250, n_iter=500):
+                         seed=0, n_jobs=1, maps=None, log=None, workers=1, ee_iter=250, n_iter=500,
+                         pool=None):
     """Watershed category of every quarantined spike, voted over `runs` full t-SNE maps of X (or the
     given `maps`, a list of (n, 2) arrays).  Returns dict(category: (n,) str, '' where not quarantined;
     dest: (n,) destination cell (own cell for own-rim, the basin owner for other-cell, -1 otherwise);
@@ -346,13 +364,20 @@ def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0
         if not gpu:
             _need("openTSNE")
         X = np.asarray(X, float)
-        pool = None if gpu else _pool(workers)
+        own = pool is None
+        if gpu:
+            pool = None
+        elif own:
+            pool = _pool(workers, int(runs))
         if pool is None:
             maps = [_tsne_fit(X, perplexity, seed + 500 + r, n_jobs, None, ee_iter, n_iter) for r in range(runs)]
         else:
-            with pool:
+            try:
                 maps = list(pool.map(_tsne_fit, *zip(*[(X, perplexity, seed + 500 + r, n_jobs, None, ee_iter, n_iter)
                                                        for r in range(runs)])))
+            finally:
+                if own:
+                    pool.shutdown()
         if log:
             log(f"  {runs} watershed maps")
     qi = np.flatnonzero(q)
@@ -396,59 +421,67 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     idx = np.flatnonzero(np.isin(clu, list(units)))
     X = np.asarray(features, float)[idx]
     X = (X - X.mean(0)) / X.std(0).clip(1e-9)
-    rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log,
-                   workers=workers, ee_iter=ee_iter, n_iter=n_iter)
-    com = coneighbour_communities(rr, idx.size, seed=seed)
-    lab = np.zeros(len(clu), int); lab[idx] = com + 2
-    envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
-                            transform=transform, min_n=20, sr=sr, partners=False, log=lambda s: None)
-    cl = (fe.refractory_cannot_link(res, lab, sorted(envs), sr=sr, refrac_ms=refrac_ms,
-                                    min_exp=refrac_min_exp)[0] if refrac_ms > 0 else None)
-    new, mrows = fe.merge_units(trace, res, lab, envs, noise, theta=theta_cell, pre=pre, post=post,
-                                margin=margin, maxlag=maxlag, transform=transform, sr=sr, cannot_link=cl,
-                                log=lambda s: None)
-    nref = sum(1 for r_ in mrows if str(r_.get("reason", "")).startswith("refractory"))
-    cell = new[idx]
-    # the envelope on the CELLS: collision flags, bump scores and residual energy relative to them
-    lab_c = np.zeros(len(clu), int); lab_c[idx] = cell
-    cenvs, table, _ = fe.run(trace, res, lab_c, pre=pre, post=post, margin=margin, maxlag=maxlag,
-                             transform=transform, min_n=20, sr=sr, log=lambda s: None)
-    resid = np.full(idx.size, np.nan); bump = np.full(idx.size, np.nan)
-    where = {int(i): j for j, i in enumerate(idx)}
-    for e in cenvs.values():
-        jj = np.array([where[int(i)] for i in e.meta["idx"]])
-        resid[jj] = e.resid_energy; bump[jj] = e.score
-    resid_z = _robust_z(resid, cell); bump_z = _robust_z(bump, cell)
-    sw = switch_rate(rr, cell)
-    per = perimeter_rank(rr, cell)
-    pos = {int(i): j for j, i in enumerate(table["idx"])}
-    take = lambda key, default: np.array([table[key][pos[i]] if i in pos else default for i in idx])  # noqa: E731
-    flagged = take("flagged", 0).astype(bool); explained = take("explained", 0).astype(bool)
-    partner = take("partner", -1).astype(int); shift = take("shift", 0).astype(int)
-    crit = dict(switch=sw >= switch_thr, collision=flagged,
-                perimeter=(np.nan_to_num(per) >= perim_thr)
-                & ((np.nan_to_num(resid_z) >= dev_z) | (np.nan_to_num(bump_z) >= dev_z)))
-    q = np.zeros(idx.size, bool)
-    for r_ in rules:
-        q |= crit[r_]
-    reason = [",".join(r_ for r_ in rules if crit[r_][j]) for j in range(idx.size)]
-    log(f"neighbourhood {sorted(units)}: {idx.size} spikes -> {np.unique(com).size} communities -> "
-        f"{np.unique(cell).size} cells ({nref} refractory vetoes); quarantined {q.sum()} ({q.mean():.1%}: "
-        + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
-    if ws_runs > 0 and q.any():
-        ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
-                                  perplexity=perplexity, seed=seed, n_jobs=n_jobs, workers=workers,
-                                  ee_iter=ee_iter, n_iter=n_iter)
-        cat = ws["category"]
-        log("  categories: " + ", ".join(f"{(cat == c).sum()} {c}" for c in WS_CATEGORIES)
-            + f"; median vote agreement {np.nanmedian(ws['agree']):.2f}")
-    else:
-        ws = dict(category=np.full(idx.size, "", dtype=object), dest=np.full(idx.size, -1, int),
-                  agree=np.full(idx.size, np.nan))
-    return dict(idx=idx, community=com, cell=cell, switch=sw, perimeter=per, resid_z=resid_z, bump_z=bump_z,
-                flagged=flagged, explained=explained, partner=partner, shift=shift, quarantine=q,
-                reason=reason, criteria=crit, category=ws["category"], ws_dest=ws["dest"], ws_agree=ws["agree"])
-
+    # ONE pool for this neighbourhood's two parallel bursts (the runs and, later, the watershed maps):
+    # a spawned worker costs ~1-1.5 s of interpreter start and imports, and creating a pool per burst paid
+    # that twice per neighbourhood.  Sized by the bigger burst, capped inside _pool by each burst's task
+    # count -- so the watershed's `ws_runs` maps no longer start a second pool at all.
+    _pool_ = _pool(workers, max(int(runs), int(ws_runs) if "island" in rules or "perimeter" in rules else 0))
+    try:
+        rr = tsne_runs(X, runs=runs, frac=frac, k=k, perplexity=perplexity, seed=seed, n_jobs=n_jobs, log=log,
+                       workers=workers, ee_iter=ee_iter, n_iter=n_iter, pool=_pool_)
+        com = coneighbour_communities(rr, idx.size, seed=seed)
+        lab = np.zeros(len(clu), int); lab[idx] = com + 2
+        envs, _, noise = fe.run(trace, res, lab, pre=pre, post=post, margin=margin, maxlag=maxlag,
+                                transform=transform, min_n=20, sr=sr, partners=False, log=lambda s: None)
+        cl = (fe.refractory_cannot_link(res, lab, sorted(envs), sr=sr, refrac_ms=refrac_ms,
+                                        min_exp=refrac_min_exp)[0] if refrac_ms > 0 else None)
+        new, mrows = fe.merge_units(trace, res, lab, envs, noise, theta=theta_cell, pre=pre, post=post,
+                                    margin=margin, maxlag=maxlag, transform=transform, sr=sr, cannot_link=cl,
+                                    log=lambda s: None)
+        nref = sum(1 for r_ in mrows if str(r_.get("reason", "")).startswith("refractory"))
+        cell = new[idx]
+        # the envelope on the CELLS: collision flags, bump scores and residual energy relative to them
+        lab_c = np.zeros(len(clu), int); lab_c[idx] = cell
+        cenvs, table, _ = fe.run(trace, res, lab_c, pre=pre, post=post, margin=margin, maxlag=maxlag,
+                                 transform=transform, min_n=20, sr=sr, log=lambda s: None)
+        resid = np.full(idx.size, np.nan); bump = np.full(idx.size, np.nan)
+        where = {int(i): j for j, i in enumerate(idx)}
+        for e in cenvs.values():
+            jj = np.array([where[int(i)] for i in e.meta["idx"]])
+            resid[jj] = e.resid_energy; bump[jj] = e.score
+        resid_z = _robust_z(resid, cell); bump_z = _robust_z(bump, cell)
+        sw = switch_rate(rr, cell)
+        per = perimeter_rank(rr, cell)
+        pos = {int(i): j for j, i in enumerate(table["idx"])}
+        take = lambda key, default: np.array([table[key][pos[i]] if i in pos else default for i in idx])  # noqa: E731
+        flagged = take("flagged", 0).astype(bool); explained = take("explained", 0).astype(bool)
+        partner = take("partner", -1).astype(int); shift = take("shift", 0).astype(int)
+        crit = dict(switch=sw >= switch_thr, collision=flagged,
+                    perimeter=(np.nan_to_num(per) >= perim_thr)
+                    & ((np.nan_to_num(resid_z) >= dev_z) | (np.nan_to_num(bump_z) >= dev_z)))
+        q = np.zeros(idx.size, bool)
+        for r_ in rules:
+            q |= crit[r_]
+        reason = [",".join(r_ for r_ in rules if crit[r_][j]) for j in range(idx.size)]
+        log(f"neighbourhood {sorted(units)}: {idx.size} spikes -> {np.unique(com).size} communities -> "
+            f"{np.unique(cell).size} cells ({nref} refractory vetoes); quarantined {q.sum()} ({q.mean():.1%}: "
+            + ", ".join(f"{crit[r_].sum()} {r_}" for r_ in rules) + ")")
+        if ws_runs > 0 and q.any():
+            ws = watershed_categories(X, cell, q, runs=ws_runs, grid=ws_grid, island_frac=ws_island,
+                                      perplexity=perplexity, seed=seed, n_jobs=n_jobs, workers=workers,
+                                      ee_iter=ee_iter, n_iter=n_iter, pool=_pool_)
+            cat = ws["category"]
+            log("  categories: " + ", ".join(f"{(cat == c).sum()} {c}" for c in WS_CATEGORIES)
+                + f"; median vote agreement {np.nanmedian(ws['agree']):.2f}")
+        else:
+            ws = dict(category=np.full(idx.size, "", dtype=object), dest=np.full(idx.size, -1, int),
+                      agree=np.full(idx.size, np.nan))
+        return dict(idx=idx, community=com, cell=cell, switch=sw, perimeter=per, resid_z=resid_z, bump_z=bump_z,
+                    flagged=flagged, explained=explained, partner=partner, shift=shift, quarantine=q,
+                    reason=reason, criteria=crit, category=ws["category"], ws_dest=ws["dest"], ws_agree=ws["agree"])
+    finally:
+        if _pool_ is not None:
+            _pool_.shutdown()
 
 def cell_ids(cell, unit, quarantine, nxt, keep=True):
     """Output id of every consensus cell.  keep: largest cell first, each takes the input unit holding
