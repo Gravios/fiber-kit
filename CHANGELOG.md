@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.16] — hybrid-search spec: Block N on by default in `start:`, its PASSES last; the 2026-11-14 findings
+- The 2026-11-14 search on 0316 g6 chunks 2-3 (45 trials, 2 passes, core truth) put `FK_SESSION_NEIGH_PASSES`
+  FIRST in the `neigh` stage; 1 and 2 both lost to the start, so coordinate ascent kept 0 and then searched
+  `NEIGH_K` and `NEIGH_COS` with Block N OFF -- five trials, five no-ops.  The stage now mirrors the hybrid
+  stage: `start:` carries `NEIGH_PASSES: 1` and the stage tries K / COS / the retry first, PASSES last.
+- `start:` also carries the run's winners, `FK_SESSION_RKK_MIN: 35` and `FK_XCM_COS_THR: 0.96` (best 0.3889 vs
+  the start's 0.3818; acc 0.419, merges 6, 175 clusters), and the `session` stage gains `FK_SESSION_COARSE_DR`
+  [0.09, 0.06].
+- Recorded in the spec header: `RKK_PTS_PER_START` is a no-op on 0316 chunks 2-3 (CHUNK_MIN 18, so no group is
+  small enough for the CEM's start to die out); `FK_PSAME_ALIGN_PAIRS` 0 == 1 at search scale but lifts the
+  full plan's plain sort (int_acc 0.363 -> 0.451, ARI 0.345 -> 0.400, merges 9 -> 7); `COARSE_DR` 0.06 trades
+  all_acc 0.415 -> 0.390 and pyr_acc 0.419 -> 0.387 for int_acc 0.278 -> 0.504, ARI 0.433 -> 0.521 and
+  completeness 0.622 -> 0.714 -- the largest effect in the table, which this objective rejects.
+
 ## [0.67.15] — fiber-consensus: cuML (GPU) t-SNE backend, `FK_CONSENSUS_TSNE_BACKEND`
 - `auto` (default) uses RAPIDS cuML's t-SNE when `cuml` and a CUDA device import, else openTSNE; `opentsne`
   / `cuml` force one.  Parameters mapped one to one (FFT gradients, random init, early exaggeration 12 for
