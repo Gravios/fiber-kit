@@ -4,6 +4,45 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.24] — psame: a scale-residual veto on over-merges (prototype, off by default)
+- New `fiber_psame.scale_residual(Ta, Tb, shift)`: roll A's template onto B's, fit ONE amplitude scalar,
+  return the residual energy relative to B's.  Distance attenuates a waveform without changing its shape,
+  so one cell's energy bands differ by a scalar while two cells at matched amplitude do not.
+- `psame_merge(..., scale_veto=False, scale_thr=0.20, scale_min_n=100)` refuses a merge the P(same) score
+  has already accepted when the dimmer cluster's template is not a scaled copy of the brighter one.  Every
+  merge record now carries `sresid`, so the statistic is visible even with the veto off.  Knobs
+  `FK_PSAME_SCALE_VETO` (0), `FK_PSAME_SCALE_THR` (0.20), `FK_PSAME_SCALE_MIN_N` (100), and the CLI flags
+  they generate.  **Off by default — it changes merge decisions.**
+- MEASURED on g6 (`analysis/scale-residual-veto-g6-0316/`), extending the 0312 band result
+  (`analysis/adaptation-energy-band-residuals-g6-0312/`) to the tuning session and then to the pipeline's
+  own clusters:
+
+  | pair set | same unit 10/50/90 % | different 10/50/90 % | AUC |
+  |---|---|---|---|
+  | 0316 truth templates, own energy quartiles vs other cells | 0.002 / 0.011 / 0.054 | 0.076 / 0.197 / 0.329 | **0.968** |
+  | pipeline pre-psame clusters, purity >= 0.85, n >= 100 | 0.013 / 0.046 / 0.137 | 0.093 / 0.215 / 0.323 | **0.943** |
+  | pipeline clusters, n >= 30, any purity | 0.018 / 0.071 / 0.278 | 0.080 / 0.201 / 0.323 | 0.764 |
+
+  `theta 0.20` keeps 93 % of correct merges and refuses 71 % of over-merges; `0.15` keeps 90 % and
+  refuses 90 %; `0.33` keeps 100 % and refuses 8 %.
+- Two design questions the measurement settled against the obvious choice.  A channel mask HURTS (AUC
+  0.928 at 0.25 x peak, 0.914 at 0.50, against 0.943 for the full template).  And projecting out the
+  cell's amplitude-shape direction `S` — CellModel's adaptation term, and the natural way to tell an
+  adapted tail from a more distant cell — hurts too (0.928 -> 0.913 at the same mask): adaptation here is
+  a <= 10 % amplitude effect (amp(ISI<10 ms)/amp(ISI>100 ms) 0.90–1.01 across six GT cells) and its
+  direction is nearly shared between the look-alike pairs (|cos| 0.95 for units 5 and 8).  Scale
+  invariance is the whole statistic; the adaptation signature contributes nothing.
+- The guard matters more than the threshold: the AUC falls 0.943 -> 0.764 once small or contaminated
+  fragments are included, because such a mean is not a single cell's template.  Hence `scale_min_n`.
+- Known blind spot, asserted in the tests: two genuinely different cells whose templates really are
+  scaled copies of one another pass the veto.  On 0316 those are the ~10 % it misses — pairs at roll-cos
+  >= 0.99 with residuals of 0.004–0.016 and amplitude ratios up to 4.9 (truth 10 vs 9, 10 vs 4, 4 vs 21).
+  Shape cannot separate them; that is the de-collision/timing problem, where the earlier timing evidence
+  also failed (AUC 0.40–0.60).
+- Adding three `FK_PSAME_*` knobs changes `stage_params("fiber-psame-merge")`, so the cached `exp_psame`
+  artifacts rehash and that one step re-runs (1 of 10) on the next bench run; the upstream steps are
+  untouched.
+
 ## [0.67.23] — regenerate plans/TEMPLATE-all-stages.yaml (it had lagged four patches of new flags)
 - `tools/gen_stages_doc.py --check --template` had been failing since 0.67.11: the template documents the
   argument parsers, and four patches added fiber-session / psame flags without regenerating it —

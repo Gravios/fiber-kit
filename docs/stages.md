@@ -800,6 +800,9 @@ Positional: `session`, `elec`
 | `--min-chunk-n` | `30` | FK_PSAME_MIN_CHUNK_N (default 30) |
 | `--max-gap` | `1` | FK_PSAME_MAX_GAP (default 1) |
 | `--align-pairs` | `1` | FK_PSAME_ALIGN_PAIRS (default 1) |
+| `--scale-veto` | `0` | FK_PSAME_SCALE_VETO (default 0) |
+| `--scale-thr` | `0.2` | FK_PSAME_SCALE_THR (default 0.2) |
+| `--scale-min-n` | `100` | FK_PSAME_SCALE_MIN_N (default 100) |
 ### `fiber-relink`
 
 Geometry-aware re-bundling/re-linking of a .fibers run (no re-run needed).

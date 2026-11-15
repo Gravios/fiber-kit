@@ -1580,6 +1580,25 @@ FK_PSAME_ALIGN_PAIRS:    1        # 1 | 0/1.  1 = the dbic evidence is scored wi
 #  amp_dom | time: a feature space Klusters lists under "Space"), .mft.<method>.<g>.<tag>.tsv.
 #  g6 0312 unit 5 (311k spikes): 14-19% of spikes carry a field at SNR >= 4 (noise 0.6%), 16 s serial.
 # ============================================================================
+FK_PSAME_SCALE_VETO:     0        # 0 | 0/1.  1 = refuse a merge the P(same) score already accepted when the
+                                  #   dimmer cluster's template is NOT a scaled copy of the brighter one.  Distance
+                                  #   attenuates a waveform without changing its shape, so one cell's energy bands
+                                  #   differ by a scalar while two cells at matched amplitude do not.  MEASURED on
+                                  #   g6 0316 (analysis/scale-residual-veto-g6-0316/): AUC 0.968 on truth templates
+                                  #   (own energy quartiles 0.002/0.011/0.054 at 10/50/90 % vs 0.076/0.197/0.329 for
+                                  #   different cells), and AUC 0.943 on the pipeline's own pre-psame clusters at
+                                  #   purity >= 0.85 / n >= 100.  Full template, no channel mask (a mask costs
+                                  #   0.015-0.029 AUC) and no projection of the adaptation direction S (costs 0.015:
+                                  #   adaptation is a <= 10 % amplitude effect whose direction is nearly shared
+                                  #   between look-alike pairs, |cos| 0.95 for units 5 and 8, so it separates
+                                  #   nothing).  Off by default: it changes merge decisions.
+FK_PSAME_SCALE_THR:      0.20     # 0.20 | 0.10-0.50.  Relative residual above which the veto fires.  0.20 keeps 93 %
+                                  #   of correct merges and refuses 71 % of over-merges; 0.15 keeps 90 % and refuses
+                                  #   90 %; 0.33 keeps 100 % and refuses only 8 %.
+FK_PSAME_SCALE_MIN_N:    100      # 100.  Both clusters need this many spikes before the veto is trusted.  Across ALL
+                                  #   fragments at n >= 30 and any purity the AUC falls to 0.764 -- a small or
+                                  #   contaminated fragment's mean is not a single cell's template -- so the guard
+                                  #   matters more than the threshold.
 FK_MANIFOLD_WINDOW_MIN:  20       # 20 (min).  Sliding window length; each window fits its own template.
 FK_MANIFOLD_STEP_MIN:    5        # 5 (min).  Window step; each spike takes the nearest window's fit.
 FK_MANIFOLD_MIN_N:       2000     # 2000.  Spikes a unit needs to be examined (--units overrides).

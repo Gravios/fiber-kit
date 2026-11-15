@@ -16,6 +16,11 @@
   5. Chunk modes: --per-chunk never merges clusters of different chunks (and still merges within one);
      --chunk-aware joins A's time halves across ADJACENT chunks (scored on those chunks), keeps the
      look-alike B apart, and with max-gap 0 refuses halves that share no chunk.
+  6. The scale-residual veto: scale_residual is zero for a scaled copy and for a scaled, SHIFTED copy,
+     and large for another cell at matched amplitude; the veto leaves a correct merge alone, refuses a
+     different-shaped cluster that an all-accepting score would swallow, never fires below scale_min_n,
+     and reports the residual on every merge.  Its documented blind spot is also asserted: cell B here
+     is a different cell whose template really is a scaled copy of A's, so no shape test can refuse it.
 Exits nonzero on failure.
 """
 import os
@@ -132,5 +137,47 @@ check("chunk-aware: the merge is scored across the adjacent chunks", any(m.get("
 check("chunk-aware: B stays apart from A", not set(np.unique(new_ca[lab == 1])) & set(np.unique(new_ca[lab == 0])))
 new_g0, _ = ps.psame_merge(spk, times, clu, chunk_of=chunk, min_chunk_n=30, max_gap=0, **kw)
 check("chunk-aware, max-gap 0: halves with no shared chunk are not merged", len(np.unique(new_g0[lab == 0])) == 2)
+# ── the scale-residual veto (0.67.24) ──────────────────────────────────────
+# Distance attenuates a waveform without changing its shape, so a cell's energy bands differ by a
+# scalar while two cells at matched amplitude do not.  Measured AUC 0.943 on g6 0316's own pre-psame
+# clusters at purity >= 0.85 / n >= 100 (analysis/scale-residual-veto-g6-0316/).
+r_scaled = ps.scale_residual(TA, 0.4 * TA)[0]
+r_rolled = ps.scale_residual(TA, 0.4 * np.roll(TA, 2, axis=0))[0]
+r_other = ps.scale_residual(TA, TC * (abs(TA).max() / abs(TC).max()))[0]
+check("scale_residual: a scaled copy leaves no residual", r_scaled < 1e-9, f"{r_scaled:.2e}")
+check("scale_residual: roll-invariant (a scaled, shifted copy too)", r_rolled < 1e-9, f"{r_rolled:.2e}")
+check("scale_residual: a different cell at matched amplitude does not scale onto it",
+      r_other > 0.5, f"{r_other:.3f}")
+
+vkw = dict(theta=0.5, cannot_link=0.3, knn=3, cos_floor=0.5, min_n=50, w_rc=0.0, w_dbic=4.0,
+           bias=0.0, log=lambda *_: None)
+new_v, m_v = ps.psame_merge(spk, times, clu, scale_veto=True, scale_thr=0.20, scale_min_n=100, **vkw)
+check("veto does not block a correct merge: A's fragments still join",
+      len(np.unique(new_v[lab == 0])) == 1, str(m_v))
+check("the pair's scale residual is reported on every merge",
+      all("sresid" in m for m in m_v) and all(m["sresid"] == m["sresid"] for m in m_v), str(m_v))
+
+# force the score to accept everything, so only the veto can refuse: p = sigmoid(bias) ~ 1 for all pairs
+akw = dict(theta=0.5, cannot_link=0.3, knn=3, cos_floor=0.0, min_n=50, w_rc=0.0, w_dbic=0.0,
+           bias=10.0, log=lambda *_: None)
+new_all, _ = ps.psame_merge(spk, times, clu, **akw)
+new_veto, m_veto = ps.psame_merge(spk, times, clu, scale_veto=True, scale_thr=0.20, scale_min_n=100, **akw)
+check("without the veto an all-accepting score swallows C into A",
+      set(np.unique(new_all[lab == 2])) & set(np.unique(new_all[lab == 0])) != set(),
+      str(sorted(np.unique(new_all))))
+check("the veto refuses it: C's template is not a scaled copy of A's",
+      not set(np.unique(new_veto[lab == 2])) & set(np.unique(new_veto[lab == 0])),
+      str(sorted(np.unique(new_veto))))
+new_guard, _ = ps.psame_merge(spk, times, clu, scale_veto=True, scale_thr=0.20,
+                              scale_min_n=10 ** 6, **akw)
+check("scale_min_n guards it: below the count the veto never fires",
+      set(np.unique(new_guard[lab == 2])) & set(np.unique(new_guard[lab == 0])) != set(),
+      str(sorted(np.unique(new_guard))))
+# B is A's AVERAGE waveform: a genuinely different cell that IS a scaled copy, so the veto cannot see
+# it -- the documented limitation (the 10 % of over-merges it misses are exactly these).
+rb = ps.scale_residual(spk[clu == 2].mean(0), spk[clu == 4].mean(0))[0]
+check("documented limitation: a look-alike cell that really is a scaled copy slips the veto",
+      rb < 0.20, f"{rb:.3f}")
+
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

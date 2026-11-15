@@ -102,6 +102,9 @@ _KNOBS = {
     "FK_PSAME_MIN_CHUNK_N": ("min_chunk_n", int, 30),
     "FK_PSAME_MAX_GAP": ("max_gap", int, 1),
     "FK_PSAME_ALIGN_PAIRS": ("align_pairs", int, 1),   # 1: dbic on B's windows rolled by the pair's roll-cos shift (shape evidence, realign-invariant); 0: raw windows (pre-0.67.11)
+    "FK_PSAME_SCALE_VETO": ("scale_veto", int, 0),     # 1: refuse an accepted merge whose dimmer template is NOT a scaled copy of the brighter one (scale_residual)
+    "FK_PSAME_SCALE_THR": ("scale_thr", float, 0.20),  # relative residual above which the veto fires
+    "FK_PSAME_SCALE_MIN_N": ("scale_min_n", int, 100), # both clusters need this many spikes before the veto is trusted
 }
 
 
@@ -208,10 +211,55 @@ def project(spk, idx, mu, V, roll=0):
 
 
 # ── the merge ───────────────────────────────────────────────────────────────
+def scale_residual(Ta, Tb, shift=4):
+    """Is B's template a dimmer copy of A's?  Roll A onto B over +-shift, fit ONE amplitude scalar, and
+    return the residual energy relative to B's: (resid, lag, scale).
+
+    Distance attenuates a waveform without changing its shape, so one cell's energy bands differ by a
+    scalar; two different cells at matched amplitude do not.  MEASURED on g6 (2026-11-15,
+    analysis/scale-residual-veto-g6-0316/): on 0316 truth units, a unit's own energy quartiles score
+    0.002/0.011/0.054 (10/50/90 %) against 0.076/0.197/0.329 for different cells at roll-cos >= 0.80,
+    AUC 0.968 -- the 0312 band result (analysis/adaptation-energy-band-residuals-g6-0312/) reproduced on
+    the tuning session.  On the pipeline's OWN pre-psame clusters at purity >= 0.85 and n >= 100, AUC
+    0.943: theta 0.20 keeps 93 % of correct merges while refusing 71 % of over-merges, and theta 0.15
+    keeps 90 % while refusing 90 %.
+
+    Two things the measurement settled.  A channel mask HURTS (AUC 0.928 at 0.25 x peak, 0.914 at 0.50,
+    against 0.943 for the full template), so none is applied.  And projecting out the cell's
+    amplitude-shape direction S -- the adaptation term of CellModel, the obvious candidate for telling an
+    adapted tail from a more distant cell -- hurts too (0.928 -> 0.913 at the same mask): adaptation here
+    is a <= 10 % amplitude effect (amp(ISI<10ms)/amp(ISI>100ms) 0.90-1.01 over six GT cells) and its
+    direction is nearly shared between the look-alike pairs (|cos| 0.95 for units 5 and 8), so it carries
+    no separating power.  Scale-invariance is the whole statistic.
+
+    The guard matters more than the threshold: across ALL fragments at n >= 30 and any purity the AUC
+    falls to 0.764, because a small or contaminated fragment's mean is not a single cell's template.
+    Hence scale_min_n in psame_merge."""
+    a = np.asarray(Ta, float); b = np.asarray(Tb, float)
+    nb = float((b * b).sum()) or 1e-12
+    ar_i = np.arange(a.shape[0])
+    best = (float("inf"), 0, 0.0)
+    for L in range(-int(shift), int(shift) + 1):
+        ar = a[(ar_i + L) % a.shape[0]]
+        den = float((ar * ar).sum())
+        if den <= 0:
+            continue
+        sc = float((b * ar).sum()) / den
+        r = float(((b - sc * ar) ** 2).sum()) / nb
+        if r < best[0]:
+            best = (r, L, sc)
+    return best
+
+
+def _amp(Tm):
+    Tm = np.asarray(Tm, float)
+    return float((Tm.max(0) - Tm.min(0)).max())
+
+
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
                 w_rc=22.2143, w_dbic=0.6144, bias=-17.773, geo_term=None, w_geo=0.0, cap=None, rng=None,
                 group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print, keyed=True,
-                align_pairs=True):
+                align_pairs=True, scale_veto=False, scale_thr=0.20, scale_min_n=100):
     """Sequential P(same) merge.  spk: (N, nsamp, nchan) memmap of the scoring variant; times (s) per spike;
     clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups'
     raw templates.
@@ -223,7 +271,12 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
     leaves behind -- read as two cells to the union model: on g6 0316 (2026-11-13) the same xcm output
     scored 0.397 after the plan's realign-3 and 0.440 on the un-realigned windows (hybrid sort), with
     units 9/10/14/15 and the big interneuron flipping between merged and not, and plain sorts flipped
-    other units.  Returns (new clu, list of accepted merges as dicts)."""
+    other units.
+    scale_veto: refuse a merge the score already accepted when the dimmer cluster's template is not a
+    SCALED copy of the brighter one (scale_residual > scale_thr), and only when both clusters hold at
+    least scale_min_n spikes -- below that a fragment's mean is not a cell's template and the statistic
+    loses most of its power (AUC 0.943 -> 0.764).  Off by default: it changes merge decisions.
+    Returns (new clu, list of accepted merges as dicts)."""
     rng = rng or np.random.default_rng(0)
     clu = np.asarray(clu).astype(np.int64).copy()
     mu, V = pca_basis(spk, rng=rng)
@@ -286,7 +339,9 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
                 d = dbic_pair(cmod[a][ka], cmod[b][kb], cuse[b][kb], s_); how = "adjacent"
         z = geo_term(members[a], members[b]) if geo_term is not None else 0.0
         p = 1.0 / (1.0 + np.exp(-(bias + w_rc * rc + w_dbic * d + w_geo * z)))
-        return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how)
+        hi, lo = (a, b) if _amp(mean[a]) >= _amp(mean[b]) else (b, a)
+        sr = scale_residual(mean[hi], mean[lo], shift)[0]
+        return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how, sresid=sr)
 
     members = {u: {u} for u in ids}
     cand = {}
@@ -301,14 +356,24 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
         return all(p0.get((min(x, y), max(x, y)), 1.0) >= cannot_link for x in members[a] for y in members[b])
 
     merges = []
+    nveto = 0
     log(f"{_LP} · {len(ids)} clusters >= {min_n} spikes, {len(cand)} candidate pairs "
-        f"(roll-cos >= {cos_floor}, {knn} nearest)")
+        f"(roll-cos >= {cos_floor}, {knn} nearest)"
+        + (f"; scale veto at residual > {scale_thr} for pairs >= {scale_min_n} spikes" if scale_veto else ""))
     while cand:
         (a, b), (p, terms) = max(cand.items(), key=lambda kv: kv[1][0])
         if p < theta:
             break
         if not allowed(a, b):
             del cand[(a, b)]; continue
+        if scale_veto:
+            na, nb_ = int(np.count_nonzero(clu == a)), int(np.count_nonzero(clu == b))
+            sr = terms.get("sresid", float("nan"))
+            if min(na, nb_) >= scale_min_n and sr == sr and sr > scale_thr:
+                nveto += 1
+                log(f"{_LP} ·   scale veto {a}+{b}: p {p:.3f} but residual {sr:.3f} > {scale_thr} "
+                    f"(n {na}/{nb_}) -- the dimmer template is not a scaled copy")
+                del cand[(a, b)]; continue
         clu[clu == b] = a; ids.remove(b); members[a] |= members.pop(b)
         merges.append(dict(into=a, merged=b, p=p, **terms))
         for d_ in (mean, model, muse, cmod, cmean, cn, cuse):
@@ -317,6 +382,8 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
         cand = {k: v for k, v in cand.items() if a not in k and b not in k}
         for v in neighbours(a):
             k = (min(a, v), max(a, v)); cand[k] = score(*k)
+    if scale_veto:
+        log(f"{_LP} · scale veto refused {nveto} merge(s) the score had accepted")
     return clu, merges
 
 
@@ -407,12 +474,14 @@ def main():
         print(f"{_LP} · chunk-aware: pairs scored inside shared {a.chunk_min:g}-min chunks "
               f"(>= {a.min_chunk_n} spikes each), else across chunks <= {a.max_gap} apart")
     print(f"{_LP} · {base} elec {a.elec} | {var} .spk | theta {a.theta} cannot-link {a.cannot_link}"
-          + (" | + shared geometry" if a.geo else "") + (" | dbic on pair-aligned windows" if a.align_pairs else ""))
+          + (" | + shared geometry" if a.geo else "") + (" | dbic on pair-aligned windows" if a.align_pairs else "")
+          + (f" | scale veto > {a.scale_thr:g} (n >= {a.scale_min_n})" if a.scale_veto else ""))
     new, merges = psame_merge(spk, res / float(sr), clu, theta=a.theta, cannot_link=a.cannot_link, knn=a.knn,
                               cos_floor=a.cos_floor, min_n=a.min_n, shift=a.shift, w_rc=w_rc, w_dbic=w_dbic,
                               bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng, keyed=bool(a.sample_keyed),
                               group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap,
-                              align_pairs=bool(a.align_pairs))
+                              align_pairs=bool(a.align_pairs), scale_veto=bool(a.scale_veto),
+                              scale_thr=a.scale_thr, scale_min_n=a.scale_min_n)
     nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=a.out_tag)
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
     print(f"{_LP} · {len(merges)} merges ({n_in} -> {n_out} clusters); wrote "
