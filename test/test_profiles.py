@@ -55,9 +55,15 @@ def main():
         names = re.findall(r"^(FK_[A-Z0-9_]+):", fh.read(), re.M)
     check(len(names) == len(set(names)), "every knob appears once in best")
     diff = {k: (exp[k], best[k]) for k in ke if exp[k] != best[k]}
-    want = {"FK_SESSION_CFIBER_Q": (0.9, 0.85), "FK_SESSION_INCL_ASSIGN": (0, 1), "FK_SESSION_DIP_ALPHA": (0.02, 0.03),
-            "FK_CONSENSUS_THETA_CELL": (7.0, 5.0), "FK_XCM_COS_THR": (0.96, 0.94)}
-    check(diff == want, f"best differs from exp in exactly the winner's 5 knobs ({diff})")
+    want = {  # round 1 -- fiber-tune exp-search, g6 0316, 2026-11-07 (chunks 2-3, never confirmed at full scale)
+            "FK_SESSION_CFIBER_Q": (0.9, 0.85), "FK_SESSION_INCL_ASSIGN": (0, 1), "FK_SESSION_DIP_ALPHA": (0.02, 0.03),
+            "FK_CONSENSUS_THETA_CELL": (7.0, 5.0), "FK_XCM_COS_THR": (0.96, 0.94),
+              # round 2 -- hybrid-search, 2026-11-15 (chunks 2-7 with the realign in the search; the search
+              # order winner > PASSES 1 > +RKK_MIN 20 > plain reproduced exactly on `confirm --chunks all`)
+            "FK_REALIGN_MIN_SCORE": (0.10, 0.70), "FK_SESSION_FEAT_HYBRID": (0, 1),
+            "FK_SESSION_HYBRID_SCALE": (1.0, 2.0), "FK_SESSION_HYBRID_PCS": (2, 3),
+            "FK_SESSION_NEIGH_COS": (0.7, 0.6), "FK_SESSION_NEIGH_PASSES": (0, 2)}
+    check(diff == want, f"best differs from exp in exactly the winner's {len(want)} knobs ({diff})")
     pe = [s["name"] for s in exp["pipeline"]]; pb = [s["name"] for s in best["pipeline"]]
     check(pb == [n for n in pe if n != "psame-chunk"], f"best's plan is exp's without psame-chunk ({pb})")
     link = next(s for s in best["pipeline"] if s["name"] == "link")

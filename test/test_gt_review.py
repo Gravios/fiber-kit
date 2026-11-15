@@ -143,9 +143,16 @@ def main():
                                 "FK_SESSION_NEIGH_COS", "FK_SESSION_RKK_PTS_PER_START", "FK_SESSION_RKK_STARTS",
                                 "FK_SESSION_RKK_MIN", "FK_SESSION_RKK_REALIGN_ITERS", "FK_PSAME_ALIGN_PAIRS")),
           "hybrid-search.yaml searches Block N, the rkk retry, the rkk effort knobs and the psame pair alignment")
-    check(ft._same(spec["start"].get("FK_SESSION_FEAT_HYBRID"), 1) and ft._same(spec["start"].get("FK_SESSION_HYBRID_SCALE"), 2.0)
-          and ft._same(spec["start"].get("FK_SESSION_HYBRID_PCS"), 3),
-          "hybrid-search.yaml starts from the clean run's winner (hybrid on, scale 2, 3 PCs)")
+    # 0.67.22: the round-2 winner IS the shipped profile, so start: is empty and the profile carries it.
+    prof = fb.load_config(os.path.join(ROOT, "src", "fiber_kit", "fiber-kit-best.yaml"))
+    want = {"FK_REALIGN_MIN_SCORE": 0.70, "FK_SESSION_FEAT_HYBRID": 1, "FK_SESSION_HYBRID_SCALE": 2.0,
+            "FK_SESSION_HYBRID_PCS": 3, "FK_SESSION_NEIGH_COS": 0.6, "FK_SESSION_NEIGH_PASSES": 2}
+    check(not spec["start"] and all(ft._same(prof.get(k), v) for k, v in want.items()),
+          "hybrid-search.yaml starts from the shipped profile (start: {}) and that profile is the "
+          "confirmed round-2 winner: gate 0.70, hybrid on at scale 2 / 3 PCs, Block N cos 0.6 / 2 passes")
+    check(all(ft._same(prof.get(k), v) for k, v in want.items())
+          and not any(k in spec["start"] for k in want),
+          "the winner lives in exactly one place -- the profile, not duplicated into start:")
     check(spec["stages"][0].get("name") == "realign" and spec["stages"][1].get("name") == "neigh"
           and spec["stages"][-1].get("name") == "hybrid"
           and list(spec["stages"][-1]["knobs"]) == ["FK_SESSION_FEAT_HYBRID"],

@@ -524,11 +524,19 @@ FK_REALIGN_KERNEL:       hamming  # hamming | hann | gauss | template | none.  K
 FK_REALIGN_KERNEL_WIDTH: 16       # 16 | 1-.  Half-width in samples of the recording (16 = 0.49 ms at 32,552 Hz; 0 = half the peak
                                   #   position).  +-10 measured slightly tighter than +-16 on 0312; keep the width near the
                                   #   spike's own extent at the session's rate (~10 at 20 kHz).
-FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default) | 0.10 (the curator's Klusters setting, used here).
+FK_REALIGN_MIN_SCORE:    0.10     # 0.70 (Klusters factory default, and the TUNED value in -best) | 0.10 (the
+                                  #   curator's Klusters setting; the exp value here).
                                   #   Klusters --threshold: a spike whose best normalised xcorr is below this is not moved
                                   #   in that pass.  g6 36-47 min, RMS mode: 0.10 moves 30.6 % (stderiv) / 93.6 %
                                   #   (standard) of spikes, mean template correlation 0.618 / 0.707; 0.70 moves 8.6 % /
                                   #   63.4 % at 0.592 / 0.652.  Parity with the compiled Klusters code holds at both.
+                                  #   The gate is LABEL-CONDITIONED: the template is the mean of whatever currently
+                                  #   carries the label, so at 0.10 a mis-assigned spike is rolled onto the foreign
+                                  #   template and the error is written into the window and the .res.  On 0316 g6 a 0.70
+                                  #   gate freezes 61.3 % of foreign-seated spikes against 34.4 % of own-unit ones, and
+                                  #   it is selective for the low-amplitude broad units (89.3 % of unit 2's foreign-
+                                  #   seated spikes score below 0.70, 96.5 % of unit 6's, against 9.5 % for unit 13):
+                                  #   claude/realign-label-conditioning-2026-11-14.md.
 FK_REALIGN_ITERS:        2        # 2.  Klusters --iterations: template / xcorr passes; shifts accumulate across passes.
 FK_REALIGN_MAX_SHIFT:    ""       # "" = Klusters' max(1, (peakSampleIndex-1) // 2) (10 on a 42-sample window) | N.
 FK_REALIGN_PARK_DUPS:    1        # 1 | 0/1.  After the shift, the later spike of every same-unit pair the alignment put on

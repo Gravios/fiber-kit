@@ -4,6 +4,44 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.22] — the round-2 winner is adopted: the realign gate, the hybrid space and Block N
+- **The first search winner here to survive a confirm.**  The 0.67.21 search (chunks 2-7, the realign
+  inside the search) ranked winner > PASSES 1 > +RKK_MIN 20 > plain at 0.3777 / 0.3757 / 0.3752 / 0.3500,
+  and `fiber-tune confirm --chunks all` reproduced that order exactly at **0.4253 / 0.4180 / 0.4068 /
+  0.3724**.  Every earlier round inverted at full scale; the difference is that the search now runs the
+  realign steps it is judged on (`search_realign: true`, 0.67.21).
+- `tools/gen_best_profile.py`: six knobs added to `WINNER`, and `fiber-kit-best.yaml` /
+  `fiber-kit-klusters.yaml` regenerated.  Against the round-1 profile with the hybrid on, at full scale:
+
+  | | obj | acc | int | pyr | ARI | comp | purity | frag80 | merges | pyr-pyr | clusters |
+  |---|---|---|---|---|---|---|---|---|---|---|---|
+  | round 1 + hybrid | 0.3944 | 0.434 | 0.220 | 0.441 | 0.270 | 0.541 | **0.838** | 4.516 | 8 | 2 | 471 |
+  | **round 2 (adopted)** | **0.4253** | **0.450** | **0.485** | **0.449** | **0.423** | **0.651** | 0.816 | **3.600** | **5** | 2 | 500 |
+
+  `FK_REALIGN_MIN_SCORE` 0.10 -> 0.70, `FK_SESSION_FEAT_HYBRID` 0 -> 1, `_HYBRID_SCALE` 1.0 -> 2.0,
+  `_HYBRID_PCS` 2 -> 3, `FK_SESSION_NEIGH_COS` 0.7 -> 0.6, `FK_SESSION_NEIGH_PASSES` 0 -> 2.  Purity is
+  the only axis that gives ground.
+- The gate is the round's largest single move (+0.028 at search scale) and it is the *label-conditioned*
+  realign it tames: at 0.10 a mis-assigned spike is rolled onto the template of whatever cluster holds
+  it, writing the error into the window and the `.res`
+  (`claude/realign-label-conditioning-2026-11-14.md`).
+- `NEIGH_PASSES 2` over 1 was a 0.0073 call on the objective, decided by the per-type columns rather than
+  the merge count: **pyramidal-pyramidal merges 5 -> 2** and frag80 4.433 -> 3.600 at equal pyramidal
+  accuracy (0.451 vs 0.449).  PASSES 1 keeps more interneuron accuracy (0.527 vs 0.485) and a tidier
+  partition (ARI 0.455, completeness 0.679), so a run that cares about the broad high-rate units should
+  set it back.
+- The hybrid's case is settled at full scale and it is the opposite of the 2026-11-14 three-way: with the
+  gate and Block N tuned, plain reaches **pyramidal 0.396** against the hybrid's **0.449**, while winning
+  interneuron accuracy (0.603 vs 0.485), ARI (0.522 vs 0.423) and completeness (0.716 vs 0.651).  Plain
+  is the choice for interneurons and the wrong one for low-amplitude broad pyramidals.
+- `RKK_MIN 20` is rejected again at full scale (0.4068): it cuts 500 clusters to 372 and takes
+  interneuron accuracy 0.485 -> 0.342 with it.
+- `plans/tune/hybrid-search.yaml`: `start: {}` -- the winner is the shipped profile now, so the start row
+  *is* the profile and every stage still has something to try (the gate sees 0.10 / 0.40 against 0.70,
+  neigh sees COS 0.7 / 0.8 and PASSES 1 / 0, the control sees the hybrid off).
+- `fiber-kit-exp.yaml`: the `FK_REALIGN_MIN_SCORE` comment no longer claims 0.10 is "used here" and now
+  records the label-conditioning measurement and which units a 0.70 gate protects.
+
 ## [0.67.21] — tune spec: the search now runs the realign it is judged on, and the alignment gate is searched
 - **The search and the confirm were not running the same pipeline.**  `search-base.yaml` is
   `flag > session > clean > cpos-clean > link > merge > psame` with no `fiber-realign` step, and
