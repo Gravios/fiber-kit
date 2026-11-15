@@ -4,6 +4,14 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.23] — regenerate plans/TEMPLATE-all-stages.yaml (it had lagged four patches of new flags)
+- `tools/gen_stages_doc.py --check --template` had been failing since 0.67.11: the template documents the
+  argument parsers, and four patches added fiber-session / psame flags without regenerating it —
+  `hybrid-gain-fit` and `hybrid-deriv-basis` (0.67.11), `align-pairs` (0.67.12), `neigh-passes` /
+  `neigh-k` / `neigh-cos` / `neigh-seed` (0.67.13), and `jobs` (reworded) with `job-mem-gib` (0.67.17 /
+  0.67.19).  Documentation only: the flags themselves have worked since those patches, and `docs/stages.md`
+  was never out of date.  `test/run_all.py` goes back to green.
+
 ## [0.67.22] — the round-2 winner is adopted: the realign gate, the hybrid space and Block N
 - **The first search winner here to survive a confirm.**  The 0.67.21 search (chunks 2-7, the realign
   inside the search) ranked winner > PASSES 1 > +RKK_MIN 20 > plain at 0.3777 / 0.3757 / 0.3752 / 0.3500,
