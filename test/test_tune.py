@@ -256,5 +256,31 @@ check("--top 0 with --extra confirms exactly the start plus those",
 picks.clear(); tn.confirm(top=1, extra_configs=[{"FK_SESSION_RKK_MIN": 35}])
 check("an --extra that repeats a pick is not run twice", picks == [{}, {"FK_SESSION_RKK_MIN": 35}], str(picks))
 
+# ── cfg_id: the same overrides under a changed profile is NOT the same configuration (0.67.25) ──
+tc = object.__new__(ft.Tuner)
+tc.spec = {"start": {"FK_SESSION_FEAT_HYBRID": 1}, "stages": [
+    {"name": "realign", "knobs": {"FK_REALIGN_MIN_SCORE": [0.10, 0.70]}},
+    {"name": "neigh", "knobs": {"FK_SESSION_NEIGH_PASSES": [1, 2], "session:rkk-dims": [6, 8]}}]}
+check("knob_surface is the start plus every stage's FK_ knobs, step params excluded",
+      tc.knob_surface() == ["FK_REALIGN_MIN_SCORE", "FK_SESSION_FEAT_HYBRID", "FK_SESSION_NEIGH_PASSES"],
+      str(tc.knob_surface()))
+# the exact 2026-11-14/15 case: one override dict, two profiles, two configurations
+old_prof = {"FK_REALIGN_MIN_SCORE": 0.10, "FK_SESSION_NEIGH_COS": 0.7, "FK_SESSION_FEAT_HYBRID": 1,
+            "FK_SESSION_NEIGH_PASSES": 1}
+new_prof = dict(old_prof, FK_REALIGN_MIN_SCORE=0.70, FK_SESSION_NEIGH_COS=0.6)
+id_old, surf_old = tc.cfg_of(old_prof)
+id_new, surf_new = tc.cfg_of(new_prof)
+check("cfg_id separates the same overrides resolved under two profiles", id_old != id_new,
+      f"{id_old} vs {id_new}")
+check("the resolved surface shows WHICH knob moved",
+      surf_old["FK_REALIGN_MIN_SCORE"] == 0.10 and surf_new["FK_REALIGN_MIN_SCORE"] == 0.70,
+      f"{surf_old} vs {surf_new}")
+check("cfg_id is stable for the same resolved config", tc.cfg_of(dict(new_prof))[0] == id_new)
+# the throughput knobs cannot change a result, so they must not change the identity either
+check("cfg_id ignores the perf knobs (fiber-bench _PERF_KNOBS)",
+      tc.cfg_of(dict(new_prof, FK_SESSION_JOBS=8, FK_SESSION_JOB_MEM_GIB=99.0))[0] == id_new)
+check("a knob OFF the surface still changes cfg_id (it digests every FK_ value)",
+      tc.cfg_of(dict(new_prof, FK_XCM_COS_THR=0.5))[0] != id_new)
+
 print("OK (0 failures)" if not fails else f"FAILED ({fails})")
 sys.exit(1 if fails else 0)

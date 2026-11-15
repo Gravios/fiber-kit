@@ -4,6 +4,32 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.25] — stamp each trial with its RESOLVED config: `overrides` alone never identified one
+- `overrides` records only the delta from the profile, so when patch 1084 moved the realign gate, `COS 0.6`
+  and `NEIGH_PASSES 2` into `fiber-kit-best.yaml`, one override dict started meaning two different
+  configurations — and summary.md printed them as one row type and ranked them against each other:
+
+  | override dict | results |
+  |---|---|
+  | `{}` | 0.3671 (0.67.9), 0.3817 (0.67.10), 0.3863 (0.67.12), 0.3863 (0.67.13) |
+  | `{FEAT_HYBRID 1, HYBRID_PCS 3, HYBRID_SCALE 2.0}` | 0.3851, 0.3850, 0.3850, 0.3892 (0.67.10 → .15) |
+  | `… + NEIGH_PASSES 1` | 0.3944 (0.67.21), 0.4180 (0.67.24) |
+
+  `{}` — "the base profile untouched" — is the worst case. **No measurement was wrong**: fiber-bench's step
+  hash distinguished every one of these and nothing was wrongly cached or conflated. Only the label was.
+- `Tuner.cfg_of(cfg_run)` returns `(cfg_id, resolved surface)`. `cfg_id` is a blake2b digest of every `FK_*`
+  value except `fiber_bench._PERF_KNOBS` (throughput knobs cannot change a result, so they must not change
+  the identity); the surface is `Tuner.knob_surface()` — `start` plus every stage's `FK_*` knobs — resolved,
+  which is the human-readable "which knob moved". All six knobs 1084 moved are on that surface.
+- Both record constructors stamp `cfg_id` and `cfg` on every trial. trials.tsv gains `cfg_id`, `fiber_kit`
+  and `cfg` (the resolved surface as JSON); summary.md gains `cfg` (the digest, 8 chars) and `fk` columns.
+- summary.md now **warns** when an override string in the displayed table covers more than one
+  configuration, listing each `cfg_id/version`. Rows written before this release have no `cfg_id`, so they
+  are grouped by `fiber_kit` version instead — which is enough to flag all three cases above. They cannot be
+  backfilled: reconstructing a historical resolved config would need the profile as it was then.
+- Nothing that runs is changed: this is the record and the tables only. No knob added, no step hash touched,
+  so no cached artifact is invalidated.
+
 ## [0.67.24] — psame: a scale-residual veto on over-merges (prototype, off by default)
 - New `fiber_psame.scale_residual(Ta, Tb, shift)`: roll A's template onto B's, fit ONE amplitude scalar,
   return the residual energy relative to B's.  Distance attenuates a waveform without changing its shape,

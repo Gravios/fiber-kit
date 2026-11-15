@@ -81,7 +81,9 @@ records the truth it was scored against: after `truth:` changes, a resumed searc
 (the sorts themselves are re-used through fiber-bench's tags), and the summary shows only trials scored
 against the current truth.
 
-OUTPUT (fk-bench/tune/<name>/): trials.jsonl (every trial: overrides, metrics, objective, phase, truth),
+OUTPUT (fk-bench/tune/<name>/): trials.jsonl (every trial: overrides, metrics, objective, phase, truth,
+cfg_id and the resolved knob surface -- `overrides` is only a delta from the profile, so two rows with the
+same overrides are the same configuration ONLY if their cfg_id matches),
 trials.tsv, best.yaml -- the base config with the best overrides applied and the plan as given (realign
 steps included, no FK_CHUNKS) -- and summary.md.
 """
@@ -529,6 +531,34 @@ class Tuner:
         fp = fb.input_fingerprint(self.base, self.elec)
         return hashlib.blake2b(json.dumps(fp, sort_keys=True).encode(), digest_size=6).hexdigest()
 
+    def knob_surface(self):
+        """The FK_* knobs this spec can move: `start` plus every stage's knob list.  The resolved values of
+        these are a trial's readable identity -- `overrides` alone is NOT, because it is a delta from a
+        profile that changes.  All six knobs patch 1084 moved into fiber-kit-best.yaml are on this surface,
+        so a profile change of that kind shows up here."""
+        ks = {k for k in self.spec.get("start") or {} if isinstance(k, str) and k.startswith("FK_")}
+        for g in self.spec.get("stages") or []:
+            ks |= {k for k in (g.get("knobs") or {}) if isinstance(k, str) and k.startswith("FK_")}
+        return sorted(ks)
+
+    def cfg_of(self, cfg_run):
+        """(cfg_id, resolved surface) for a trial's RESOLVED config.  cfg_id digests every FK_* value except
+        the throughput knobs (fiber-bench's _PERF_KNOBS, which cannot change a result), so two trials with
+        the same cfg_id really are the same configuration however their overrides were spelled.
+
+        Why this is stamped: `overrides` records only the delta from the profile.  When patch 1084 moved the
+        realign gate, COS 0.6 and NEIGH_PASSES 2 into fiber-kit-best.yaml, the SAME override dict
+        {FEAT_HYBRID 1, HYBRID_PCS 3, HYBRID_SCALE 2.0, NEIGH_PASSES 1} meant gate 0.10 / COS 0.7 on
+        2026-11-14 (objective 0.3944) and gate 0.70 / COS 0.6 on 2026-11-15 (0.4180), and the summary printed
+        them as one configuration and ranked them against each other.  `{}` -- "the base profile untouched"
+        -- is the worst case: four rows, three different results.  The step hash always distinguished them,
+        so no measurement was wrong; only the label was."""
+        items = {k: v for k, v in cfg_run.items()
+                 if isinstance(k, str) and k.startswith("FK_") and k not in fb._PERF_KNOBS}
+        cid = hashlib.blake2b(json.dumps(items, sort_keys=True, default=str).encode(),
+                              digest_size=6).hexdigest()
+        return cid, {k: cfg_run.get(k) for k in self.knob_surface()}
+
     def _current(self, r):
         """Whether a recorded trial is comparable to a trial made now: scored against this spec's truth AND
         sorted from the session files on disk now (records without either field predate the check).  A
@@ -591,10 +621,11 @@ class Tuner:
         fb.cmd_run(ns)
         meth = cfg_run.get("FK_REALIGN_VARIANT") or self.method
         path = f"{self.base}.clu.{meth}.{self.elec}.{tag}"
+        cid, csurf = self.cfg_of(cfg_run)
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, hash=h, tag=tag,
                    overrides=overrides, note=note, when=datetime.datetime.now().isoformat(timespec="seconds"),
                    fiber_kit=fb._fk_version(), truth=self.truth.id if getattr(self, "truth", None) else None,
-                   inputs=self._inputs)
+                   inputs=self._inputs, cfg_id=cid, cfg=csurf)
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
         if not os.path.exists(path):
@@ -706,10 +737,12 @@ class Tuner:
                                 keep_going=True, dry_run=self.dry_run, chunks=self.spec["chunks"] or None)
         fb.cmd_run(ns)
         tag = steps[-1]["out_tag"]; meth = cfg_run.get("FK_REALIGN_VARIANT") or self.method
+        cid, csurf = self.cfg_of(cfg_run)
         rec = dict(trial=len([r for r in self.trials if r.get("phase") == phase]) + 1, phase=phase, mode="workspace",
                    hash=h, tag=tag, overrides=dict(overrides), note=note, chunks=self.spec["chunks"], workspace=ws,
                    when=datetime.datetime.now().isoformat(timespec="seconds"), fiber_kit=fb._fk_version(),
-                   truth=self.truth.id if getattr(self, "truth", None) else None, inputs=self._inputs, **(extra or {}))
+                   truth=self.truth.id if getattr(self, "truth", None) else None, inputs=self._inputs,
+                   cfg_id=cid, cfg=csurf, **(extra or {}))
         path = f"{wbase}.clu.{meth}.{self.elec}.{tag}"
         if self.dry_run:
             return dict(rec, ok=False, objective=float("-inf"), metrics={})
@@ -800,6 +833,8 @@ class Tuner:
         for r in self.trials:
             row = dict(phase=r.get("phase"), trial=r.get("trial", ""), hash=r.get("hash"), ok=r.get("ok"),
                        objective=r.get("objective"), overrides=json.dumps(r.get("overrides", {}), sort_keys=True),
+                       cfg_id=r.get("cfg_id") or "", fiber_kit=r.get("fiber_kit") or "",
+                       cfg=json.dumps(r.get("cfg") or {}, sort_keys=True),
                        seconds=r.get("seconds"), note=r.get("note", ""), truth=r.get("truth") or "")
             for k in ("all_acc", "pyr_acc", "int_acc", "all_rec", "all_prec", "all_n80", "all_frag80", "merges",
                       "merges_pyr_pyr", "ari", "purity", "completeness", "unsorted", "n_clusters", "units_scored",
@@ -827,12 +862,29 @@ class Tuner:
             lines[-1:-1] = [f"- search table: the latest `fiber-tune search` run only; {earlier} trial(s) of earlier "
                             "runs of this spec are in trials.tsv"]
         for ph in ("search", "confirm"):
-            R = sorted([r for r in S if r["phase"] == ph], key=lambda r: -r["objective"])[:15]
+            P = [r for r in S if r["phase"] == ph]
+            R = sorted(P, key=lambda r: -r["objective"])[:15]
             if not R:
                 continue
-            lines += [f"## {ph} (best first)", "",
-                      "| objective | acc | ARI | purity | completeness | core prec | link | coverage | clean | merges "
-                      "| clusters | overrides |", "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+            amb = {}                                  # scanned over EVERY current row of this phase, not just
+            for r in P:                               #   the 15 shown -- an affected pair can straddle the cut
+                amb.setdefault(json.dumps(r["overrides"], sort_keys=True), set()).add(
+                    (r.get("cfg_id") or "?", r.get("fiber_kit") or "?"))
+            amb = {k: v for k, v in amb.items() if len(v) > 1}
+            lines += [f"## {ph} (best first)", ""]
+            if amb:
+                lines += [f"> {len(amb)} override string(s) in this phase cover MORE THAN ONE configuration: "
+                          "`overrides` is a delta from the profile, and the profile changed between the runs.  Read "
+                          "the `cfg` column (the resolved-config digest), not the overrides, to tell these rows "
+                          "apart; trials.tsv carries each row's resolved knob surface.  Some of the rows involved "
+                          "may fall below the 15-row cut.  Rows written before 0.67.25 carry no cfg_id and are "
+                          "grouped by fiber-kit version instead."]
+                for k, v in amb.items():
+                    lines.append(f">   `{k}` -> " + ", ".join(f"{c}/{fk}" for c, fk in sorted(v)))
+                lines.append("")
+            lines += ["| objective | acc | ARI | purity | completeness | core prec | link | coverage | clean | merges "
+                      "| clusters | cfg | fk | overrides |",
+                      "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
             def f3(M, k):
                 v = M.get(k)
@@ -842,6 +894,7 @@ class Tuner:
                 lines.append(f"| {r['objective']:.4f} | {f3(M, 'all_acc')} | {f3(M, 'ari')} | {f3(M, 'purity')} | "
                              f"{f3(M, 'completeness')} | {f3(M, 'all_core_prec')} | {f3(M, 'all_link')} | {f3(M, 'all_cov')} | "
                              f"{M.get('all_clean', '-')} | {M.get('merges', '')} | {M.get('n_clusters', '')} | "
+                             f"`{(r.get('cfg_id') or '-')[:8]}` | {r.get('fiber_kit') or '-'} | "
                              f"`{json.dumps(r['overrides'], sort_keys=True)}` |")
             lines.append("")
         with open(os.path.join(self.dir, "summary.md"), "w") as fh:
