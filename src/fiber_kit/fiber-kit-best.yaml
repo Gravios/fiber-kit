@@ -1565,6 +1565,32 @@ FK_PSAME_SCALE_MIN_N:    100      # 100.  Both clusters need this many spikes be
                                   #   fragments at n >= 30 and any purity the AUC falls to 0.764 -- a small or
                                   #   contaminated fragment's mean is not a single cell's template -- so the guard
                                   #   matters more than the threshold.
+FK_PSAME_W_SRESID:       0.0      # 0.0 = off | 20-40.  The scale residual as a SCORE TERM instead of a veto: the
+                                  #   logit loses w * max(0, residual - the pair's own noise floor), so a template that
+                                  #   is not a scaled copy of its partner lowers P(same) continuously.  The VETO cannot
+                                  #   do this -- refusing the top pair just lets the loop take the next-best one, so it
+                                  #   reroutes a merge instead of preventing it, and it has a cliff at SCALE_MIN_N.
+                                  #   Use this instead of SCALE_VETO where split-off low-energy units are at stake.
+FK_PSAME_SRESID_REF:     split    # split | fixed.  What the residual is an EXCESS over.  split = the pair's own noise
+                                  #   floor, from the DIMMER cluster's split-half residual (its spikes in two
+                                  #   interleaved halves, each averaged, one fitted to the other as a scaled copy):
+                                  #   that is what template noise alone produces at that spike count, and it tightens
+                                  #   as a cluster grows instead of sitting at a constant.  MEASURED
+                                  #   (analysis/sresid-reference/, synthetic 32x8 template, noise sd 15): the
+                                  #   different-cell excess beats the same-cell excess by 500-25000x above 100 spikes,
+                                  #   74x at 50 and 13x at 20 -- the regime where SCALE_MIN_N switches the veto off
+                                  #   entirely.  fixed = use SCALE_THR, the pre-0.67.28 constant.
+FK_PSAME_SRESID_REF_K:   1.0      # 1.0 | 1.0-1.3.  Multiplier on that floor.  The closed form runs 2-5 % optimistic
+                                  #   above 200 averaged spikes and ~17 % at 60-100, where the mean is itself a quarter
+                                  #   noise and the first-order expansion gives out; raise it to be more forgiving.
+FK_PSAME_SRESID_REF_MAX: 0.0      # 0.0 = off | 0.1-0.3.  Refuse a merge whose NOISE FLOOR alone exceeds this: at that
+                                  #   spike count the shape test cannot tell the two templates apart, and over-merging
+                                  #   is the irreversible direction.  Unlike the shape veto this does not reroute --
+                                  #   the floor belongs to the dimmer cluster, so a cluster refused against one partner
+                                  #   is refused against all.  It also catches a CONTAMINATED cluster, whose own halves
+                                  #   disagree and whose floor is therefore high.
+FK_PSAME_SRESID_MIN_HALF: 8       # 8.  Spikes per half before a split-half floor is trusted; below it the floor is NaN
+                                  #   and the term abstains (no penalty, no refusal).
 FK_MANIFOLD_WINDOW_MIN:  20       # 20 (min).  Sliding window length; each window fits its own template.
 FK_MANIFOLD_STEP_MIN:    5        # 5 (min).  Window step; each spike takes the nearest window's fit.
 FK_MANIFOLD_MIN_N:       2000     # 2000.  Spikes a unit needs to be examined (--units overrides).

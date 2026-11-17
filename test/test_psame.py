@@ -160,7 +160,7 @@ check("the pair's scale residual is reported on every merge",
 # force the score to accept everything, so only the veto can refuse: p = sigmoid(bias) ~ 1 for all pairs
 akw = dict(theta=0.5, cannot_link=0.3, knn=3, cos_floor=0.0, min_n=50, w_rc=0.0, w_dbic=0.0,
            bias=10.0, log=lambda *_: None)
-new_all, _ = ps.psame_merge(spk, times, clu, **akw)
+new_all, _m_all_ref = ps.psame_merge(spk, times, clu, **akw)
 new_veto, m_veto = ps.psame_merge(spk, times, clu, scale_veto=True, scale_thr=0.20, scale_min_n=100, **akw)
 check("without the veto an all-accepting score swallows C into A",
       set(np.unique(new_all[lab == 2])) & set(np.unique(new_all[lab == 0])) != set(),
@@ -170,6 +170,68 @@ check("the veto refuses it: C's template is not a scaled copy of A's",
       str(sorted(np.unique(new_veto))))
 new_guard, _ = ps.psame_merge(spk, times, clu, scale_veto=True, scale_thr=0.20,
                               scale_min_n=10 ** 6, **akw)
+# ── the residual as a SCORE TERM over the pair's own noise floor (0.67.28) ─
+# A fixed threshold cannot work at low spike counts: the residual a SINGLE cell scores against
+# itself rises as 1/m, so below ~100 spikes the floor approaches scale_thr and the veto had to be
+# switched off (scale_min_n).  split_half_residual measures that floor per cluster.
+W5 = spk[clu == 5]
+f_full, f_small = ps.split_half_residual(W5), ps.split_half_residual(W5[:60])
+check("split_half_residual: the noise floor falls as spikes are added",
+      f_small > 4 * f_full, f"{f_small:.4f} at 60 vs {f_full:.4f} at {len(W5)}")
+check("split_half_residual: NaN when a half would be too thin",
+      ps.split_half_residual(W5[:10]) != ps.split_half_residual(W5[:10]))
+# the reference predicts what a SAME-cell pair scores: two disjoint subsets of cluster 5
+for m_lo, m_hi in ((100, 400), (60, 400)):
+    _lo, _hi = W5[:m_lo].mean(0), W5[m_lo:m_lo + m_hi].mean(0)
+    _sr, _lag, _sc = ps.scale_residual(_hi, _lo)
+    _ref = ps.residual_reference(ps.split_half_residual(W5[:m_lo]), m_lo, m_hi, _sc)
+    check(f"residual_reference predicts a same-cell cross residual (m_lo {m_lo})",
+          0.7 < _sr / _ref < 1.6, f"cross {_sr:.4f} vs reference {_ref:.4f} ({_sr / _ref:.2f}x)")
+check("residual_reference: NaN floor in, NaN out",
+      ps.residual_reference(float("nan"), 100, 400, 0.5) != ps.residual_reference(float("nan"), 100, 400, 0.5))
+# the excess separates same-cell from different-cell BELOW scale_min_n, where the veto is off.
+# Measured across spike counts in analysis/sresid-reference/: 74x at 50 spikes, 13x at 20.
+_hiW = spk[clu == 4]
+for _m in (150, 60):
+    _same = ps.scale_residual(_hiW.mean(0), W5[:_m].mean(0))
+    _exc_d = _same[0] - ps.residual_reference(ps.split_half_residual(W5[:_m]), _m, len(_hiW), _same[2])
+    _lo2 = W5[:_m]
+    _s2 = ps.scale_residual(W5[_m:].mean(0), _lo2.mean(0))
+    _exc_s = _s2[0] - ps.residual_reference(ps.split_half_residual(_lo2), _m, len(W5) - _m, _s2[2])
+    check(f"excess separates two cells from one at m={_m} (below scale_min_n 100)",
+          _exc_d > 10 * max(_exc_s, 1e-6), f"different {_exc_d:+.4f} vs same {_exc_s:+.4f}")
+
+new_w0, m_w0 = ps.psame_merge(spk, times, clu, w_sresid=0.0, **akw)
+check("w_sresid 0 changes nothing: the same merges as the untouched score",
+      [(m["into"], m["merged"]) for m in m_w0] == [(m["into"], m["merged"]) for m in _m_all_ref],
+      f"{[(m['into'], m['merged']) for m in m_w0]}")
+new_w, m_w = ps.psame_merge(spk, times, clu, w_sresid=30.0, **akw)
+check("the score term refuses C into A without a veto",
+      not set(np.unique(new_w[lab == 2])) & set(np.unique(new_w[lab == 0])),
+      str(sorted(np.unique(new_w))))
+check("the score term does not block A's own fragments", len(np.unique(new_w[lab == 0])) == 1, str(m_w))
+check("every merge records its floor and excess",
+      all(m.get("sresid_ref") == m.get("sresid_ref") and "sresid_exc" in m for m in m_w), str(m_w))
+_af = [m for m in m_w if {m["into"], m["merged"]} == {2, 3}]
+check("A's own fragments pay no penalty: their residual sits BELOW their floor",
+      len(_af) == 1 and _af[0]["sresid_exc"] < 0 and _af[0]["sresid_pen"] == 0.0,
+      str([(m["into"], m["merged"], round(m["sresid_exc"], 5), round(m["sresid_pen"], 5)) for m in m_w]))
+check("documented limitation carries over: B is built from A's OWN mean shape, so it is a scaled "
+      "copy and the term cannot refuse it either (only dbic can)",
+      any({m["into"], m["merged"]} == {2, 4} for m in m_w),
+      str([(m["into"], m["merged"]) for m in m_w]))
+# sresid_ref fixed reproduces the constant threshold as the reference
+new_f, m_f = ps.psame_merge(spk, times, clu, w_sresid=30.0, sresid_ref="fixed", scale_thr=0.20, **akw)
+check("sresid_ref fixed uses scale_thr as the floor",
+      all(abs(m["sresid_ref"] - 0.20) < 1e-9 for m in m_f), str([m["sresid_ref"] for m in m_f]))
+# the no-power refusal: a floor above sresid_ref_max means the shape test cannot tell them apart
+new_np, m_np = ps.psame_merge(spk, times, clu, sresid_ref_max=1e-9, **akw)
+check("sresid_ref_max refuses every merge whose floor exceeds it", len(m_np) == 0, str(m_np))
+check("...and it does not reroute: no cluster merges into another instead",
+      len(np.unique(new_np)) == len(np.unique(clu)), str(sorted(np.unique(new_np))))
+new_np2, m_np2 = ps.psame_merge(spk, times, clu, sresid_ref_max=10.0, **akw)
+check("sresid_ref_max above every floor refuses nothing", len(m_np2) == len(_m_all_ref), str(m_np2))
+
 check("scale_min_n guards it: below the count the veto never fires",
       set(np.unique(new_guard[lab == 2])) & set(np.unique(new_guard[lab == 0])) != set(),
       str(sorted(np.unique(new_guard))))

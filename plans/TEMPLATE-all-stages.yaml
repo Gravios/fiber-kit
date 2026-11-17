@@ -614,6 +614,11 @@ pipeline:
   #       scale-veto: 0                   # FK_PSAME_SCALE_VETO (default 0)
   #       scale-thr: 0.2                  # FK_PSAME_SCALE_THR (default 0.2)
   #       scale-min-n: 100                # FK_PSAME_SCALE_MIN_N (default 100)
+  #       w-sresid: 0.0                   # FK_PSAME_W_SRESID (default 0.0)
+  #       sresid-ref: split               # FK_PSAME_SRESID_REF (default split)
+  #       sresid-ref-k: 1.0               # FK_PSAME_SRESID_REF_K (default 1.0)
+  #       sresid-ref-max: 0.0             # FK_PSAME_SRESID_REF_MAX (default 0.0)
+  #       sresid-min-half: 8              # FK_PSAME_SRESID_MIN_HALF (default 8)
   #     }}
 
   # ===== fiber-backbone-link : Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. =====

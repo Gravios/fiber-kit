@@ -4,6 +4,46 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.28] — the scale residual as a score term, over the pair's OWN noise floor
+Splitting a multi-unit cluster puts every child in the regime where the merge guards stop working.
+Measured on the shipped defaults:
+
+| guard | stops protecting below | why |
+|---|---|---|
+| scale-residual veto | `scale_min_n` 100 spikes — and `FK_PSAME_SCALE_VETO` is `0` in both profiles | a small fragment's mean is not a cell's template (AUC 0.943 → 0.764) |
+| refractory cannot-link | **~1,101 spikes per cluster** at a 12-min chunk | `c_exp = 2.475e-6 · n_a · n_b`, and `refractory_gate` abstains below `min_exp` 3 |
+| ΔBIC | never off, but biased **toward** merging as n falls | `dbic = [2ΔLL + k·ln n]/n` with `w_dbic` +0.6144: the complexity term is positive and grows as `ln n / n` |
+
+A 757-spike cluster is already below the refractory threshold (`c_exp` 1.42) before any split; four
+~190-spike children give `c_exp` 0.09. The ΔBIC bias moves from +0.15 to +0.48 logit (k=28) over the
+same split — a free push toward merging, applied to exactly the units just separated.
+
+- `split_half_residual(W)` — a cluster's spikes in two **interleaved** halves (so its own drift lands
+  in both, not in the reference), each averaged, one fitted to the other as a scaled copy. That is the
+  residual template NOISE alone produces at that spike count and SNR.
+- `residual_reference(sr0_lo, m_lo, m_hi, sc, k)` = `k · sr0_lo/4 · (1 + sc²·m_lo/m_hi)`, from noise
+  falling as 1/m. Validated against same-cell pairs: 2–5 % optimistic above 200 averaged spikes, ~17 %
+  at 60–100. `m_*` are the spikes actually averaged (psame caps at 1000), not the cluster sizes.
+- `FK_PSAME_W_SRESID` makes the residual a **score term**: the logit loses
+  `w · max(0, sresid − reference)`. The veto could not do this — refusing the top pair leaves the loop
+  to take the next-best, so it **reroutes** a merge instead of preventing it, and it has a cliff at
+  `scale_min_n`. Only an EXCESS costs; a residual at or below the floor says nothing and must not read
+  as evidence *for* one cell either.
+- **Measured** (`analysis/sresid-reference/`, synthetic 32×8 template, per-spike noise sd 15): the
+  different-cell excess beats the same-cell excess by 500–25,000× above 100 spikes, **74× at 50 spikes
+  and 13× at 20** — the regime where `scale_min_n` switches the veto off entirely. At 20 spikes the
+  same-cell cross residual reaches 0.189, so the fixed `scale_thr` 0.20 is about to start refusing
+  correct merges; the adaptive floor keeps tracking.
+- `FK_PSAME_SRESID_REF_MAX` refuses a merge whose noise floor alone exceeds it: at that spike count
+  the shape test cannot tell the templates apart, and over-merging is the irreversible direction.
+  Unlike the shape veto it does **not** reroute — the floor belongs to the dimmer cluster, so a
+  cluster refused against one partner is refused against all. It also catches a *contaminated*
+  cluster, whose own halves disagree and whose floor is therefore high.
+- All off by default (`w_sresid` 0.0, `sresid_ref_max` 0.0): the logit is unchanged bit for bit, and
+  `test_psame.py` asserts the merge list is identical. Known limitation carried over from 0.67.24 and
+  now asserted in the tests: a look-alike cell that really *is* a scaled copy of its partner slips
+  both the veto and the term — only `dbic` separates that one. 16 tests.
+
 ## [0.67.27] — only drop a column that IS the time, and say so when one is embedded
 - Follow-up to 0.67.26, from the obvious question: *wasn't the time feature turned off?* It is — everywhere
   else. KlustaKwik's `useFeatures` default masks the last column off, which is **why** the time goes

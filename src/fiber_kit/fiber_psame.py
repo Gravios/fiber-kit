@@ -105,6 +105,11 @@ _KNOBS = {
     "FK_PSAME_SCALE_VETO": ("scale_veto", int, 0),     # 1: refuse an accepted merge whose dimmer template is NOT a scaled copy of the brighter one (scale_residual)
     "FK_PSAME_SCALE_THR": ("scale_thr", float, 0.20),  # relative residual above which the veto fires
     "FK_PSAME_SCALE_MIN_N": ("scale_min_n", int, 100), # both clusters need this many spikes before the veto is trusted
+    "FK_PSAME_W_SRESID": ("w_sresid", float, 0.0),     # logit weight on the scale-residual EXCESS over the pair's noise floor (subtracted; 0 = off)
+    "FK_PSAME_SRESID_REF": ("sresid_ref", str, "split"),  # split = per-pair split-half noise floor; fixed = use scale_thr as the floor
+    "FK_PSAME_SRESID_REF_K": ("sresid_ref_k", float, 1.0),   # multiplier on that floor (the closed form runs 2-17% optimistic)
+    "FK_PSAME_SRESID_REF_MAX": ("sresid_ref_max", float, 0.0),  # > 0: refuse a merge whose noise floor exceeds this -- the shape test has no power at that spike count
+    "FK_PSAME_SRESID_MIN_HALF": ("sresid_min_half", int, 8),    # spikes per half before a split-half floor is trusted
 }
 
 
@@ -256,10 +261,51 @@ def _amp(Tm):
     return float((Tm.max(0) - Tm.min(0)).max())
 
 
+def split_half_residual(W, shift=4, min_half=8):
+    """The scale residual a SINGLE cluster scores against ITSELF: its windows split into two
+    interleaved halves, each averaged, one fitted to the other as a scaled copy.
+
+    This is the residual TEMPLATE NOISE alone produces at that spike count and SNR -- the floor a
+    cross-cluster residual has to clear before it says anything about two cells.  A fixed threshold
+    cannot do this job: at 100 averaged spikes the floor measures ~0.24 on a synthetic template,
+    above `scale_thr` 0.20 itself, which is why the veto needed `scale_min_n` to switch off there.
+
+    The halves are interleaved (0::2 / 1::2) over time-sorted indices, not contiguous, so a
+    cluster's own drift lands in BOTH halves instead of inflating the reference.  NaN when either
+    half would hold fewer than `min_half` spikes."""
+    W = np.asarray(W, float)
+    if W.shape[0] < 2 * int(min_half):
+        return float("nan")
+    return float(scale_residual(W[0::2].mean(0), W[1::2].mean(0), shift)[0])
+
+
+def residual_reference(sr0_lo, m_lo, m_hi, sc, k=1.0):
+    """The cross-pair scale residual expected from template NOISE alone, from the DIMMER cluster's
+    split-half residual.
+
+    Template noise falls as 1/m, so with sigma^2 the per-spike waveform variance and D the window
+    size the dimmer mean carries D*sigma^2/m_lo and the brighter sc^2*D*sigma^2/m_hi -- both
+    relative to the dimmer's energy, which is what scale_residual normalises by.  A split-half of
+    the dimmer measures 4*D*sigma^2/(m_lo*||T||^2), i.e. sr0_lo, so
+
+        reference = k * sr0_lo/4 * (1 + sc^2 * m_lo/m_hi)
+
+    Measured against SAME-CELL pairs on a synthetic 32x4 template, 40 draws per point: the form runs
+    2-5 % optimistic for m_lo >= 200 and 17 % at m_lo 60-100, where the mean is itself a quarter
+    noise and the first-order expansion gives out.  `k` is the knob for that; 1.0 is uncorrected.
+    `m_*` are the spikes ACTUALLY AVERAGED into each template (psame caps that at 1000), not the
+    cluster sizes.  NaN in, NaN out."""
+    if sr0_lo != sr0_lo or m_lo <= 0 or m_hi <= 0:          # NaN in, NaN out
+        return float("nan")
+    return float(k) * float(sr0_lo) / 4.0 * (1.0 + float(sc) ** 2 * float(m_lo) / float(m_hi))
+
+
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
                 w_rc=22.2143, w_dbic=0.6144, bias=-17.773, geo_term=None, w_geo=0.0, cap=None, rng=None,
                 group_of=None, chunk_of=None, min_chunk_n=30, max_gap=1, log=print, keyed=True,
-                align_pairs=True, scale_veto=False, scale_thr=0.20, scale_min_n=100):
+                align_pairs=True, scale_veto=False, scale_thr=0.20, scale_min_n=100,
+                w_sresid=0.0, sresid_ref="split", sresid_ref_k=1.0, sresid_ref_max=0.0,
+                sresid_min_half=8):
     """Sequential P(same) merge.  spk: (N, nsamp, nchan) memmap of the scoring variant; times (s) per spike;
     clu per spike.  geo_term: optional callable (members_a, members_b) -> shared-geometry z of the two groups'
     raw templates.
@@ -276,6 +322,23 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
     SCALED copy of the brighter one (scale_residual > scale_thr), and only when both clusters hold at
     least scale_min_n spikes -- below that a fragment's mean is not a cell's template and the statistic
     loses most of its power (AUC 0.943 -> 0.764).  Off by default: it changes merge decisions.
+
+    w_sresid: the scale residual as a SCORE TERM instead of a veto -- the logit loses
+    `w_sresid * max(0, sresid - reference)`, so a template that is not a scaled copy of its partner
+    lowers P(same) continuously.  The veto cannot do this: refusing the top pair leaves the loop to
+    take the next-best one, so it REROUTES a merge rather than preventing it, and it has a cliff at
+    scale_min_n.  0.0 = off (the logit is unchanged, bit for bit).
+
+    sresid_ref: what the residual is excess OVER.  "split" (default) measures each pair's own noise
+    floor from the dimmer cluster's split-half residual (split_half_residual / residual_reference),
+    so the bar tightens as a cluster gets more spikes instead of sitting at a constant that is below
+    the noise floor for anything under ~100 spikes.  "fixed" uses scale_thr, the pre-0.67.28 form.
+
+    sresid_ref_max: > 0 refuses a merge whose noise floor alone exceeds it -- at that spike count the
+    shape test cannot tell the two templates apart, and over-merging is the irreversible direction.
+    Unlike the shape veto this does NOT reroute: the floor is a property of the dimmer cluster, so a
+    cluster refused against one partner is refused against all of them.
+
     Returns (new clu, list of accepted merges as dicts)."""
     rng = rng or np.random.default_rng(0)
     clu = np.asarray(clu).astype(np.int64).copy()
@@ -284,12 +347,16 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
     if len(ids) < 2:
         return clu, []
     model, mean, muse = {}, {}, {}
+    sr0, nmean = {}, {}                               # split-half noise floor and the spikes averaged into mean[u]
     cmod, cmean, cn, cuse = {}, {}, {}, {}            # chunk-aware: per cluster, per chunk
 
     def refresh(u):
         idx = np.flatnonzero(clu == u)
         sub = fl.subsample(idx, 1000, rng, keyed=keyed, salt=1)
-        mean[u] = np.asarray(spk[sub], float).mean(0)
+        W = np.asarray(spk[sub], float)
+        mean[u] = W.mean(0); nmean[u] = int(W.shape[0])
+        sr0[u] = (split_half_residual(W, shift, sresid_min_half)
+                  if (w_sresid or sresid_ref_max > 0) and sresid_ref == "split" else float("nan"))
         if chunk_of is None:
             use = fl.subsample(idx, cap, rng, keyed=keyed)
             model[u] = CellModel(project(spk, use, mu, V), times[use]); muse[u] = use
@@ -338,10 +405,18 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
                 rc, s_ = rollcos_shift(cmean[a][ka], cmean[b][kb], shift)
                 d = dbic_pair(cmod[a][ka], cmod[b][kb], cuse[b][kb], s_); how = "adjacent"
         z = geo_term(members[a], members[b]) if geo_term is not None else 0.0
-        p = 1.0 / (1.0 + np.exp(-(bias + w_rc * rc + w_dbic * d + w_geo * z)))
         hi, lo = (a, b) if _amp(mean[a]) >= _amp(mean[b]) else (b, a)
-        sr = scale_residual(mean[hi], mean[lo], shift)[0]
-        return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how, sresid=sr)
+        sr, _lag, sc = scale_residual(mean[hi], mean[lo], shift)
+        ref = (residual_reference(sr0.get(lo, float("nan")), nmean.get(lo, 0), nmean.get(hi, 0),
+                                  sc, sresid_ref_k)
+               if sresid_ref == "split" else float(sresid_ref_k) * float(scale_thr))
+        exc = sr - ref if ref == ref else float("nan")
+        # only an EXCESS costs: a residual at or below the pair's own noise floor says nothing, and
+        # must not be read as evidence FOR one cell either.
+        pen = float(w_sresid) * max(exc, 0.0) if (w_sresid and exc == exc) else 0.0
+        p = 1.0 / (1.0 + np.exp(-(bias + w_rc * rc + w_dbic * d + w_geo * z - pen)))
+        return float(p), dict(rc=rc, dbic=d, geo_z=z, how=how, sresid=sr,
+                              sresid_ref=ref, sresid_exc=exc, sresid_pen=pen)
 
     members = {u: {u} for u in ids}
     cand = {}
@@ -356,16 +431,25 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
         return all(p0.get((min(x, y), max(x, y)), 1.0) >= cannot_link for x in members[a] for y in members[b])
 
     merges = []
-    nveto = 0
+    nveto = nfloor = 0
     log(f"{_LP} · {len(ids)} clusters >= {min_n} spikes, {len(cand)} candidate pairs "
         f"(roll-cos >= {cos_floor}, {knn} nearest)"
-        + (f"; scale veto at residual > {scale_thr} for pairs >= {scale_min_n} spikes" if scale_veto else ""))
+        + (f"; scale veto at residual > {scale_thr} for pairs >= {scale_min_n} spikes" if scale_veto else "")
+        + (f"; residual score term w {w_sresid:g} over the {sresid_ref} floor x{sresid_ref_k:g}" if w_sresid else "")
+        + (f"; refusing merges whose noise floor > {sresid_ref_max:g}" if sresid_ref_max > 0 else ""))
     while cand:
         (a, b), (p, terms) = max(cand.items(), key=lambda kv: kv[1][0])
         if p < theta:
             break
         if not allowed(a, b):
             del cand[(a, b)]; continue
+        if sresid_ref_max > 0:
+            ref = terms.get("sresid_ref", float("nan"))
+            if ref == ref and ref > sresid_ref_max:
+                nfloor += 1
+                log(f"{_LP} ·   no power {a}+{b}: p {p:.3f} but the pair's residual noise floor is "
+                    f"{ref:.3f} > {sresid_ref_max:g} -- too few spikes to tell the templates apart")
+                del cand[(a, b)]; continue
         if scale_veto:
             na, nb_ = int(np.count_nonzero(clu == a)), int(np.count_nonzero(clu == b))
             sr = terms.get("sresid", float("nan"))
@@ -384,6 +468,8 @@ def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor
             k = (min(a, v), max(a, v)); cand[k] = score(*k)
     if scale_veto:
         log(f"{_LP} · scale veto refused {nveto} merge(s) the score had accepted")
+    if sresid_ref_max > 0:
+        log(f"{_LP} · no-power floor refused {nfloor} merge(s) the score had accepted")
     return clu, merges
 
 
@@ -481,7 +567,10 @@ def main():
                               bias=bias, geo_term=geo_term, w_geo=w_geo, cap=a.cap, rng=rng, keyed=bool(a.sample_keyed),
                               group_of=group_of, chunk_of=chunk_of, min_chunk_n=a.min_chunk_n, max_gap=a.max_gap,
                               align_pairs=bool(a.align_pairs), scale_veto=bool(a.scale_veto),
-                              scale_thr=a.scale_thr, scale_min_n=a.scale_min_n)
+                              scale_thr=a.scale_thr, scale_min_n=a.scale_min_n,
+                              w_sresid=a.w_sresid, sresid_ref=a.sresid_ref,
+                              sresid_ref_k=a.sresid_ref_k, sresid_ref_max=a.sresid_ref_max,
+                              sresid_min_half=a.sresid_min_half)
     nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=a.out_tag)
     n_in = len(np.unique(clu[clu > 1])); n_out = len(np.unique(new[new > 1]))
     print(f"{_LP} · {len(merges)} merges ({n_in} -> {n_out} clusters); wrote "
