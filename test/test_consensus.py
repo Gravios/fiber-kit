@@ -325,6 +325,21 @@ def test_looks_like_time_column_separates_a_ramp_from_a_component():
     # a constant tail column is not a ramp, and a 1-column .fet is never trimmed
     assert not fc.looks_like_time_column(np.column_stack([no_time, np.ones(50)]))
     assert fc.fet_block(np.arange(9.0).reshape(9, 1)).shape == (9, 1)
+    # a COMMITTED REALIGN reorders spikes (res_corr = res + ioff), so the time column is not
+    # perfectly sorted.  On a 30-min g6 subsession: 5 backward steps in 113,515 gaps, worst -14
+    # samples, 121 duplicates.  Requiring every step to be non-decreasing read that as a feature.
+    jittered = with_time.copy()
+    for i, shift in ((7, -40), (19, -35), (31, -33)):      # bigger than the ramp's own step
+        jittered[i, -1] += shift
+    jittered[11, -1] = jittered[10, -1]                    # a duplicate timestamp
+    assert not np.all(np.diff(jittered[:, -1]) >= 0)       # genuinely out of order ...
+    assert fc.looks_like_time_column(jittered)             # ... and still obviously the time
+    assert fc.fet_block(jittered).shape == (50, 4)
+    # the threshold is a fraction, and a column shuffled beyond recognition fails it
+    shuffled = with_time.copy()
+    shuffled[:, -1] = rng.permutation(shuffled[:, -1])
+    assert not fc.looks_like_time_column(shuffled)
+    assert not fc.looks_like_time_column(jittered, monotone=1.0)
 
 
 def test_fet_block_drops_time_and_trims_components_per_channel():

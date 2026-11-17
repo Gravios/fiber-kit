@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.30] — the time-column guard failed on every realigned session
+- Found by running 1088 on real data for the first time (`kern_pipe/ws_hyb`, a 30-min g6
+  subsession with both `.fet` spaces staged). `looks_like_time_column` returned **False** for
+  `sub.fet.stderiv_C5_D34.6` and `sub.fet.standard.6` even though the last column of each is
+  `np.array_equal` to the `.res`.
+- Cause: 0.67.27's guard required `np.all(np.diff(c) >= 0)`. A committed realign reorders spikes —
+  `res_corr = res + ioff`, integer shifts of up to 10 samples a pass — so neighbours cross. On this
+  file: **5 backward steps in 113,515 gaps (0.004 %), worst −14 samples, 121 exact duplicates**.
+  Five spikes out of 113,516 were enough to make the guard reject a real time column.
+- The effect was the opposite of the guard's purpose: `--fet-drop-time` silently did nothing on
+  exactly the files it exists for, so `--fet-hybrid` would have stacked 33 + 25 = 58 columns
+  carrying **two** time ramps — the configuration 1088 added the flag to prevent.
+- `looks_like_time_column(values, monotone=0.9)` now takes a FRACTION of non-decreasing steps. A
+  PCA component sits near 0.5 on this measure and a time column at 0.99996, so the separation is
+  not delicate; `monotone=1.0` restores the old behaviour. On the real files the blocks now come
+  out 33 → 32 and 25 → 24 as intended. 1 test, with realign-sized inversions and a duplicate.
+- The lesson is the one the session keeps teaching: this passed seven tests and two generator
+  gates, and was wrong on the first real file it saw, because every test fixture built its time
+  column with `np.arange`.
+
 ## [0.67.29] — the residual terms reach the merge table
 - `<base>.psame.<g>.<tag>.tsv` carried `into merged p rc dbic geo_z how` and stopped there, so the
   scale residual was computed, logged to stderr on a veto, and then thrown away. With 0.67.28 that

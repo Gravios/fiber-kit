@@ -400,21 +400,29 @@ QUARANTINE_RULES = ("switch", "collision", "perimeter")
 
 
 # ── feature blocks: what the embedding actually sees ────────────────────────
-def looks_like_time_column(values):
+def looks_like_time_column(values, monotone=0.9):
     """True when a .fet's LAST column is the spike time rather than a feature.
 
     Not every .fet in a session carries one.  fiber-session, fiber-realign and fiber-manifold
     write the time last because Klusters' data.cpp requires the timestamp there (and because
     KlustaKwik's `useFeatures` default masks that one column off) -- but fiber-decollide's .fet
     is `cluster_features` alone, with no time column, so dropping its last column would throw
-    away a real PCA component.  The time column is the one that is non-decreasing over every
-    spike in detection order; a PCA component is not.
+    away a real PCA component.  The time column is the one that RISES over the spikes in detection
+    order; a PCA component does not.
+
+    `monotone` is a FRACTION of non-decreasing steps, not all of them, because a committed realign
+    reorders spikes: `res_corr = res + ioff` with integer shifts of up to 10 samples a pass can
+    make two neighbours cross.  Measured on a 30-min g6 subsession after the plan's realigns --
+    5 backward steps in 113,515 gaps (0.004 %), the worst -14 samples, and 121 exact duplicates.
+    Requiring every step to be non-decreasing (0.67.27) therefore read a real time column as a
+    feature on exactly the files the flag exists for.  A PCA component sits near 0.5 on this
+    measure, so anything from ~0.9 up separates the two cleanly.
     """
     V = np.asarray(values)
     if V.ndim != 2 or V.shape[1] < 2 or V.shape[0] < 3:
         return False
     c = np.asarray(V[:, -1], float)
-    return bool(np.all(np.diff(c) >= 0) and c[-1] > c[0])
+    return bool(float((np.diff(c) >= 0).mean()) >= float(monotone) and c[-1] > c[0])
 
 
 def fet_block(values, *, nchan=0, pcs=0, drop_time=True):
