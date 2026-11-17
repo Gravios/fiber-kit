@@ -751,6 +751,30 @@ FK_CONSENSUS_RES_VARIANT: stderiv_S3  # "" | e.g. stderiv_S3.  Pin the .res; "" 
                                   #   resolve it; fiber-realign commits its shifts back into the copy it found), so the
                                   #   pin is only right if stderiv_S3 is the ONE .res in the session directory -- with a
                                   #   second copy the others would use it and consensus stops on the spike-count check.
+FK_CONSENSUS_FET_HYBRID: 0        # 0 | 0/1.  1 = embed a HYBRID feature space: the clustering variant's .fet PLUS
+                                  #   FK_CONSENSUS_HYBRID_FET_VARIANT's, each z-scored per column and weighted so both
+                                  #   carry the same variance.  fiber-session's FK_SESSION_FEAT_HYBRID does this to the
+                                  #   WAVEFORM before clustering (adopted ON in the g6 profile); this does it to the
+                                  #   .fet before the t-SNE runs.  For the case where a big multi-unit cluster's
+                                  #   children separate cleanly in the standard space and not in the stderiv one (or
+                                  #   the reverse) -- the consensus then sees both.  Costs nothing but columns.
+FK_CONSENSUS_HYBRID_FET_VARIANT: standard  # standard | any staged .fet variant.  The space stacked beside the
+                                  #   clustering one.  "standard" falls back to the canonical <base>.fet.<elec> when no
+                                  #   .fet.standard is staged, which is what a Klusters session from ndm_pca holds.
+FK_CONSENSUS_HYBRID_SCALE: 1.0    # 1.0 | 0.5-2.  Weight of the appended block relative to the first AFTER the two
+                                  #   are put on equal total variance -- 1 = equal, <1 clustering-space-led, >1
+                                  #   appended-led, and the square is the variance share.  Column counts are divided
+                                  #   out first, so this is a statement about the two SPACES and not about how many
+                                  #   components ndm_pca happened to write.  Mirrors FK_SESSION_HYBRID_SCALE, which
+                                  #   the g6 tuning took to 2.0 on the waveform side.
+FK_CONSENSUS_HYBRID_PCS: 0        # 0 = every column | 1-3.  Components per channel kept from the appended block, as
+                                  #   FK_SESSION_HYBRID_PCS trims fiber-session's raw block.  Trim when the appended
+                                  #   space is wide and only its leading components carry the separation.
+FK_CONSENSUS_FET_DROP_TIME: auto  # auto | 0/1.  Drop the .fet's LAST column -- the spike time, which Klusters requires
+                                  #   there -- before embedding.  auto = only under FET_HYBRID (two blocks would carry
+                                  #   two time ramps); 0 = never, which is what every run up to 0.67.25 did: the time
+                                  #   column went into the t-SNE z-scored, a drift coordinate worth 1/d of the
+                                  #   variance.  Measure 1 on its own before assuming it is harmless.
 FK_CONSENSUS_SIGNAL:     ""       # "" = <sess>.fil | path.  Continuous filtered int16 trace the envelope is fit on
                                   #   (fiber-pipeline only; a direct call takes --signal).  Must match the
                                   #   filter the .spk came from; a window file needs --signal-start in params.

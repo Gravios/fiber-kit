@@ -9,7 +9,11 @@ drawn on one map is partly a boundary of that map.  This stage repeats the embed
   1. NEIGHBOURHOOD   the units to study together -- given (--units, the clusters a curator would
                      lasso together) or found as average-linkage groups on envelope d'.
   2. RUNS            R t-SNE embeddings (openTSNE), each of a random fraction of the spikes, each
-                     from a fresh random initialisation, in the stage's own feature space (.fet).
+                     from a fresh random initialisation, in the stage's own feature space (.fet) --
+                     or, with --fet-hybrid, in TWO .fet spaces stacked (e.g. the stderiv variant the
+                     sort clusters in plus the standard PCA space), each block z-scored per column
+                     and weighted to carry the same variance.  A multi-unit cluster whose children
+                     separate in one space and not the other is the case this is for.
   3. CONSENSUS       co-neighbour probability P_ij = (runs where j is among i's k nearest 2-D
                      neighbours) / (runs containing both); Louvain communities on that graph.
   4. CELLS           communities are joined into cells by the envelope merge (fiber_envelope:
@@ -395,7 +399,56 @@ def watershed_categories(X, cell, quarantine, *, runs=5, grid=256, island_frac=0
 QUARANTINE_RULES = ("switch", "collision", "perimeter")
 
 
-def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None, sr=32552.0,
+# ── feature blocks: what the embedding actually sees ────────────────────────
+def fet_block(values, *, nchan=0, pcs=0, drop_time=True):
+    """One .fet read as an embedding block.
+
+    A Klusters .fet is channel-major -- `per` components for channel 0, then channel 1, ... -- and
+    its LAST column is the spike TIME (fiber-session writes it there because Klusters' data.cpp
+    requires the timestamp last).  That column is a monotonic ramp: z-scored into the embedding it
+    is a slow drift coordinate worth 1/d of the variance.  `drop_time` removes it.  `pcs` then keeps
+    only the first `pcs` components of each of `nchan` channels (0 = every column), the way
+    FK_SESSION_HYBRID_PCS trims the raw block of fiber-session's hybrid features.
+    """
+    V = np.asarray(values, float)
+    if drop_time and V.shape[1] > 1:
+        V = V[:, :-1]
+    if pcs and nchan and V.shape[1] >= int(nchan):
+        per = V.shape[1] // int(nchan)
+        if per > int(pcs):
+            keep = np.concatenate([np.arange(c * per, c * per + int(pcs)) for c in range(int(nchan))])
+            V = V[:, keep]
+    return V
+
+
+def stack_blocks(blocks, scales=None):
+    """`(features, col_weight)` for consensus_neighbourhood: the blocks side by side, plus the
+    per-column weight that gives block i a share `scales[i]**2` of block 0's variance.
+
+    consensus_neighbourhood z-scores every column of the neighbourhood, so each column carries unit
+    variance and a block of n columns carries n -- a 24-column space would quietly outweigh an
+    8-column one 3:1, which is a statement about ndm_pca's component count and not about the
+    spikes.  Weighting block i by `scales[i] * sqrt(n0 / ni)` makes its total `scales[i]**2 * n0`
+    whatever its width, so `scale 1` means "both spaces count the same".
+    """
+    blocks = [np.asarray(b, float) for b in blocks]
+    if not blocks:
+        raise ValueError("stack_blocks: no blocks")
+    if any(b.ndim != 2 for b in blocks):
+        raise ValueError("stack_blocks: every block is (nSpikes, nColumns)")
+    n_rows = {b.shape[0] for b in blocks}
+    if len(n_rows) != 1:
+        raise ValueError(f"stack_blocks: blocks disagree on row count {sorted(n_rows)}")
+    scales = list(scales) if scales is not None else [1.0] * len(blocks)
+    if len(scales) != len(blocks):
+        raise ValueError("stack_blocks: one scale per block")
+    n0 = int(blocks[0].shape[1])
+    w = [np.full(int(b.shape[1]), float(sc) * np.sqrt(n0 / b.shape[1]) if b.shape[1] else 1.0)
+         for b, sc in zip(blocks, scales)]
+    return np.hstack(blocks), np.concatenate(w)
+
+
+def consensus_neighbourhood(trace, res, clu, units, features, *, col_weight=None, transform=None, sr=32552.0,
                             pre=21, post=21, margin=32, maxlag=4, runs=40, frac=0.7, k=15,
                             perplexity=30.0, theta_cell=7.0, switch_thr=0.3, perim_thr=0.8,
                             dev_z=2.0, rules=("collision", "perimeter"), ws_runs=5, ws_grid=256,
@@ -404,7 +457,9 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     """Consensus + cells + quarantine for ONE neighbourhood (`units`).
 
     features: (nSpikes, d) for ALL spikes (the .fet rows); only the neighbourhood's rows are used,
-    z-scored per column.  After the cells are formed the envelope is refitted ON THE CELLS, so the
+    z-scored per column.  col_weight: optional per-column weight applied AFTER that z-score -- the
+    only place a stacked hybrid space can be weighted, since the z-score would otherwise flatten
+    every block to the same per-column scale (see stack_blocks).  None = unweighted.  After the cells are formed the envelope is refitted ON THE CELLS, so the
     collision flag, bump score and residual energy are relative to the cell a spike ends up in.
 
     Quarantine criteria (`rules`, any of):
@@ -421,6 +476,11 @@ def consensus_neighbourhood(trace, res, clu, units, features, *, transform=None,
     idx = np.flatnonzero(np.isin(clu, list(units)))
     X = np.asarray(features, float)[idx]
     X = (X - X.mean(0)) / X.std(0).clip(1e-9)
+    if col_weight is not None:
+        cw = np.asarray(col_weight, float)
+        if cw.shape != (X.shape[1],):
+            raise ValueError(f"col_weight has {cw.shape} for {X.shape[1]} columns")
+        X = X * cw
     # ONE pool for this neighbourhood's two parallel bursts (the runs and, later, the watershed maps):
     # a spawned worker costs ~1-1.5 s of interpreter start and imports, and creating a pool per burst paid
     # that twice per neighbourhood.  Sized by the bigger burst, capped inside _pool by each burst's task
@@ -579,6 +639,28 @@ _KNOBS = {
     "FK_CONSENSUS_RES_VARIANT": ("res_variant", str, "",
                                  "pin the .res variant (e.g. stderiv_S3); '' = resolve the shared .res the "
                                  "way fiber-session and the other stages do"),
+    "FK_CONSENSUS_FET_HYBRID": ("fet_hybrid", int, 0,
+                                "1 = embed a HYBRID feature space: the --fet-variant block plus "
+                                "--hybrid-fet-variant's, each z-scored per column and weighted to carry the "
+                                "same variance (fiber-session's FK_SESSION_FEAT_HYBRID, one stage later and at "
+                                "the .fet level instead of the waveform's)"),
+    "FK_CONSENSUS_HYBRID_FET_VARIANT": ("hybrid_fet_variant", str, "standard",
+                                        "variant of the .fet stacked beside --fet-variant under --fet-hybrid 1; "
+                                        "'standard' falls back to the canonical <base>.fet.<elec> when no "
+                                        ".fet.standard is staged"),
+    "FK_CONSENSUS_HYBRID_SCALE": ("hybrid_scale", float, 1.0,
+                                  "weight of the appended block relative to the first after the two are put "
+                                  "on equal total variance (1 = equal; <1 clustering-space-led, >1 appended-led; "
+                                  "the square is the variance share), as FK_SESSION_HYBRID_SCALE weights "
+                                  "fiber-session's raw block"),
+    "FK_CONSENSUS_HYBRID_PCS": ("hybrid_pcs", int, 0,
+                                "components per channel kept from the appended block (0 = all), as "
+                                "FK_SESSION_HYBRID_PCS trims fiber-session's raw block"),
+    "FK_CONSENSUS_FET_DROP_TIME": ("fet_drop_time", str, "auto",
+                                   "drop the .fet's last column -- the spike TIME Klusters requires there -- "
+                                   "before embedding: auto = only under --fet-hybrid (two blocks would carry "
+                                   "two time ramps), 1 = always, 0 = never (what every run before 0.67.26 did, "
+                                   "a z-scored drift coordinate worth 1/d of the embedding's variance)"),
     "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
                                          "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
     "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 0,
@@ -633,6 +715,58 @@ def _knob_default(name, typ, fallback, gcfg):
     """FK_* env var, then the $FK_CONFIG yaml, then the default (config.knob_value: one precedence
     and one validation for every stage)."""
     return cfgmod.knob_value(name, typ, fallback, gcfg)
+
+
+def _read_fet_variant(base, elec, token):
+    """The appended block's .fet: the staged `<base>.fet.<token>.<elec>`, or -- for 'standard', the
+    space ndm_pca writes with no variant token in a Klusters session -- the canonical
+    `<base>.fet.<elec>`.  Returns (FetBinaryFile, what was read)."""
+    try:
+        return nio.read_fet_at(base, elec, variant=token), f".fet.{token}"
+    except FileNotFoundError:
+        if token != "standard":
+            raise
+    try:
+        return nio.read_fet(base, elec), ".fet (canonical)"
+    except FileNotFoundError:
+        raise SystemExit(
+            f"--fet-hybrid 1: no .fet for variant {token!r} and no canonical <base>.fet.{elec} to fall "
+            f"back on.  Run ndm_pca for the standard space, point --hybrid-fet-variant at a staged "
+            f".fet, or clear FK_CONSENSUS_FET_HYBRID.") from None
+
+
+def _embedding_space(a, fet, fet_variant, nchan, n_spikes, log):
+    """`(features, col_weight)` for the runs: one .fet, or two stacked under --fet-hybrid."""
+    want = str(a.fet_drop_time).strip().lower()
+    if want not in ("auto", "0", "1"):
+        raise SystemExit(f"--fet-drop-time takes auto, 0 or 1; got {a.fet_drop_time!r}")
+    drop_time = bool(a.fet_hybrid) if want == "auto" else bool(int(want))
+    if not a.fet_hybrid:
+        X = fet_block(fet.values, drop_time=drop_time)
+        log(f"[consensus] embedding space {fet_variant}: {X.shape[1]} column(s)"
+            + (" (time column dropped)" if drop_time else "")
+            + (f" of {fet.values.shape[1]}" if drop_time else ""))
+        return X, None
+    token = str(a.hybrid_fet_variant)
+    if token == fet_variant:
+        raise SystemExit(f"--fet-hybrid 1 with --hybrid-fet-variant {token!r} is the SAME space as "
+                         f"--fet-variant: stacking it on itself only doubles its weight.")
+    hyb, what = _read_fet_variant(a.base, a.elec, token)
+    if hyb.values.shape[0] != n_spikes:
+        raise SystemExit(f"{what} holds {hyb.values.shape[0]} spikes, the .res {n_spikes} -- the hybrid "
+                         f"block must come from the same detection as the clustering space.")
+    A = fet_block(fet.values, drop_time=drop_time)
+    B = fet_block(hyb.values, nchan=nchan, pcs=a.hybrid_pcs, drop_time=drop_time)
+    if not A.shape[1] or not B.shape[1]:
+        raise SystemExit(f"hybrid: a block came out empty ({A.shape[1]} + {B.shape[1]} columns)")
+    X, w = stack_blocks([A, B], [1.0, float(a.hybrid_scale)])
+    log(f"[consensus] HYBRID embedding space: {fet_variant} {A.shape[1]}col + {token} ({what}) "
+        f"{B.shape[1]}col"
+        + (f" [{a.hybrid_pcs} pc/channel of {nchan}]" if a.hybrid_pcs else "")
+        + f" = {X.shape[1]}col; appended weight {w[-1]:.3f}/column at --hybrid-scale "
+          f"{a.hybrid_scale:g} (variance share {a.hybrid_scale ** 2:g}x)"
+        + ("; time column dropped from both" if drop_time else "; TIME COLUMN KEPT IN BOTH BLOCKS"))
+    return X, w
 
 
 def main(argv=None):
@@ -700,7 +834,8 @@ def main(argv=None):
     res_abs = (nio.read_res_at(a.base, a.elec, variant=a.res_variant) if a.res_variant
                else nio.read_res(a.base, a.elec))
     _, clu = nio.resolve_clu(a, a.base, a.elec, n_spikes=res_abs.size, stage_dest="clu_stage")
-    fet = nio.read_fet_at(a.base, a.elec, variant=a.fet_variant or a.clu_method)
+    fet_variant = a.fet_variant or a.clu_method
+    fet = nio.read_fet_at(a.base, a.elec, variant=fet_variant)
     if fet.values.shape[0] != res_abs.size:
         raise SystemExit(f".fet has {fet.values.shape[0]} rows, .res {res_abs.size}")
     rel = res_abs - a.signal_start
@@ -722,7 +857,12 @@ def main(argv=None):
         f"k={a.k} perplexity={a.perplexity} theta-cell={a.theta_cell} rules={','.join(rules)} "
         f"perim-thr={a.perim_thr} dev-z={a.dev_z} switch-thr={a.switch_thr} ws-runs={a.ws_runs} "
         f"ws-grid={a.ws_grid} ws-island={a.ws_island} window={a.window or 'all'} "
-        f"chunk-min={chunk_min:g} keep-ids={a.keep_ids}")
+        f"chunk-min={chunk_min:g} keep-ids={a.keep_ids} fet-variant={fet_variant} "
+        f"fet-hybrid={a.fet_hybrid}"
+        + (f" hybrid-fet-variant={a.hybrid_fet_variant} hybrid-scale={a.hybrid_scale:g} "
+           f"hybrid-pcs={a.hybrid_pcs}" if a.fet_hybrid else "")
+        + f" fet-drop-time={a.fet_drop_time}")
+    features, col_weight = _embedding_space(a, fet, fet_variant, len(chans), res_abs.size, log)
     given = ([[int(x) for x in g.split(",") if x.strip()] for g in a.units.split(";")] if a.units else None)
     out = clu.copy(); review = clu.copy(); nxt = int(clu.max()) + 1
     results = []; cmaps = []; qclu = []; ngroups = 0
@@ -742,7 +882,8 @@ def main(argv=None):
             if n_in < a.min_spikes:
                 log(f"  skip {sorted(units)}: {n_in} spikes < --min-spikes {a.min_spikes}")
                 continue
-            r = consensus_neighbourhood(view, rel0, lab, units, fet.values, transform=transform, sr=sr,
+            r = consensus_neighbourhood(view, rel0, lab, units, features, col_weight=col_weight,
+                                        transform=transform, sr=sr,
                                         runs=a.runs, frac=a.frac, k=a.k, perplexity=a.perplexity,
                                         theta_cell=a.theta_cell, switch_thr=a.switch_thr, perim_thr=a.perim_thr,
                                         dev_z=a.dev_z, rules=rules, ws_runs=a.ws_runs, ws_grid=a.ws_grid,

@@ -294,6 +294,133 @@ def test_cli_writes_stage_and_quarantine_table():
         assert all(len(v) == 1 for v in by_out.values()), by_out
 
 
+# ── hybrid feature space (--fet-hybrid) ─────────────────────────────────────
+class _A:
+    """argparse.Namespace stand-in for _embedding_space."""
+    def __init__(self, base, elec, **kw):
+        self.base = base; self.elec = elec
+        self.fet_hybrid = 0; self.hybrid_fet_variant = "standard"
+        self.hybrid_scale = 1.0; self.hybrid_pcs = 0; self.fet_drop_time = "auto"
+        self.__dict__.update(kw)
+
+
+def _fet(n_spk, n_col, start=0):
+    """A .fet-shaped int64 block whose LAST column is a monotonic time ramp."""
+    V = (np.arange(n_spk * n_col).reshape(n_spk, n_col) + start) % 997
+    V[:, -1] = np.arange(n_spk) * 32                         # the spike time Klusters wants last
+    return V.astype(np.int64)
+
+
+def test_fet_block_drops_time_and_trims_components_per_channel():
+    V = _fet(40, 13)
+    assert fc.fet_block(V, drop_time=False).shape == (40, 13)
+    assert fc.fet_block(V).shape == (40, 12)                 # the time column goes
+    assert np.array_equal(fc.fet_block(V), V[:, :-1])
+    # 12 columns over 4 channels = 3 per channel; keep the first 2 of each
+    B = fc.fet_block(V, nchan=4, pcs=2)
+    assert B.shape == (40, 8)
+    assert np.array_equal(B, V[:, [0, 1, 3, 4, 6, 7, 9, 10]])
+    # pcs >= per channel is a no-op, and pcs without nchan does nothing
+    assert fc.fet_block(V, nchan=4, pcs=3).shape == (40, 12)
+    assert fc.fet_block(V, pcs=2).shape == (40, 12)
+
+
+def test_stack_blocks_gives_both_spaces_the_same_variance():
+    A = np.random.default_rng(0).normal(size=(60, 24))
+    B = np.random.default_rng(1).normal(size=(60, 8))
+    X, w = fc.stack_blocks([A, B])
+    assert X.shape == (60, 32) and w.shape == (32,)
+    # after consensus_neighbourhood's per-column z-score each column carries 1, so a block of n
+    # carries n * w^2 -- equal here whatever the column counts
+    assert np.isclose((w[:24] ** 2).sum(), (w[24:] ** 2).sum())
+    assert np.allclose(w[:24], 1.0)                          # the first block is never rescaled
+    # scale is an amplitude: its square is the variance share
+    _, w2 = fc.stack_blocks([A, B], [1.0, 2.0])
+    assert np.isclose((w2[24:] ** 2).sum() / (w2[:24] ** 2).sum(), 4.0)
+    for bad in ([], [A[:30], B]):
+        try:
+            fc.stack_blocks(bad)
+            raise AssertionError("expected ValueError")
+        except ValueError:
+            pass
+
+
+def test_col_weight_is_applied_after_the_z_score():
+    """The z-score would flatten any weight applied to `features`, so consensus_neighbourhood
+    applies col_weight itself -- and checks its length."""
+    X = np.random.default_rng(2).normal(size=(50, 6)) * np.array([1, 10, 1, 10, 1, 10.0])
+    Z = (X - X.mean(0)) / X.std(0).clip(1e-9)
+    w = np.array([1, 1, 1, 2, 2, 2.0])
+    assert np.allclose((Z * w).std(0), w, atol=0.05)          # the weight survives, the input scale does not
+    src = fc.consensus_neighbourhood.__doc__
+    assert "col_weight" in src and "AFTER" in src
+
+
+def test_embedding_space_without_hybrid_is_the_fet_unchanged():
+    """Default path: no hybrid, drop-time auto -> every column of the .fet, no weights.  This is
+    what every run up to 0.67.25 embedded, time column included."""
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "sess"); V = _fet(30, 9)
+        nio.write_fet(base, 1, V, variant="stderiv_C5_D34")
+        fet = nio.read_fet_at(base, 1, variant="stderiv_C5_D34")
+        X, w = fc._embedding_space(_A(base, 1), fet, "stderiv_C5_D34", 3, 30, lambda s: None)
+        assert w is None and np.array_equal(X, V)
+        # ... and --fet-drop-time 1 removes the time ramp from that same path
+        X1, w1 = fc._embedding_space(_A(base, 1, fet_drop_time="1"), fet,
+                                     "stderiv_C5_D34", 3, 30, lambda s: None)
+        assert w1 is None and np.array_equal(X1, V[:, :-1])
+
+
+def test_embedding_space_hybrid_stacks_two_spaces_and_drops_both_time_columns():
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "sess")
+        A = _fet(30, 9); B = _fet(30, 13, start=7)
+        nio.write_fet(base, 1, A, variant="stderiv_C5_D34")
+        nio.write_fet(base, 1, B, variant="standard")
+        fet = nio.read_fet_at(base, 1, variant="stderiv_C5_D34")
+        a = _A(base, 1, fet_hybrid=1)
+        X, w = fc._embedding_space(a, fet, "stderiv_C5_D34", 4, 30, lambda s: None)
+        assert X.shape == (30, 8 + 12)                        # both time columns gone
+        assert np.array_equal(X[:, :8], A[:, :-1]) and np.array_equal(X[:, 8:], B[:, :-1])
+        assert np.isclose((w[:8] ** 2).sum(), (w[8:] ** 2).sum())
+        # trimming the appended block to 2 components per channel over 4 channels
+        X2, w2 = fc._embedding_space(_A(base, 1, fet_hybrid=1, hybrid_pcs=2), fet,
+                                     "stderiv_C5_D34", 4, 30, lambda s: None)
+        assert X2.shape == (30, 8 + 8) and w2.shape == (16,)
+
+
+def test_hybrid_standard_falls_back_to_the_canonical_fet():
+    """A Klusters session from ndm_pca has <base>.fet.<elec> with no variant token."""
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "sess")
+        nio.write_fet(base, 1, _fet(20, 9), variant="stderiv_C5_D34")
+        nio.write_fet(base, 1, _fet(20, 13, start=3))         # canonical, no variant
+        fet = nio.read_fet_at(base, 1, variant="stderiv_C5_D34")
+        X, w = fc._embedding_space(_A(base, 1, fet_hybrid=1), fet,
+                                   "stderiv_C5_D34", 4, 20, lambda s: None)
+        assert X.shape == (20, 8 + 12)
+
+
+def test_embedding_space_refuses_a_self_stack_and_a_row_mismatch():
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "sess")
+        nio.write_fet(base, 1, _fet(20, 9), variant="stderiv_C5_D34")
+        nio.write_fet(base, 1, _fet(11, 9), variant="standard")
+        fet = nio.read_fet_at(base, 1, variant="stderiv_C5_D34")
+        for kw in (dict(fet_hybrid=1, hybrid_fet_variant="stderiv_C5_D34"), dict(fet_hybrid=1)):
+            try:
+                fc._embedding_space(_A(base, 1, **kw), fet, "stderiv_C5_D34", 3, 20, lambda s: None)
+                raise AssertionError(f"expected SystemExit for {kw}")
+            except SystemExit:
+                pass
+        try:
+            fc._embedding_space(_A(base, 1, fet_drop_time="maybe"), fet,
+                                "stderiv_C5_D34", 3, 20, lambda s: None)
+            raise AssertionError("expected SystemExit")
+        except SystemExit:
+            pass
+
+
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

@@ -4,6 +4,33 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.26] — fiber-consensus can embed TWO feature spaces at once (`--fet-hybrid`)
+- The curator's case: a large multi-unit cluster in the 0312 g6 sort whose children separate into clean,
+  well-spaced islands under t-SNE **in the standard space** — while the sort, and therefore fiber-consensus,
+  clusters in `stderiv_C5_D34`. The consensus runs embed `--fet-variant`'s `.fet` and nothing else, so a
+  separation that lives in the other space is invisible to them no matter how many runs they average.
+- `--fet-hybrid 1` stacks a second `.fet` beside the first: `--hybrid-fet-variant` (default `standard`,
+  falling back to the canonical `<base>.fet.<elec>` a Klusters session from ndm_pca holds),
+  `--hybrid-scale`, `--hybrid-pcs`. This is `FK_SESSION_FEAT_HYBRID` one stage later and at the `.fet`
+  level instead of the waveform's — the session knob was adopted ON (`PCS 3`, `SCALE 2.0`) in the g6
+  profile, so the same argument applies to the stage that decides what a cell IS.
+- `stack_blocks` divides the column counts out before weighting: after `consensus_neighbourhood`'s
+  per-column z-score a block of n columns carries variance n, so a 24-column space would outweigh an
+  8-column one 3:1 — a statement about how many components ndm_pca wrote, not about the spikes. Block i
+  is weighted `scale_i * sqrt(n_0/n_i)`, so `--hybrid-scale 1` means "both spaces count the same".
+  The weight is applied **after** the z-score, inside `consensus_neighbourhood` (`col_weight=`), because
+  the z-score would otherwise flatten it away.
+- **Observation, not a fix:** a Klusters `.fet`'s LAST column is the spike TIME (`data.cpp` requires the
+  timestamp last; `fiber_session` and `fiber_realign` write it there). fiber-consensus passed `fet.values`
+  whole into the embedding, so every consensus run up to 0.67.25 z-scored a monotonic ramp into the t-SNE
+  as a drift coordinate worth 1/d of the variance. `--fet-drop-time` defaults to `auto` = drop only under
+  `--fet-hybrid` (two blocks would carry two ramps); the single-space path is unchanged and still carries
+  it, so nothing already measured moves. Whether dropping it helps on its own is **unmeasured** — it wants
+  its own A/B before the default changes.
+- Off by default; `--fet-hybrid 0` embeds exactly what 0.67.25 embedded, column for column, with
+  `col_weight=None`. Three spaces are now one flag apart on the same neighbourhood: the clustering variant,
+  `--fet-variant standard` (which already existed), and the two stacked. 7 tests.
+
 ## [0.67.25] — stamp each trial with its RESOLVED config: `overrides` alone never identified one
 - `overrides` records only the delta from the profile, so when patch 1084 moved the realign gate, `COS 0.6`
   and `NEIGH_PASSES 2` into `fiber-kit-best.yaml`, one override dict started meaning two different
