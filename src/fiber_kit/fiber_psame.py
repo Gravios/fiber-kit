@@ -64,7 +64,8 @@
 #  per-chunk first then chunk-aware last: 0.664 / 0.780 / 0.786 (the two do not add up).
 #
 #  A pure .clu relabel (.res/.spk untouched); the .clc/.clp hierarchy is carried.
-#  Writes <base>.psame.<group>.<out-stage>.tsv: every accepted merge with P and terms.
+#  Writes <base>.psame.<group>.<out-stage>.tsv: every accepted merge with P and terms, including
+#  the scale residual, the pair's noise floor, the excess and what the score term charged.
 #  Knobs FK_PSAME_* (CLI > env > $FK_CONFIG > default).
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
@@ -298,6 +299,31 @@ def residual_reference(sr0_lo, m_lo, m_hi, sc, k=1.0):
     if sr0_lo != sr0_lo or m_lo <= 0 or m_hi <= 0:          # NaN in, NaN out
         return float("nan")
     return float(k) * float(sr0_lo) / 4.0 * (1.0 + float(sc) ** 2 * float(m_lo) / float(m_hi))
+
+
+MERGE_TABLE_COLUMNS = ("into", "merged", "p", "rc", "dbic", "geo_z", "how",
+                       "sresid", "sresid_ref", "sresid_exc", "sresid_pen")
+
+
+def merge_table_rows(merges):
+    """The `<base>.psame.<g>.<tag>.tsv` lines for `merges`: the header, then one row each.
+
+    sresid and its floor are in the table because they are what a curator checks after a run with
+    FK_PSAME_W_SRESID on -- the floor of each accepted merge is how a session's
+    FK_PSAME_SRESID_REF_MAX gets chosen, and the excess is what the score term charged.  A term the
+    run did not compute (NaN, e.g. the floor with sresid_ref off) writes as an empty cell rather
+    than the string 'nan', so the column reads as missing in a spreadsheet."""
+    fmt = {"into": "d", "merged": "d", "p": ".4f", "rc": ".4f", "dbic": ".4f", "geo_z": ".3f"}
+    out = ["\t".join(MERGE_TABLE_COLUMNS)]
+    for m in merges:
+        cells = []
+        for c in MERGE_TABLE_COLUMNS:
+            if c == "how":
+                cells.append(str(m.get(c, "lifetime"))); continue
+            v = m.get(c, float("nan"))
+            cells.append("" if v != v else format(v, fmt.get(c, ".4f")))
+        out.append("\t".join(cells))
+    return out
 
 
 def psame_merge(spk, times, clu, *, theta=0.5, cannot_link=0.3, knn=8, cos_floor=0.75, min_n=50, shift=4,
@@ -577,10 +603,7 @@ def main():
           f"{os.path.basename(nio.session_path(base, 'clu', a.elec, variant=a.clu_method, tag=a.out_tag))}")
     log_path = f"{base}.psame.{a.elec}.{a.out_tag}.tsv"
     with open(log_path, "w") as fh:
-        fh.write("into\tmerged\tp\trc\tdbic\tgeo_z\thow\n")
-        for m in merges:
-            fh.write(f"{m['into']}\t{m['merged']}\t{m['p']:.4f}\t{m['rc']:.4f}\t{m['dbic']:.4f}\t{m['geo_z']:.3f}"
-                     f"\t{m.get('how', 'lifetime')}\n")
+        fh.write("\n".join(merge_table_rows(merges)) + "\n")
     print(f"{_LP} · wrote {os.path.basename(log_path)}")
     # carry the .clc/.clp hierarchy: a merge only re-parents children
     try:

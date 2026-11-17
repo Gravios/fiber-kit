@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.29] — the residual terms reach the merge table
+- `<base>.psame.<g>.<tag>.tsv` carried `into merged p rc dbic geo_z how` and stopped there, so the
+  scale residual was computed, logged to stderr on a veto, and then thrown away. With 0.67.28 that
+  table is the diagnostic: **the floor of each accepted merge is how a session's
+  `FK_PSAME_SRESID_REF_MAX` gets chosen**, and the excess is what the score term actually charged.
+  Four columns added: `sresid`, `sresid_ref`, `sresid_exc`, `sresid_pen`.
+- `merge_table_rows(merges)` / `MERGE_TABLE_COLUMNS` pulled out of `main()` so the formatting is
+  testable at all — it never was. A term the run did not compute (NaN, e.g. the floor with
+  `sresid_ref` off) writes as an **empty cell**, not the string `nan`, so the column reads as
+  missing in a spreadsheet rather than as a value. 4 tests.
+
 ## [0.67.28] — the scale residual as a score term, over the pair's OWN noise floor
 Splitting a multi-unit cluster puts every child in the regime where the merge guards stop working.
 Measured on the shipped defaults:

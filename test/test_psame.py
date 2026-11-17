@@ -232,6 +232,18 @@ check("...and it does not reroute: no cluster merges into another instead",
 new_np2, m_np2 = ps.psame_merge(spk, times, clu, sresid_ref_max=10.0, **akw)
 check("sresid_ref_max above every floor refuses nothing", len(m_np2) == len(_m_all_ref), str(m_np2))
 
+# the merge table carries the residual terms: that is how a session's SRESID_REF_MAX gets chosen
+_rows = ps.merge_table_rows(m_w + [dict(into=9, merged=8, p=0.9, rc=0.8, dbic=0.1, geo_z=0.0)])
+check("merge table header names every term", _rows[0].split("\t") == list(ps.MERGE_TABLE_COLUMNS),
+      _rows[0])
+check("merge table keeps every row rectangular",
+      all(len(r.split("\t")) == len(ps.MERGE_TABLE_COLUMNS) for r in _rows),
+      str([len(r.split("\t")) for r in _rows]))
+check("merge table writes a term the run did not compute as an EMPTY cell, not 'nan'",
+      _rows[-1].split("\t")[-4:] == ["", "", "", ""] and "nan" not in _rows[-1], _rows[-1])
+check("merge table reports the floor of every accepted merge",
+      all(r.split("\t")[8] for r in _rows[1:-1]), str(_rows[1:-1]))
+
 check("scale_min_n guards it: below the count the veto never fires",
       set(np.unique(new_guard[lab == 2])) & set(np.unique(new_guard[lab == 0])) != set(),
       str(sorted(np.unique(new_guard))))
