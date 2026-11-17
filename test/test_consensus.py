@@ -311,6 +311,22 @@ def _fet(n_spk, n_col, start=0):
     return V.astype(np.int64)
 
 
+def test_looks_like_time_column_separates_a_ramp_from_a_component():
+    """fiber-session / -realign / -manifold put the time last; fiber-decollide's .fet is
+    cluster_features alone and has none, so --fet-drop-time must not eat its last component."""
+    rng = np.random.default_rng(3)
+    with_time = np.column_stack([rng.normal(size=(50, 4)), np.arange(50) * 31.0])
+    no_time = rng.normal(size=(50, 5))
+    assert fc.looks_like_time_column(with_time)
+    assert not fc.looks_like_time_column(no_time)
+    assert fc.fet_block(with_time).shape == (50, 4)
+    assert fc.fet_block(no_time).shape == (50, 5)          # nothing to drop: every column kept
+    assert np.array_equal(fc.fet_block(no_time), no_time)
+    # a constant tail column is not a ramp, and a 1-column .fet is never trimmed
+    assert not fc.looks_like_time_column(np.column_stack([no_time, np.ones(50)]))
+    assert fc.fet_block(np.arange(9.0).reshape(9, 1)).shape == (9, 1)
+
+
 def test_fet_block_drops_time_and_trims_components_per_channel():
     V = _fet(40, 13)
     assert fc.fet_block(V, drop_time=False).shape == (40, 13)
@@ -369,6 +385,21 @@ def test_embedding_space_without_hybrid_is_the_fet_unchanged():
         X1, w1 = fc._embedding_space(_A(base, 1, fet_drop_time="1"), fet,
                                      "stderiv_C5_D34", 3, 30, lambda s: None)
         assert w1 is None and np.array_equal(X1, V[:, :-1])
+
+
+def test_embedding_space_says_when_it_embeds_the_time_column():
+    """The default keeps it, so the run log has to say so: silent is how it went unnoticed."""
+    with tempfile.TemporaryDirectory() as d:
+        base = os.path.join(d, "sess")
+        nio.write_fet(base, 1, _fet(30, 9), variant="stderiv_C5_D34")
+        fet = nio.read_fet_at(base, 1, variant="stderiv_C5_D34")
+        said = []
+        fc._embedding_space(_A(base, 1), fet, "stderiv_C5_D34", 3, 30, said.append)
+        assert "KEPT" in said[0] and "useFeatures" in said[0], said
+        said.clear()
+        fc._embedding_space(_A(base, 1, fet_drop_time="1"), fet,
+                            "stderiv_C5_D34", 3, 30, said.append)
+        assert "dropped" in said[0], said
 
 
 def test_embedding_space_hybrid_stacks_two_spaces_and_drops_both_time_columns():

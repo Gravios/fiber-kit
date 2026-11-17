@@ -400,6 +400,23 @@ QUARANTINE_RULES = ("switch", "collision", "perimeter")
 
 
 # ── feature blocks: what the embedding actually sees ────────────────────────
+def looks_like_time_column(values):
+    """True when a .fet's LAST column is the spike time rather than a feature.
+
+    Not every .fet in a session carries one.  fiber-session, fiber-realign and fiber-manifold
+    write the time last because Klusters' data.cpp requires the timestamp there (and because
+    KlustaKwik's `useFeatures` default masks that one column off) -- but fiber-decollide's .fet
+    is `cluster_features` alone, with no time column, so dropping its last column would throw
+    away a real PCA component.  The time column is the one that is non-decreasing over every
+    spike in detection order; a PCA component is not.
+    """
+    V = np.asarray(values)
+    if V.ndim != 2 or V.shape[1] < 2 or V.shape[0] < 3:
+        return False
+    c = np.asarray(V[:, -1], float)
+    return bool(np.all(np.diff(c) >= 0) and c[-1] > c[0])
+
+
 def fet_block(values, *, nchan=0, pcs=0, drop_time=True):
     """One .fet read as an embedding block.
 
@@ -409,9 +426,12 @@ def fet_block(values, *, nchan=0, pcs=0, drop_time=True):
     is a slow drift coordinate worth 1/d of the variance.  `drop_time` removes it.  `pcs` then keeps
     only the first `pcs` components of each of `nchan` channels (0 = every column), the way
     FK_SESSION_HYBRID_PCS trims the raw block of fiber-session's hybrid features.
+
+    `drop_time` is honoured only where `looks_like_time_column` agrees -- a .fet without one
+    (fiber-decollide's) keeps every column, so the flag can be left on for a whole session.
     """
     V = np.asarray(values, float)
-    if drop_time and V.shape[1] > 1:
+    if drop_time and looks_like_time_column(V):
         V = V[:, :-1]
     if pcs and nchan and V.shape[1] >= int(nchan):
         per = V.shape[1] // int(nchan)
@@ -657,10 +677,13 @@ _KNOBS = {
                                 "components per channel kept from the appended block (0 = all), as "
                                 "FK_SESSION_HYBRID_PCS trims fiber-session's raw block"),
     "FK_CONSENSUS_FET_DROP_TIME": ("fet_drop_time", str, "auto",
-                                   "drop the .fet's last column -- the spike TIME Klusters requires there -- "
-                                   "before embedding: auto = only under --fet-hybrid (two blocks would carry "
-                                   "two time ramps), 1 = always, 0 = never (what every run before 0.67.26 did, "
-                                   "a z-scored drift coordinate worth 1/d of the embedding's variance)"),
+                                   "drop the .fet's last column -- the spike TIME Klusters requires there, and "
+                                   "the one KlustaKwik's useFeatures masks off -- before embedding: auto = only "
+                                   "under --fet-hybrid (two blocks would carry two time ramps), 1 = always, "
+                                   "0 = never (what every run before 0.67.26 did, a z-scored coordinate worth "
+                                   "1/d of the variance whatever the chunk length).  Only a column that is "
+                                   "non-decreasing over the whole .fet is dropped, so a .fet with no time "
+                                   "column (fiber-decollide's) keeps every component"),
     "FK_CONSENSUS_NEIGHBOURHOOD_THETA": ("neighbourhood_theta", float, 12.0,
                                          "envelope d' cut for automatic neighbourhoods (ignored with --units)"),
     "FK_CONSENSUS_MAX_SPIKES": ("max_spikes", int, 0,
@@ -741,11 +764,23 @@ def _embedding_space(a, fet, fet_variant, nchan, n_spikes, log):
     if want not in ("auto", "0", "1"):
         raise SystemExit(f"--fet-drop-time takes auto, 0 or 1; got {a.fet_drop_time!r}")
     drop_time = bool(a.fet_hybrid) if want == "auto" else bool(int(want))
+    def _block(values, **kw):
+        """One block, saying what actually happened to its last column."""
+        had = looks_like_time_column(values)
+        X = fet_block(values, drop_time=drop_time, **kw)
+        if not drop_time:
+            note = ("time column KEPT in the embedding -- KlustaKwik's useFeatures masks this one "
+                    "off; --fet-drop-time 1 does the same here" if had else "no time column")
+        elif had:
+            note = "time column dropped"
+        else:
+            note = "NO time column in this .fet -- last column kept, it is a feature"
+        return X, note
+
     if not a.fet_hybrid:
-        X = fet_block(fet.values, drop_time=drop_time)
-        log(f"[consensus] embedding space {fet_variant}: {X.shape[1]} column(s)"
-            + (" (time column dropped)" if drop_time else "")
-            + (f" of {fet.values.shape[1]}" if drop_time else ""))
+        X, note = _block(fet.values)
+        log(f"[consensus] embedding space {fet_variant}: {X.shape[1]} of "
+            f"{fet.values.shape[1]} column(s) -- {note}")
         return X, None
     token = str(a.hybrid_fet_variant)
     if token == fet_variant:
@@ -755,8 +790,8 @@ def _embedding_space(a, fet, fet_variant, nchan, n_spikes, log):
     if hyb.values.shape[0] != n_spikes:
         raise SystemExit(f"{what} holds {hyb.values.shape[0]} spikes, the .res {n_spikes} -- the hybrid "
                          f"block must come from the same detection as the clustering space.")
-    A = fet_block(fet.values, drop_time=drop_time)
-    B = fet_block(hyb.values, nchan=nchan, pcs=a.hybrid_pcs, drop_time=drop_time)
+    A, note_a = _block(fet.values)
+    B, note_b = _block(hyb.values, nchan=nchan, pcs=a.hybrid_pcs)
     if not A.shape[1] or not B.shape[1]:
         raise SystemExit(f"hybrid: a block came out empty ({A.shape[1]} + {B.shape[1]} columns)")
     X, w = stack_blocks([A, B], [1.0, float(a.hybrid_scale)])
@@ -765,7 +800,7 @@ def _embedding_space(a, fet, fet_variant, nchan, n_spikes, log):
         + (f" [{a.hybrid_pcs} pc/channel of {nchan}]" if a.hybrid_pcs else "")
         + f" = {X.shape[1]}col; appended weight {w[-1]:.3f}/column at --hybrid-scale "
           f"{a.hybrid_scale:g} (variance share {a.hybrid_scale ** 2:g}x)"
-        + ("; time column dropped from both" if drop_time else "; TIME COLUMN KEPT IN BOTH BLOCKS"))
+        + f"; {fet_variant}: {note_a}; {token}: {note_b}")
     return X, w
 
 

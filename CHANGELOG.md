@@ -4,6 +4,29 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.27] — only drop a column that IS the time, and say so when one is embedded
+- Follow-up to 0.67.26, from the obvious question: *wasn't the time feature turned off?* It is — everywhere
+  else. KlustaKwik's `useFeatures` default masks the last column off, which is **why** the time goes
+  last (`ns3_sort_bench/adapters/fiber_kit.py::_compute_features`: "the last column is the spike sample
+  index (time feature) so KK's `useFeatures` default of masking that one off works as expected"). In
+  fiber-kit it is off more thoroughly still: `klustakwik.py` and `fiber_session` never read a `.fet` at
+  all, they build features from the waveforms via `fiber_pca.cluster_features`. Of every `.fet` reader in
+  `src/fiber_kit/`, only `fiber_consensus` uses one as a feature matrix (`fiber_subsession` slices rows to
+  copy a subsession); so fiber-consensus was the one place without the mask.
+- **Chunking does not mitigate it.** `consensus_neighbourhood` z-scores `features[idx]` where `idx` is the
+  CHUNK's rows, so the ramp is renormalised to unit variance inside every chunk exactly like every PCA
+  column. A shorter chunk narrows what the ramp spans, not what it costs: 1/d of the embedding, whatever
+  `FK_CONSENSUS_CHUNK_MIN` is.
+- `looks_like_time_column` — non-decreasing over the whole file — gates the drop. Not every `.fet` has one:
+  `fiber_session`, `fiber_realign` and `fiber_manifold` write the time last, but `fiber_decollide`'s `.fet`
+  is `cluster_features` alone, and blanket-dropping its last column would have eaten a real PCA component.
+  `--fet-drop-time 1` is now safe to leave on across a whole session.
+- The run log now states what happened to each block's last column, and says so loudly when one is being
+  embedded: *"time column KEPT in the embedding -- KlustaKwik's useFeatures masks this one off;
+  --fet-drop-time 1 does the same here"*. The default is unchanged (`auto` = drop only under
+  `--fet-hybrid`), so no number already measured moves — but it is now an informed default rather than a
+  silent one. 2 tests (9 on the feature path).
+
 ## [0.67.26] — fiber-consensus can embed TWO feature spaces at once (`--fet-hybrid`)
 - The curator's case: a large multi-unit cluster in the 0312 g6 sort whose children separate into clean,
   well-spaced islands under t-SNE **in the standard space** — while the sort, and therefore fiber-consensus,
