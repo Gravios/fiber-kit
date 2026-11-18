@@ -557,5 +557,52 @@ check(tap[20] == tap.max() and tap[0] == 0.0 and tap[-1] == 0.0,
 check((fc._resid_taper(np.median(rwav[:370], 0), -1) == 1.0).all(),
       "resid taper: a negative width disables the taper")
 
+# ── 8. resid_pass: the frame it scores in (FK_CONS_RESID_ALIGN) ──────────────
+#   consolidate realigns each chunk once, to the chunk MIXTURE's median, and
+#   hands that frame to every pass.  `align` picks what the residual strip
+#   scores in: that frame, a per-cluster realign on top of it, or the STORED
+#   alignment with the chunk realign bypassed.  "stored" is the arm that needs
+#   the raw accessor to reach the pass at all, so it is checked by implanting a
+#   timing offset the chunk realign removes: scored in the chunk frame the
+#   shifted spikes are no longer outliers, scored at stored alignment they are.
+sh_shift = rwav[:300].copy()
+sh_shift[:30] = np.roll(sh_shift[:30], 4, axis=1)       # 30 spikes 4 samples late
+sh_lab3 = np.full(300, 5, np.int64)
+sh_ch3 = np.zeros(300, np.int64)
+
+
+def _align_run(align):
+    return fc.consolidate(lambda ix: sh_shift[np.asarray(ix)], sh_lab3, sh_ch3,
+                          mode="off", exclude=(0,),
+                          strip_kw=dict(resid_k_on=3.0, resid_k_off=3.0, resid_min=50,
+                                        resid_align=align),
+                          log=lambda *_: None)
+
+
+a_stored, t_stored = _align_run("stored")
+a_chunk, t_chunk = _align_run("chunk")
+a_clu, t_clu = _align_run("cluster")
+check((a_stored[:30] == 1).sum() >= 24,
+      "resid align=stored: a timing offset against the template reads as residual")
+check((a_chunk[:30] == 1).sum() < (a_stored[:30] == 1).sum(),
+      "...and align=chunk realigns that offset away, so fewer of them are parked")
+check(t_clu["resid_clusters"] == 1 and t_chunk["resid_clusters"] == 1,
+      "every frame still scores the cluster (the arms differ in what they see, not whether)")
+check(fc._KNOBS["FK_CONS_RESID_ALIGN"][2] == "chunk",
+      "the default frame is chunk -- shed's frame, and every other pass's")
+
+# A frame outside the set stops the stage with the knob's name, like cons_mode.
+try:
+    import argparse as _argparse
+    fc.add_consolidate_args(_argparse.ArgumentParser(),
+                            {"FK_CONS_RESID_ALIGN": "sideways"})
+    check(False, "a frame outside the set is an error, not silently the default")
+except SystemExit as e:
+    check("RESID_ALIGN" in str(e) or e.code != 0,
+          "a frame outside the set stops the stage with the knob's name")
+except Exception as e:
+    check("FK_CONS_RESID_ALIGN" in str(e),
+          "a frame outside the set stops the stage with the knob's name")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)

@@ -144,6 +144,7 @@ _KNOBS = {
     "FK_CONS_RESID_MIN": ("cons_resid_min", int, 200),
     "FK_CONS_RESID_IQR_MAX": ("cons_resid_iqr_max", float, 0.0),
     "FK_CONS_RESID_IQR_MIN": ("cons_resid_iqr_min", float, 0.0),
+    "FK_CONS_RESID_ALIGN": ("cons_resid_align", str, "chunk"),
 }
 
 
@@ -178,6 +179,14 @@ def add_consolidate_args(ap, gcfg=None, stage=None):
             d = cfgmod.coerce_knob(label, d, str, ("off", "strip", "knn", "both", "shed"))
             g.add_argument("--cons-mode", dest=dest, choices=("off", "strip", "knn", "both", "shed"),
                            default=d, help=f"{label}: which consolidation passes run (default {d})")
+        elif dest == "cons_resid_align":
+            # Validated like cons_mode: a frame outside the set stops the stage
+            # with the knob's name rather than silently scoring the wrong one.
+            d = cfgmod.coerce_knob(name, d, str, ("chunk", "cluster", "stored"))
+            g.add_argument("--cons-resid-align", dest=dest,
+                           choices=("chunk", "cluster", "stored"), default=d,
+                           help=f"{name}: which alignment the residual strip scores in "
+                                f"(default {d})")
         else:
             g.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
                            help=f"{name} (default {d})")
@@ -198,7 +207,8 @@ def kwargs_from_args(a):
                     resid_k_on=a.cons_resid_k_on, resid_k_off=a.cons_resid_k_off,
                     resid_win=a.cons_resid_win, resid_mingain=a.cons_resid_mingain,
                     resid_min=a.cons_resid_min, resid_iqr_max=a.cons_resid_iqr_max,
-                    resid_iqr_min=a.cons_resid_iqr_min)
+                    resid_iqr_min=a.cons_resid_iqr_min,
+                    resid_align=a.cons_resid_align)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -642,8 +652,8 @@ def _resid_tail(v, k):
 
 
 def resid_pass(get_waves, labels, idx, *, k_on=3.0, k_off=3.0, win=0, mingain=0.25,
-               minspk=200, iqr_max=0.0, iqr_min=0.0, tpl_cap=1024, exclude=(0,),
-               rng=None, log=None):
+               minspk=200, iqr_max=0.0, iqr_min=0.0, align="chunk", raw_waves=None,
+               tpl_cap=1024, exclude=(0,), rng=None, log=None):
     """Expel each cluster's gain-free residual outliers to the reserve (label 1).
 
     The interactive twin of Klusters' "Strip Residual Outliers", and a sibling
@@ -694,6 +704,37 @@ def resid_pass(get_waves, labels, idx, *, k_on=3.0, k_off=3.0, win=0, mingain=0.
     structure does not mark a mixture).  The protection for it is a seeded
     template, not a gate.
 
+    THE FRAME (`align`).  consolidate realigns every spike of a chunk ONCE, to
+    the chunk MIXTURE's median, and hands that frame to every pass; `align`
+    chooses what this pass scores in.  Measured on the same 22 clusters, where
+    the stored alignment is the curator's own per-cluster committed realign:
+
+      align     clusters  parked  precision  recall  keepers lost
+      chunk           22   10504       0.43    0.27         11.0%
+      cluster         22   10319       0.43    0.26         10.8%
+      stored          22   10148       0.49    0.29          9.5%
+
+    Realigning does not help and slightly hurts, for a reason that is the same
+    one the template and the threshold already ran into: a contaminated
+    cluster's own median is a POLLUTED alignment reference, so aligning to it
+    pulls the contaminant into the cell's frame and shrinks the residual that
+    would have exposed it.  Per cluster the cost lands exactly where the strip
+    was working -- cluster 3 drops 0.80 -> 0.63 precision, 11 drops 0.61 ->
+    0.31, 184 drops 0.27 -> 0.08.  A timing offset against the template is
+    INFORMATION about contamination, and a self-derived realign spends it.
+
+    CONFOUND, stated because it decides the default: "stored" in that table is
+    not an unaligned session.  It is this session's curator-committed alignment,
+    done per cluster AFTER splitting -- a good frame no fresh pipeline run has.
+    So the table shows that a well-seeded alignment beats a self-derived one; it
+    does NOT show that skipping the realign helps a raw session, which is not
+    measured here.  The default therefore stays "chunk", matching shed and every
+    other pass, and `align="stored"` is the lever for a session whose .spk
+    already carries a curated realign (set FK_CONS_RESID_ALIGN=stored).
+    `align="cluster"` realigns each cluster to its own median first, both
+    template and scored spikes in one frame, and is the arm the table shows
+    buying nothing.
+
     Parked spikes go to the reserve, so this is park-and-review, never
     deletion.  Returns (labels, stats)."""
     labels = np.asarray(labels).copy()
@@ -709,8 +750,19 @@ def resid_pass(get_waves, labels, idx, *, k_on=3.0, k_off=3.0, win=0, mingain=0.
         ci = idx[labels[idx] == c]
         if len(ci) < int(minspk):
             continue
-        T = _template(get_waves, ci, int(tpl_cap), rng)
-        t = resid_terms(get_waves(ci), T, win=win, mingain=mingain)
+        if align == "stored" and raw_waves is not None:
+            W = np.asarray(raw_waves(ci), float)        # bypass the chunk realign
+        elif align == "cluster":
+            W = np.asarray(fl.realign(np.asarray(get_waves(ci), float)), float)
+        else:
+            W = np.asarray(get_waves(ci), float)        # the chunk mixture frame
+        # The template comes from the SAME array, so it and the spikes it scores
+        # are always in one frame -- unlike strip's tpl_align, which sharpens the
+        # template alone (harmless for its calibrated quantities, but here it
+        # would inflate every residual it is subtracted from).
+        step = max(1, len(W) // max(1, int(tpl_cap)))
+        T = np.median(W[::step][: int(tpl_cap)], 0)
+        t = resid_terms(W, T, win=win, mingain=mingain)
         if t is None:
             continue
         ok = t["ok"]
@@ -759,7 +811,8 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
                     mingain=float(strip_kw.pop("resid_mingain", 0.25)),
                     minspk=int(strip_kw.pop("resid_min", 200)),
                     iqr_max=float(strip_kw.pop("resid_iqr_max", 0.0)),
-                    iqr_min=float(strip_kw.pop("resid_iqr_min", 0.0)))
+                    iqr_min=float(strip_kw.pop("resid_iqr_min", 0.0)),
+                    align=str(strip_kw.pop("resid_align", "chunk")))
     resid_on = resid_kw["k_on"] > 0.0 or resid_kw["k_off"] > 0.0
     # Per-cluster resid lines carry the sited tails, which is the only way to see
     # whether the thresholds are anywhere near the data; FK_CONS_RESID_QUIET=1
@@ -901,6 +954,7 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
             # cluster's own median, so it wants whatever membership the earlier
             # passes settled on rather than the one they started from.
             labels, rtot = resid_pass(aw, labels, idx, exclude=exclude, rng=rng,
+                                      raw_waves=get_waves,
                                       tpl_cap=int(strip_kw.get("tpl_cap", 1024)),
                                       log=(log if resid_log else None), **resid_kw)
             for k, v in rtot.items():

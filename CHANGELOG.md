@@ -4,6 +4,45 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.32] — realigning before the residual strip spends the signal it needs
+- Gravio, on the previous entry's claim that the residual-covariance mixture test failed because a
+  clean unit's residual is dominated by alignment jitter: *"There should be no alignment jitter if
+  the spikes are realigned before stripping."* He is right that the pipeline realigns —
+  `consolidate` does one `fl.realign` per chunk and hands that frame to every pass — and neither of
+  0.67.31's two measurements did it. Both redone, in three frames, on the same 22 clusters.
+- **The jitter diagnosis was correct and does not rescue the test.** `rho(r1, contamination)` goes
+  **−0.361 → +0.103** (chunk realign) **→ +0.134** (per-cluster), and `r1` itself collapses on the
+  clean clusters exactly as the mechanism predicts (cluster 4: 0.507 → 0.184; 110: 0.474 → 0.181;
+  12: 0.427 → 0.201). So jitter *was* what made clean units look structured. But +0.10 is not a
+  detector, and cluster 229 — 0.0 % contamination — still carries the highest `r1` in its window
+  (0.658) while cluster 3 at 53 % sits at 0.242. The blind spot stands; the reasoning for it was
+  right and the conclusion unchanged.
+- **Realigning does not help the strip and slightly hurts it**, which was not expected:
+
+  | `align` | clusters | parked | precision | recall | keepers lost |
+  |---|---|---|---|---|---|
+  | `chunk` (the frame every pass gets) | 22 | 10504 | 0.43 | 0.27 | 11.0 % |
+  | `cluster` (realigned to its own median) | 22 | 10319 | 0.43 | 0.26 | 10.8 % |
+  | `stored` (chunk realign bypassed) | 22 | 10148 | **0.49** | 0.29 | 9.5 % |
+
+  The reason is the one the template and the threshold already ran into: a contaminated cluster's
+  own median is a **polluted alignment reference**, so aligning to it pulls the contaminant into
+  the cell's frame and shrinks the residual that would have exposed it. The cost lands exactly
+  where the strip was working — cluster 3 drops 0.80 → 0.63 precision, 11 drops 0.61 → 0.31, 184
+  drops 0.27 → 0.08. A timing offset against the template is *information* about contamination,
+  and a self-derived realign spends it.
+- `FK_CONS_RESID_ALIGN` = `chunk` (default) / `cluster` / `stored`, validated like `--cons-mode`.
+  **The default stays `chunk`** because of a confound that decides it: `stored` in that table is
+  not an unaligned session, it is *this* session's curator-committed per-cluster realign, done
+  after splitting — a good frame no fresh pipeline run has. The table shows a well-seeded alignment
+  beating a self-derived one; it does **not** show that skipping the realign helps a raw session,
+  which is not measured. `stored` is the lever for a `.spk` that already carries a curated realign.
+- The template now comes from the same array the spikes are scored from, so frame and template can
+  never disagree — unlike `strip`'s `tpl_align`, which sharpens the template alone (harmless for
+  its calibrated quantities, but here it would inflate every residual it is subtracted from).
+- 5 tests, including the mechanism in miniature: 30 spikes rolled 4 samples late read as residual
+  at `stored` and are realigned away under `chunk`. 85 checks / 0 failed.
+
 ## [0.67.31] — the gain-free residual strip in fiber-consolidate, and an IQR gate that measured backwards
 - `resid_pass` + `FK_CONS_RESID_*`: the pipeline twin of Klusters' "Strip Residual Outliers"
   (ns3 patches 1094/1095). `shed` scores a gain-blind distance under a `|T|` point kernel, so
