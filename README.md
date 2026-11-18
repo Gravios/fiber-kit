@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.67.33-orange)
+![version](https://img.shields.io/badge/version-0.67.34-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -415,6 +415,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-adlp` | Amplitude-dependent low-pass of the spike snippets, written as a new waveform variant: every spike gets a zero-phase low-pass whose cutoff is a power ... |
 | `fiber-flag-artifacts` | Flag acquisition artifacts before clustering from the unwhitened temporal derivative (an exclusion mask .clu). |
 | `fiber-xcorr-merge` | Confidence-ordered Klusters roll-shift cosine merge (realign after each merge). |
+| `fiber-residual-merge` | Confidence-ordered merge by the reverse residual strip: a pair fuses when each cluster's strip keeps the other's spikes (re-template after each merge); takes `fiber-xcorr-merge`'s place in a plan. |
 | `fiber-psame-merge` | Merge clusters by a calibrated P(same cell) from history-conditioned cell models (sequential, with refit and a member cannot-link). |
 | `fiber-cfiber` | Complex-fiber drift/identity test: per curated unit, bin by time and report whether the affine-invariant loop SHAPE stays flat (identity) while the ... |
 | `fiber-intrachunk` | Collapse over-split fragments within each chunk into units (stderiv cosine + offset + depth). |

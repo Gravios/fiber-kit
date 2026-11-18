@@ -401,6 +401,106 @@ def _score(new, gt, keep):
     return (pur / tot if tot else float("nan")), comp
 
 
+def carry_hierarchy(base, elec, *, clu_method, clu_stage, out_tag, mapping, new, chunks=None,
+                    knn_moved=False, lp=_LP):
+    """Write the out-stage's .clc/.clp from the in-stage's, parents sent through `mapping` (fiber id ->
+    merged fiber id).  Shared by the merge stages (fiber-xcorr-merge, fiber-residual-merge)."""
+    # ── carry the .clc/.clp hierarchy through the merge ──
+    #   A merge changes only WHICH FIBER a child belongs to, never the atoms, so the child layer is
+    #   copied verbatim and each child's parent goes through the SAME mapping the .clu did.  Without
+    #   this the out-stage has a .clu with no matching .clc/.clp and the triple cannot be loaded as a
+    #   unit (FiberHierarchy.load raises on the missing sibling).
+    from .fiber_refiberize import FiberHierarchy as _FH
+    try:
+        _hier = _FH.load(base, elec, variant=clu_method, tag=clu_stage)
+    except (FileNotFoundError, OSError):
+        _hier = None
+        print(f"{lp} · no .clc/.clp at .{clu_stage} - wrote .clu only (no hierarchy to carry)")
+    if _hier is not None:
+        _child = np.asarray(_hier.child, np.int64).copy()
+        _newpar = {c: int(mapping.get(int(f), int(f))) for c, f in _hier.parent.items()}
+        if knn_moved:                                      # per-spike moves: each (atom -> new cluster) bucket
+            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # becomes a child atom of its own, parented to
+            mv = np.flatnonzero((_child > 0) & (new != np.array([_newpar.get(int(c), 0) for c in _child])))
+            key = {}                                       # the cluster it moved to (Klusters-inspectable)
+            for i in mv:
+                kk = (int(_child[i]), int(new[i]))
+                if kk not in key:
+                    key[kk] = nxt_c; _newpar[nxt_c] = kk[1]; nxt_c += 1
+                _child[i] = key[kk]
+            print(f"{lp} · knn moves parked as {len(key):,} new child atoms")
+        if chunks is not None:                             # spikes of chunks not merged here: one atom per
+            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # chunk under its reserved cluster, as fiber-session
+            lut = np.zeros(max(int(_child.max()), max(_newpar, default=0)) + 1, np.int64)
+            for c_, f_ in _newpar.items():
+                lut[c_] = f_
+            pc = lut[np.clip(_child, 0, lut.size - 1)]         # each spike's current parent
+            for rid in np.unique(new[_fch.is_reserved(new)]):
+                rows = (new == rid) & (pc != rid)
+                if rows.any():
+                    _child[rows] = nxt_c; _newpar[nxt_c] = int(rid); nxt_c += 1
+        _FH(_child, _newpar).save(base, elec, variant=clu_method, tag=out_tag,
+                                  renumber=False, backup=False)
+        print(f"{lp} · hierarchy carried: {len(_newpar):,} children -> "
+              f"{len(set(_newpar.values())):,} fibers (.clc unchanged, .clp remapped)")
+
+
+def emit_drift(base, elec, spk, res, SR, big, idx0, mapping, *, clu_method, out_tag, spk_variant,
+               drift_k, drift_chunk_min, spk_cap, rng, keyed=True, lp=_LP):
+    """Fit the chunk-to-chunk drift transform from a merge's own cross-chunk unions and write it as the
+    out-stage's .fibers table.  Shared by the merge stages (fiber-xcorr-merge, fiber-residual-merge)."""
+    if spk_variant != "standard":
+        print(f"{lp} · --emit-drift skipped: the drift basis is RAW (stderiv breaks the "
+              f"amplitude-distance law and mutes drift), got {spk_variant}")
+    else:
+        K = int(drift_k)
+        chunk_s = float(drift_chunk_min) * 60.0 * SR
+        t0 = float(res.min()) if res.size else 0.0
+        ch_of = {u: int((float(np.median(res[ix])) - t0) // chunk_s) for u, ix in zip(big, idx0)}
+        nP = max((max(ch_of.values()) + 1 if ch_of else 0) - 1, 0)
+        grp = defaultdict(list)
+        for u in big:
+            grp[mapping[u]].append(u)
+        anchor_links = [[] for _ in range(nP)]
+        for _g, ms in grp.items():                       # every merged group = one cell
+            byc = defaultdict(list)
+            for u in ms:
+                byc[ch_of[u]].append(u)
+            for c in sorted(byc):
+                if c + 1 in byc and 0 <= c < nP:
+                    for f in byc[c]:
+                        for g2 in byc[c + 1]:
+                            anchor_links[c].append((f, g2))
+        npair = sum(len(x) for x in anchor_links)
+        # RAW mean templates -- the same recipe fiber-session fits on (realign, no denoise/centering)
+        rt = {}
+        for u, ix in zip(big, idx0):
+            sel = fl.subsample(ix, spk_cap, rng, keyed=keyed)
+            rt[(ch_of[u], u)] = fl.realign(np.asarray(spk[sel], float)).mean(0).ravel()
+        if len(rt) >= K + 2 and npair:
+            X = np.array(list(rt.values())); mu = X.mean(0)
+            basis = np.linalg.svd(X - mu, full_matrices=False)[2][:K]
+            pos = {k: (v - mu) @ basis.T for k, v in rt.items()}
+            R, t, resid, na = flc.fit_drift_transforms(pos, anchor_links, K)
+            dpath = nio.fibers_path(base, clu_method, elec, stage=out_tag)
+            # Through a file handle, as fiber-session writes its .fibers: np.savez(<path>) appends
+            # '.npz', so the table landed at <path>.npz while fiber-pipeline hands backbone-link
+            # the canonical <path> -- and the drift step was silently skipped.
+            with nio.atomic_write(dpath, "wb") as _fh:
+                np.savez(_fh, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
+                         drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
+                         drift_resid=resid.astype(np.float32), drift_nanchor=na,
+                         meta_drift_k=np.array(K), meta_chunk_min=np.array(float(drift_chunk_min)))
+            _med = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
+            print(f"{lp} · drift fit from {npair} cross-chunk merges: {int(np.sum(na > 0))}/{max(nP, 1)} "
+                  f"chunk-pairs fit, median residual {_med:.2f}, anchors/pair median "
+                  f"{int(np.median(na)) if na.size else 0}")
+            print(f"{lp} · wrote {os.path.basename(dpath)}  (fiber-backbone-link --drift-fibers)")
+        else:
+            print(f"{lp} · --emit-drift: too few cross-chunk merges to fit ({npair} anchor pairs, "
+                  f"{len(rt)} templates; need >= {K + 2} templates and >= 1 pair)")
+
+
 def main():
     gcfg = cfgmod.load_global_config()
     ap = argparse.ArgumentParser(prog="fiber-xcorr-merge",
@@ -493,43 +593,8 @@ def main():
     print(f"{_LP} · wrote {os.path.basename(nio.session_path(base, 'clu', elec, variant=a.clu_method, tag=a.out_tag))}")
 
     # ── carry the .clc/.clp hierarchy through the merge ──
-    #   A merge changes only WHICH FIBER a child belongs to, never the atoms, so the child layer is
-    #   copied verbatim and each child's parent goes through the SAME mapping the .clu did.  Without
-    #   this the out-stage has a .clu with no matching .clc/.clp and the triple cannot be loaded as a
-    #   unit (FiberHierarchy.load raises on the missing sibling).
-    from .fiber_refiberize import FiberHierarchy as _FH
-    try:
-        _hier = _FH.load(base, elec, variant=a.clu_method, tag=a.clu_stage)
-    except (FileNotFoundError, OSError):
-        _hier = None
-        print(f"{_LP} · no .clc/.clp at .{a.clu_stage} - wrote .clu only (no hierarchy to carry)")
-    if _hier is not None:
-        _child = np.asarray(_hier.child, np.int64).copy()
-        _newpar = {c: int(mapping.get(int(f), int(f))) for c, f in _hier.parent.items()}
-        if knn_moved:                                      # per-spike moves: each (atom -> new cluster) bucket
-            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # becomes a child atom of its own, parented to
-            mv = np.flatnonzero((_child > 0) & (new != np.array([_newpar.get(int(c), 0) for c in _child])))
-            key = {}                                       # the cluster it moved to (Klusters-inspectable)
-            for i in mv:
-                kk = (int(_child[i]), int(new[i]))
-                if kk not in key:
-                    key[kk] = nxt_c; _newpar[nxt_c] = kk[1]; nxt_c += 1
-                _child[i] = key[kk]
-            print(f"{_LP} · knn moves parked as {len(key):,} new child atoms")
-        if chunks is not None:                             # spikes of chunks not merged here: one atom per
-            nxt_c = int(max(_newpar) if _newpar else 0) + 1    # chunk under its reserved cluster, as fiber-session
-            lut = np.zeros(max(int(_child.max()), max(_newpar, default=0)) + 1, np.int64)
-            for c_, f_ in _newpar.items():
-                lut[c_] = f_
-            pc = lut[np.clip(_child, 0, lut.size - 1)]         # each spike's current parent
-            for rid in np.unique(new[_fch.is_reserved(new)]):
-                rows = (new == rid) & (pc != rid)
-                if rows.any():
-                    _child[rows] = nxt_c; _newpar[nxt_c] = int(rid); nxt_c += 1
-        _FH(_child, _newpar).save(base, elec, variant=a.clu_method, tag=a.out_tag,
-                                  renumber=False, backup=False)
-        print(f"{_LP} · hierarchy carried: {len(_newpar):,} children -> "
-              f"{len(set(_newpar.values())):,} fibers (.clc unchanged, .clp remapped)")
+    carry_hierarchy(base, elec, clu_method=a.clu_method, clu_stage=a.clu_stage, out_tag=a.out_tag,
+                    mapping=mapping, new=new, chunks=chunks, knn_moved=knn_moved)
 
     # ── optional: fit + emit the drift transform from OUR OWN cross-chunk merges ──
     #   An accepted merge between clusters living in different chunks IS a same-cell correspondence --
@@ -537,56 +602,9 @@ def main():
     #   drift object without fiber-session having linked at all.  Shared primitive (flc.fit_drift_transforms),
     #   shared key names, so fiber-backbone-link consumes it unchanged via --drift-fibers.
     if a.emit_drift:
-        if a.spk_variant != "standard":
-            print(f"{_LP} · --emit-drift skipped: the drift basis is RAW (stderiv breaks the "
-                  f"amplitude-distance law and mutes drift), got {a.spk_variant}")
-        else:
-            K = int(a.drift_k)
-            chunk_s = float(a.drift_chunk_min) * 60.0 * SR
-            t0 = float(res.min()) if res.size else 0.0
-            ch_of = {u: int((float(np.median(res[ix])) - t0) // chunk_s) for u, ix in zip(big, idx0)}
-            nP = max((max(ch_of.values()) + 1 if ch_of else 0) - 1, 0)
-            grp = defaultdict(list)
-            for u in big:
-                grp[mapping[u]].append(u)
-            anchor_links = [[] for _ in range(nP)]
-            for _g, ms in grp.items():                       # every merged group = one cell
-                byc = defaultdict(list)
-                for u in ms:
-                    byc[ch_of[u]].append(u)
-                for c in sorted(byc):
-                    if c + 1 in byc and 0 <= c < nP:
-                        for f in byc[c]:
-                            for g2 in byc[c + 1]:
-                                anchor_links[c].append((f, g2))
-            npair = sum(len(x) for x in anchor_links)
-            # RAW mean templates -- the same recipe fiber-session fits on (realign, no denoise/centering)
-            rt = {}
-            for u, ix in zip(big, idx0):
-                sel = fl.subsample(ix, a.spk_cap, rng, keyed=_SAMPLE_KEYED)
-                rt[(ch_of[u], u)] = fl.realign(np.asarray(spk[sel], float)).mean(0).ravel()
-            if len(rt) >= K + 2 and npair:
-                X = np.array(list(rt.values())); mu = X.mean(0)
-                basis = np.linalg.svd(X - mu, full_matrices=False)[2][:K]
-                pos = {k: (v - mu) @ basis.T for k, v in rt.items()}
-                R, t, resid, na = flc.fit_drift_transforms(pos, anchor_links, K)
-                dpath = nio.fibers_path(base, a.clu_method, elec, stage=a.out_tag)
-                # Through a file handle, as fiber-session writes its .fibers: np.savez(<path>) appends
-                # '.npz', so the table landed at <path>.npz while fiber-pipeline hands backbone-link
-                # the canonical <path> -- and the drift step was silently skipped.
-                with nio.atomic_write(dpath, "wb") as _fh:
-                    np.savez(_fh, drift_pca_basis=basis.astype(np.float32), drift_pca_mean=mu.astype(np.float32),
-                             drift_R=R.astype(np.float32), drift_t=t.astype(np.float32),
-                             drift_resid=resid.astype(np.float32), drift_nanchor=na,
-                             meta_drift_k=np.array(K), meta_chunk_min=np.array(float(a.drift_chunk_min)))
-                _med = float(np.nanmedian(resid)) if np.isfinite(resid).any() else float("nan")
-                print(f"{_LP} · drift fit from {npair} cross-chunk merges: {int(np.sum(na > 0))}/{max(nP, 1)} "
-                      f"chunk-pairs fit, median residual {_med:.2f}, anchors/pair median "
-                      f"{int(np.median(na)) if na.size else 0}")
-                print(f"{_LP} · wrote {os.path.basename(dpath)}  (fiber-backbone-link --drift-fibers)")
-            else:
-                print(f"{_LP} · --emit-drift: too few cross-chunk merges to fit ({npair} anchor pairs, "
-                      f"{len(rt)} templates; need >= {K + 2} templates and >= 1 pair)")
+        emit_drift(base, elec, spk, res, SR, big, idx0, mapping, clu_method=a.clu_method, out_tag=a.out_tag,
+                   spk_variant=a.spk_variant, drift_k=a.drift_k, drift_chunk_min=a.drift_chunk_min,
+                   spk_cap=a.spk_cap, rng=rng, keyed=_SAMPLE_KEYED)
 
     if a.gt_clu:
         try:                                               # a diagnostic, after the output is written: a GT of

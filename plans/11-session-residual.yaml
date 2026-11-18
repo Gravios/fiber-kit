@@ -1,0 +1,41 @@
+# ============================================================================
+#  11-session-residual : fiber-session, then ONE confidence-ordered merge of its fibers
+#  by the reverse residual strip (fiber-residual-merge, re-template after each merge) --
+#  plan 10 with the residual merge in fiber-xcorr-merge's place.  Starts from the
+#  EXISTING fiber-session sort (fiber_session tag; the session step is commented out)
+#  and does not overwrite it.
+#
+#  Measured 2026-11-19 on sirotaA-jg-000005-20120316 group 6, five 18-min chunks sorted
+#  WITHOUT cross-chunk linking (1,961 fibers), against the curated .clu (33 units; the
+#  curation is itself contaminated, so read the differences, not the levels).  Clusters
+#  >= 50 spikes; `good` = curator-kept spikes in a cluster whose dominant curated label
+#  is their own; `complete` = share in the largest cluster of their unit; `mixed` =
+#  clusters holding >= 20 % (and >= 50 spikes) of a second curated unit.
+#
+#                                         merges clusters purity  good  complete mixed   time
+#    fiber-session fibers (input)             -    1961    73.4   59.6     8.3     19      -
+#    fiber-xcorr-merge, tuned profile *     573    1388    73.2   65.2    24.9     18   337 s
+#    fiber-xcorr-merge, plan 10            1124     837    69.1   66.1    43.9     13    66 s
+#    this plan (defaults)                   399    1562    73.0   62.2    21.4     21   240 s
+#      --min-n 15                           798    1163    72.2   68.5    19.7     23   709 s
+#      --acc-thr 0.8                        149    1812    73.6   60.8    15.6     19   153 s
+#      --acc-thr 0.9                          1       -       -      -       -      -      -
+#      --shift 2                            428    1533    72.8   62.4    22.4     21      -
+#      --merge-align klusters               596    1365    72.7   63.1    22.2     22      -
+#    (* fiber-kit-best.yaml with FK_XCM_RVU_KNN 0: with the knn split on, the run was
+#       stopped unfinished after 23 CPU-minutes on 1,840 participating fibers)
+#
+#  What that says, on this ONE sort: at its defaults the residual merge is NOT ahead of
+#  the tuned fiber-xcorr-merge -- same purity, fewer unions, less `good` and less
+#  completeness.  It is the conservative of the two.  --min-n 15 gives the most `good`
+#  of any run here and costs a point of purity and 3x the time.  ACC_THR is read
+#  against a cluster's acceptance of ITSELF, which at k 3 / 3 is ~0.85-0.9: 0.9 is
+#  "never".  Untuned; nothing here was searched.
+#
+#  Run:  fiber-pipeline <elec> --plan plans/11-session-residual.yaml
+# ============================================================================
+pipeline:
+  # - {stage: fiber-session,       name: session, out: fiber_session}
+  # The merge compares at the STORED alignment: the numbers above are on the .spk as fiber-session left
+  # it.  If the sort was not realigned, put a fiber-realign on fiber_session before this step.
+  - {stage: fiber-residual-merge,  name: merge,   in: fiber_session, out: session_rsm}

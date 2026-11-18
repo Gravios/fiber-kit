@@ -69,8 +69,8 @@ def main():
             "FK_SESSION_RKK_DIMS": (9, 6)}
     check(diff == want, f"best differs from exp in exactly the winner's 11 knobs + the 3 held ones ({diff})")
     pe = [s["name"] for s in exp["pipeline"]]; pb = [s["name"] for s in best["pipeline"]]
-    check(pb == [n for n in pe if n not in ("psame-chunk", "polish", "rdr-polish")],
-          f"best's plan is exp's without psame-chunk and without the fiber-polish branch ({pb})")
+    check(pb == [n for n in pe if n not in ("psame-chunk", "polish", "rdr-polish", "merge-resid", "psame-resid")],
+          f"best's plan is exp's without psame-chunk and without the exp-only branches ({pb})")
     link = next(s for s in best["pipeline"] if s["name"] == "link")
     psame = next(s for s in best["pipeline"] if s["name"] == "psame")
     check(link["in"] == "fs_clean", "link reads fs_clean (the dropped step's input)")

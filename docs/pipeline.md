@@ -171,6 +171,15 @@ Instead of `intrachunk → link`, you can link the over-split `fiber_session` ou
   merge**, gated by the refractory cross-correlogram and (by default) the band-overlap co-gate.  Run
   it after `fiber-backbone-link`.
 
+- **`fiber-residual-merge`** — the same agglomeration with a different score: a pair fuses when
+  each cluster's **residual strip keeps the other's spikes** (the share of spikes inside the other
+  cluster's gain-free on- / off-channel tails, the minimum of the two directions, judged under the
+  cleaner cluster's tails), **re-templating after each merge**, gated by the same refractory
+  cross-correlogram.  It reads and writes what `fiber-xcorr-merge` does (`.clu`, the `.clc`/`.clp`
+  hierarchy, the drift table) and takes its place in a plan; it adds a `.rsm` table of every pair
+  at or above the threshold.  It compares at the stored alignment, so run it after a
+  `fiber-realign`.
+
 A ready multi-pass plan chains them: `backbone-link → xcorr-merge → backbone-link → xcorr-merge`
 (`plans/09-backbone-xcorr.yaml`).
 
@@ -288,7 +297,7 @@ log numbers them from 1.
   id allocator skips the block: `fiber_chunks.next_free_id` here, and `highestClusterId()` in
   Klusters (neurosuite-3 0889).  So new clusters are always numbered below it.  The two sides'
   constants are checked by `test_shared_contract` when `NS3_ROOT` is set.
-* Stages that support it natively (`--chunks`): fiber-flag-artifacts, fiber-session, fiber-xcorr-merge,
+* Stages that support it natively (`--chunks`): fiber-flag-artifacts, fiber-session, fiber-xcorr-merge, fiber-residual-merge,
   fiber-realign, fiber-rdr.
 * Stages that only relabel spikes run **shielded** by fiber-pipeline: fiber-cpos, fiber-intrachunk,
   fiber-link, fiber-anchor-link, fiber-backbone-link, fiber-consensus, fiber-lowmix, fiber-manifold,

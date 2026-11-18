@@ -143,6 +143,11 @@
 #    * link         : fiber-cpos on fs_clean (raw .spk), fiber-anchor-link on the units layer -> exp_linked,
 #                     then realign.
 #    * merge        : fiber-xcorr-merge -> exp_xcm.
+#    * merge-resid, psame-resid : a BRANCH (0.67.34).  fiber-residual-merge reads the SAME exp_linked as
+#                     `merge` and writes exp_rsm; psame-resid takes it to exp_rsm_psame.  One run gives both
+#                     lines, exp_psame and exp_rsm_psame, from one linker output.  To make the residual merge
+#                     the plan's merge instead, delete these two steps and set `merge` to
+#                     {stage: fiber-residual-merge, name: merge, in: exp_linked, out: exp_xcm}.
 #    * psame        : fiber-psame-merge -> exp_psame (section [F]); its weights were calibrated on
 #                     stderiv_C5, see the note there.
 #    * realign-final, rdr : on exp_psame.
@@ -179,7 +184,9 @@ pipeline:
   - {stage: fiber-anchor-link,    name: link,            in: fs_psc, out: exp_linked, params: {frag-layer: units}}
   - {stage: fiber-realign,        name: realign-3,       in: exp_linked}
   - {stage: fiber-xcorr-merge,    name: merge,           in: exp_linked, out: exp_xcm}
+  - {stage: fiber-residual-merge, name: merge-resid,     in: exp_linked, out: exp_rsm}   # section [I]; a BRANCH: the reverse residual strip in fiber-xcorr-merge's place, from the same linker output
   - {stage: fiber-psame-merge,    name: psame,           in: exp_xcm, out: exp_psame}   # section [F]
+  - {stage: fiber-psame-merge,    name: psame-resid,     in: exp_rsm, out: exp_rsm_psame}   # the branch's P(same): compare exp_rsm_psame with exp_psame
   - {stage: fiber-realign,        name: realign-final,   in: exp_psame}
   - {stage: fiber-rdr,            name: rdr,             in: exp_psame}    # QC table only: <SESS>.rdr.<method>.<group>.exp_psame.tsv
   - {stage: fiber-polish,         name: polish,          in: fiber_session, out: fs_polish}   # section [H]; a BRANCH: compare fs_polish with exp_psame
@@ -1800,3 +1807,51 @@ FK_POLISH_HYBRID_PCS:    3        # 3 | 1-3.  features: standard-basis component
                                   #   OWN knob (not FK_SESSION_HYBRID_PCS): 3 / 2.0 is what the measurements used.
 FK_POLISH_HYBRID_SCALE:  2.0      # 2.0 | 0.5-2.  features: weight of the raw block.
 FK_POLISH_SEED:          0
+
+# ============================================================================
+#  [I] FIBER-RESIDUAL-MERGE -- merge by the reverse residual strip  (takes fiber-xcorr-merge's place)
+#  The same confidence-ordered agglomeration as fiber-xcorr-merge (best pair first, re-template after
+#  each union, refractory veto, .clc/.clp carried, drift table emitted), with a different SCORE:
+#  instead of the cosine of two median waveforms, the share of each cluster's SPIKES that the other
+#  cluster's residual strip would keep (gain-free on- / off-channel residual, robust tails), the
+#  minimum of the two directions, under the CLEANER cluster's tails.  A different cell at the same
+#  site moves the on-channel term, one at a neighbouring site the off-channel term, and a population
+#  at a different amplitude sits outside the tails -- so none of fiber-xcorr-merge's vetoes (band,
+#  timing, gain IQR, residual variance, knn split) has a counterpart here.
+#  Run it AFTER a fiber-realign: it compares at the STORED alignment by default.
+#  Writes <base>.rsm.<group>.<out>.tsv (every pair at or above ACC_THR, with its verdict).
+#  Plan steps `merge-resid` / `psame-resid`: a BRANCH beside `merge` / `psame`, from the same exp_linked.
+#  Measured 2026-11-19 on g6 0316 (five unlinked 18-min chunks, 1,961 fibers; plans/11-session-residual.yaml):
+#  at these defaults it is NOT ahead of the tuned fiber-xcorr-merge -- purity 73.0 vs 73.2, `good`
+#  62.2 vs 65.2, completeness 21.4 vs 24.9, 399 unions vs 573.  It is the conservative of the two.
+#  UNTUNED: every value below is the one that measurement used.
+# ============================================================================
+FK_RSM_ACC_THR:          0.7      # 0.7 | 0.6-0.85.  Min share of EACH cluster's spikes surviving the other's strip.
+                                  #   The merge threshold.  Read it against a cluster's acceptance of ITSELF,
+                                  #   ~0.85-0.9 at k 3 / 3: on g6 0316, 0.7 / 0.8 / 0.9 gave 399 / 149 / 1 unions.
+                                  #   DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and
+                                  #   collapsed a whole sort to 9 clusters.
+FK_RSM_COS:              0.5      # 0.5 | 0.3-0.8.  Template cosine a pair needs to be scored at all (a pre-filter,
+                                  #   not the decision).
+FK_RSM_SHIFT:            0        # 0 | 0-4 (samples).  Compare a pair at the lag, within +/- this, that maximises
+                                  #   the template cosine.  0 = the stored alignment.  2 on g6 0316: 428 unions
+                                  #   for 399, purity -0.2, completeness +1.0, about twice the pairs scored.
+FK_RSM_STRIP_K_ON:       3.0      # 3.0 | 2.5-4.  Robust-tail multiplier of the on-channel residual (0 = term off).
+FK_RSM_STRIP_K_OFF:      3.0      # 3.0 | 2.5-4.  The same for the off-channel residual (0 = term off).
+FK_RSM_WIN:              0        # 0 | samples.  Hamming taper width centred on the template peak; 0 = half the record.
+FK_RSM_MINGAIN:          0.25     # 0.25.  A spike whose fitted gain is below this has no template-shaped signal.
+FK_RSM_REFRAC_MS:        2.0      # 2.0 | 1.5-3.0.  Refractory window of the CCG veto; 0 disables it.
+FK_RSM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powered pair is vetoed.
+FK_RSM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
+FK_RSM_MIN_N:            40       # 40 | 15-100.  Min spikes for a cluster to take part.  15 on g6 0316: 798 unions
+                                  #   for 399, `good` 62.2 -> 68.5, purity 73.0 -> 72.2, 3x the time.
+FK_RSM_SPK_CAP:          1000     # 1000.  Spikes per cluster for the template, the tails and the acceptance share.
+FK_RSM_SAMPLE_KEYED:     1        # 1.  That sample keyed by the cluster's own spike set (as FK_XCM_SAMPLE_KEYED).
+FK_RSM_MERGE_ALIGN:      stored   # stored | peak | klusters.  stored = the .spk as it stands; peak / klusters
+                                  #   re-align each cluster's sample first, as fiber-xcorr-merge does.  klusters on
+                                  #   g6 0316: 596 unions for 399, purity -0.3, `good` +0.9.
+FK_RSM_MERGE_ALIGN_MIN_SCORE: 0.10  # 0.10.  --merge-align klusters only (as FK_XCM_MERGE_ALIGN_MIN_SCORE).
+FK_RSM_EMIT_DRIFT:       1        # 0 = off, 1 = on.  Fit + write the drift table from this stage's cross-chunk
+                                  #   unions, exactly as FK_XCM_EMIT_DRIFT.
+FK_RSM_DRIFT_K:          6        # 6.  Dimensionality of the fitted drift transform.
+FK_RSM_DRIFT_CHUNK_MIN:  12.0     # 12.0 (min).  Chunk length used to bin clusters for the drift fit.

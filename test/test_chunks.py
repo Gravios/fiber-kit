@@ -7,7 +7,8 @@
     chunk 1 partitioned exactly as in the full run, and the .clc/.clp reproduce the .clu;
   * fiber-flag-artifacts --chunks 1: chunk 0 marked reserved (not evaluated), and fiber-session reads such
     a mask without excluding those spikes;
-  * fiber-xcorr-merge on the chunk run: the reserved cluster is never merged and keeps its id;
+  * fiber-xcorr-merge and fiber-residual-merge on the chunk run: the reserved cluster is never merged and
+    keeps its id;
   * fiber-realign: spikes in reserved clusters get offset 0 while the others move;
   * fiber-rdr skips the reserved cluster;
   * fiber-pipeline refuses a stage that changes the spike set while FK_CHUNKS is set, and SHIELDS the
@@ -174,6 +175,16 @@ def main():
                       "--chunks", "1", "--chunk-length", "0.5")
         fx = nio.read_clu_file(base + ".clu.stderiv.1.fx")[1]
         check(rc == 0 and np.all(fx[ci == 0] == fch.RESERVED_LO), "xcorr-merge --chunks 1 on a full sort: chunk 0 -> reserved")
+        # ── fiber-residual-merge: the same chunk contract as fiber-xcorr-merge ──
+        rc, out = run("fiber_residual_merge", base, "1", "--clu-method", "stderiv", "--clu-stage", "c1",
+                      "--out-stage", "c1r", "--acc-thr", "0.05", "--cos", "0.0", "--min-n", "15", "--emit-drift", "0")
+        xr = nio.read_clu_file(base + ".clu.stderiv.1.c1r")[1]
+        check(rc == 0 and np.all(xr[ci == 0] == fch.RESERVED_LO) and not fch.is_reserved(xr[ci == 1]).any(),
+              "residual-merge never merges the reserved cluster, even at acceptance 0.05" + ("" if rc == 0 else "\n" + out[-2000:]))
+        rc, out = run("fiber_residual_merge", base, "1", "--clu-method", "stderiv", "--clu-stage", "full",
+                      "--out-stage", "fr", "--min-n", "15", "--emit-drift", "0", "--chunks", "1", "--chunk-length", "0.5")
+        frr = nio.read_clu_file(base + ".clu.stderiv.1.fr")[1]
+        check(rc == 0 and np.all(frr[ci == 0] == fch.RESERVED_LO), "residual-merge --chunks 1 on a full sort: chunk 0 -> reserved")
         # ── fiber-realign: reserved spikes are frozen ──
         from fiber_kit import fiber_realign as frl
         spk = np.asarray(nio.open_spk_file(base + ".spk.standard.1", NSAMP, NCH)).copy()

@@ -568,6 +568,29 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_POLISH_HYBRID_SCALE` | `2.0` | `2.0` | `2.0` | 2.0 \| 0.5-2.  features: weight of the raw block. |
 | `FK_POLISH_SEED` | `0` | `0` | `0` |  |
 
+## [I] FIBER-RESIDUAL-MERGE -- merge by the reverse residual strip  (takes fiber-xcorr-merge's place)
+
+| knob | fiber-kit-exp.yaml | fiber-kit-best.yaml | fiber-kit.yaml | meaning |
+|---|---|---|---|---|
+| `FK_RSM_ACC_THR` | `0.7` | `0.7` | `0.7` | 0.7 \| 0.6-0.85.  Min share of EACH cluster's spikes surviving the other's strip. The merge threshold.  Read it against a cluster's acceptance of ITSELF, ~0.85-0.9 at k 3 / 3: on g6 0316, 0.7 / 0.8 / 0.9 gave 399 / 149 / 1 unions. DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and collapsed a whole sort to 9 clusters. |
+| `FK_RSM_COS` | `0.5` | `0.5` | `0.5` | 0.5 \| 0.3-0.8.  Template cosine a pair needs to be scored at all (a pre-filter, not the decision). |
+| `FK_RSM_SHIFT` | `0` | `0` | `0` | 0 \| 0-4 (samples).  Compare a pair at the lag, within +/- this, that maximises the template cosine.  0 = the stored alignment.  2 on g6 0316: 428 unions for 399, purity -0.2, completeness +1.0, about twice the pairs scored. |
+| `FK_RSM_STRIP_K_ON` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  Robust-tail multiplier of the on-channel residual (0 = term off). |
+| `FK_RSM_STRIP_K_OFF` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  The same for the off-channel residual (0 = term off). |
+| `FK_RSM_WIN` | `0` | `0` | `0` | 0 \| samples.  Hamming taper width centred on the template peak; 0 = half the record. |
+| `FK_RSM_MINGAIN` | `0.25` | `0.25` | `0.25` | 0.25.  A spike whose fitted gain is below this has no template-shaped signal. |
+| `FK_RSM_REFRAC_MS` | `2.0` | `2.0` | `2.0` | 2.0 \| 1.5-3.0.  Refractory window of the CCG veto; 0 disables it. |
+| `FK_RSM_REFRAC_THR` | `0.3` | `0.3` | `0.3` | 0.3.  CCG obs/exp ratio above which a powered pair is vetoed. |
+| `FK_RSM_REFRAC_MIN_EXP` | `5.0` | `5.0` | `5.0` | 5.0.  Min expected coincidences for the veto to have power (else it abstains). |
+| `FK_RSM_MIN_N` | `40` | `40` | `40` | 40 \| 15-100.  Min spikes for a cluster to take part.  15 on g6 0316: 798 unions for 399, `good` 62.2 -> 68.5, purity 73.0 -> 72.2, 3x the time. |
+| `FK_RSM_SPK_CAP` | `1000` | `1000` | `1000` | 1000.  Spikes per cluster for the template, the tails and the acceptance share. |
+| `FK_RSM_SAMPLE_KEYED` | `1` | `1` | `1` | 1.  That sample keyed by the cluster's own spike set (as FK_XCM_SAMPLE_KEYED). |
+| `FK_RSM_MERGE_ALIGN` | `stored` | `stored` | `stored` | stored \| peak \| klusters.  stored = the .spk as it stands; peak / klusters re-align each cluster's sample first, as fiber-xcorr-merge does.  klusters on g6 0316: 596 unions for 399, purity -0.3, `good` +0.9. |
+| `FK_RSM_MERGE_ALIGN_MIN_SCORE` | `0.10` | `0.10` | `0.10` | 0.10.  --merge-align klusters only (as FK_XCM_MERGE_ALIGN_MIN_SCORE). |
+| `FK_RSM_EMIT_DRIFT` | `1` | `1` | `1` | 0 = off, 1 = on.  Fit + write the drift table from this stage's cross-chunk unions, exactly as FK_XCM_EMIT_DRIFT. |
+| `FK_RSM_DRIFT_K` | `6` | `6` | `6` | 6.  Dimensionality of the fitted drift transform. |
+| `FK_RSM_DRIFT_CHUNK_MIN` | `12.0` | `12.0` | `12.0` | 12.0 (min).  Chunk length used to bin clusters for the drift fit. |
+
 ## Legacy names
 
 Still honoured for old configs; use the replacement.

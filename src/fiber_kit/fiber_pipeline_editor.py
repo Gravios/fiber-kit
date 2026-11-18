@@ -123,6 +123,15 @@ CATALOG = {
         _p("refrac-thr", "float", 0.3, "CCG obs/exp ratio above which a merge is vetoed"),
         _p("min-n", "int", 40, "min spikes for a cluster to participate"),
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
+    "fiber-residual-merge": dict(input=True, tags=["in", "out"], params=[  # reverse-residual-strip merge; takes xcorr-merge's place
+        _p("acc-thr", "float", 0.7, "min share of each cluster's spikes surviving the other's strip; do not go below 0.7 unexamined"),
+        _p("cos", "float", 0.5, "template cosine a pair needs to be scored at all (pre-filter)"),
+        _p("shift", "int", 0, "+/- samples: compare a pair at its best template lag; 0 = the stored alignment"),
+        _p("strip-k-on", "float", 3.0, "robust-tail multiplier, on-channel residual"),
+        _p("strip-k-off", "float", 3.0, "robust-tail multiplier, off-channel residual"),
+        _p("refrac-ms", "float", 2.0, "refractory window (ms); 0 disables the CCG veto"),
+        _p("min-n", "int", 40, "min spikes for a cluster to participate"),
+        _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
     "fiber-consensus": dict(input=True, tags=["in", "out"], params=[  # clean before merging; not in `all`
         _p("quarantine-only", "int", 0, "1 = clean only: quarantine -> noise, labels + hierarchy kept (use after fiber-session)"),
         _p("res-variant", "str", "", "pin the .res variant (e.g. stderiv_S3); empty = shared resolve"),
@@ -182,6 +191,7 @@ STAGE_MODULES = {
     "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
     "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
     "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
+    "fiber-residual-merge": "fiber_kit.fiber_residual_merge",
     "fiber-psame-merge": "fiber_kit.fiber_psame",
     "fiber-consensus": "fiber_kit.fiber_consensus",
     "fiber-lowmix": "fiber_kit.fiber_lowmix",

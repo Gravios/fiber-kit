@@ -45,9 +45,10 @@ KLUSTERS_OVERRIDES = {
     "FK_REALIGN_VARIANT":     ('""', "no fixed variant: the plugin's `method` (the open clustering's) decides"),
 }
 KLUSTERS_DROP_STEPS = ("rdr",)      # QC table only
-# The exp plan's fiber-polish BRANCH (0.67.33) is not part of the tuned winner: the profile's numbers were
-# confirmed without it, so both generated profiles carry it commented out.
-BRANCH_DROP_STEPS = ("polish", "rdr-polish")
+# The exp plan's BRANCHES -- fiber-polish (0.67.33), fiber-residual-merge + its psame (0.67.34) -- are not
+# part of the tuned winner: the profile's numbers were confirmed without them, so both generated profiles
+# carry them commented out.
+BRANCH_DROP_STEPS = ("polish", "rdr-polish", "merge-resid", "psame-resid")
 # exp values the profiles do NOT inherit: the winner was confirmed with these, and the exp file moved
 # them for the fiber-polish route (finer splitting that only pays with a merge after it).
 HELD = {
@@ -99,7 +100,7 @@ RUN_CONTROL = ["FK_CHUNKS", "FK_REALIGN_VARIANT", "FK_SESSION_SKIP_EXTANT", "FK_
 IN_PLAN = [("B", "fiber-flag-artifacts"), ("1", None), ("6", None), ("2", None), ("C", None), ("3", None),
            ("5", None), ("B", "fiber-xcorr-merge"), ("F", None), ("E", None)]
 NOT_IN_PLAN = [("4", None), ("A", None), ("B", "fiber-refine"), ("B", "fiber-peel"), ("B", "fiber-backbone-link"),
-               ("B", "fiber-stochastic"), ("D", None), ("G", None), ("H", None)]
+               ("B", "fiber-stochastic"), ("D", None), ("G", None), ("H", None), ("I", None)]
 
 BANNER_OPEN = re.compile(r"^# =+\s*$")
 BANNER = re.compile(r"^#\s+\[([A-Z0-9])\]\s+(.*\S)\s*$")
@@ -194,7 +195,7 @@ def plan_block(plan_lines, drop_steps=()):
     out = []
     for ln in plan_lines:
         if any(f"name: {d}," in ln for d in BRANCH_DROP_STEPS) and ln.lstrip().startswith("- {"):
-            out.append("  # " + ln.split("#")[0].strip() + "   # NOT in this profile: the fiber-polish branch is exp-only (untuned)")
+            out.append("  # " + ln.split("#")[0].strip() + "   # NOT in this profile: an exp-only branch (untuned)")
             continue
         if any(f"name: {d}," in ln for d in drop_steps) and ln.lstrip().startswith("- {"):
             out.append("  # " + ln.strip() + "   # DROPPED in the klusters profile: a QC table nobody reads in a recluster")

@@ -39,4 +39,4 @@ statistics, curation/merge-validation, visualization (`fiber-view`), and design 
 | tune a stage without editing code | [config.md](config.md) — set the `FK_*` knob |
 | understand band matching / the warp veto | [methods.md](methods.md) |
 | link the over-split output directly (skip refine/intrachunk) | `fiber-backbone-link` in [stages.md](stages.md) |
-| fuse near-identical clusters after linking | `fiber-xcorr-merge` in [stages.md](stages.md) |
+| fuse near-identical clusters after linking | `fiber-xcorr-merge`, or `fiber-residual-merge` (the residual strip in reverse), in [stages.md](stages.md) |

@@ -4,6 +4,54 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.34] — fiber-residual-merge: the reverse residual strip in fiber-xcorr-merge's flow
+- **New stage `fiber-residual-merge`** (`fiber_residual_merge.py`, `FK_RSM_*`, section [I] of the config).
+  fiber-xcorr-merge's flow, step for step -- clusters >= `MIN_N` on the standard `.spk`, a
+  confidence-ordered agglomeration (best pair first, re-template after every union), the refractory
+  CCG veto, `--chunks`, the `.clc`/`.clp` hierarchy carried, the drift table emitted, `--gt-clu` -- with
+  a different SCORE.  Instead of the roll cosine of two median waveforms: the share of each cluster's
+  SPIKES that land inside the other cluster's residual-strip tails (the gain-free on- / off-channel
+  residual of 0.67.31), the minimum of the two directions, under the CLEANER cluster's tails.  The
+  rules are the ones measured for fiber-polish's merge (0.67.33): cleaner tails, greedy with
+  re-templating, `ACC_THR` 0.7.  Two conservative pre-filters keep it affordable: template cosine >
+  `COS`, and each cluster's MEDIAN must itself pass the other's strip.  Writes
+  `<base>.rsm.<group>.<out>.tsv`, every pair at or above the threshold with its verdict.
+- **Not a win yet.**  Measured 2026-11-19 on g6 of 0316, five 18-min chunks sorted without cross-chunk
+  linking (1,961 fibers), against the curated `.clu` (itself contaminated; read differences):
+
+  | run | unions | clusters | purity | good | complete | mixed | time |
+  |---|---|---|---|---|---|---|---|
+  | input | — | 1961 | 73.4 | 59.6 | 8.3 | 19 | — |
+  | fiber-xcorr-merge, tuned profile (knn split off) | 573 | 1388 | 73.2 | 65.2 | 24.9 | 18 | 337 s |
+  | fiber-xcorr-merge, plan 10 (cos 0.96, min-n 15) | 1124 | 837 | 69.1 | 66.1 | 43.9 | 13 | 66 s |
+  | **fiber-residual-merge, defaults** | 399 | 1562 | 73.0 | 62.2 | 21.4 | 21 | 240 s |
+  | `--min-n 15` | 798 | 1163 | 72.2 | 68.5 | 19.7 | 23 | 709 s |
+  | `--acc-thr 0.8` / `0.9` | 149 / 1 | 1812 / — | 73.6 | 60.8 | 15.6 | 19 | 153 s |
+  | `--shift 2` | 428 | 1533 | 72.8 | 62.4 | 22.4 | 21 | — |
+  | `--merge-align klusters` | 596 | 1365 | 72.7 | 63.1 | 22.2 | 22 | — |
+
+  At its defaults it is the conservative of the two: the same purity as the tuned fiber-xcorr-merge,
+  fewer unions, less `good`, less completeness.  `--min-n 15` has the most `good` of any run and pays a
+  point of purity and 3x the time.  `ACC_THR` is read against a cluster's acceptance of itself, ~0.85-0.9
+  at k 3 / 3, so 0.9 merges nothing.  One sort, one curation, nothing searched; the input is the
+  unlinked session sort, not the linker output the exp plan hands a merge.
+- **So it does not replace fiber-xcorr-merge in any shipped plan.**  `fiber-kit-exp.yaml` runs it as a
+  BRANCH: `merge-resid` (exp_linked -> exp_rsm) beside `merge`, and `psame-resid` (exp_rsm ->
+  exp_rsm_psame) beside `psame`, so one run gives both lines from one linker output.  The swap is one
+  line (in the plan's notes).  `fiber-kit-best.yaml` / `-klusters.yaml` do not inherit the branch.
+  `plans/11-session-residual.yaml` is plan 10 with the stage swapped, carrying the table above.
+- What the synthetic test pins (`test_residual_merge.py`, 22 checks): fragments of one cell fuse; a
+  different shape at the same site is kept out by the on-channel term and the same shape at the next
+  site by the off-channel term; a population at 0.65x amplitude is kept apart (the residual is
+  gain-free but normalised by the spike's own energy, so it sits at ~2.4x the noise residual); a
+  half-and-half mixture is judged under the clean fragment's tails and not merged, though under its own
+  it would accept 97 % of the clean one; the refractory veto; `--shift`; order independence; the CLI
+  with its hierarchy and table.  The chunk-run contract is in `test_chunks.py`.
+- `fiber_xcorr_merge.carry_hierarchy` / `emit_drift`: the two blocks of that stage's `main()` lifted
+  into functions, unchanged, so both merges share them.
+- Wired into `fiber-pipeline` (an alternative-linker stage, native `--chunks`), the plan editor,
+  `fiber_bench`'s knob prefixes and `fiber_chunks.SUPPORTED_STAGES`.
+
 ## [0.67.33] — fiber-polish: strip + pooled rkk, small-leaf t-SNE islands, reverse-strip merge
 - **New stage `fiber-polish`** (`fiber_polish.py`, `FK_POLISH_*`, section [H] of the config). Four
   operations on a finished `.clu`, all scored on the RAW windows at their stored alignment:

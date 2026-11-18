@@ -788,6 +788,45 @@ Positional: `session`, `elec`
 | `--drift-chunk-min` | `12.0` | FK_XCM_DRIFT_CHUNK_MIN (default 12.0) |
 | `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
 | `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
+### `fiber-residual-merge`
+
+Confidence-ordered reverse-residual-strip merge (re-template after each merge).
+
+Positional: `session`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` |  |
+| `--clu-stage` (`--variant`) | `backbone_linked` | input .clu stage tag (e.g. the linker's output) |
+| `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
+| `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates and residuals (RAW: the strip was measured there) |
+| `--out-stage` (`--out-tag`) | `resid_merged` | post-fiber stage tag of the output .clu |
+| `--refrac-censor-ms` | `0.0` | detection censor window (ms) |
+| `--nsamp` | — | override; default from <session>.yaml |
+| `--nchan` | — | override; default from <session>.yaml |
+| `--ref-sample` | — | override; default = peak from <session>.yaml |
+| `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness |
+| `--seed` | `0` |  |
+| `--acc-thr` | `0.7` | FK_RSM_ACC_THR (default 0.7) |
+| `--cos` | `0.5` | FK_RSM_COS (default 0.5) |
+| `--shift` | `0` | FK_RSM_SHIFT (default 0) |
+| `--strip-k-on` | `3.0` | FK_RSM_STRIP_K_ON (default 3.0) |
+| `--strip-k-off` | `3.0` | FK_RSM_STRIP_K_OFF (default 3.0) |
+| `--win` | `0` | FK_RSM_WIN (default 0) |
+| `--mingain` | `0.25` | FK_RSM_MINGAIN (default 0.25) |
+| `--refrac-ms` | `2.0` | FK_RSM_REFRAC_MS (default 2.0) |
+| `--refrac-thr` | `0.3` | FK_RSM_REFRAC_THR (default 0.3) |
+| `--refrac-min-exp` | `5.0` | FK_RSM_REFRAC_MIN_EXP (default 5.0) |
+| `--min-n` | `40` | FK_RSM_MIN_N (default 40) |
+| `--spk-cap` | `1000` | FK_RSM_SPK_CAP (default 1000) |
+| `--sample-keyed` | `1` | FK_RSM_SAMPLE_KEYED (default 1) |
+| `--merge-align` | `stored` | FK_RSM_MERGE_ALIGN (default stored) |
+| `--merge-align-min-score` | `0.1` | FK_RSM_MERGE_ALIGN_MIN_SCORE (default 0.1) |
+| `--emit-drift` | `1` | FK_RSM_EMIT_DRIFT (default 1) |
+| `--drift-k` | `6` | FK_RSM_DRIFT_K (default 6) |
+| `--drift-chunk-min` | `12.0` | FK_RSM_DRIFT_CHUNK_MIN (default 12.0) |
+| `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
+| `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
 ### `fiber-psame-merge`
 
 Merge by a calibrated P(same cell) from history-conditioned cell models (docs/methods.md "P(same cell)").

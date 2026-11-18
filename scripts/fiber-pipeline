@@ -350,7 +350,7 @@ PEEL_BURST_FOOT_LO="${FK_PEEL_BURST_FOOT_LO:-0}"      # burst pass floor below f
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
 PRE_STAGES=(fiber-flag-artifacts)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
-ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-psame-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
+ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-residual-merge fiber-psame-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
 POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr fiber-manifold fiber-polish)   # post-sort review / refinement: runs AFTER the plan's final stage; plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}" "${POST_STAGES[@]}")
 
@@ -374,6 +374,7 @@ ALT_SUMMARY=(
     "link fiber-session fragments on the invariant backbone (CI-overlap + warp veto); alt to intrachunk+link"
     "link fiber-session fragments seeded by the overlap anchors, on a within-session calibrated null; alt to backbone-link"
     "fuse near-identical clusters by Klusters roll-shift cosine + refractory veto; realign after each merge"
+    "fuse clusters whose residual strips keep each other's spikes + refractory veto; re-template after each merge"
     "merge clusters by a calibrated P(same cell) from history-conditioned cell models (refit + cannot-link)"
     "DIAGNOSTIC: ensemble/consensus fibering over resampled draws -> <SESS>.fiberens.<ELEC>.npz"
 )
@@ -755,6 +756,11 @@ fiber_xcorr_merge() {   # merge clusters by Klusters roll-shift cosine (realign 
     _run fiber-xcorr-merge "$SESS" "$ELEC" --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-backbone_linked}" --out-stage "${STEP_OUT:-xcorr_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
+fiber_residual_merge() {   # merge clusters by the reverse residual strip (re-template after each merge) -> .resid_merged
+    echo "== fiber-residual-merge  (.${STEP_IN:-backbone_linked} -> .${STEP_OUT:-resid_merged} + $SESS.rsm.$ELEC.${STEP_OUT:-resid_merged}.tsv) =="
+    _run fiber-residual-merge "$SESS" "$ELEC" --clu-method "$(clu_variant)" --clu-stage "${STEP_IN:-backbone_linked}" --out-stage "${STEP_OUT:-resid_merged}" "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
 fiber_consensus() {   # post-sort review: resampled t-SNE consensus + quarantine -> .consensus + .qrn table
     # Reads the continuous .fil (the envelope needs the trace, not the .spk), the .fet of the clu's
     # method for the embeddings, and the clu at STEP_IN.  FK_CONSENSUS_* knobs come from $FK_CONFIG /
@@ -825,7 +831,7 @@ fiber_rdr() {   # post-sort QC: residual-derivative contamination score per clus
 #                  back into their reserved clusters in the stage's output and restores the input;
 #   anything else  changes the spike set or the .res (fiber-refine's dedup, fiber-stochastic's own chunking)
 #                  and refuses to run while FK_CHUNKS is set.
-CHUNK_STAGES=" fiber-flag-artifacts fiber-session fiber-xcorr-merge fiber-realign fiber-rdr "
+CHUNK_STAGES=" fiber-flag-artifacts fiber-session fiber-xcorr-merge fiber-residual-merge fiber-realign fiber-rdr "
 SHIELD_STAGES=" fiber-cpos fiber-intrachunk fiber-link fiber-anchor-link fiber-backbone-link fiber-psame-merge fiber-consensus fiber-lowmix fiber-manifold fiber-polish fiber-peel fiber-refit "
 _chunks_guard() {   # 0 = run as is; 1 = run shielded; exits for a stage that cannot run on a chunk run
     case "${FK_CHUNKS:-}" in ""|all|ALL|none) return 0 ;; esac
@@ -894,6 +900,7 @@ run_stage_direct() {
         fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
         fiber-anchor-link) fiber_anchor_link "${ov[@]}" ;;
         fiber-xcorr-merge) fiber_xcorr_merge "${ov[@]}" ;;
+        fiber-residual-merge) fiber_residual_merge "${ov[@]}" ;;
         fiber-psame-merge) fiber_psame_merge "${ov[@]}" ;;
         fiber-stochastic) fiber_stochastic "${ov[@]}" ;;
         fiber-consensus)  fiber_consensus  "${ov[@]}" ;;
@@ -926,6 +933,7 @@ run_plan_stage_direct() {
         fiber-backbone-link) fiber_backbone_link ;;
         fiber-anchor-link) fiber_anchor_link ;;
         fiber-xcorr-merge) fiber_xcorr_merge ;;
+        fiber-residual-merge) fiber_residual_merge ;;
         fiber-psame-merge) fiber_psame_merge ;;
         fiber-consensus)  fiber_consensus  ;;
         fiber-lowmix)     fiber_lowmix     ;;
@@ -949,7 +957,7 @@ except ImportError:                                   # a source checkout run wi
     sys.path.insert(0, os.path.join(sys.argv[1], "..", "src"))
     from fiber_kit import plan_steps
 KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
-         "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-psame-merge",
+         "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-residual-merge", "fiber-psame-merge",
          "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix", "fiber-rdr", "fiber-manifold", "fiber-polish"}
 sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN

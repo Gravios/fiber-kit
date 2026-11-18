@@ -36,7 +36,8 @@ RESERVED_N = 100
 RESERVED_HI = 2 ** 24 - 1                         # 16,777,215: the highest id a float32 holds exactly
 RESERVED_LO = RESERVED_HI - RESERVED_N + 1        # 16,777,116
 DEFAULT_CHUNK_MIN = 12.0
-SUPPORTED_STAGES = ("fiber-flag-artifacts", "fiber-session", "fiber-xcorr-merge", "fiber-realign", "fiber-rdr")
+SUPPORTED_STAGES = ("fiber-flag-artifacts", "fiber-session", "fiber-xcorr-merge", "fiber-residual-merge",
+                    "fiber-realign", "fiber-rdr")
 
 
 def reserved_id(k):
