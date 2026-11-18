@@ -150,6 +150,16 @@ CATALOG = {
         _p("min-n", "int", 50, "min spikes for a cluster to take part"),
         _p("spk-variant", "str", "", "waveform variant the cell models use (empty = the clu method; calibrated on stderiv_C5)"),
         _p("geo", "int", 0, "1 = add the shared-geometry term (fiber_srcgeom; standard .spk + probe geometry)")]),
+    "fiber-polish": dict(input=True, tags=["in", "out"], params=[  # strip + pool rkk, islands, reverse-strip merge; not in `all`
+        _p("loops", "int", 2, "strip -> pool -> full-dimensional rkk rounds (0 = skip)"),
+        _p("rounds", "int", 2, "island -> merge rounds (0 = skip)"),
+        _p("island", "int", 1, "1 = small-leaf t-SNE island pass (needs fiber-kit[consensus])"),
+        _p("merge", "int", 1, "1 = reverse-strip merge"),
+        _p("merge-thr", "float", 0.7, "min share of each cluster surviving the other's strip (0.3 collapses a sort)"),
+        _p("island-margin", "float", 0.5, "an island moves only if it fits the target this much better than its parent"),
+        _p("strip-min", "int", 100, "smallest cluster that is stripped"),
+        _p("pool-max", "int", 50, "clusters below this join the pool whole"),
+        _p("gt-clu", "str", "", "curated .clu path to score every stage against (empty = off)")]),
     "fiber-rdr": dict(input=True, tags=["in"], params=[  # post-sort QC table; writes no .clu; not in `all`
         _p("thr", "float", 2.0, "flag clusters whose residual-derivative excess ratio reaches this"),
         _p("min-amp", "float", 4.0, "channels below this amplitude (noise SD) are not scored"),
@@ -176,6 +186,7 @@ STAGE_MODULES = {
     "fiber-consensus": "fiber_kit.fiber_consensus",
     "fiber-lowmix": "fiber_kit.fiber_lowmix",
     "fiber-rdr": "fiber_kit.fiber_rdr",
+    "fiber-polish": "fiber_kit.fiber_polish",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning

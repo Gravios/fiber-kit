@@ -77,7 +77,7 @@ Positional: `session`, `group`
 | `--overlap-min` | `4.0` |  |
 | `--min-group` | `200` | COARSE min spikes/fiber (for linking) |
 | `--fine-algo` (`--fine-method`) | `rkk` | per-fiber fine clusterer: rkk (default, masked-EM KlustaKwik with per-cluster realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the coarse cluster whole) — choices: `gmm`, `rkk`, `fiber`, `none` |
-| `--rkk-dims` | `6` |  |
+| `--rkk-dims` | `6` | FK_SESSION_RKK_DIMS. SVD components of the fine-split feature space handed to the rkk CEM |
 | `--rkk-max` | `50` |  |
 | `--rkk-realign` | flag (off) | interleave rkk (CEM) with per-cluster realignment (per-step; default on) |
 | `--no-rkk-realign` | flag (on) | legacy: one parent realign + fixed features for the rkk split |
@@ -239,6 +239,14 @@ Positional: `session`, `group`
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
 | `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
+| `--cons-resid-k-on` | `0.0` | FK_CONS_RESID_K_ON (default 0.0) |
+| `--cons-resid-k-off` | `0.0` | FK_CONS_RESID_K_OFF (default 0.0) |
+| `--cons-resid-win` | `0` | FK_CONS_RESID_WIN (default 0) |
+| `--cons-resid-mingain` | `0.25` | FK_CONS_RESID_MINGAIN (default 0.25) |
+| `--cons-resid-min` | `200` | FK_CONS_RESID_MIN (default 200) |
+| `--cons-resid-iqr-max` | `0.0` | FK_CONS_RESID_IQR_MAX (default 0.0) |
+| `--cons-resid-iqr-min` | `0.0` | FK_CONS_RESID_IQR_MIN (default 0.0) |
+| `--cons-resid-align` | `chunk` | FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored` |
 | `--realign` | `auto` | FK_SESSION_REALIGN. At the end of the run, align every spike to its fiber's template (fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY waveform variant's .spk on disk at the shifted times (standard, stderiv*, ...) and its .fet (from its .pca; _D alias .fet included) -- what `fiber-realign --reextract --refeaturize --variants all` does as a separate step. reextract = re-read the .fil; shift-spk = circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil exists, else shift-spk; off = leave .res/.spk/.fet as extracted. — choices: `auto`, `reextract`, `shift-spk`, `off` |
 | `--realign-algo` | `klusters` | FK_REALIGN_ALGO. fiber-realign --align-algo for the end-of-run commit; its other knobs (FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there — choices: `klusters`, `template`, `centroid` |
 | `--realign-fil` | — | filtered signal the end-of-run re-extraction reads (default <base>.fil) |
@@ -527,6 +535,14 @@ Positional: `session`, `group`
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
 | `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
+| `--cons-resid-k-on` | `0.0` | FK_CONS_RESID_K_ON (default 0.0) |
+| `--cons-resid-k-off` | `0.0` | FK_CONS_RESID_K_OFF (default 0.0) |
+| `--cons-resid-win` | `0` | FK_CONS_RESID_WIN (default 0) |
+| `--cons-resid-mingain` | `0.25` | FK_CONS_RESID_MINGAIN (default 0.25) |
+| `--cons-resid-min` | `200` | FK_CONS_RESID_MIN (default 200) |
+| `--cons-resid-iqr-max` | `0.0` | FK_CONS_RESID_IQR_MAX (default 0.0) |
+| `--cons-resid-iqr-min` | `0.0` | FK_CONS_RESID_IQR_MIN (default 0.0) |
+| `--cons-resid-align` | `chunk` | FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored` |
 | `--profile` | `default` | fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: 'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline. — choices: `default`, `recommended` |
 | `--off-n-ref` | — | SNR-adaptive offset gate: spike count at which --off-thr applies as-is; loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr. |
 | `--off-ceil` | `2.0` | cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee). |
@@ -679,6 +695,14 @@ Positional: `args`
 | `--cons-fold-thr` | `0.9` | FK_CONS_FOLD_THR (default 0.9) |
 | `--cons-scorr` | `0.93` | FK_CONS_SCORR (default 0.93) |
 | `--cons-off-thr` | `0.0` | FK_CONS_OFF_THR (default 0.0) |
+| `--cons-resid-k-on` | `0.0` | FK_CONS_RESID_K_ON (default 0.0) |
+| `--cons-resid-k-off` | `0.0` | FK_CONS_RESID_K_OFF (default 0.0) |
+| `--cons-resid-win` | `0` | FK_CONS_RESID_WIN (default 0) |
+| `--cons-resid-mingain` | `0.25` | FK_CONS_RESID_MINGAIN (default 0.25) |
+| `--cons-resid-min` | `200` | FK_CONS_RESID_MIN (default 200) |
+| `--cons-resid-iqr-max` | `0.0` | FK_CONS_RESID_IQR_MAX (default 0.0) |
+| `--cons-resid-iqr-min` | `0.0` | FK_CONS_RESID_IQR_MIN (default 0.0) |
+| `--cons-resid-align` | `chunk` | FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored` |
 ### `fiber-backbone-link`
 
 Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto.
@@ -1363,6 +1387,49 @@ Positional: `base`, `elec`
 | `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
 | `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
 | `--fet-method` | `manifold` | method token of the written feature space |
+### `fiber-polish`
+
+Polish an over-split sort (0.67.33): a residual strip with a pooled full-dimensional rkk, a small-leaf
+t-SNE island pass, and the reverse residual strip as a merge.  Every score is taken on the RAW
+(`.spk.standard`) windows at their stored alignment; the pool rkk and the island embedding use the
+session's feature space (hybrid when the method `.spk` and both `.pca` bases are present).  Writes a
+flat `.clu` -- the `.clc`/`.clp` hierarchy is not rebuilt.  The island pass needs `fiber-kit[consensus]`.
+Untuned: the defaults are the values of the 2026-11-18 measurements (module docstring;
+`FK_POLISH_*` in docs/config.md).
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
+| `--gt-clu` | `""` | curated .clu path: score every stage against it (nothing is fitted to it) |
+| `--loops` | `2` | strip -> pool -> rkk rounds (0 = skip; rounds 3-5 moved `good` <= 0.5 pt) [FK_POLISH_LOOPS; default 2] |
+| `--strip-k-on` | `3.0` | strip: robust-tail multiplier of the on-channel residual (0 = term off) [FK_POLISH_STRIP_K_ON; default 3.0] |
+| `--strip-k-off` | `3.0` | strip: robust-tail multiplier of the off-channel residual (0 = term off) [FK_POLISH_STRIP_K_OFF; default 3.0] |
+| `--strip-min` | `100` | strip: smallest cluster that is stripped [FK_POLISH_STRIP_MIN; default 100] |
+| `--pool-max` | `50` | pool: clusters below this many spikes join the pool whole [FK_POLISH_POOL_MAX; default 50] |
+| `--pool-min` | `50` | pool: smallest cluster the pool rkk may create (smaller -> the residue cluster) [FK_POLISH_POOL_MIN; default 50] |
+| `--pool-k` | `50` | pool: starting cluster count of the full-dimensional rkk [FK_POLISH_POOL_K; default 50] |
+| `--pool-cap` | `30000` | pool: most spikes the rkk is run on (the rest go to the residue cluster) [FK_POLISH_POOL_CAP; default 30000] |
+| `--rounds` | `2` | island -> merge rounds (0 = skip both) [FK_POLISH_ROUNDS; default 2] |
+| `--island` | `1` | 1 = run the island pass (needs the [consensus] extra), 0 = merge only [FK_POLISH_ISLAND; default 1] |
+| `--leaf` | `300` | islands: most spikes per t-SNE leaf (the 200-300 regime) [FK_POLISH_LEAF; default 300] |
+| `--island-runs` | `8` | islands: resampled t-SNE runs per leaf [FK_POLISH_ISLAND_RUNS; default 8] |
+| `--island-min` | `10` | islands: smallest community treated as an island [FK_POLISH_ISLAND_MIN; default 10] |
+| `--island-min-clu` | `60` | islands: smallest cluster (and leaf) that is embedded [FK_POLISH_ISLAND_MIN_CLU; default 60] |
+| `--island-margin` | `0.5` | islands: move only if residual to the target < MARGIN x residual to the parent [FK_POLISH_ISLAND_MARGIN; default 0.5] |
+| `--merge` | `1` | 1 = run the reverse-strip merge, 0 = islands only [FK_POLISH_MERGE; default 1] |
+| `--merge-thr` | `0.7` | merge: min share of each cluster that survives the other's strip (0.3 collapses a sort) [FK_POLISH_MERGE_THR; default 0.7] |
+| `--merge-min` | `50` | merge: smallest cluster that takes part [FK_POLISH_MERGE_MIN; default 50] |
+| `--cos` | `0.5` | template cosine a pair needs to be a candidate (islands and merge) [FK_POLISH_COS; default 0.5] |
+| `--tpl-cap` | `1000` | spikes per cluster used for a median template and its tails [FK_POLISH_TPL_CAP; default 1000] |
+| `--hybrid-pcs` | `3` | features: standard-basis components per channel in the raw block of the hybrid space [FK_POLISH_HYBRID_PCS; default 3] |
+| `--hybrid-scale` | `2.0` | features: weight of the raw block (the hybrid-search winner's 2.0) [FK_POLISH_HYBRID_SCALE; default 2.0] |
+| `--seed` | `0` | random seed (subsamples, t-SNE runs, rkk) [FK_POLISH_SEED; default 0] |
+| `--out-tag` | — | output stage tag (default <clu-stage>_polish) |
 ### `fiber-bench`
 
 Run, score and compare pipeline-parameter variants under a config hash.  Sub-commands `run` (the config's

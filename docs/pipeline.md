@@ -128,6 +128,7 @@ The embedded plan of `fiber-kit-exp.yaml` (0.60.0), in order:
 | 12 | realign-final | fiber-realign | exp_psame (in place) | final re-extraction for curation |
 | 13 | rdr | fiber-rdr | exp_psame -> `.rdr.<method>.<group>.exp_psame.tsv` | per-cluster contamination QC; flags only, no `.clu` |
 | (opt) | fiber-lowmix | exp_final -> exp_lowmix (+ .lmx) | split low-amplitude mixture units; copies returned on a refractory allow, novel groups to noise (docs/methods.md "Low-amplitude mixtures") |
+| (exp) | fiber-polish | fiber_session -> fs_polish (flat `.clu`) | a BRANCH of the exp plan: residual strip + pooled full-dimensional rkk, small-leaf t-SNE islands, reverse-strip merge; compare with exp_psame (untuned, `FK_POLISH_*`) |
 | (opt) | fiber-manifold | exp_final -> exp_final_manifold (.clc/.clp + `.fet.manifold.<g>` + .mft) | refine a unit's children from the field manifold of its off-spike channels, in sliding windows; moves no spike between units ("Refining a unit", below) |
 
 Run it with `FK_CONFIG=fiber-kit-exp.yaml fiber-pipeline <elec>`.  The yaml pins the method token
@@ -291,7 +292,7 @@ log numbers them from 1.
   fiber-realign, fiber-rdr.
 * Stages that only relabel spikes run **shielded** by fiber-pipeline: fiber-cpos, fiber-intrachunk,
   fiber-link, fiber-anchor-link, fiber-backbone-link, fiber-consensus, fiber-lowmix, fiber-manifold,
-  fiber-peel, fiber-refit.  Before the stage, `fiber_chunks shield` sets the not-computed chunks' spikes to 0 in the
+  fiber-polish, fiber-peel, fiber-refit.  Before the stage, `fiber_chunks shield` sets the not-computed chunks' spikes to 0 in the
   step's input `.clu` (their atoms to 0 in the `.clc`), the artifact bin every stage leaves out of its units,
   and saves the input beside it (`<file>.chunkshield`).  After the stage, `unshield` puts those spikes back
   into their reserved clusters in the `.clu` the stage wrote (in the `.clc`/`.clp`, as one atom per chunk

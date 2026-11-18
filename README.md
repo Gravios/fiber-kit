@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.67.32-orange)
+![version](https://img.shields.io/badge/version-0.67.33-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -406,6 +406,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-envelope` | Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision ... |
 | `fiber-consensus` | Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in ... |
 | `fiber-lowmix` | Split low-amplitude units that are mixtures of sources; return the parts that copy existing units. |
+| `fiber-polish` | Polish an over-split sort: residual strip + pooled full-dimensional rkk, small-leaf t-SNE islands, and the reverse residual strip as a merge (flat `.clu`; untuned). |
 | `fiber-manifold` | Refine a unit: fit the field manifold of its off-spike channels in sliding windows (drift-following); children per class × time bin and a `.fet.manifold` feature space for Klusters. |
 | `fiber-template` | Linked per-unit median templates (one .wtf per variant, indexed by .wti) along time or energy. |
 | `fiber-link` | Link per-chunk fragments into tracked units (position fingerprint + A anchor + template co-gate). |

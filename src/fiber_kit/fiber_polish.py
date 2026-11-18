@@ -1,0 +1,498 @@
+#!/usr/bin/env python3
+"""fiber-polish -- clean and consolidate an over-split sort, per spike and per cluster.
+
+Four operations on a finished .clu, each built on the gain-free residual of fiber-consolidate's
+resid_pass (0.67.31), run in this order:
+
+  LOOP (FK_POLISH_LOOPS times)
+    strip     every cluster of at least STRIP_MIN spikes parks its own residual outliers
+              (resid_pass: on- and off-channel terms, a robust tail each, flagged sets unioned).
+    pool      the parked spikes and every cluster below POOL_MAX spikes are pooled, and a
+              FULL-dimensional rkk (every column of the session's feature space, not the
+              top-`rkk-dims` reduction the fine split uses) re-clusters the pool.  A pool cluster
+              below POOL_MIN goes to the run's residue cluster -- a real cluster, never 0 or 1.
+              Cluster 0 (artifacts; a chunk fiber-pipeline shielded) is never touched.
+  ROUNDS (FK_POLISH_ROUNDS times)
+    islands   each cluster is cut into leaves of at most LEAF spikes by median bisection along
+              its first two principal components; each leaf gets a resampled t-SNE consensus
+              (fiber-consensus's own runs and co-neighbour communities).  Every community but
+              the leaf's largest is an ISLAND.  An island moves to another cluster only when its
+              median waveform fits that cluster's median better than its own parent's by
+              ISLAND_MARGIN (gain-only residual; the parent's median taken without the island).
+    merge     the reverse residual strip.  acc(B|A) is the share of B's spikes that A's strip
+              would NOT park; a pair merges when min(acc(A|B), acc(B|A)) >= MERGE_THR.  Greedy,
+              best pair first, the union RE-TEMPLATED and re-scored before the next (no
+              union-find chaining), with the tails taken from the CLEANER cluster of the pair
+              (the smaller threshold per term) so a contaminated cluster's inflated tails cannot
+              accept everything.
+
+MEASURED (2026-11-18, against the curators' labels; `good` = share of curator-kept spikes in a
+>=50-spike cluster whose dominant curated label is their own, `complete` = share in the single
+largest cluster of their own unit):
+
+  sort                                clusters   purity    good   complete
+  0312 g6 chunk 19, standard   sort        178    63.6%   62.7%     33.8%
+                               polish       80    73.8%   78.7%     42.6%
+  0312 g6 chunk 19, hybrid     sort        110    64.1%   63.5%     71.8%
+                               polish       63    72.8%   77.9%     56.4%
+  0312 g6 t 24-36, hybrid      sort        110    68.1%   67.8%     51.3%
+                               polish       71    70.7%   73.7%     55.5%
+  0316 g6 (5 unlinked chunks)  sort        750    73.4%   59.6%      8.3%
+                               polish      322    71.9%   77.1%     25.2%
+
+What that table does and does not say:
+  * the island pass is what raises purity and `good`, and it COSTS completeness (4-15 points a
+    pass); the merge gives part of it back.  On a sort that starts complete (the hybrid) the
+    chain is a trade, not a gain on every axis.
+  * on a chunk-disjoint sort the merge is the cross-chunk linker: 354 unions on 0316 halved the
+    cluster count for -0.8 purity.  At MERGE_THR 0.7 it still leaves 322 clusters for 33 units.
+  * the loop cost 6.6 points of purity on 0316 and none on the single-chunk 0312 windows.  The
+    pool is session-wide; whether that is the cause was not tested.
+  * the curated labels are themselves contaminated, so none of these is a clean verdict.
+  * MERGE_THR does not transfer from clean pairs: 0.3 separated 29 clean fibers at AUC 0.99 and
+    collapsed a whole sort to 9 clusters.  0.7 was clean on the hybrid sorts (49 right / 1 wrong
+    unions under the earlier union-find rule) and is the default; nothing below it is.
+Every default here is the value those runs used.  None has been tuned.
+
+The strip, the island fit and the merge all score the RAW (.spk.standard) windows at their stored
+alignment -- the space the residual was validated in, and a self-derived realign spends the timing
+offset that marks contamination (0.67.32).  The feature space of the pool rkk and of the island
+embedding is the session's: [method block | raw block] when the method .spk and both .pca bases
+are present (the hybrid), else the standard basis, else a local SVD.
+
+Writes <base>.clu.<method>.<group>.<out-tag>.  The .clc/.clp hierarchy is NOT rebuilt -- islands
+and the pool cut across atoms -- so the output is a flat clu.
+"""
+import argparse
+import heapq
+import os
+import sys
+import time
+
+import numpy as np
+
+try:
+    from . import config as cfgmod
+    from . import fiber_chunks as _fch
+    from . import fiber_consolidate as fcn
+    from . import fiber_pca as fp
+    from . import neuro_io as nio
+    from . import session_yaml as sy
+except ImportError:                                    # run as a script from src/fiber_kit
+    import config as cfgmod
+    import fiber_chunks as _fch
+    import fiber_consolidate as fcn
+    import fiber_pca as fp
+    import neuro_io as nio
+    import session_yaml as sy
+
+_KNOBS = {
+    "FK_POLISH_LOOPS": ("loops", int, 2, "strip -> pool -> rkk rounds (0 = skip; rounds 3-5 moved `good` <= 0.5 pt)"),
+    "FK_POLISH_STRIP_K_ON": ("strip_k_on", float, 3.0, "strip: robust-tail multiplier of the on-channel residual (0 = term off)"),
+    "FK_POLISH_STRIP_K_OFF": ("strip_k_off", float, 3.0, "strip: robust-tail multiplier of the off-channel residual (0 = term off)"),
+    "FK_POLISH_STRIP_MIN": ("strip_min", int, 100, "strip: smallest cluster that is stripped"),
+    "FK_POLISH_POOL_MAX": ("pool_max", int, 50, "pool: clusters below this many spikes join the pool whole"),
+    "FK_POLISH_POOL_MIN": ("pool_min", int, 50, "pool: smallest cluster the pool rkk may create (smaller -> the residue cluster)"),
+    "FK_POLISH_POOL_K": ("pool_k", int, 50, "pool: starting cluster count of the full-dimensional rkk"),
+    "FK_POLISH_POOL_CAP": ("pool_cap", int, 30000, "pool: most spikes the rkk is run on (the rest go to the residue cluster)"),
+    "FK_POLISH_ROUNDS": ("rounds", int, 2, "island -> merge rounds (0 = skip both)"),
+    "FK_POLISH_ISLAND": ("island", int, 1, "1 = run the island pass (needs the [consensus] extra), 0 = merge only"),
+    "FK_POLISH_LEAF": ("leaf", int, 300, "islands: most spikes per t-SNE leaf (the 200-300 regime)"),
+    "FK_POLISH_ISLAND_RUNS": ("island_runs", int, 8, "islands: resampled t-SNE runs per leaf"),
+    "FK_POLISH_ISLAND_MIN": ("island_min", int, 10, "islands: smallest community treated as an island"),
+    "FK_POLISH_ISLAND_MIN_CLU": ("island_min_clu", int, 60, "islands: smallest cluster (and leaf) that is embedded"),
+    "FK_POLISH_ISLAND_MARGIN": ("island_margin", float, 0.5, "islands: move only if residual to the target < MARGIN x residual to the parent"),
+    "FK_POLISH_MERGE": ("merge", int, 1, "1 = run the reverse-strip merge, 0 = islands only"),
+    "FK_POLISH_MERGE_THR": ("merge_thr", float, 0.7, "merge: min share of each cluster that survives the other's strip (0.3 collapses a sort)"),
+    "FK_POLISH_MERGE_MIN": ("merge_min", int, 50, "merge: smallest cluster that takes part"),
+    "FK_POLISH_COS": ("cos", float, 0.5, "template cosine a pair needs to be a candidate (islands and merge)"),
+    "FK_POLISH_TPL_CAP": ("tpl_cap", int, 1000, "spikes per cluster used for a median template and its tails"),
+    "FK_POLISH_HYBRID_PCS": ("hybrid_pcs", int, 3, "features: standard-basis components per channel in the raw block of the hybrid space"),
+    "FK_POLISH_HYBRID_SCALE": ("hybrid_scale", float, 2.0, "features: weight of the raw block (the hybrid-search winner's 2.0)"),
+    "FK_POLISH_SEED": ("seed", int, 0, "random seed (subsamples, t-SNE runs, rkk)"),
+}
+
+
+def _knob_default(name, typ, fallback, gcfg):
+    return cfgmod.knob_value(name, typ, fallback, gcfg)
+
+
+# ── shared pieces ────────────────────────────────────────────────────────────
+def _real(labels):
+    """Mask of spikes in a real, non-reserved cluster (not 0/1, not a chunk's reserved id)."""
+    labels = np.asarray(labels)
+    return (labels > 1) & ~_fch.is_reserved(labels)
+
+
+def _sub(rows, cap, rng):
+    return np.sort(rng.choice(rows, cap, replace=False)) if rows.size > cap else rows
+
+
+def gain_residual(TI, TX):
+    """Gain-only residual of template TI against TX, on + off channel, in the strip's units
+    (1 = as large as TX).  inf when TI carries no TX-shaped signal.  The difference of medians of
+    two fragments of one cell is almost purely a gain term (0.046 of template energy against 0.46
+    for different cells, 0312 g6); also fitting a SHIFT made the hardest pairs worse."""
+    h = fcn._resid_taper(TX, 0)
+    Ec = (h[:, None] * TX ** 2).sum(0)
+    if not Ec.max() > 0:
+        return np.inf
+    u = Ec / Ec.max()
+    Eon = float((u * Ec).sum())
+    g = float((h[:, None] * u[None, :] * TI * TX).sum() / Eon)
+    if g < 0.25:
+        return np.inf
+    return float((h[:, None] * (TI - g * TX) ** 2).sum() / (g * g * Eon))
+
+
+def kd_leaves(P, leaf):
+    """Index sets of at most `leaf` points: median bisection of P (n, 2) alternating its columns."""
+    out, stack = [], [(np.arange(len(P)), 0)]
+    while stack:
+        ix, d = stack.pop()
+        if ix.size <= leaf:
+            out.append(ix)
+            continue
+        o = ix[np.argsort(P[ix, d % 2], kind="stable")]
+        stack += [(o[:o.size // 2], d + 1), (o[o.size // 2:], d + 1)]
+    return out
+
+
+# ── loop: strip -> pool -> full-dimensional rkk ──────────────────────────────
+def strip_pool_pass(labels, raw, feats, *, k_on=3.0, k_off=3.0, strip_min=100, pool_max=50, pool_min=50,
+                    pool_k=50, pool_cap=30000, residue=None, rng=None, seed=42, rkk=None, log=None):
+    """One loop round.  `raw(ix)` -> (m, S, C) raw windows; `feats(ix)` -> (m, d) full features.
+    Returns (labels, stats, residue id)."""
+    rng = rng or np.random.default_rng(0)
+    lab = np.asarray(labels).astype(np.int64).copy()
+    idx = np.flatnonzero(_real(lab) | (lab == 1))
+    excl = tuple([0] + ([int(residue)] if residue is not None else []))
+    lab, tot = fcn.resid_pass(raw, lab, idx, k_on=k_on, k_off=k_off, minspk=strip_min, exclude=excl,
+                              rng=rng)
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+    small = ids[(cnt < pool_max) & (ids != (residue if residue is not None else -1))]
+    pool = np.flatnonzero((lab == 1) | np.isin(lab, small) |
+                          ((lab == residue) if residue is not None else False))
+    stats = dict(stripped=int(tot["resid"]), pool=int(pool.size), born=0, residue=0)
+    if not pool.size:
+        return lab, stats, residue
+    if residue is None:
+        residue = _fch.next_free_id(lab)
+    lab[pool] = residue
+    use = _sub(pool, int(pool_cap), rng)
+    if use.size >= max(2 * pool_min, 20):
+        if rkk is None:
+            try:
+                from .fiber_session import _rkk_labels as rkk
+            except ImportError:
+                from fiber_session import _rkk_labels as rkk
+        sub = rkk(np.asarray(feats(use), float), max_clusters=int(pool_k), min_size=int(pool_min), seed=seed)
+        for c in np.unique(sub[sub >= 0]):
+            lab[use[sub == c]] = _fch.next_free_id(lab)
+            stats["born"] += 1
+    stats["residue"] = int((lab == residue).sum())
+    if log:
+        log(f"  strip parked {stats['stripped']:,} from {tot['resid_clusters']} clusters; pool {stats['pool']:,} "
+            f"-> {stats['born']} clusters, {stats['residue']:,} in residue cluster {residue}")
+    return lab, stats, residue
+
+
+# ── islands ──────────────────────────────────────────────────────────────────
+def island_pass(labels, raw, F, *, leaf=300, runs=8, island_min=10, min_clu=60, margin=0.5, cos=0.5,
+                tpl_cap=1000, skip=(), rng=None, log=None):
+    """Per-cluster small-leaf t-SNE consensus; reassign an island only where its median fits another
+    cluster better than its parent.  `F` (n, d) full features of every spike.  Returns (labels, stats)."""
+    try:
+        from . import fiber_consensus as fcs
+    except ImportError:
+        import fiber_consensus as fcs
+    rng = rng or np.random.default_rng(0)
+    lab = np.asarray(labels).astype(np.int64)
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+    clus = [int(f) for f, c in zip(ids, cnt) if c >= min_clu and int(f) not in skip]
+    tmpl = {f: np.median(raw(_sub(np.flatnonzero(lab == f), tpl_cap, rng)), 0) for f in clus}
+    tn = {f: tmpl[f].ravel() / max(np.linalg.norm(tmpl[f]), 1e-12) for f in clus}
+    new = lab.copy()
+    st = dict(leaves=0, islands=0, moved=0, spikes=0)
+    for ci, f in enumerate(clus):
+        m = np.flatnonzero(lab == f)
+        Z = F[m] - F[m].mean(0)
+        U, Sv, _ = np.linalg.svd(Z, full_matrices=False)
+        for loc in kd_leaves(U[:, :2] * Sv[:2], int(leaf)):
+            if loc.size < min_clu:
+                continue
+            st["leaves"] += 1
+            Zc = F[m[loc]]
+            Zc = (Zc - Zc.mean(0)) / Zc.std(0).clip(1e-9)
+            sub = max(17, int(round(0.7 * loc.size)))
+            rr = [fcs._one_run(Zc, np.sort(rng.choice(loc.size, sub, replace=False)),
+                               min(30.0, (sub - 2) / 3.0), 1000 * ci + r, 15, 1, 120, 300)
+                  for r in range(int(runs))]
+            com = fcs.coneighbour_communities(rr, loc.size, seed=ci)
+            sizes = np.bincount(com)
+            core = int(sizes.argmax())
+            for k in np.flatnonzero(sizes >= island_min):
+                if k == core:
+                    continue                                   # the leaf's core stays
+                isl = m[loc[com == k]]
+                st["islands"] += 1
+                TI = np.median(raw(isl), 0)
+                rest = np.setdiff1d(m, isl)
+                if rest.size < 8:
+                    continue
+                dP = gain_residual(TI, np.median(raw(_sub(rest, tpl_cap, rng)), 0))
+                ti = TI.ravel() / max(np.linalg.norm(TI), 1e-12)
+                best, dB = None, np.inf
+                for x in clus:
+                    if x != f and float(ti @ tn[x]) >= cos:
+                        d = gain_residual(TI, tmpl[x])
+                        if d < dB:
+                            best, dB = x, d
+                if best is not None and dB < margin * dP:
+                    new[isl] = best
+                    st["moved"] += 1
+                    st["spikes"] += int(isl.size)
+    if log:
+        log(f"  islands: {len(clus)} clusters -> {st['leaves']} leaves -> {st['islands']} islands, "
+            f"{st['moved']} moved ({st['spikes']:,} spikes)")
+    return new, st
+
+
+# ── merge: the reverse residual strip ────────────────────────────────────────
+def _entry(W, k):
+    T = np.median(W, 0)
+    t = fcn.resid_terms(W, T)
+    if t is None or t["ok"].sum() < 10:
+        return None
+    ok = t["ok"]
+    return dict(W=W, T=T, tn=T.ravel() / max(np.linalg.norm(T), 1e-12),
+                thr=(fcn._resid_tail(t["onr"][ok], k), fcn._resid_tail(t["offr"][ok], k)))
+
+
+def pair_acceptance(A, B):
+    """min over both directions of the share of one cluster's spikes the other's strip keeps, under
+    the CLEANER cluster's tails (the smaller threshold per term)."""
+    to, tf = min(A["thr"][0], B["thr"][0]), min(A["thr"][1], B["thr"][1])
+    out = []
+    for X, Y in ((A, B), (B, A)):
+        t = fcn.resid_terms(Y["W"], X["T"])
+        out.append(0.0 if t is None else float((t["ok"] & (t["onr"] <= to) & (t["offr"] <= tf)).mean()))
+    return min(out)
+
+
+def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, skip=(), rng=None, log=None):
+    """Greedy reverse-strip merge with re-templating.  Returns (labels, unions)."""
+    rng = rng or np.random.default_rng(0)
+    lab = np.asarray(labels).astype(np.int64).copy()
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+    E = {}
+    for f, c in zip(ids, cnt):
+        if c >= min_n and int(f) not in skip:
+            e = _entry(raw(_sub(np.flatnonzero(lab == f), tpl_cap, rng)), k)
+            if e is not None:
+                E[int(f)] = e
+    ver = {f: 0 for f in E}
+    heap, keys = [], list(E)
+    for i, a in enumerate(keys):
+        for b in keys[i + 1:]:
+            if float(E[a]["tn"] @ E[b]["tn"]) > cos:
+                s = pair_acceptance(E[a], E[b])
+                if s >= thr:
+                    heap.append((-s, a, b, 0, 0))
+    heapq.heapify(heap)
+    unions = 0
+    while heap:
+        _, a, b, va, vb = heapq.heappop(heap)
+        if a not in E or b not in E or ver[a] != va or ver[b] != vb:
+            continue                                           # stale: one side changed since it was scored
+        lab[lab == b] = a
+        del E[b]
+        unions += 1
+        e = _entry(raw(_sub(np.flatnonzero(lab == a), tpl_cap, rng)), k)
+        if e is None:
+            del E[a]
+            continue
+        E[a] = e
+        ver[a] += 1
+        for x in list(E):
+            if x != a and float(e["tn"] @ E[x]["tn"]) > cos:
+                s = pair_acceptance(e, E[x])
+                if s >= thr:
+                    heapq.heappush(heap, (-s, a, x, ver[a], ver[x]))
+    if log:
+        log(f"  merge: {len(keys)} clusters, {unions} unions at acceptance >= {thr:g}")
+    return lab, unions
+
+
+# ── driver ───────────────────────────────────────────────────────────────────
+def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, strip_k_on=3.0,
+           strip_k_off=3.0, strip_min=100, pool_max=50, pool_min=50, pool_k=50, pool_cap=30000, leaf=300,
+           island_runs=8, island_min=10, island_min_clu=60, island_margin=0.5, merge_thr=0.7, merge_min=50,
+           cos=0.5, tpl_cap=1000, seed=0, rkk=None, log=None, on_stage=None):
+    """Run the chain.  `F` is the full feature matrix (needed for islands; feats(arange) if None).
+    `on_stage(tag, labels)` is called after every stage (the CLI's scoring hook)."""
+    rng = np.random.default_rng(int(seed))
+    lab = np.asarray(labels).astype(np.int64).copy()   # cluster 0 (artifacts, a shielded chunk) is never touched
+    residue = None
+    for it in range(1, int(loops) + 1):
+        t0 = time.time()
+        if log:
+            log(f"[polish] loop {it}/{loops}")
+        lab, _, residue = strip_pool_pass(lab, raw, feats, k_on=strip_k_on, k_off=strip_k_off,
+                                          strip_min=strip_min, pool_max=pool_max, pool_min=pool_min,
+                                          pool_k=pool_k, pool_cap=pool_cap, residue=residue, rng=rng,
+                                          seed=42 + it + int(seed), rkk=rkk, log=log)
+        if on_stage:
+            on_stage(f"loop {it} ({time.time() - t0:.0f}s)", lab)
+    skip = () if residue is None else (int(residue),)
+    for it in range(1, int(rounds) + 1):
+        if island:
+            if F is None:
+                F = np.asarray(feats(np.arange(lab.size)), float)
+            t0 = time.time()
+            if log:
+                log(f"[polish] islands {it}/{rounds}")
+            lab, _ = island_pass(lab, raw, F, leaf=leaf, runs=island_runs, island_min=island_min,
+                                 min_clu=island_min_clu, margin=island_margin, cos=cos, tpl_cap=tpl_cap,
+                                 skip=skip, rng=rng, log=log)
+            if on_stage:
+                on_stage(f"islands {it} ({time.time() - t0:.0f}s)", lab)
+        if merge:
+            t0 = time.time()
+            if log:
+                log(f"[polish] merge {it}/{rounds}")
+            lab, _ = merge_pass(lab, raw, thr=merge_thr, cos=cos, min_n=merge_min, tpl_cap=tpl_cap,
+                                skip=skip, rng=rng, log=log)
+            if on_stage:
+                on_stage(f"merge {it} ({time.time() - t0:.0f}s)", lab)
+    if residue is not None:
+        lab[lab == 1] = residue                               # nothing this stage parked stays in the noise cluster
+    return lab, residue
+
+
+def score_against(labels, truth, min_n=50):
+    """(clusters, purity, good, complete) against a curated labelling -- see the module docstring."""
+    lab, cur = np.asarray(labels), np.asarray(truth)
+    kept = cur > 1
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+    big = ids[cnt >= min_n]
+    tot = dom = good = 0
+    best = {}
+    for f in big:
+        c = np.bincount(cur[lab == f])
+        tot += int(c.sum())
+        dom += int(c.max())
+        if int(c.argmax()) > 1:
+            good += int(c.max())
+        for u in np.flatnonzero(c):
+            if u > 1:
+                best[int(u)] = max(best.get(int(u), 0), int(c[u]))
+    nk = max(int(kept.sum()), 1)
+    return len(big), dom / max(tot, 1), good / nk, sum(best.values()) / nk
+
+
+def build_features(base, elec, method, spk_m, raw, nchan, hybrid_pcs=3, hybrid_scale=2.0, log=None):
+    """feats(ix) for the session's feature space: hybrid, else the standard basis, else None."""
+    std = fp.read_cluster_basis(base, elec, "standard")
+    mb = fp.read_cluster_basis(base, elec, method) if method else None
+    if spk_m is not None and mb is not None and std is not None \
+            and nio.parse_variant_token(method).family != "standard":
+        try:
+            from . import fiber_lib as fl
+        except ImportError:
+            import fiber_lib as fl
+        n = raw.shape[0]
+        mb["_hyb"] = fp.hybrid_basis(std, pcs=hybrid_pcs, scale=hybrid_scale, nraw=nchan)
+        gs = np.sort(np.random.default_rng(0).choice(n, min(n, 20000), replace=False))
+        fl.set_align_channels(nchan)
+        mb["_hyb"]["gain"] = fp.fit_hybrid_gain(np.asarray(spk_m[gs], float), np.asarray(raw[gs], float), mb)
+        if log:
+            log(f"[polish] features: hybrid [{method} | standard x{hybrid_pcs}], scale {hybrid_scale:g}, "
+                f"gain {mb['_hyb']['gain']:.4g}")
+        return lambda ix: fp.cluster_features(fp.hybrid_stack(spk_m[np.asarray(ix)], raw[np.asarray(ix)]),
+                                              mb, realign=False, dims=None)
+    if std is not None:
+        if log:
+            log("[polish] features: standard basis (no method .spk / .pca pair for the hybrid)")
+        return lambda ix: fp.cluster_features(np.asarray(raw[np.asarray(ix)], float), std, realign=False, dims=None)
+    return None
+
+
+def main(argv=None):
+    gcfg = cfgmod.load_global_config()
+    ap = argparse.ArgumentParser(description="Polish an over-split sort: residual strip + pooled full-dimensional "
+                                             "rkk, small-leaf t-SNE islands, reverse-strip merge.")
+    ap.add_argument("base"); ap.add_argument("elec", type=int)
+    nio.add_clu_args(ap, method_default="stderiv", stage_default="fiber_session", stage_dest="clu_stage",
+                     stage_alias=None)
+    ap.add_argument("--res-variant", default="", help="pin the .res variant ('' = the shared .res)")
+    ap.add_argument("--gt-clu", default="", help="curated .clu path: score every stage against it (nothing is fitted to it)")
+    for name, (dest, typ, fb, hlp) in _KNOBS.items():
+        d = _knob_default(name, typ, fb, gcfg)
+        ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d,
+                        help=f"{hlp} [{name}; default {d}]")
+    ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_polish)")
+    cfgmod.check_choice_defaults(ap)
+    a = ap.parse_args(argv)
+    log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
+
+    cfg = sy.resolve_session_params(a.base, a.elec, verbose=False)
+    base = cfg["base"]; NS, NC = int(cfg["nsamp"]), int(cfg["nchan"])
+    res = nio.read_res_at(base, a.elec, variant=a.res_variant) if a.res_variant else nio.read_res(base, a.elec)
+    n = len(res)
+    _, clu = nio.resolve_clu(a, base, a.elec, n_spikes=n, stage_dest="clu_stage")
+    clu = np.asarray(clu, np.int64)
+    try:
+        rawmm, rs = nio.open_spk(base, a.elec, NS, NC, prefer=nio.prefer_standard())
+    except FileNotFoundError:
+        raise SystemExit("fiber-polish needs the RAW waveforms (.spk.standard.<group>): the residual strip, "
+                         "the island fit and the merge are all scored in the raw space") from None
+    if rawmm.shape[0] != n:
+        raise SystemExit(f"{os.path.basename(rs.path)} holds {rawmm.shape[0]:,} spikes, the .res {n:,}")
+    spk_m = None
+    if nio.parse_variant_token(a.clu_method).family != "standard":
+        r = nio.resolve(base, "spk", a.elec, a.clu_method)
+        if r.found and r.variant == a.clu_method:
+            spk_m = nio.open_spk_file(r.path, NS, NC)
+            if spk_m.shape[0] != n:
+                raise SystemExit(f"{os.path.basename(r.path)} holds {spk_m.shape[0]:,} spikes, the .res {n:,}")
+    feats = build_features(base, a.elec, a.clu_method, spk_m, rawmm, NC, a.hybrid_pcs, a.hybrid_scale, log=log)
+    if feats is None:
+        log("[polish] features: no .pca basis -- local SVD of the raw windows (24 components)")
+        sm = np.sort(np.random.default_rng(0).choice(n, min(n, 20000), replace=False))
+        w = np.asarray(rawmm[sm], float).reshape(sm.size, -1)
+        mu = w.mean(0)
+        Vt = np.linalg.svd(w - mu, full_matrices=False)[2][:24]
+        feats = lambda ix: (np.asarray(rawmm[np.asarray(ix)], float).reshape(len(ix), -1) - mu) @ Vt.T  # noqa: E731
+    raw = lambda ix: np.asarray(rawmm[np.asarray(ix)], float)   # noqa: E731
+
+    truth = None
+    if a.gt_clu:
+        _, truth = nio.read_clu_file(a.gt_clu, n_spikes=n)
+        truth = np.asarray(truth)
+
+    def on_stage(tag, lab):
+        ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+        line = f"[polish] {tag:<20} clusters {len(ids):>5} (>=50: {int((cnt >= 50).sum()):>4})"
+        if truth is not None:
+            nb, p, g, c = score_against(lab, truth)
+            line += f"   purity {p:6.1%}  good {g:6.1%}  complete {c:6.1%}"
+        log(line)
+
+    log(f"[polish] {os.path.basename(base)} group {a.elec}: {n:,} spikes, stage "
+        f"'{a.clu_stage}', raw {NS}x{NC}")
+    on_stage("input", clu)
+    F = None
+    if a.rounds > 0 and a.island:
+        F = np.vstack([np.asarray(feats(np.arange(i, min(i + 20000, n))), float) for i in range(0, n, 20000)])
+    kw = {dest: getattr(a, dest) for dest, *_ in _KNOBS.values() if not dest.startswith("hybrid_")}
+    new, residue = polish(clu, raw, feats, F, log=log, on_stage=on_stage, **kw)
+    tag = a.out_tag or (f"{a.clu_stage}_polish" if a.clu_stage else "polish")
+    path = nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=tag)
+    log(f"[polish] wrote {os.path.basename(path)}"
+        + (f"  (residue cluster {residue}: {int((new == residue).sum()):,} spikes)" if residue is not None else "")
+        + "  -- flat .clu; the .clc/.clp hierarchy is not rebuilt")
+
+
+if __name__ == "__main__":
+    main()

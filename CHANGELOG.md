@@ -4,6 +4,59 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.33] — fiber-polish: strip + pooled rkk, small-leaf t-SNE islands, reverse-strip merge
+- **New stage `fiber-polish`** (`fiber_polish.py`, `FK_POLISH_*`, section [H] of the config). Four
+  operations on a finished `.clu`, all scored on the RAW windows at their stored alignment:
+  - *loop* × `LOOPS`: strip every cluster ≥ `STRIP_MIN` with the gain-free on/off residual (0.67.31),
+    pool the parked spikes with every cluster < `POOL_MAX`, and re-cluster the pool with a
+    full-dimensional rkk (every column of the session's feature space). The pool's remainder goes
+    to a residue cluster with a real id — nothing the stage parks ends in cluster 0 or 1.
+  - *islands*: each cluster is cut into ≤ `LEAF`-spike leaves by median bisection along its first two
+    PCs; each leaf gets a resampled t-SNE consensus; every community but the leaf's largest is an
+    island, and moves only when its median fits another cluster's median `ISLAND_MARGIN` better than
+    its own parent's (gain-only residual, the parent's median taken without it).
+  - *merge*: the residual strip in reverse. A pair merges when at least `MERGE_THR` of each cluster
+    survives the other's strip. Greedy with re-templating after every union (no union-find chaining),
+    under the cleaner cluster's tails.
+- Measured 2026-11-18 against the curators' labels (`good` = kept spikes in a ≥50-spike cluster whose
+  dominant curated label is their own; `complete` = share in the largest cluster of their unit):
+
+  | sort | clusters | purity | good | complete |
+  |---|---|---|---|---|
+  | 0312 g6 chunk 19, standard | 178 → 80 | 63.6 → 73.8 | 62.7 → 78.7 | 33.8 → 42.6 |
+  | 0312 g6 chunk 19, hybrid | 110 → 63 | 64.1 → 72.8 | 63.5 → 77.9 | 71.8 → 56.4 |
+  | 0312 g6 t 24–36, hybrid | 110 → 71 | 68.1 → 70.7 | 67.8 → 73.7 | 51.3 → 55.5 |
+  | 0316 g6, hybrid, 5 unlinked chunks | 750 → 322 | 73.4 → 71.9 | 59.6 → 77.1 | 8.3 → 25.2 |
+
+  The CLI reproduces the chunk-19 hybrid row stage for stage. **Untuned**: every default is the value
+  those runs used. What the table does not hide: the island pass buys purity and costs completeness
+  (4–15 points a pass) — on a sort that starts complete, the chain is a trade; the loop cost 6.6
+  points of purity on the multi-chunk 0316 run and none on single-chunk windows (cause untested);
+  and the curated labels are themselves contaminated.
+- **`MERGE_THR` does not transfer from clean pairs.** 0.3 separated 29 clean fibers at AUC 0.99
+  (template cosine 0.97) and collapsed a whole sort to 9 clusters: a contaminated cluster's own tails
+  are inflated, so it accepts everything, and union-find chained the acceptances. Hence the cleaner
+  cluster's tails, the re-templating, and a default of 0.7.
+- Two fiber-session knobs for what the route needed: `FK_SESSION_RKK_REALIGN_MAXLAG` (the lag
+  half-width of the rkk realign loop and Block N — a literal 6 at both sites) and
+  `FK_SESSION_RKK_DIMS` (`--rkk-dims` had no knob). Measured with `RKK_REALIGN_ITERS` 5 / 12 / 9 on
+  chunk 19: 248 → 325 fibers, `good` 62.7 → 62.1 %, 345 s → 597 s — finer splitting, not more correct
+  spikes; it pays only with a merge after it.
+- **Config.** `fiber-kit-exp.yaml` runs the route: `RKK_REALIGN_ITERS` 5, `MAXLAG` 12, `RKK_DIMS` 9,
+  and the plan gains a BRANCH at its end — `polish` (fiber_session → fs_polish) and `rdr-polish` — so
+  one run of the exp plan yields both `exp_psame` and `fs_polish` to compare. The branch is last on
+  purpose: every other step runs exactly as before. `fiber-kit-best.yaml` / `-klusters.yaml` do NOT
+  inherit any of it (`BRANCH_DROP_STEPS`, `HELD` in `gen_best_profile.py`): the profile was confirmed
+  without the branch and at 2 / 6 / 6. `fiber-tune`'s default `score_at` now follows the plan's main
+  line, so it is still `psame`.
+- **Repairs to 0.67.31 / 0.67.32**, which shipped with the repo's own checks failing: the ten
+  `FK_CONS_RESID_*` knobs were in no config template (now in section [6]); `docs/stages.md` and
+  `plans/TEMPLATE-all-stages.yaml` were stale; `__init__.__version__` was still 0.67.30.
+- Wired into `fiber-pipeline` (post-sort stage, shielded), the plan editor, `fiber_bench`'s knob
+  prefixes and `fiber_chunks.SHIELD_STAGES`; cluster 0 is never touched, so a shielded chunk stays
+  shielded. Writes a flat `.clu` — the `.clc`/`.clp` hierarchy is not rebuilt. The island pass needs
+  the `[consensus]` extra. 21 + 3 tests.
+
 ## [0.67.32] — realigning before the residual strip spends the signal it needs
 - Gravio, on the previous entry's claim that the residual-covariance mixture test failed because a
   clean unit's residual is dominated by alignment jitter: *"There should be no alignment jitter if

@@ -76,6 +76,7 @@ STAGE_PREFIXES = {
     "fiber-anchor-link": ("FK_ALINK_",),
     "fiber-consensus": ("FK_CONSENSUS_",),
     "fiber-lowmix": ("FK_LOWMIX_",),
+    "fiber-polish": ("FK_POLISH_",),
     "fiber-intrachunk": ("FK_INTRA_",),
     "fiber-link": ("FK_LINK_", "FK_MERGE_"),
     "fiber-refine": ("FK_REFINE_",),

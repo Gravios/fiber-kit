@@ -436,6 +436,10 @@ _RKK_MIN         = cfgmod.knob_value("FK_SESSION_RKK_MIN", int, 0)
 # starting Gaussians leave the unit's tails to the uniform reject density), where the legacy start keeps
 # 90 %; only the groups the legacy start loses entirely are touched.  0 = off (legacy).
 _RKK_PTS_PER_START = cfgmod.knob_value("FK_SESSION_RKK_PTS_PER_START", int, 0)
+# Half-width (samples) of the lag search in the rkk realign loop and Block N's per-cluster
+# alignment.  Was a literal 6 at both sites; a cluster whose spikes sit further than that from
+# their own median cannot be brought in, however many cluster<->realign passes run.
+_RKK_REALIGN_MAXLAG = max(1, int(cfgmod.knob_value("FK_SESSION_RKK_REALIGN_MAXLAG", int, 6)))
 
 
 def _rkk_labels(F, max_clusters, min_size, seed=42, delete=True):
@@ -496,7 +500,7 @@ def _rkk_realign(waves, mask, dims, max_clusters, min_size, iters=2, delete=True
                 continue
             idx = np.flatnonzero(lab == c)
             if len(idx) >= 8:
-                Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=6)
+                Wal[idx] = fl.align_xcorr(waves[idx], ref="median", iters=6, maxlag=_RKK_REALIGN_MAXLAG)
         F = _fpca.cluster_features(Wal, basis, realign=False, dims=dims) if basis is not None else None
         if F is None:
             w = Wal[:, mask, :].reshape(len(waves), -1); w = w - w.mean(0)
@@ -721,7 +725,7 @@ def _neigh_recluster(fine, waves, waves_std, basis, mask, dims, min_size, *, k=3
             for v in pick:                                      # per-cluster alignment, as _rkk_realign
                 loc = np.flatnonzero(fine[idx] == v)
                 if len(loc) >= 8:
-                    Wal[loc] = fl.align_xcorr(wu[loc], ref="median", iters=6, maxlag=6)
+                    Wal[loc] = fl.align_xcorr(wu[loc], ref="median", iters=6, maxlag=_RKK_REALIGN_MAXLAG)
             F = _fpca.cluster_features(Wal, basis, realign=False, dims=dims) if basis is not None else None
             if F is None:
                 w = Wal[:, mask, :].reshape(len(idx), -1); w = w - w.mean(0)
@@ -1799,7 +1803,9 @@ def add_core_arguments(ap):
                          "realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture "
                          "split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the "
                          "coarse cluster whole)")
-    ap.add_argument("--rkk-dims", type=int, default=6); ap.add_argument("--rkk-max", type=int, default=50)
+    ap.add_argument("--rkk-dims", type=int, default=int(cfgmod.knob_value("FK_SESSION_RKK_DIMS", int, 6)),
+                    help="FK_SESSION_RKK_DIMS. SVD components of the fine-split feature space handed to the rkk CEM")
+    ap.add_argument("--rkk-max", type=int, default=50)
     ap.add_argument("--rkk-realign", dest="rkk_realign", action="store_true", default=True,
                     help="interleave rkk (CEM) with per-cluster realignment (per-step; default on)")
     ap.add_argument("--no-rkk-realign", dest="rkk_realign", action="store_false",

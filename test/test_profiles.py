@@ -62,10 +62,15 @@ def main():
               # order winner > PASSES 1 > +RKK_MIN 20 > plain reproduced exactly on `confirm --chunks all`)
             "FK_REALIGN_MIN_SCORE": (0.10, 0.70), "FK_SESSION_FEAT_HYBRID": (0, 1),
             "FK_SESSION_HYBRID_SCALE": (1.0, 2.0), "FK_SESSION_HYBRID_PCS": (2, 3),
-            "FK_SESSION_NEIGH_COS": (0.7, 0.6), "FK_SESSION_NEIGH_PASSES": (0, 2)}
-    check(diff == want, f"best differs from exp in exactly the winner's {len(want)} knobs ({diff})")
+            "FK_SESSION_NEIGH_COS": (0.7, 0.6), "FK_SESSION_NEIGH_PASSES": (0, 2),
+              # HELD (0.67.33): exp moved these for the fiber-polish route; the profile keeps the values it
+              # was confirmed with
+            "FK_SESSION_RKK_REALIGN_ITERS": (5, 2), "FK_SESSION_RKK_REALIGN_MAXLAG": (12, 6),
+            "FK_SESSION_RKK_DIMS": (9, 6)}
+    check(diff == want, f"best differs from exp in exactly the winner's 11 knobs + the 3 held ones ({diff})")
     pe = [s["name"] for s in exp["pipeline"]]; pb = [s["name"] for s in best["pipeline"]]
-    check(pb == [n for n in pe if n != "psame-chunk"], f"best's plan is exp's without psame-chunk ({pb})")
+    check(pb == [n for n in pe if n not in ("psame-chunk", "polish", "rdr-polish")],
+          f"best's plan is exp's without psame-chunk and without the fiber-polish branch ({pb})")
     link = next(s for s in best["pipeline"] if s["name"] == "link")
     psame = next(s for s in best["pipeline"] if s["name"] == "psame")
     check(link["in"] == "fs_clean", "link reads fs_clean (the dropped step's input)")

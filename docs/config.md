@@ -38,7 +38,9 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_SESSION_RKK_STARTS` | `1` | `1` | — | 1 \| 1-4.  Random restarts of the rkk CEM per starting K (the best AIC/BIC score wins).  The CEM itself always runs to convergence; this and RKK_MIN are the "let rkk work harder on a coarse fiber" knobs.  Each restart is one full CEM. |
 | `FK_SESSION_RKK_MIN` | `0` | `0` | — | 0 \| 0 or 10-50.  >0 = also sweep the STARTING cluster count from this value up to --rkk-max (50), as the classic KlustaKwik driver does (every K up to a span of 12, then geometric), keeping the best-scoring run.  0 = one start at --rkk-max (the behaviour so far).  Costs one CEM per K tried. |
 | `FK_SESSION_RKK_PTS_PER_START` | `0` | `0` | `0` | 0 \| 0 or 14-40.  >0 = when the CEM's first start returns NO cluster, retry it with the starting K capped at N // this (>= 2).  The start at --rkk-max (50) gives a group of N spikes N/50 per starting cluster, and the M-step deletes every cluster with n <= dims (6): at N <= ~120 that is all of them, in the first step, and the whole group lands in the reject cluster -- 0 clusters, 100 % reserve, at any min group (0312 g6: single curated units at 25-100 spikes).  A 12-min chunk holds 144 spikes of a 0.2 Hz unit.  21 = 3 x (dims + 1): the retried start keeps 65-95 % of a 60-100-spike unit in one cluster; groups the first start clusters are untouched.  A general cap (every group) was measured to send 30-60 % of 150-250-spike units to the reject cluster: hence the retry. Off until a chunk run has measured what the recovered groups are (the tune spec searches [0, 21]); 21 is the value to try. |
-| `FK_SESSION_RKK_REALIGN_ITERS` | `2` | `2` | — | 2 \| 2-6.  cluster<->realign passes of the rkk fine split: each pass realigns every cluster to its own median, re-featurises and re-runs the CEM; stops early once the cluster count stops changing. |
+| `FK_SESSION_RKK_REALIGN_ITERS` | `5` | **`2`** | — | 2 \| 2-6.  cluster<->realign passes of the rkk fine split: each pass realigns every cluster to its own median, re-featurises and re-runs the CEM; stops early once the cluster count stops changing. |
+| `FK_SESSION_RKK_REALIGN_MAXLAG` | `12` | **`6`** | — | 6 \| 4-12 (samples).  Half-width of the lag search in the rkk realign loop and Block N's per-cluster alignment.  A cluster whose spikes sit further than this from their own median cannot be brought in, however many passes run.  Was a literal 6. |
+| `FK_SESSION_RKK_DIMS` | `9` | **`6`** | — | 6 \| 6-12.  SVD components of the fine-split feature space the rkk CEM sees. Measured with REALIGN_ITERS 5 and MAXLAG 12 on 0312 g6 chunk 19 (2026-11-18): 248 -> 325 fibers, pure clusters 46 -> 59, `good` 62.7% -> 62.1%, 345 s -> 597 s -- FINER splitting, not more correct spikes.  Worth it only with a merge after (fiber-polish, section [H]). |
 | `FK_SESSION_MERGE_METHOD` | `sliding` | `sliding` | `sliding` | sliding \| template \| profile.  Coarse merge method; INERT when MERGE_CORR=0. |
 | `FK_SESSION_MERGE_CORR` | `0` | `0` | `0` | 0 \| 0 or 0.88-0.93.  0 = session does NOT merge across chunks -- fiber-intrachunk stitches later WITH its refractory gate.  Set 0.90 to restore the old session sliding merge (premature: it welds co-active cells before refine can clean). |
 | `FK_SESSION_RESPLIT_PASSES` | `3` | `3` | `0` | 0 \| 1-5.  Iterative WITHIN-CHUNK cleanup: residual-gated re-split (em_swap on the |
@@ -236,6 +238,15 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_CONS_OFF_THR` | `0` | `0` | `0` | 0 \| 0 or 0.2-0.3.  knn pass: inter-channel-timing co-veto (0 = off). |
 | `FK_CONS_SHED_K` | `3.0` | `3.0` | — | 3.0.  shed pass (FK_CONS_MODE shed, opt-in): a cluster's own spikes whose distance to its template exceeds median + K x 1.4826 x MAD of the cluster's own distances are parked in the reserve (cluster 1).  Terminal-curation dial only. |
 | `FK_CONS_SHED_MIN` | `40` | `40` | — | 40.  shed pass: clusters below this many spikes are not shed. |
+| `FK_CONS_RESID_K_ON` | `0` | `0` | — | 0 \| 0 or 2.5-4.  residual strip (resid_pass; independent of FK_CONS_MODE): robust-tail multiplier of the ON-channel gain-free residual.  0 = term off; both 0 = pass off. Per cluster: per-spike gain fitted on the template's own channels, r = x - a*T, residual power split by each channel's share of the template (on / off), a separate tail per term, flagged sets unioned -> the reserve (cluster 1). |
+| `FK_CONS_RESID_K_OFF` | `0` | `0` | — | 0 \| 0 or 2.5-4.  the same for the OFF-channel term (signal where the cell has none). |
+| `FK_CONS_RESID_WIN` | `0` | `0` | — | 0 \| samples.  Hamming taper width centred on the template peak; 0 = half the record, < 0 = no taper. |
+| `FK_CONS_RESID_MINGAIN` | `0.25` | `0.25` | — | 0.25.  A spike whose fitted gain is below this carries no template-shaped signal and is parked outright (load-bearing: near-zero gains reach scores of 1e6). |
+| `FK_CONS_RESID_MIN` | `200` | `200` | — | 200.  Clusters below this many spikes are not stripped. |
+| `FK_CONS_RESID_IQR_MAX` | `0` | `0` | — | 0 \| 0 or 0.2-0.4.  Gate: strip only clusters whose own-gain IQR is at or below this. 0 = no ceiling.  On a curated sort a ceiling HALVED precision (0.49 -> 0.27); on a fresh over-split sort it removes the past-breakdown fibers.  Population-dependent. |
+| `FK_CONS_RESID_IQR_MIN` | `0` | `0` | — | 0 \| 0 or 0.1-0.2.  Gate: ... and at or above this.  0 = no floor. |
+| `FK_CONS_RESID_ALIGN` | `chunk` | `chunk` | — | chunk \| cluster \| stored.  The alignment the strip scores in: the per-chunk mixture realign every pass gets, a per-cluster realign on top, or the STORED windows (use for a .spk that already carries a curated realign: precision 0.43 -> 0.49 there; a self-derived realign spends the timing offset that marks contamination). |
+| `FK_CONS_RESID_QUIET` | `0` | `0` | — | 0 \| 1.  1 = no per-cluster [resid] log lines (they carry the sited tails). |
 
 ## [A] ALTERNATE LINKER: FIBER-LINK  (production fiber-kit.yaml's plan; A/B against [5])
 
@@ -528,6 +539,34 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_MANIFOLD_SEED` | `0` | `0` | — |  |
 | `FK_MANIFOLD_JOBS` | `0` | `0` | — | 0 = one process per CPU over the units; 1 = serial.  FIBER_KIT_GPU=1 puts the matched-filter products on the GPU (CuPy) instead. |
 | `FK_MANIFOLD_SIGNAL` | `""` | `""` | — | "" = the group's .nst \| path to the .fil: per-window spike-free snippets for the noise covariance instead of the .nst (fiber-pipeline passes it as --signal). |
+
+## [H] FIBER-POLISH -- strip + pooled rkk, small-leaf t-SNE islands, reverse-strip merge
+
+| knob | fiber-kit-exp.yaml | fiber-kit-best.yaml | fiber-kit.yaml | meaning |
+|---|---|---|---|---|
+| `FK_POLISH_LOOPS` | `2` | `2` | `2` | 2 \| 0-5.  strip -> pool -> rkk rounds.  Round 1 carries most of the gain; rounds 3-5 moved `good` by <= 0.5 pt.  On 0316 (5 chunks, session-wide pool) the loop cost 6.6 pt of purity; on single-chunk windows none.  0 = skip. |
+| `FK_POLISH_STRIP_K_ON` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  strip: robust-tail multiplier, on-channel residual (0 = term off). |
+| `FK_POLISH_STRIP_K_OFF` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  strip: robust-tail multiplier, off-channel residual (0 = term off). |
+| `FK_POLISH_STRIP_MIN` | `100` | `100` | `100` | 100.  strip: smallest cluster that is stripped. |
+| `FK_POLISH_POOL_MAX` | `50` | `50` | `50` | 50.  pool: clusters below this many spikes join the pool whole. |
+| `FK_POLISH_POOL_MIN` | `50` | `50` | `50` | 50.  pool: smallest cluster the pool rkk may create; smaller -> the run's residue cluster (a real cluster id, never 0 or 1). |
+| `FK_POLISH_POOL_K` | `50` | `50` | `50` | 50.  pool: starting cluster count of the full-dimensional rkk. |
+| `FK_POLISH_POOL_CAP` | `30000` | `30000` | `30000` | 30000.  pool: most spikes the rkk runs on. |
+| `FK_POLISH_ROUNDS` | `2` | `2` | `2` | 2 \| 0-3.  island -> merge rounds.  Round 2 added +3 pt `good` on the standard sort and ~0 on the hybrid, at -5 pt completeness.  0 = skip both. |
+| `FK_POLISH_ISLAND` | `1` | `1` | `1` | 1 \| 0.  0 = merge only (keeps completeness; the island pass is the slow step, ~1 s per leaf). |
+| `FK_POLISH_LEAF` | `300` | `300` | `300` | 300 \| 200-300.  islands: most spikes per t-SNE leaf. |
+| `FK_POLISH_ISLAND_RUNS` | `8` | `8` | `8` | 8.  islands: resampled t-SNE runs per leaf. |
+| `FK_POLISH_ISLAND_MIN` | `10` | `10` | `10` | 10.  islands: smallest community treated as an island. |
+| `FK_POLISH_ISLAND_MIN_CLU` | `60` | `60` | `60` | 60.  islands: smallest cluster (and leaf) embedded. |
+| `FK_POLISH_ISLAND_MARGIN` | `0.5` | `0.5` | `0.5` | 0.5 \| 0.3-0.8.  islands: move only if residual-to-target < MARGIN x residual-to-parent. 0.8 moved 38-67% of all spikes; 0.5 kept completeness on the hybrid. |
+| `FK_POLISH_MERGE` | `1` | `1` | `1` | 1 \| 0.  0 = islands only. |
+| `FK_POLISH_MERGE_THR` | `0.7` | `0.7` | `0.7` | 0.7 \| 0.7-0.9.  merge: min share of each cluster surviving the other's strip. DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and collapsed a whole sort to 9 clusters.  0.9 for a standard-space sort. |
+| `FK_POLISH_MERGE_MIN` | `50` | `50` | `50` | 50.  merge: smallest cluster that takes part. |
+| `FK_POLISH_COS` | `0.5` | `0.5` | `0.5` | 0.5.  template cosine a pair needs to be a candidate (islands and merge). |
+| `FK_POLISH_TPL_CAP` | `1000` | `1000` | `1000` | 1000.  spikes per cluster used for a template and its tails. |
+| `FK_POLISH_HYBRID_PCS` | `3` | `3` | `3` | 3 \| 1-3.  features: standard-basis components per channel in the raw block.  The stage's OWN knob (not FK_SESSION_HYBRID_PCS): 3 / 2.0 is what the measurements used. |
+| `FK_POLISH_HYBRID_SCALE` | `2.0` | `2.0` | `2.0` | 2.0 \| 0.5-2.  features: weight of the raw block. |
+| `FK_POLISH_SEED` | `0` | `0` | `0` |  |
 
 ## Legacy names
 

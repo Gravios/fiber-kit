@@ -235,11 +235,19 @@ def check_knobs(spec, cfg, plans=None):
 
 
 def default_score_at(plan):
-    """The last step that writes a new stage (`out:`) and is not fiber-realign."""
+    """The last step that writes a new stage (`out:`), is not fiber-realign, and is on the plan's MAIN
+    LINE.  A step is a side branch when it reads a stage older than the newest one written so far (the
+    exp plan's fiber-polish step reads fiber_session after exp_psame exists): its output is something to
+    compare the plan's result with, not the result."""
     steps = [s for s in plan if s.get("out") and s["stage"] != "fiber-realign"]
     if not steps:
         raise SystemExit(f"{_LP} · the plan has no step with `out:` to score")
-    return steps[-1].get("name") or steps[-1]["stage"]
+    main, newest = [], None
+    for s in steps:
+        if newest is None or s.get("in") in (None, newest) or s.get("out") == s.get("in"):
+            main.append(s)
+            newest = s["out"]
+    return (main or steps)[-1].get("name") or (main or steps)[-1]["stage"]
 
 
 def derive_plan(base_plan, d, here="."):

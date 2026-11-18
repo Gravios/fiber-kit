@@ -883,3 +883,53 @@ FK_PSAME_SCALE_MIN_N:    100      # 100.  Both clusters need this many spikes be
                                   #   fragments at n >= 30 and any purity the AUC falls to 0.764 -- a small or
                                   #   contaminated fragment's mean is not a single cell's template -- so the guard
                                   #   matters more than the threshold.
+
+
+# ============================================================================
+#  [H] FIBER-POLISH -- strip + pooled rkk, small-leaf t-SNE islands, reverse-strip merge
+#  (NOT in this file's plan; fiber-kit-exp.yaml runs it as a branch.  Direct CLI / other plans.)
+#  Four operations on a finished .clu, all scored on the RAW windows at their stored alignment:
+#    loop    x LOOPS   strip every cluster >= STRIP_MIN (gain-free on/off residual), pool the parked
+#                      spikes with every cluster < POOL_MAX, re-cluster the pool with a FULL-dimensional rkk
+#    rounds  x ROUNDS  islands: cut each cluster into <= LEAF-spike leaves along its first two PCs, t-SNE
+#                      consensus per leaf, move a non-core community only if its median fits another
+#                      cluster ISLAND_MARGIN better than its parent;  merge: greedy reverse strip (share of
+#                      each cluster surviving the other's strip >= MERGE_THR), re-templated after each union
+#  Measured 2026-11-18 against the curators' labels (`good` = kept spikes in a >=50 cluster of their own
+#  unit): 0312 g6 chunk 19 standard 62.7% -> 78.7% (178 -> 80 clusters), hybrid 63.5% -> 77.9% (110 -> 63,
+#  completeness 71.8% -> 56.4%: the island pass costs completeness); 0316 g6 59.6% -> 77.1% (750 -> 322).
+#  UNTUNED: every value below is the one those runs used.  Writes a FLAT .clu (no .clc/.clp).
+#  The island pass needs the [consensus] extra.  See claude/refined-chain-standard-vs-hybrid-2026-11-18.md.
+# ============================================================================
+FK_POLISH_LOOPS:         2        # 2 | 0-5.  strip -> pool -> rkk rounds.  Round 1 carries most of the gain; rounds 3-5
+                                  #   moved `good` by <= 0.5 pt.  On 0316 (5 chunks, session-wide pool) the loop cost
+                                  #   6.6 pt of purity; on single-chunk windows none.  0 = skip.
+FK_POLISH_STRIP_K_ON:    3.0      # 3.0 | 2.5-4.  strip: robust-tail multiplier, on-channel residual (0 = term off).
+FK_POLISH_STRIP_K_OFF:   3.0      # 3.0 | 2.5-4.  strip: robust-tail multiplier, off-channel residual (0 = term off).
+FK_POLISH_STRIP_MIN:     100      # 100.  strip: smallest cluster that is stripped.
+FK_POLISH_POOL_MAX:      50       # 50.  pool: clusters below this many spikes join the pool whole.
+FK_POLISH_POOL_MIN:      50       # 50.  pool: smallest cluster the pool rkk may create; smaller -> the run's residue
+                                  #   cluster (a real cluster id, never 0 or 1).
+FK_POLISH_POOL_K:        50       # 50.  pool: starting cluster count of the full-dimensional rkk.
+FK_POLISH_POOL_CAP:      30000    # 30000.  pool: most spikes the rkk runs on.
+FK_POLISH_ROUNDS:        2        # 2 | 0-3.  island -> merge rounds.  Round 2 added +3 pt `good` on the standard sort
+                                  #   and ~0 on the hybrid, at -5 pt completeness.  0 = skip both.
+FK_POLISH_ISLAND:        1        # 1 | 0.  0 = merge only (keeps completeness; the island pass is the slow step,
+                                  #   ~1 s per leaf).
+FK_POLISH_LEAF:          300      # 300 | 200-300.  islands: most spikes per t-SNE leaf.
+FK_POLISH_ISLAND_RUNS:   8        # 8.  islands: resampled t-SNE runs per leaf.
+FK_POLISH_ISLAND_MIN:    10       # 10.  islands: smallest community treated as an island.
+FK_POLISH_ISLAND_MIN_CLU: 60      # 60.  islands: smallest cluster (and leaf) embedded.
+FK_POLISH_ISLAND_MARGIN: 0.5      # 0.5 | 0.3-0.8.  islands: move only if residual-to-target < MARGIN x residual-to-parent.
+                                  #   0.8 moved 38-67% of all spikes; 0.5 kept completeness on the hybrid.
+FK_POLISH_MERGE:         1        # 1 | 0.  0 = islands only.
+FK_POLISH_MERGE_THR:     0.7      # 0.7 | 0.7-0.9.  merge: min share of each cluster surviving the other's strip.
+                                  #   DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and
+                                  #   collapsed a whole sort to 9 clusters.  0.9 for a standard-space sort.
+FK_POLISH_MERGE_MIN:     50       # 50.  merge: smallest cluster that takes part.
+FK_POLISH_COS:           0.5      # 0.5.  template cosine a pair needs to be a candidate (islands and merge).
+FK_POLISH_TPL_CAP:       1000     # 1000.  spikes per cluster used for a template and its tails.
+FK_POLISH_HYBRID_PCS:    3        # 3 | 1-3.  features: standard-basis components per channel in the raw block.  The stage's
+                                  #   OWN knob (not FK_SESSION_HYBRID_PCS): 3 / 2.0 is what the measurements used.
+FK_POLISH_HYBRID_SCALE:  2.0      # 2.0 | 0.5-2.  features: weight of the raw block.
+FK_POLISH_SEED:          0

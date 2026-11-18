@@ -34,7 +34,7 @@ pipeline:
   #       overlap-min: 4.0
   #       min-group: 200                  # COARSE min spikes/fiber (for linking)
   #       fine-algo: rkk                  # per-fiber fine clusterer: rkk (default, masked-EM KlustaKwik with per-cluster realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the coarse cluster whole) — choices: `gmm`, `rkk`, `fiber`, `none`
-  #       rkk-dims: 6
+  #       rkk-dims: 6                     # FK_SESSION_RKK_DIMS. SVD components of the fine-split feature space handed to the rkk CEM
   #       rkk-max: 50
   #       rkk-realign: false              # interleave rkk (CEM) with per-cluster realignment (per-step; default on)
   #       no-rkk-realign: true            # legacy: one parent realign + fixed features for the rkk split
@@ -196,6 +196,14 @@ pipeline:
   #       cons-fold-thr: 0.9              # FK_CONS_FOLD_THR (default 0.9)
   #       cons-scorr: 0.93                # FK_CONS_SCORR (default 0.93)
   #       cons-off-thr: 0.0               # FK_CONS_OFF_THR (default 0.0)
+  #       cons-resid-k-on: 0.0            # FK_CONS_RESID_K_ON (default 0.0)
+  #       cons-resid-k-off: 0.0           # FK_CONS_RESID_K_OFF (default 0.0)
+  #       cons-resid-win: 0               # FK_CONS_RESID_WIN (default 0)
+  #       cons-resid-mingain: 0.25        # FK_CONS_RESID_MINGAIN (default 0.25)
+  #       cons-resid-min: 200             # FK_CONS_RESID_MIN (default 200)
+  #       cons-resid-iqr-max: 0.0         # FK_CONS_RESID_IQR_MAX (default 0.0)
+  #       cons-resid-iqr-min: 0.0         # FK_CONS_RESID_IQR_MIN (default 0.0)
+  #       cons-resid-align: chunk         # FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored`
   #       realign: auto                   # FK_SESSION_REALIGN. At the end of the run, align every spike to its fiber's template (fiber-realign's Klusters per-spike offsets, on the .clu this run wrote), commit the shifted spike times to the shared .res (+ <base>.offsets.<group>.npy), and rebuild EVERY waveform variant's .spk on disk at the shifted times (standard, stderiv*, ...) and its .fet (from its .pca; _D alias .fet included) -- what `fiber-realign --reextract --refeaturize --variants all` does as a separate step. reextract = re-read the .fil; shift-spk = circularly roll the existing .spk (no .fil); auto (default) = reextract when the .fil exists, else shift-spk; off = leave .res/.spk/.fet as extracted. — choices: `auto`, `reextract`, `shift-spk`, `off`
   #       realign-algo: klusters          # FK_REALIGN_ALGO. fiber-realign --align-algo for the end-of-run commit; its other knobs (FK_REALIGN_MAX_SHIFT / _ITERS / _MIN_SCORE / _RECENTER_RMS / _RMIN) apply as they do there — choices: `klusters`, `template`, `centroid`
   #       realign-fil: ""                 # filtered signal the end-of-run re-extraction reads (default <base>.fil)
@@ -464,6 +472,14 @@ pipeline:
   #       cons-fold-thr: 0.9              # FK_CONS_FOLD_THR (default 0.9)
   #       cons-scorr: 0.93                # FK_CONS_SCORR (default 0.93)
   #       cons-off-thr: 0.0               # FK_CONS_OFF_THR (default 0.0)
+  #       cons-resid-k-on: 0.0            # FK_CONS_RESID_K_ON (default 0.0)
+  #       cons-resid-k-off: 0.0           # FK_CONS_RESID_K_OFF (default 0.0)
+  #       cons-resid-win: 0               # FK_CONS_RESID_WIN (default 0)
+  #       cons-resid-mingain: 0.25        # FK_CONS_RESID_MINGAIN (default 0.25)
+  #       cons-resid-min: 200             # FK_CONS_RESID_MIN (default 200)
+  #       cons-resid-iqr-max: 0.0         # FK_CONS_RESID_IQR_MAX (default 0.0)
+  #       cons-resid-iqr-min: 0.0         # FK_CONS_RESID_IQR_MIN (default 0.0)
+  #       cons-resid-align: chunk         # FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored`
   #       profile: default                # fallback profile for any intrachunk knob left unset in CLI/env/<session>.yaml: 'recommended' = the tuned pipeline baseline (cfiber gate, amp-gate 1.1, refrac 1.0, pre-merge 0.97, sig-cap 8000); 'default' = the conservative library baseline. — choices: `default`, `recommended`
   #       off-n-ref: ""                   # SNR-adaptive offset gate: spike count at which --off-thr applies as-is; loosens ~1/sqrt(n) below it (recommend ~150). Omit for flat off_thr.
   #       off-ceil: 2.0                   # cap on the adaptive offset tolerance (default 2.0; ~95%% same-neuron knee).
@@ -748,7 +764,7 @@ pipeline:
   #       overlap-min: 4.0
   #       min-group: 200                  # COARSE min spikes/fiber (for linking)
   #       fine-algo: rkk                  # per-fiber fine clusterer: rkk (default, masked-EM KlustaKwik with per-cluster realign + BIC model selection, robust to unequal covariances), gmm (Gaussian-mixture split), fiber (fiber-kit's native cluster_chunk), none (no fine split -- keep the coarse cluster whole) — choices: `gmm`, `rkk`, `fiber`, `none`
-  #       rkk-dims: 6
+  #       rkk-dims: 6                     # FK_SESSION_RKK_DIMS. SVD components of the fine-split feature space handed to the rkk CEM
   #       rkk-max: 50
   #       rkk-realign: false              # interleave rkk (CEM) with per-cluster realignment (per-step; default on)
   #       no-rkk-realign: true            # legacy: one parent realign + fixed features for the rkk split
@@ -910,6 +926,14 @@ pipeline:
   #       cons-fold-thr: 0.9              # FK_CONS_FOLD_THR (default 0.9)
   #       cons-scorr: 0.93                # FK_CONS_SCORR (default 0.93)
   #       cons-off-thr: 0.0               # FK_CONS_OFF_THR (default 0.0)
+  #       cons-resid-k-on: 0.0            # FK_CONS_RESID_K_ON (default 0.0)
+  #       cons-resid-k-off: 0.0           # FK_CONS_RESID_K_OFF (default 0.0)
+  #       cons-resid-win: 0               # FK_CONS_RESID_WIN (default 0)
+  #       cons-resid-mingain: 0.25        # FK_CONS_RESID_MINGAIN (default 0.25)
+  #       cons-resid-min: 200             # FK_CONS_RESID_MIN (default 200)
+  #       cons-resid-iqr-max: 0.0         # FK_CONS_RESID_IQR_MAX (default 0.0)
+  #       cons-resid-iqr-min: 0.0         # FK_CONS_RESID_IQR_MIN (default 0.0)
+  #       cons-resid-align: chunk         # FK_CONS_RESID_ALIGN: which alignment the residual strip scores in (default chunk) — choices: `chunk`, `cluster`, `stored`
   #       stochastic: false               # run the ensemble/consensus fibering diagnostic instead of the normal single pass
   #       stochastic-draws: 20            # number of resampled draws per chunk (per peel round)
   #       stochastic-frac: 0.8            # subsample fraction per draw. HIGH by default: a low fraction starves most fibers below min_group (a 0.5 draw drops 50-70%% of fibers on this data)

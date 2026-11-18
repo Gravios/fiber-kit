@@ -45,6 +45,16 @@ KLUSTERS_OVERRIDES = {
     "FK_REALIGN_VARIANT":     ('""', "no fixed variant: the plugin's `method` (the open clustering's) decides"),
 }
 KLUSTERS_DROP_STEPS = ("rdr",)      # QC table only
+# The exp plan's fiber-polish BRANCH (0.67.33) is not part of the tuned winner: the profile's numbers were
+# confirmed without it, so both generated profiles carry it commented out.
+BRANCH_DROP_STEPS = ("polish", "rdr-polish")
+# exp values the profiles do NOT inherit: the winner was confirmed with these, and the exp file moved
+# them for the fiber-polish route (finer splitting that only pays with a merge after it).
+HELD = {
+    "FK_SESSION_RKK_REALIGN_ITERS": ("2", "the confirmed profile's value; exp runs 5 for the fiber-polish route"),
+    "FK_SESSION_RKK_REALIGN_MAXLAG": ("6", "the confirmed profile's value (the former literal); exp runs 12"),
+    "FK_SESSION_RKK_DIMS": ("6", "the confirmed profile's value (the former default); exp runs 9"),
+}
 
 # ── the winner, in two rounds (g6 0316; objective all_acc - 0.005*merges) ──
 #   round 1  exp-search,    2026-11-07, chunks 2-3, 109 trials, NOT confirmed at full scale
@@ -89,7 +99,7 @@ RUN_CONTROL = ["FK_CHUNKS", "FK_REALIGN_VARIANT", "FK_SESSION_SKIP_EXTANT", "FK_
 IN_PLAN = [("B", "fiber-flag-artifacts"), ("1", None), ("6", None), ("2", None), ("C", None), ("3", None),
            ("5", None), ("B", "fiber-xcorr-merge"), ("F", None), ("E", None)]
 NOT_IN_PLAN = [("4", None), ("A", None), ("B", "fiber-refine"), ("B", "fiber-peel"), ("B", "fiber-backbone-link"),
-               ("B", "fiber-stochastic"), ("D", None), ("G", None)]
+               ("B", "fiber-stochastic"), ("D", None), ("G", None), ("H", None)]
 
 BANNER_OPEN = re.compile(r"^# =+\s*$")
 BANNER = re.compile(r"^#\s+\[([A-Z0-9])\]\s+(.*\S)\s*$")
@@ -183,6 +193,9 @@ def plan_block(plan_lines, drop_steps=()):
     `drop_steps` (by name) commented out for the klusters profile."""
     out = []
     for ln in plan_lines:
+        if any(f"name: {d}," in ln for d in BRANCH_DROP_STEPS) and ln.lstrip().startswith("- {"):
+            out.append("  # " + ln.split("#")[0].strip() + "   # NOT in this profile: the fiber-polish branch is exp-only (untuned)")
+            continue
         if any(f"name: {d}," in ln for d in drop_steps) and ln.lstrip().startswith("- {"):
             out.append("  # " + ln.strip() + "   # DROPPED in the klusters profile: a QC table nobody reads in a recluster")
             continue
@@ -418,6 +431,17 @@ def render(target="best"):
         out += ["", "", "# ----- other knobs of fiber-kit-exp.yaml (not placed by tools/gen_best_profile.py) -----"]
         for k in rest:
             out += emit(k)
+    for n, (v, why) in HELD.items():                        # exp values the profiles do not inherit
+        if n not in by_name:
+            raise SystemExit(f"gen_best_profile: {n} is not a knob of fiber-kit-exp.yaml")
+        i = next(j for j, ln in enumerate(out) if ln.startswith(n + ":"))
+        m = KNOB.match(out[i])
+        name, pad, old, gap, comment = m.groups()
+        if old != v:
+            width = len(pad) + len(old) + len(gap)
+            body = f"{pad}{v}"
+            body += " " * max(1, width - len(body)) if comment else ""
+            out[i:i + 1] = [f"# HELD at {v} (exp: {old}): {why}", f"{name}:{body}{comment or ''}"]
     text = "\n".join(out).rstrip("\n") + "\n"
     return text, knobs
 
