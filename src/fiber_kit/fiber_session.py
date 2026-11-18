@@ -2752,7 +2752,9 @@ def main():
     #   (source atom -> destination fiber) bucket becomes its own NEW child atom — the
     #   same parking fiber-anchor-link uses — keeping every move Klusters-inspectable
     #   and revertible.  The .fibers geometry stays pre-consolidation (diagnostic).
-    if a.cons_mode != "off":
+    # The residual strip (FK_CONS_RESID_K_ON / _K_OFF) is independent of --cons-mode,
+    # so mode=off with a residual tail set is a valid request: run the block for it too.
+    if (a.cons_mode != "off" or a.cons_resid_k_on > 0.0 or a.cons_resid_k_off > 0.0):
         cons_mode, strip_kw, knn_kw = fcons.kwargs_from_args(a)
         chid = np.minimum(((res - t_min) / chunk_s).astype(np.int64), nchunks - 1)
         chid = np.where(clu > 0, chid, -1)             # cluster 0 never joins a chunk

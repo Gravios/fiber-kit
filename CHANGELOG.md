@@ -4,6 +4,56 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.31] — the gain-free residual strip in fiber-consolidate, and an IQR gate that measured backwards
+- `resid_pass` + `FK_CONS_RESID_*`: the pipeline twin of Klusters' "Strip Residual Outliers"
+  (ns3 patches 1094/1095). `shed` scores a gain-blind distance under a `|T|` point kernel, so
+  amplitude counts as distance and the off-template channels — where a spatially displaced
+  intruder lands — carry almost no weight. This fits a per-spike gain on the template's own
+  channels, takes `r = x − a·T`, and splits the residual's power by `u_c = E_c/max_c E_c`:
+  `onr = Σ u_c q_c /(a²Eon)`, `offr = Σ (1−u_c) q_c /(a²Eon)`, each with its OWN robust tail and
+  the flagged sets **unioned** — their sum scores 0.869 against 0.887 for the on-channel term
+  alone, so summing dilutes whichever term carries the signal. A sibling of `shed`, not a
+  replacement: `shed` stays calibrated to `FK_CONS_SHED_K`. Independent of `--cons-mode`, so it
+  composes with strip/knn/shed or runs alone (`mode=off` with a tail set is a valid request, in
+  `fiber-consolidate` and in `fiber-session`).
+- **The IQR gate was asked for as a ceiling and measured as a mistake.** Requested: gate on the
+  waveform IQR so the strip "only runs on relatively clean clusters" — the automated reading of
+  the GUI finding that it works while the cluster is well defined. Measured over 22 clusters in
+  two verified 12-min windows of `jg05-20120312` group 6 (t 24–36 and t 228–240 min, 192 min
+  apart on purpose), scored against the curator's own `.clu`:
+
+  | gate | clusters | parked | precision | recall | keepers lost |
+  |---|---|---|---|---|---|
+  | none | 22 | 10148 | 0.49 | 0.29 | 9.5 % |
+  | `giqr ≤ 0.25` | 12 | 6119 | **0.27** | 0.15 | 9.2 % |
+  | `giqr ≤ 0.20` | 11 | 6083 | **0.27** | 0.15 | 9.2 % |
+
+  The ceiling halves precision, and structurally, not through a bad threshold: it rejects the
+  clusters the strip is informative on (cluster 104 at 57 % contamination runs at precision 0.94
+  / recall 0.85; cluster 2 at 78 % at 0.99) and admits the ones the curator left clean, where
+  there is nothing to remove and the strip parks 6–14 % of good spikes at precision 0.00 —
+  cluster 4 parks 1,354 of 9,673 and loses 14.0 % of keepers. Corrected for each cluster's own
+  base rate the strip is most useful in the middle band, 15–40 % contamination (lift 1.6–3.0),
+  and purely costly at 0 %. So the gate that matches the data is a **floor**. Both `iqr_max` and
+  `iqr_min` ship, both default to **0 (off)**, because the clusters the curator left at 0.0 % may
+  be clean or may be untouched and that confound decides how hard a floor is justified.
+- The gate reuses `giqr`, the own-gain IQR `pure_iqr` already gates the claim on, because it was
+  the best of six label-free predictors of the curator's contamination (Spearman ρ **0.743**;
+  shape IQR 0.600, median `onr` 0.589, IQR of `onr` 0.666, median `offr` 0.680, no-gain fraction
+  0.643). No new statistic was added.
+- **One blind spot no candidate covered**, stated because it is the dangerous one: a near-even
+  mixture of two cells of similar amplitude *and* similar shape. Cluster 3 at 53 % contamination
+  scores `giqr` 0.188, inside the band of clusters at 0.0 % — and 53 % is past the per-point
+  median's breakdown point, where the template is no longer the dominant cell's. A
+  residual-covariance test was tried for it and **refuted** (ρ −0.361: a *clean* unit's residual
+  is dominated by alignment jitter, so one dominant direction marks cleanliness, not mixture).
+  The protection for that case is a seeded template (ns3 1095), not a gate.
+- Per-cluster log lines carry the sited tails, which is the only way to see whether the
+  thresholds are near the data; `FK_CONS_RESID_QUIET=1` silences them. 15 tests: both terms
+  separately, each disabled on its own, the gain divided out (a half-amplitude spike of the same
+  cell is not an outlier), the gate in both directions, independence from `--cons-mode`, the
+  exclude list, `resid_min`, and the taper.
+
 ## [0.67.30] — the time-column guard failed on every realigned session
 - Found by running 1088 on real data for the first time (`kern_pipe/ws_hyb`, a 30-min g6
   subsession with both `.fet` spaces staged). `looks_like_time_column` returned **False** for

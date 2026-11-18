@@ -464,5 +464,98 @@ sh_out2, sh_tot2 = fc.consolidate(lambda ix: sh_waves[np.asarray(ix)], sh_lab, s
                                      strip_kw=dict(shed_k=3.0, shed_min=40), log=lambda *_: None)
 check((sh_out2 == sh_lab).all(), "an excluded cluster is never shed")
 
+
+# ── 7. resid_pass: the gain-free strip, on/off split, and the IQR gate ───────
+#   The off-channel term is the half shed cannot see: shed's |T| point kernel is
+#   ~0 exactly where a spatially displaced intruder lands, and it has no
+#   per-spike gain, so a scaled copy of the template reads as distance.  Both are
+#   checked here against implanted populations, plus the gate in both directions
+#   and the independence from --cons-mode.
+rr = np.random.default_rng(7)
+RS, RC, RN = 40, 6, 400
+rt = np.arange(RS)
+rbump = np.exp(-((rt - 20) ** 2) / 8.0)
+rw = np.zeros((RN, RS, RC))
+rw[:, :, 0] = -100 * rbump                      # the cell: channels 0-1
+rw[:, :, 1] = -60 * rbump
+rw[-30:, :, 4] = -80 * rbump                    # 30 intruders, displaced to 4-5,
+rw[-30:, :, 5] = -70 * rbump                    #   with the SAME on-channel shape
+rw += rr.normal(0, 3, rw.shape)
+rlab = np.full(RN, 5, np.int64)
+rchunk = np.zeros(RN, np.int64)
+rwav = rw.astype(np.float32)
+
+
+def _resid(labels=None, **kw):
+    base = dict(resid_k_on=3.0, resid_k_off=3.0, resid_min=50)
+    base.update(kw)
+    return fc.consolidate(lambda ix: rwav[np.asarray(ix)],
+                          rlab if labels is None else labels, rchunk,
+                          mode="off", exclude=(0,), strip_kw=base, log=lambda *_: None)
+
+
+r_out, r_tot = _resid()
+check((r_out[-30:] == 1).sum() >= 27,
+      "resid: the off-channel term catches a displaced intruder shed's kernel is blind to")
+check(r_tot["resid_off"] > r_tot["resid_on"],
+      "...and it is the OFF-channel term that catches it, not the on-channel one")
+check((r_out[:370] == 5).sum() >= 340, "resid leaves the clean core in place")
+
+# The terms are reported apart, and each can be switched off on its own.
+r_on, t_on = _resid(resid_k_off=0.0)
+r_off, t_off = _resid(resid_k_on=0.0)
+check(t_on["resid_off"] == 0 and t_off["resid_on"] == 0,
+      "resid: k_off=0 disables the off-channel term and k_on=0 the on-channel one")
+check((r_off[-30:] == 1).sum() > (r_on[-30:] == 1).sum(),
+      "...and the off-channel term alone outperforms the on-channel one on this intruder")
+
+# A scaled copy of the template is NOT an outlier: the gain is divided out.
+sc_w = rwav[:370].copy()
+sc_w[:40] *= 0.55                                # 40 half-amplitude spikes of the same cell
+sc_lab = np.full(370, 5, np.int64)
+sc_out, sc_tot = fc.consolidate(lambda ix: sc_w[np.asarray(ix)], sc_lab,
+                                np.zeros(370, np.int64), mode="off", exclude=(0,),
+                                strip_kw=dict(resid_k_on=3.0, resid_k_off=3.0, resid_min=50),
+                                log=lambda *_: None)
+check((sc_out[:40] == 1).sum() <= 4,
+      "resid: a half-amplitude spike of the same cell is not an outlier (the gain is fitted out)")
+
+# The gate, both directions.  giqr here is small (one cell, little amplitude
+# spread), so a ceiling below it must refuse and a floor above it must refuse.
+g_hi, t_hi = _resid(resid_iqr_max=1e-6)
+check((g_hi == rlab).all() and t_hi["resid_gated"] == 1,
+      "resid: a cluster above iqr_max is left alone and counted as gated")
+g_lo, t_lo = _resid(resid_iqr_min=10.0)
+check((g_lo == rlab).all() and t_lo["resid_gated"] == 1,
+      "resid: a cluster below iqr_min is left alone too (the gate is two-sided)")
+g_ok, t_ok = _resid(resid_iqr_max=10.0, resid_iqr_min=0.0)
+check(t_ok["resid"] == r_tot["resid"] and t_ok["resid_gated"] == 0,
+      "...and a cluster inside the gate is stripped exactly as with no gate")
+
+# Independence from mode, and off by default.
+_, t_none = fc.consolidate(lambda ix: rwav[np.asarray(ix)], rlab, rchunk, mode="off",
+                           exclude=(0,), strip_kw=dict(), log=lambda *_: None)
+check(t_none.get("resid", 0) == 0,
+      "resid is OFF by default: no tail multiplier, nothing parked")
+_, t_both = _resid(max_dist=0.5)
+check(t_both["resid"] > 0,
+      "resid runs under mode=off, so it composes with (or replaces) strip/knn/shed")
+r_small, t_small = _resid(resid_min=RN + 10)
+check((r_small == rlab).all() and t_small["resid"] == 0,
+      "a cluster below resid_min is never stripped")
+r_exc, t_exc = fc.consolidate(lambda ix: rwav[np.asarray(ix)], rlab, rchunk, mode="off",
+                              exclude=(0, 5),
+                              strip_kw=dict(resid_k_on=3.0, resid_k_off=3.0, resid_min=50),
+                              log=lambda *_: None)
+check((r_exc == rlab).all(), "an excluded cluster is never residual-stripped")
+
+# The taper: win < 0 disables it, win > 0 sets its width, and the peak-centred
+# default must land on the template's own trough.
+tap = fc._resid_taper(np.median(rwav[:370], 0), 0)
+check(tap[20] == tap.max() and tap[0] == 0.0 and tap[-1] == 0.0,
+      "resid taper: peak-centred on the template's trough, zero outside its window")
+check((fc._resid_taper(np.median(rwav[:370], 0), -1) == 1.0).all(),
+      "resid taper: a negative width disables the taper")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)

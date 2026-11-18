@@ -135,6 +135,15 @@ _KNOBS = {
     "FK_CONS_FOLD_THR": ("cons_fold_thr", float, 0.9),
     "FK_CONS_SCORR": ("cons_scorr", float, 0.93),
     "FK_CONS_OFF_THR": ("cons_off_thr", float, 0.0),
+    # The gain-free residual strip (resid_pass).  Off unless a tail multiplier is set;
+    # independent of --cons-mode, so it composes with strip/knn/shed or runs alone.
+    "FK_CONS_RESID_K_ON": ("cons_resid_k_on", float, 0.0),
+    "FK_CONS_RESID_K_OFF": ("cons_resid_k_off", float, 0.0),
+    "FK_CONS_RESID_WIN": ("cons_resid_win", int, 0),
+    "FK_CONS_RESID_MINGAIN": ("cons_resid_mingain", float, 0.25),
+    "FK_CONS_RESID_MIN": ("cons_resid_min", int, 200),
+    "FK_CONS_RESID_IQR_MAX": ("cons_resid_iqr_max", float, 0.0),
+    "FK_CONS_RESID_IQR_MIN": ("cons_resid_iqr_min", float, 0.0),
 }
 
 
@@ -185,7 +194,11 @@ def kwargs_from_args(a):
                     pure_iqr=a.cons_pure_iqr, agg_iqr=a.cons_agg_iqr,
                     agg_every=a.cons_agg_every, agg_minnew=a.cons_agg_minnew,
                     agg_vac=a.cons_agg_vac, tpl_align=bool(a.cons_tpl_align),
-                    shed_k=a.cons_shed_k, shed_min=a.cons_shed_min)
+                    shed_k=a.cons_shed_k, shed_min=a.cons_shed_min,
+                    resid_k_on=a.cons_resid_k_on, resid_k_off=a.cons_resid_k_off,
+                    resid_win=a.cons_resid_win, resid_mingain=a.cons_resid_mingain,
+                    resid_min=a.cons_resid_min, resid_iqr_max=a.cons_resid_iqr_max,
+                    resid_iqr_min=a.cons_resid_iqr_min)
     knn_kw = dict(k=a.cons_knn_k, thr=a.cons_knn_thr, minref=a.cons_knn_minref,
                   minnew=a.cons_knn_minnew, dims=a.cons_knn_dims, fold_thr=a.cons_fold_thr,
                   scorr=a.cons_scorr, off_thr=(a.cons_off_thr if a.cons_off_thr > 0 else None))
@@ -537,18 +550,228 @@ def knn_pass(get_waves, labels, idx, *, k=20, thr=0.3, minref=50, minnew=30,
 
 
 # ── the per-chunk driver both stages call ────────────────────────────────────
+# ── the gain-free residual strip, on/off-channel split ───────────────────────
+def _resid_taper(T, win):
+    """Squared Hamming taper centred on the template's own peak sample.
+
+    win > 0 is its width in samples, win == 0 means half the record, win < 0
+    disables the taper.  SQUARED because the taper is an AMPLITUDE weight and
+    every form it enters below (h x T, h T^2, h r^2) is quadratic -- storing
+    h_amp^2 once is the same statistic as tapering x and T and then squaring,
+    which is what the offline measurement did.  Channel-free by construction,
+    unlike the |T| kernel the strip and shed use: the whole point is a weight
+    that does NOT vanish off-template, since that is where a spatially
+    displaced contaminant shows itself."""
+    S = int(T.shape[0])
+    if win < 0:
+        return np.ones(S)
+    width = int(win) if win > 0 else max(1, S // 2)
+    tpk = int((T ** 2).sum(1).argmax())
+    half = max(1, width // 2)
+    d = np.arange(S) - tpk
+    h = np.zeros(S)
+    m = np.abs(d) <= half
+    amp = 0.54 - 0.46 * np.cos(2.0 * np.pi * (d[m] + half) / (2.0 * half))
+    h[m] = amp * amp
+    return h
+
+
+def resid_terms(W, T, win=0, mingain=0.25):
+    """Per-spike on- and off-channel residual, with the gain divided out.
+
+    The shed metric is a gain-blind distance under a |T| point kernel, so
+    amplitude counts as distance and the off-template channels carry almost no
+    weight.  This fits a per-spike gain on the template's own channels, takes
+    r = x - a*T, and splits the residual's power by how much of the template
+    each channel carries:
+
+      E_c  = sum_t h T^2 ;  u_c = E_c / max_c E_c ;  Eon = sum_c u_c E_c
+      a    = sum_c u_c sum_t h x T / Eon      (fitted ON-channel only, so an
+             intruder's off-channel energy cannot inflate it and erase its own
+             off-residual)
+      q_c  = sum_t h (x - a T)^2
+      onr  = sum_c u_c       q_c / (a^2 Eon)
+      offr = sum_c (1 - u_c) q_c / (a^2 Eon)
+
+    Both dimensionless and gain-free; 1 = residual as large as the template.
+    u_c WEIGHTS rather than splits, so a flank channel at half the energy feeds
+    both terms in proportion.  offr is normalised by the ON-channel energy on
+    purpose -- it asks how much signal sits where this cell has none, relative
+    to this cell's own size -- so it does not blow up on a quiet channel.
+
+    Spikes whose gain falls below `mingain` carry no template-shaped signal and
+    cannot be normalised by a^2; `ok` marks the rest.  That guard is
+    load-bearing: on the validated unit a runs down through zero and the scores
+    of near-zero-gain spikes reach 2e+06, which would set the MAD by themselves.
+
+    Returns None when the template is flat on these channels."""
+    h = _resid_taper(T, win)
+    Ec = (h[:, None] * T ** 2).sum(0)
+    if not Ec.max() > 0:
+        return None
+    u = Ec / Ec.max()
+    Eon = float((u * Ec).sum())
+    if not Eon > 0:
+        return None
+    nsp = int(W.shape[0])
+    onr = np.empty(nsp)
+    offr = np.empty(nsp)
+    av = np.empty(nsp)
+    for b0 in range(0, nsp, 20000):                 # bounded working set on a big cluster
+        Wb = np.asarray(W[b0:b0 + 20000], float)
+        a = (h[None, :, None] * Wb * T[None] * u[None, None, :]).sum((1, 2)) / Eon
+        r = Wb - a[:, None, None] * T[None]
+        q = (h[None, :, None] * r ** 2).sum(1)
+        nrm = np.maximum(a ** 2 * Eon, 1e-300)
+        onr[b0:b0 + len(a)] = (q * u[None, :]).sum(1) / nrm
+        offr[b0:b0 + len(a)] = (q * (1.0 - u)[None, :]).sum(1) / nrm
+        av[b0:b0 + len(a)] = a
+    return dict(onr=onr, offr=offr, a=av, ok=av >= float(mingain), u=u, Eon=Eon,
+                offmargin=float((1.0 - u).sum()))
+
+
+def _resid_tail(v, k):
+    """Robust one-sided upper tail, median + k*1.4826*MAD.  The terms are
+    non-negative and right-skewed, so a symmetric sigma would misread them
+    (the same cut shed uses).  A zero-MAD distribution has no tail: inf."""
+    if not len(v):
+        return np.inf
+    med = float(np.median(v))
+    mad = float(np.median(np.abs(v - med)))
+    return med + k * 1.4826 * mad if mad > 0 else np.inf
+
+
+def resid_pass(get_waves, labels, idx, *, k_on=3.0, k_off=3.0, win=0, mingain=0.25,
+               minspk=200, iqr_max=0.0, iqr_min=0.0, tpl_cap=1024, exclude=(0,),
+               rng=None, log=None):
+    """Expel each cluster's gain-free residual outliers to the reserve (label 1).
+
+    The interactive twin of Klusters' "Strip Residual Outliers", and a sibling
+    of shed rather than a replacement: shed stays calibrated to FK_CONS_SHED_K,
+    so the two can be run on the same clusters and compared.  Per cluster: its
+    OWN median template, resid_terms, then a SEPARATE robust tail per term with
+    the flagged sets UNIONED.  Separate because the terms are complementary --
+    on the validated unit one sibling separates on shape (on-channel AUC 0.943)
+    and another on position (off-channel 0.786 while amplitude alone is blind at
+    0.522) -- and their SUM scores 0.869, below the on-channel term alone.
+
+    THE IQR GATE, AND WHY ITS DEFAULT IS OFF.  `iqr_max` admits a cluster only
+    while the IQR of its own matched gain (the same statistic `pure_iqr` gates
+    the claim on) is at or below it; `iqr_min` admits it only above.  Measured
+    over 22 clusters in two verified 12-min windows of jg05-20120312 group 6
+    (t 24-36 and t 228-240 min), scored against the curator's own file:
+
+      gate              clusters  parked  precision  recall  keepers lost
+      none (all)              22   10148       0.49    0.29          9.5%
+      giqr <= 0.25            12    6119       0.27    0.15          9.2%
+      giqr <= 0.20            11    6083       0.27    0.15          9.2%
+
+    The ceiling HALVES precision, and the reason is structural, not a bad
+    threshold.  It rejects the clusters the strip is informative on -- 104 at
+    57% contamination runs at precision 0.94 / recall 0.85, 2 at 78% at 0.99 --
+    and admits the clusters the curator left clean, where there is nothing to
+    remove and the strip parks 6-14% of good spikes for precision 0.00 (cluster
+    4: 1,354 of 9,673 parked, precision 0.00, 14.0% of keepers lost).  Read as
+    lift over each cluster's own base rate the strip is most useful in the
+    middle band, 15-40% contamination (lift 1.6-3.0), and purely costly at 0%.
+
+    So the gate that matches the measurement is a FLOOR, not a ceiling -- and
+    `iqr_min` is how to set one.  Both default to 0 (off) because the clusters
+    the curator left at 0.0% may be clean or may be untouched, and that
+    confound decides how hard a floor is justified; the numbers are here so the
+    choice is informed rather than inherited.
+
+    Of six label-free candidates the gain IQR was the best predictor of the
+    curator's contamination (Spearman rho 0.743; shape IQR 0.600, median onr
+    0.589, IQR of onr 0.666, median offr 0.680, no-gain fraction 0.643), which
+    is why the gate reuses it instead of adding a statistic.  It has one blind
+    spot that no candidate covered: a near-even mixture of two cells of similar
+    amplitude AND similar shape.  Cluster 3 at 53% contamination scores giqr
+    0.188, inside the band of clusters at 0.0% -- and 53% is past the per-point
+    median's breakdown point, where the template is no longer the dominant
+    cell's.  A residual-covariance test was tried for that case and refuted
+    (rho -0.361: a CLEAN unit's residual is dominated by alignment jitter, so
+    structure does not mark a mixture).  The protection for it is a seeded
+    template, not a gate.
+
+    Parked spikes go to the reserve, so this is park-and-review, never
+    deletion.  Returns (labels, stats)."""
+    labels = np.asarray(labels).copy()
+    idx = np.asarray(idx)
+    rng = rng or np.random.default_rng(0)
+    tot = dict(resid=0, resid_on=0, resid_off=0, resid_both=0, resid_nogain=0,
+               resid_clusters=0, resid_gated=0)
+    if k_on <= 0.0 and k_off <= 0.0:
+        return labels, tot
+    for c in np.unique(labels[idx]):
+        if c <= 0 or c == 1 or c in exclude:
+            continue
+        ci = idx[labels[idx] == c]
+        if len(ci) < int(minspk):
+            continue
+        T = _template(get_waves, ci, int(tpl_cap), rng)
+        t = resid_terms(get_waves(ci), T, win=win, mingain=mingain)
+        if t is None:
+            continue
+        ok = t["ok"]
+        if ok.sum() < 5:
+            continue
+        gq = np.quantile(t["a"][ok], (0.25, 0.75))
+        giqr = float(gq[1] - gq[0])
+        if (iqr_max > 0.0 and giqr > iqr_max) or (iqr_min > 0.0 and giqr < iqr_min):
+            tot["resid_gated"] += 1
+            if log:
+                log(f"    [resid] cluster {int(c)}: giqr {giqr:.3f} outside the gate "
+                    f"({iqr_min or '-'} .. {iqr_max or '-'}), left alone")
+            continue
+        thr_on = _resid_tail(t["onr"][ok], k_on) if k_on > 0 else np.inf
+        thr_off = _resid_tail(t["offr"][ok], k_off) if k_off > 0 else np.inf
+        f_on = ok & (t["onr"] > thr_on)
+        f_off = ok & (t["offr"] > thr_off)
+        bad = (~ok) | f_on | f_off
+        tot["resid_clusters"] += 1
+        if log:
+            log(f"    [resid] cluster {int(c)}: {int(ok.sum())} scored, giqr {giqr:.3f}, "
+                f"median on={np.median(t['onr'][ok]):.3g} off={np.median(t['offr'][ok]):.3g}, "
+                f"tail on>{thr_on:.3g} off>{thr_off:.3g} -> {int(bad.sum())} parked")
+        if not bad.any():
+            continue
+        tot["resid_nogain"] += int((~ok).sum())
+        tot["resid_both"] += int((f_on & f_off).sum())
+        tot["resid_on"] += int((f_on & ~f_off).sum())
+        tot["resid_off"] += int((f_off & ~f_on).sum())
+        tot["resid"] += int(bad.sum())
+        labels[ci[bad]] = 1
+    return labels, tot
+
+
 def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
                 strip_kw=None, knn_kw=None, rng=None, log=print, tag="consolidate"):
     """Run the requested passes per chunk over `labels`.  `chunk_ids` assigns
     every spike a chunk (< 0 = never touched).  Returns (labels, stats)."""
-    if mode == "off":
+    strip_kw = dict(strip_kw or {})
+    # resid_pass is independent of `mode` -- it composes with strip/knn/shed or
+    # runs alone, so mode="off" with a resid tail set is a valid request and
+    # must not short-circuit here.
+    resid_kw = dict(k_on=float(strip_kw.pop("resid_k_on", 0.0)),
+                    k_off=float(strip_kw.pop("resid_k_off", 0.0)),
+                    win=int(strip_kw.pop("resid_win", 0)),
+                    mingain=float(strip_kw.pop("resid_mingain", 0.25)),
+                    minspk=int(strip_kw.pop("resid_min", 200)),
+                    iqr_max=float(strip_kw.pop("resid_iqr_max", 0.0)),
+                    iqr_min=float(strip_kw.pop("resid_iqr_min", 0.0)))
+    resid_on = resid_kw["k_on"] > 0.0 or resid_kw["k_off"] > 0.0
+    # Per-cluster resid lines carry the sited tails, which is the only way to see
+    # whether the thresholds are anywhere near the data; FK_CONS_RESID_QUIET=1
+    # silences them once a config is settled.
+    resid_log = not cfgmod.knob_value("FK_CONS_RESID_QUIET", int, 0, None)
+    if mode == "off" and not resid_on:
         return np.asarray(labels), dict(strip=0, knn=0, new=0)
     rng = rng or np.random.default_rng(0)
     labels = np.asarray(labels).copy()
     chunk_ids = np.asarray(chunk_ids)
     next_id = _fch.next_free_id(labels)                     # below the reserved block (fiber_chunks)
     tot = dict(strip=0, knn=0, new=0)
-    strip_kw = dict(strip_kw or {})
     # The curator's strip is ITERATIVE: strip, re-template on the result,
     # adjust the distance, strip again.  iters automates that loop — every
     # round refits the templates AND the calibration quantiles on the updated
@@ -578,6 +801,9 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
     tot["shed"] = 0
     tot["agg"] = 0
     tot["agg_new"] = 0
+    for k in ("resid", "resid_on", "resid_off", "resid_both", "resid_nogain",
+              "resid_clusters", "resid_gated"):
+        tot[k] = 0
     for ch in np.unique(chunk_ids[chunk_ids >= 0]):
         idx = np.flatnonzero(chunk_ids == ch)
         # One realignment per chunk, shared by both passes (see ALIGNMENT above).
@@ -669,10 +895,26 @@ def consolidate(get_waves, labels, chunk_ids, *, mode="both", exclude=(0,),
                                                  rng=rng, **(knn_kw or {}))
             tot["knn"] += n
             tot["new"] += k_new
+        if resid_on:
+            # LAST in the chunk, and independent of mode: the residual strip is a
+            # terminal precision dial like shed, and it scores against each
+            # cluster's own median, so it wants whatever membership the earlier
+            # passes settled on rather than the one they started from.
+            labels, rtot = resid_pass(aw, labels, idx, exclude=exclude, rng=rng,
+                                      tpl_cap=int(strip_kw.get("tpl_cap", 1024)),
+                                      log=(log if resid_log else None), **resid_kw)
+            for k, v in rtot.items():
+                tot[k] = tot.get(k, 0) + v
     if log:
         agg_line = (f", dissolved {tot['agg']} into per-chunk aggregates "
                     f"({tot['agg_new']} reseeded template(s))" if tot.get("agg") else "")
         shed_line = f", shed {tot['shed']} own-outlier(s) to reserve" if tot.get("shed") else ""
+        resid_line = (f", residual strip parked {tot['resid']} ({tot['resid_on']} on-channel, "
+                      f"{tot['resid_off']} off-channel, {tot['resid_both']} both, "
+                      f"{tot['resid_nogain']} no-gain) from {tot['resid_clusters']} cluster(s)"
+                      + (f"; {tot['resid_gated']} left alone by the IQR gate"
+                         if tot.get("resid_gated") else "")
+                      if tot.get("resid") or tot.get("resid_gated") else "")
         log(f"[{tag}] mode={mode}: strip moved {tot['strip']}, knn relabelled {tot['knn']} "
-            f"({tot['new']} new cluster(s)){agg_line}{shed_line}")
+            f"({tot['new']} new cluster(s)){agg_line}{shed_line}{resid_line}")
     return labels, tot
