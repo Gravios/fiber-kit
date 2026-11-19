@@ -17,6 +17,10 @@ Synthetic raw .spk, four channels.  Units:
   * --shift: a fragment stored 2 samples late merges only when the pair may be compared at its best lag;
   * re-templating: the result does not depend on the order the fragments are listed in;
   * the contract fiber-xcorr-merge's downstream expects (mapping, counts) and the .tsv rows;
+  * the tuned defaults (0.67.35: acceptance 0.675, shift 2, on-channel k 6) give the same partition of
+    the fixture: the looser on-channel tail still keeps the other shape out;
+  * replay: a run at a threshold is EXACTLY a lower-threshold run's pop log truncated there, as a function
+    and as --replay; a table written at a higher threshold, or with other settings, is refused;
   * the CLI on a small session: .clu, .clc/.clp carried, the .rsm table, a bad --merge-align refused.
 """
 import os, subprocess, sys, tempfile
@@ -117,6 +121,36 @@ def main():
     check(np.median(tb["onr"][tb["ok"]]) > ea["thr"][0] and np.median(tc["offr"][tc["ok"]]) > ea["thr"][1],
           "B is outside A's ON-channel tail and C outside A's OFF-channel tail")
 
+    # the tuned defaults keep the fixture's partition
+    outd, _, nmd, _, _ = run(spk, ids, res, acc_thr=0.675, shift=2, k_on=6.0)
+    check(groups(outd, ids) == g, f"the tuned defaults (0.675, shift 2, k_on 6) give the same partition ({groups(outd, ids)})")
+
+    # replay: a graded fixture (fragments of three units with 0-35 % of another unit mixed in), so the
+    # acceptances spread and the thresholds cut the pop log at different places
+    rg = np.random.default_rng(1)
+    gplan, lab = [], 2
+    for tm in (TA, TB, TC):
+        for frac in (0.0, 0.0, 0.1, 0.2, 0.35):
+            other = TB if tm is not TB else TA
+            n = int(rg.integers(150, 400)); k = int(frac * n)
+            gplan.append((lab, [("x", tm, n - k)] + ([("y", other, k)] if k else []))); lab += 1
+    gspk, gids, _, gres = build(rg, gplan)
+    glabs = sorted({int(x) for x in gids})
+    _, mlow, _, _, stlow = run(gspk, gids, gres, acc_thr=0.3)
+    cuts, same = [], True
+    for thr in (0.4, 0.5, 0.6, 0.7, 0.8):
+        _, mdir, nmdir, nvdir, _ = run(gspk, gids, gres, acc_thr=thr)
+        mrep, nmrep, nvrep, used = rm.replay(glabs, stlow["pairs"], thr)
+        same &= (mrep == mdir and nmrep == nmdir and nvrep == nvdir)
+        cuts.append(nmdir)
+    check(same, f"replay of the 0.3 run reproduces the runs at 0.4-0.8 exactly (unions {cuts})")
+    check(len(set(cuts)) >= 3, f"and those thresholds do cut the log at different places ({cuts})")
+    try:
+        rm.replay([2, 3], stlow["pairs"], 0.5); bad = False
+    except ValueError:
+        bad = True
+    check(bad, "a table naming clusters this input does not have is refused")
+
     # order independence (re-templating, keyed samples)
     perm_labs = [6, 3, 8, 2, 7, 5, 4]
     out2, *_ = run(spk, ids, res, labs=perm_labs)
@@ -199,7 +233,21 @@ def main():
                   "each child's parent went through the merge's mapping")
             with open(base + ".rsm.1.rsm.tsv") as fh:
                 rows = fh.read().strip().split("\n")
-            check(rows[0].startswith("a\tb\tacceptance") and len(rows) == 4, f"the .rsm table: header + 3 unions ({len(rows) - 1} rows)")
+            check(rows[0].startswith("# fiber-residual-merge acc_thr=0.675 ") and rows[1].startswith("a\tb\tacceptance")
+                  and len(rows) == 5, f"the .rsm table: the settings, the header, 3 unions ({len(rows) - 2} rows)")
+            # --replay: one run at 0.3, then 0.675 from its table
+            cli = [sys.executable, "-m", "fiber_kit.fiber_residual_merge", base, "1", "--clu-stage", "lnk", "--emit-drift", "0"]
+            r1 = subprocess.run(cli + ["--out-stage", "low", "--acc-thr", "0.3"], capture_output=True, text=True, env=env, cwd=d)
+            r2 = subprocess.run(cli + ["--out-stage", "rep", "--replay", base + ".rsm.1.low.tsv"], capture_output=True, text=True, env=env, cwd=d)
+            ok2 = r1.returncode == 0 and r2.returncode == 0
+            check(ok2 and "replayed" in r2.stdout, "--replay runs from the table of a run at 0.3" + ("" if ok2 else "\n" + (r1.stdout + r1.stderr + r2.stdout + r2.stderr)[-1500:]))
+            if ok2:
+                _, rep = nio.read_clu_at(base, 1, variant="stderiv", tag="rep", n_spikes=n)
+                check(np.array_equal(rep, new), "and writes exactly the .clu of the direct run at the default threshold")
+            r3 = subprocess.run(cli + ["--out-stage", "x", "--acc-thr", "0.2", "--replay", base + ".rsm.1.low.tsv"], capture_output=True, text=True, env=env, cwd=d)
+            check(r3.returncode != 0 and "holds no pair" in (r3.stdout + r3.stderr), "a threshold below the table's is refused")
+            r4 = subprocess.run(cli + ["--out-stage", "x", "--shift", "0", "--replay", base + ".rsm.1.low.tsv"], capture_output=True, text=True, env=env, cwd=d)
+            check(r4.returncode != 0 and "other settings (shift 2 -> 0)" in (r4.stdout + r4.stderr), "a table written with other settings is refused, and the message names them")
         r = subprocess.run([sys.executable, "-m", "fiber_kit.fiber_residual_merge", "nosuch", "1", "--merge-align", "bogus"],
                            capture_output=True, text=True, env=env, cwd=d)
         check(r.returncode != 0 and "--merge-align must be stored, peak or klusters" in (r.stdout + r.stderr),

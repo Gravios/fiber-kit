@@ -807,10 +807,11 @@ Positional: `session`, `elec`
 | `--ref-sample` | — | override; default = peak from <session>.yaml |
 | `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness |
 | `--seed` | `0` |  |
-| `--acc-thr` | `0.7` | FK_RSM_ACC_THR (default 0.7) |
+| `--replay` | — | the .rsm table of an earlier run on the SAME input at a LOWER --acc-thr and otherwise the same settings: this run is that one truncated at --acc-thr (exact), and scores nothing. One run at e.g. 0.4, then any threshold above it for free |
+| `--acc-thr` | `0.675` | FK_RSM_ACC_THR (default 0.675) |
 | `--cos` | `0.5` | FK_RSM_COS (default 0.5) |
-| `--shift` | `0` | FK_RSM_SHIFT (default 0) |
-| `--strip-k-on` | `3.0` | FK_RSM_STRIP_K_ON (default 3.0) |
+| `--shift` | `2` | FK_RSM_SHIFT (default 2) |
+| `--strip-k-on` | `6.0` | FK_RSM_STRIP_K_ON (default 6.0) |
 | `--strip-k-off` | `3.0` | FK_RSM_STRIP_K_OFF (default 3.0) |
 | `--win` | `0` | FK_RSM_WIN (default 0) |
 | `--mingain` | `0.25` | FK_RSM_MINGAIN (default 0.25) |

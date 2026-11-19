@@ -36,23 +36,34 @@
 #      everything; with each side's own tails a threshold of 0.3 collapsed a sort.
 #    * greedy with RE-TEMPLATING, no union-find chaining: a merged cluster gets a new
 #      median and new tails before it is offered another partner.
-#    * ACC_THR 0.7 by default.  0.3 separated clean pairs at AUC 0.99 and does not
-#      transfer to a real sort; do not lower it unexamined.
+#    * ACC_THR well above the collapse.  0.3 separated clean pairs at AUC 0.99 and does not
+#      transfer to a real sort: below ~0.5 a session sort collapses into a few blobs.
+#
+#  TUNED 2026-11-19 on g6 0316 (plans/11-session-residual.yaml; per-knob notes in section [I]
+#  of fiber-kit-exp.yaml): ACC_THR 0.675, SHIFT 2, STRIP_K_ON 6.  Chosen as the highest
+#  per-unit accuracy whose purity stays within a point of the input sort's, NOT by
+#  fiber-tune's objective, which rises all the way into the collapse.
+#
+#  A THRESHOLD SWEEP COSTS ONE RUN.  The heap pops in descending acceptance and a lower
+#  threshold only adds pairs below the others, so a run at ACC_THR t is exactly a run at any
+#  lower threshold truncated at the first pair popped below t.  The .rsm table is that pop
+#  log, in order, with the run's settings in its first line; --replay <table> reproduces the
+#  run at any threshold at or above the table's without scoring anything.
 #
 #  Candidates are pre-filtered twice, both conservative: the template cosine must
 #  exceed COS (0.5 -- unrelated shapes are never scored), and each cluster's MEDIAN
 #  must itself pass the other's strip (if the median of B is outside A's tails, well
 #  under half of B's spikes are inside them, so the pair cannot reach 0.7).
 #
-#  Templates and scores are built on the RAW .spk (--spk-method standard) at its
-#  STORED alignment by default: run it after a fiber-realign, as the plans do.
-#  --merge-align peak|klusters re-aligns each cluster's sample first, as
-#  fiber-xcorr-merge does; --shift lets a pair be compared at the lag that maximises
-#  the template cosine.
+#  Templates and scores are built on the RAW .spk (--spk-method standard) as it is
+#  STORED: run it after a fiber-realign, as the plans do.  A pair is compared at the lag
+#  within +/- SHIFT (2) that maximises the template cosine -- fragments of one cell in
+#  different chunks sit a sample or two apart.  --merge-align peak|klusters re-aligns each
+#  cluster's sample first, as fiber-xcorr-merge does.
 #
 #  Knobs read FK_RSM_* (CLI/plan-param > FK_* env > global fiber-kit.yaml > default).
-#  Writes <base>.rsm.<group>.<out-stage>.tsv: every pair that reached the threshold,
-#  with its acceptance, cosine, lag, sizes and verdict.  Optional --gt-clu scores
+#  Writes <base>.rsm.<group>.<out-stage>.tsv: every pair that reached the threshold, in
+#  the order it was popped, with its acceptance, cosine, lag, sizes and verdict.  Optional --gt-clu scores
 #  purity + completeness like fiber-xcorr-merge.
 # ════════════════════════════════════════════════════════════════════════════
 import argparse
@@ -77,14 +88,15 @@ _LP = "▸ fiber-residual-merge"
 
 _KNOBS = {
     # min share of EACH cluster's spikes that survives the other's strip.  The merge threshold.
-    "FK_RSM_ACC_THR": ("acc_thr", float, 0.7),
+    "FK_RSM_ACC_THR": ("acc_thr", float, 0.675),
     # template cosine a pair needs to be scored at all (a pre-filter, not the decision)
     "FK_RSM_COS": ("cos", float, 0.5),
     # +/- samples: a pair is compared at the lag (within this) that maximises the template cosine.
-    # 0 = the stored alignment, which is what the acceptance was measured at.
-    "FK_RSM_SHIFT": ("shift", int, 0),
+    # 0 = the stored alignment.  2 since the 2026-11-19 tuning: fragments of one cell in different chunks
+    # sit a sample or two apart, and at lag 0 that offset is on-channel residual.
+    "FK_RSM_SHIFT": ("shift", int, 2),
     # robust-tail multipliers of the on- and off-channel residual (the strip's own k)
-    "FK_RSM_STRIP_K_ON": ("strip_k_on", float, 3.0),
+    "FK_RSM_STRIP_K_ON": ("strip_k_on", float, 6.0),
     "FK_RSM_STRIP_K_OFF": ("strip_k_off", float, 3.0),
     "FK_RSM_WIN": ("win", int, 0),                 # Hamming taper width; 0 = half the record
     "FK_RSM_MINGAIN": ("mingain", float, 0.25),    # a spike below this gain has no template-shaped signal
@@ -169,7 +181,7 @@ def acceptance(A, B, lag=0, *, win=0, mingain=0.25, medians_only=False):
     return min(out)
 
 
-def agglomerate(spk, ids, idx0, times0, duration, *, acc_thr=0.7, cos=0.5, shift=0, k_on=3.0, k_off=3.0,
+def agglomerate(spk, ids, idx0, times0, duration, *, acc_thr=0.675, cos=0.5, shift=2, k_on=6.0, k_off=3.0,
                 win=0, mingain=0.25, refrac=0, refrac_thr=0.3, refrac_min_exp=5.0, censor=0, cap=1000,
                 ref_sample=0, rng=None, keyed=True, align="stored", align_min_score=0.10, stats=None):
     """Confidence-ordered reverse-strip agglomeration with re-templating + refractory veto.
@@ -254,12 +266,66 @@ def agglomerate(spk, ids, idx0, times0, duration, *, acc_thr=0.7, cos=0.5, shift
     return {int(u): root(int(u)) for u in ids}, n_merge, n_veto
 
 
-def table_lines(pairs):
-    """The <base>.rsm.<g>.<tag>.tsv lines: the header, then one row per pair that reached the threshold."""
-    out = ["a\tb\tacceptance\tcos\tlag\tn_a\tn_b\tverdict"]
+# The settings a pop log depends on: a replay is only the same run if these agree (ACC_THR aside).
+_SETTINGS = ("acc_thr", "cos", "shift", "strip_k_on", "strip_k_off", "win", "mingain", "refrac_ms", "refrac_thr",
+             "refrac_min_exp", "min_n", "spk_cap", "sample_keyed", "merge_align", "merge_align_min_score")
+
+
+def table_lines(pairs, settings=None):
+    """The <base>.rsm.<g>.<tag>.tsv lines: an optional `# key=value ...` line recording the run's settings,
+    the header, then one row per pair IN THE ORDER IT WAS POPPED (which is what makes the file a replayable
+    log, not just a report)."""
+    out = []
+    if settings:
+        out.append("# fiber-residual-merge " + " ".join(f"{k}={settings[k]}" for k in _SETTINGS if k in settings))
+    out.append("a\tb\tacceptance\tcos\tlag\tn_a\tn_b\tverdict")
     for a, b, s, c, lag, na, nb, v in pairs:
-        out.append(f"{a}\t{b}\t{s:.4f}\t{c:.4f}\t{lag}\t{na}\t{nb}\t{v}")
+        out.append(f"{a}\t{b}\t{s:.6f}\t{c:.4f}\t{lag}\t{na}\t{nb}\t{v}")
     return out
+
+
+def read_table(path):
+    """(settings dict of strings, pairs) from a .rsm table."""
+    settings, pairs = {}, []
+    with open(path, encoding="utf-8") as fh:
+        for ln in fh:
+            ln = ln.rstrip("\n")
+            if ln.startswith("#"):
+                settings.update(kv.split("=", 1) for kv in ln.split()[2:] if "=" in kv)
+            elif ln and not ln.startswith("a\t"):
+                a, b, s, c, lag, na, nb, v = ln.split("\t")
+                pairs.append([int(a), int(b), float(s), float(c), int(lag), int(na), int(nb), v])
+    return settings, pairs
+
+
+def replay(ids, pairs, acc_thr):
+    """The result of a run at `acc_thr`, from the pop log of a run at a LOWER threshold and otherwise the
+    same settings: the log truncated at the first pair popped below `acc_thr`.
+
+    Exact, not an approximation.  The heap pops in descending acceptance and a lower threshold only ADDS
+    pairs below the others, so until the best remaining pair falls under `acc_thr` the two runs pop the
+    same pairs, veto the same pairs and re-template the same unions; at that point the run at `acc_thr`
+    stops.  Returns (mapping id -> group id, n_merge, n_veto, the pairs used) -- agglomerate's contract."""
+    parent = {int(u): int(u) for u in ids}
+    used, n_merge, n_veto = [], 0, 0
+    for row in pairs:
+        a, b, s, v = row[0], row[1], row[2], row[-1]
+        if s < acc_thr:
+            break
+        if a not in parent or b not in parent:
+            raise ValueError(f"the table names cluster {a if a not in parent else b}, which is not among the "
+                             "clusters of this input: it was written for another .clu or another --min-n")
+        used.append(row)
+        if v == "merge":
+            parent[b] = a; n_merge += 1
+        else:
+            n_veto += 1
+
+    def root(x):
+        while parent[x] != x:
+            x = parent[x]
+        return x
+    return {int(u): root(int(u)) for u in ids}, n_merge, n_veto, used
 
 
 def main():
@@ -282,6 +348,10 @@ def main():
     ap.add_argument("--gt-stage", "--gt-clu", dest="gt_clu", default=None,
                     help="post-fiber stage tag (or path) of the curated .clu to score purity+completeness")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--replay", default=None, metavar="TSV",
+                    help="the .rsm table of an earlier run on the SAME input at a LOWER --acc-thr and otherwise "
+                         "the same settings: this run is that one truncated at --acc-thr (exact), and scores "
+                         "nothing.  One run at e.g. 0.4, then any threshold above it for free")
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
@@ -324,11 +394,33 @@ def main():
     idx0 = [np.flatnonzero(clu == u) for u in big]
     times0 = [np.sort(res[ix]) for ix in idx0]
     _st = {}
-    mapping, n_merge, n_veto = agglomerate(
-        spk, big, idx0, times0, duration, acc_thr=a.acc_thr, cos=a.cos, shift=a.shift, k_on=a.strip_k_on,
-        k_off=a.strip_k_off, win=a.win, mingain=a.mingain, refrac=refrac, refrac_thr=a.refrac_thr,
-        refrac_min_exp=a.refrac_min_exp, censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
-        keyed=bool(a.sample_keyed), align=a.merge_align, align_min_score=a.merge_align_min_score, stats=_st)
+    settings = {k: getattr(a, k) for k in _SETTINGS}
+    if a.replay:
+        told, pairs = read_table(a.replay)
+        if not told:
+            raise SystemExit(f"{_LP} · --replay {a.replay}: the table records no settings (written before 0.67.35); "
+                             "it cannot be checked against this run")
+        if float(told["acc_thr"]) > a.acc_thr + 1e-12:
+            raise SystemExit(f"{_LP} · --replay: the table was written at --acc-thr {told['acc_thr']} and holds no pair "
+                             f"below it; it cannot give a run at {a.acc_thr:g}")
+        diff = [f"{k} {told.get(k)} -> {settings[k]}" for k in _SETTINGS
+                if k != "acc_thr" and str(settings[k]) != told.get(k)]
+        if diff:
+            raise SystemExit(f"{_LP} · --replay: the table was written with other settings ({'; '.join(diff)}); "
+                             "a replay is exact only when everything but --acc-thr agrees")
+        try:
+            mapping, n_merge, n_veto, used = replay(big, pairs, a.acc_thr)
+        except ValueError as e:
+            raise SystemExit(f"{_LP} · --replay: {e}") from None
+        _st.update(pairs=used, scored=0, prefiltered=0, unjudged=0)
+        print(f"{_LP} · replayed {os.path.basename(a.replay)} (written at acceptance >= {told['acc_thr']}): "
+              f"{len(used)} of its {len(pairs)} pairs are at or above {a.acc_thr:g}")
+    else:
+        mapping, n_merge, n_veto = agglomerate(
+            spk, big, idx0, times0, duration, acc_thr=a.acc_thr, cos=a.cos, shift=a.shift, k_on=a.strip_k_on,
+            k_off=a.strip_k_off, win=a.win, mingain=a.mingain, refrac=refrac, refrac_thr=a.refrac_thr,
+            refrac_min_exp=a.refrac_min_exp, censor=censor, cap=a.spk_cap, ref_sample=PK, rng=rng,
+            keyed=bool(a.sample_keyed), align=a.merge_align, align_min_score=a.merge_align_min_score, stats=_st)
     new = clu.copy().astype(np.int64)
     for u in big:
         if mapping[u] != u:
@@ -343,7 +435,7 @@ def main():
 
     log_path = f"{base}.rsm.{elec}.{a.out_tag}.tsv"
     with nio.atomic_write(log_path, "w") as fh:
-        fh.write("\n".join(table_lines(_st["pairs"])) + "\n")
+        fh.write("\n".join(table_lines(_st["pairs"], settings)) + "\n")
     print(f"{_LP} · wrote {os.path.basename(log_path)}  ({len(_st['pairs'])} pairs at acceptance >= {a.acc_thr:g})")
 
     # the hierarchy and the drift table, exactly as fiber-xcorr-merge carries / emits them

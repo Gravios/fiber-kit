@@ -4,6 +4,57 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.35] — fiber-residual-merge tuned; a threshold sweep from one run (--replay)
+- **Tuned defaults: `FK_RSM_ACC_THR` 0.7 -> 0.675, `FK_RSM_SHIFT` 0 -> 2, `FK_RSM_STRIP_K_ON` 3 -> 6.**
+  g6 of 0316, 80 min sorted without cross-chunk linking (1,961 fibers), curated `.clu` (contaminated:
+  read differences).  35 configurations searched on minutes 0-54, the choice checked on 54-80 and run
+  through the command on the whole session:
+
+  | whole session | clusters | acc | purity | good | complete | mixed | time |
+  |---|---|---|---|---|---|---|---|
+  | input | 1961 | 0.119 | 73.4 | 59.6 | 8.3 | 19 | — |
+  | fiber-xcorr-merge, tuned profile (knn split off) | 1388 | 0.176 | 73.2 | 65.2 | 24.9 | 18 | 337 s |
+  | fiber-xcorr-merge, plan 10 | 837 | 0.317 | 69.1 | 66.1 | 43.9 | 13 | 66 s |
+  | fiber-residual-merge, 0.67.34 defaults | 1562 | 0.187 | 73.0 | 62.2 | 21.4 | 21 | 240 s |
+  | **fiber-residual-merge, tuned** | 1345 | 0.241 | 72.1 | 62.5 | 27.8 | 16 | 407 s |
+
+  | acc / purity / mixed | 0-54 min (tuned on) | 54-80 min (held out) |
+  |---|---|---|
+  | input | 0.124 / 77.0 / 12 | 0.165 / 61.8 / 7 |
+  | fiber-xcorr-merge, tuned profile | 0.176 / 77.0 / 12 | 0.199 / 61.3 / 3 |
+  | fiber-residual-merge, 0.67.34 defaults | 0.205 / 76.7 / 11 | 0.205 / 61.3 / 10 |
+  | fiber-residual-merge, tuned | 0.266 / 75.9 / 9 | 0.244 / 60.7 / 11 |
+
+  `acc` is fiber-tune's `all_acc`.  What tuning bought: accuracy and completeness, for about a point of
+  purity; the gain holds on the held-out minutes (0.205 -> 0.244).  What it did not buy: against the
+  tuned fiber-xcorr-merge it is more accurate and more complete but a point less pure, with less `good`,
+  and on the held-out minutes it leaves 11 mixed clusters to that stage's 3.  It still replaces
+  fiber-xcorr-merge in no shipped plan; the exp plan keeps it as a branch.
+- **The selection rule is not fiber-tune's objective.**  `all_acc - 0.005 * merges` rises all the way
+  into a collapsed sort: the best objective of the whole search (0.317) is a run that fuses 1,169
+  fibers into 40 clusters and counts 4 "merges" -- a blob of ten units has no second unit at 20 %, so
+  the penalty goes DOWN as the sort gets worse.  (With the 0.67.34 values, acceptance 0.2 takes 745
+  fibers to 37 clusters at 0.290 and 3 merges.)  The rule used instead: the highest
+  `all_acc` whose spike-weighted purity stays within one point of the INPUT sort's (over-split before
+  false merges).  Worth knowing for any fiber-tune search that can reach a collapse.
+- What the search found, per knob (all at equal purity unless said; details in section [I]):
+  `SHIFT` 2 alone 0.231 -> 0.252; `STRIP_K_ON` 6 (with `K_OFF` 4) 0.250; both 0.265.  The on-channel
+  term OFF scored a little higher (0.255; 0.271 with `MERGE_ALIGN` klusters) and was not taken -- it is
+  what keeps a different cell at the same site out, and this curation cannot price that.  The
+  off-channel term off: per-unit precision 0.58 -> 0.51; it carries the purity.  `MERGE_ALIGN` klusters:
+  helps alone (0.241), not on top of the two (0.260).  `MIN_N` 25: more `good` (67 -> 71-75), no more
+  accuracy, twice the time.  `K` 2.5, `MERGE_ALIGN` peak: worse.  `COS` 0.3 / 0.7, `WIN` 16, no
+  refractory veto, `K_OFF` 4: no difference worth a default.
+- **`--replay <table>`.**  A run at threshold t is exactly a run at any lower threshold truncated at
+  the first pair popped below t (the heap pops in descending acceptance; a lower threshold only adds
+  pairs below the others).  The `.rsm` table is that pop log, now with the run's settings in its first
+  line and six decimals of acceptance; `--replay` reproduces the run at any `--acc-thr` at or above the
+  table's without scoring a pair, and refuses a table written at a HIGHER threshold than
+  the one asked for, with other settings, or for other clusters.  This is what made the search affordable: every
+  configuration gave its whole `ACC_THR` curve from one agglomeration.
+- `test_residual_merge.py`: the tuned defaults keep the fixture's partition; replay == direct run at
+  five thresholds; the `--replay` CLI and its refusals (30 checks).
+
 ## [0.67.34] — fiber-residual-merge: the reverse residual strip in fiber-xcorr-merge's flow
 - **New stage `fiber-residual-merge`** (`fiber_residual_merge.py`, `FK_RSM_*`, section [I] of the config).
   fiber-xcorr-merge's flow, step for step -- clusters >= `MIN_N` on the standard `.spk`, a

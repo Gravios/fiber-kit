@@ -124,10 +124,10 @@ CATALOG = {
         _p("min-n", "int", 40, "min spikes for a cluster to participate"),
         _p("gt-clu", "str", "", "curated .clu tag to score purity+completeness (empty=off)")]),
     "fiber-residual-merge": dict(input=True, tags=["in", "out"], params=[  # reverse-residual-strip merge; takes xcorr-merge's place
-        _p("acc-thr", "float", 0.7, "min share of each cluster's spikes surviving the other's strip; do not go below 0.7 unexamined"),
+        _p("acc-thr", "float", 0.675, "min share of each cluster's spikes surviving the other's strip (tuned 0.675); below ~0.5 the sort collapses"),
         _p("cos", "float", 0.5, "template cosine a pair needs to be scored at all (pre-filter)"),
-        _p("shift", "int", 0, "+/- samples: compare a pair at its best template lag; 0 = the stored alignment"),
-        _p("strip-k-on", "float", 3.0, "robust-tail multiplier, on-channel residual"),
+        _p("shift", "int", 2, "+/- samples: compare a pair at its best template lag; 0 = the stored alignment"),
+        _p("strip-k-on", "float", 6.0, "robust-tail multiplier, on-channel residual"),
         _p("strip-k-off", "float", 3.0, "robust-tail multiplier, off-channel residual"),
         _p("refrac-ms", "float", 2.0, "refractory window (ms); 0 disables the CCG veto"),
         _p("min-n", "int", 40, "min spikes for a cluster to participate"),

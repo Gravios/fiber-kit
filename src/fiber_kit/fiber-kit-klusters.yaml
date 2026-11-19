@@ -1698,35 +1698,55 @@ FK_POLISH_SEED:          0
 #  Run it AFTER a fiber-realign: it compares at the STORED alignment by default.
 #  Writes <base>.rsm.<group>.<out>.tsv (every pair at or above ACC_THR, with its verdict).
 #  Plan steps `merge-resid` / `psame-resid`: a BRANCH beside `merge` / `psame`, from the same exp_linked.
-#  Measured 2026-11-19 on g6 0316 (five unlinked 18-min chunks, 1,961 fibers; plans/11-session-residual.yaml):
-#  at these defaults it is NOT ahead of the tuned fiber-xcorr-merge -- purity 73.0 vs 73.2, `good`
-#  62.2 vs 65.2, completeness 21.4 vs 24.9, 399 unions vs 573.  It is the conservative of the two.
-#  UNTUNED: every value below is the one that measurement used.
+#  TUNED 2026-11-19 on g6 0316 (80 min sorted without cross-chunk linking, 1,961 fibers; the table is in
+#  plans/11-session-residual.yaml): 35 configurations on minutes 0-54, the choice checked on 54-80.
+#  Rule: the highest per-unit accuracy (fiber-tune's all_acc) whose spike-weighted purity stays within
+#  one point of the INPUT sort's -- over-split before false merges.  fiber-tune's own objective
+#  (all_acc - 0.005 * merges) was NOT used to choose: it keeps rising as the sort collapses (the best
+#  objective of the search fuses 1,169 fibers into 40 clusters and counts 4 "merges", because a blob of
+#  ten units has no second unit at 20 %).  Three knobs moved: ACC_THR 0.7 -> 0.675, SHIFT 0 -> 2, STRIP_K_ON 3 -> 6.
+#  Whole session, against the 0.67.34 defaults: accuracy 0.187 -> 0.241, completeness 21.4 -> 27.8,
+#  purity 73.0 -> 72.1, mixed clusters 21 -> 16.  Against the tuned fiber-xcorr-merge (0.176 / 24.9 /
+#  73.2 / 18) it is more accurate and more complete and a point less pure; on the held-out minutes it
+#  leaves 11 mixed clusters to that stage's 3.  One session, one curation: a starting point.
 # ============================================================================
-FK_RSM_ACC_THR:          0.7      # 0.7 | 0.6-0.85.  Min share of EACH cluster's spikes surviving the other's strip.
-                                  #   The merge threshold.  Read it against a cluster's acceptance of ITSELF,
-                                  #   ~0.85-0.9 at k 3 / 3: on g6 0316, 0.7 / 0.8 / 0.9 gave 399 / 149 / 1 unions.
-                                  #   DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and
-                                  #   collapsed a whole sort to 9 clusters.
+FK_RSM_ACC_THR:          0.675    # 0.7 | 0.6-0.8.  Min share of EACH cluster's spikes surviving the other's strip.
+                                  #   The merge threshold; TUNED 0.7 -> 0.675.  On minutes 0-54 at the other tuned
+                                  #   values, 0.60 / 0.675 / 0.75 / 0.80: accuracy 0.297 / 0.265 / 0.229 / 0.211,
+                                  #   purity 75.3 / 76.1 / 76.6 / 77.0 (input 77.0).  Lower is NOT safe: below
+                                  #   ~0.5 the sort collapses (0.2: 745 fibers -> 37 clusters).  A sweep costs one
+                                  #   run: --acc-thr 0.4 once, then --replay its .rsm table at any threshold above.
 FK_RSM_COS:              0.5      # 0.5 | 0.3-0.8.  Template cosine a pair needs to be scored at all (a pre-filter,
-                                  #   not the decision).
-FK_RSM_SHIFT:            0        # 0 | 0-4 (samples).  Compare a pair at the lag, within +/- this, that maximises
-                                  #   the template cosine.  0 = the stored alignment.  2 on g6 0316: 428 unions
-                                  #   for 399, purity -0.2, completeness +1.0, about twice the pairs scored.
-FK_RSM_STRIP_K_ON:       3.0      # 3.0 | 2.5-4.  Robust-tail multiplier of the on-channel residual (0 = term off).
-FK_RSM_STRIP_K_OFF:      3.0      # 3.0 | 2.5-4.  The same for the off-channel residual (0 = term off).
+                                  #   not the decision).  0.3: the same unions as 0.5; 0.7: two more of 633.
+FK_RSM_SHIFT:            2        # 0 | 0-4 (samples).  Compare a pair at the lag, within +/- this, that maximises
+                                  #   the template cosine.  0 = the stored alignment.  TUNED 0 -> 2: fragments of
+                                  #   one cell in different chunks sit a sample or two apart, and at lag 0 that
+                                  #   offset reads as on-channel residual.  Alone, at equal purity: accuracy
+                                  #   0.231 -> 0.252.  About 1.3x the time.
+FK_RSM_STRIP_K_ON:       6.0      # 3.0 | 3-8.  Robust-tail multiplier of the on-channel residual (0 = term off).
+                                  #   TUNED 3 -> 6.  At equal purity (with K_OFF 4): accuracy 0.231 -> 0.250.  Turning the
+                                  #   term OFF scored a little higher still (0.255; 0.271 with MERGE_ALIGN
+                                  #   klusters) and was not taken: it is the only thing that keeps a different
+                                  #   cell at the same site out, and this curation cannot show what that costs.
+FK_RSM_STRIP_K_OFF:      3.0      # 3.0 | 2.5-4.  The same for the off-channel residual (0 = term off).  4 (with
+                                  #   K_ON 4): no gain at equal purity.  OFF (on-channel only): per-unit precision
+                                  #   0.58 -> 0.51 at acceptance 0.5 -- this is the term that carries the purity.
 FK_RSM_WIN:              0        # 0 | samples.  Hamming taper width centred on the template peak; 0 = half the record.
 FK_RSM_MINGAIN:          0.25     # 0.25.  A spike whose fitted gain is below this has no template-shaped signal.
 FK_RSM_REFRAC_MS:        2.0      # 2.0 | 1.5-3.0.  Refractory window of the CCG veto; 0 disables it.
 FK_RSM_REFRAC_THR:       0.3      # 0.3.  CCG obs/exp ratio above which a powered pair is vetoed.
 FK_RSM_REFRAC_MIN_EXP:   5.0      # 5.0.  Min expected coincidences for the veto to have power (else it abstains).
-FK_RSM_MIN_N:            40       # 40 | 15-100.  Min spikes for a cluster to take part.  15 on g6 0316: 798 unions
-                                  #   for 399, `good` 62.2 -> 68.5, purity 73.0 -> 72.2, 3x the time.
+FK_RSM_MIN_N:            40       # 40 | 15-100.  Min spikes for a cluster to take part.  25: more of the kept
+                                  #   spikes end in a cluster of their own unit (`good` 67 -> 71-75) but per-unit
+                                  #   accuracy is no higher at equal purity, at twice the time.  Kept at 40.
 FK_RSM_SPK_CAP:          1000     # 1000.  Spikes per cluster for the template, the tails and the acceptance share.
+                                  #   300: objective 0.231 for 0.226 at acceptance 0.5 in 0.63x the time; not
+                                  #   carried into the later search stages.
 FK_RSM_SAMPLE_KEYED:     1        # 1.  That sample keyed by the cluster's own spike set (as FK_XCM_SAMPLE_KEYED).
 FK_RSM_MERGE_ALIGN:      stored   # stored | peak | klusters.  stored = the .spk as it stands; peak / klusters
-                                  #   re-align each cluster's sample first, as fiber-xcorr-merge does.  klusters on
-                                  #   g6 0316: 596 unions for 399, purity -0.3, `good` +0.9.
+                                  #   re-align each cluster's sample first, as fiber-xcorr-merge does.  At equal
+                                  #   purity klusters helped alone (accuracy 0.231 -> 0.241) and not on top of
+                                  #   SHIFT 2 + K_ON 6 (0.265 -> 0.260); peak was worse (0.243 vs 0.265 at acceptance 0.5).
 FK_RSM_MERGE_ALIGN_MIN_SCORE: 0.10  # 0.10.  --merge-align klusters only (as FK_XCM_MERGE_ALIGN_MIN_SCORE).
 FK_RSM_EMIT_DRIFT:       1        # 0 = off, 1 = on.  Fit + write the drift table from this stage's cross-chunk
                                   #   unions, exactly as FK_XCM_EMIT_DRIFT.

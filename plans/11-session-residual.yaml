@@ -5,32 +5,48 @@
 #  EXISTING fiber-session sort (fiber_session tag; the session step is commented out)
 #  and does not overwrite it.
 #
-#  Measured 2026-11-19 on sirotaA-jg-000005-20120316 group 6, five 18-min chunks sorted
-#  WITHOUT cross-chunk linking (1,961 fibers), against the curated .clu (33 units; the
-#  curation is itself contaminated, so read the differences, not the levels).  Clusters
-#  >= 50 spikes; `good` = curator-kept spikes in a cluster whose dominant curated label
-#  is their own; `complete` = share in the largest cluster of their unit; `mixed` =
-#  clusters holding >= 20 % (and >= 50 spikes) of a second curated unit.
+#  Measured and TUNED 2026-11-19 on sirotaA-jg-000005-20120316 group 6: 80 minutes in 18-min
+#  chunks sorted WITHOUT cross-chunk linking (1,961 fibers), against the curated .clu (33
+#  units; the curation is itself contaminated, so read the differences, not the levels).
+#    acc      = fiber-tune's all_acc: per curated unit, the accuracy of its best cluster
+#    purity   = spike-weighted, clusters >= 50;   good = curator-kept spikes in a cluster
+#               whose dominant curated label is their own;   complete = share in the largest
+#               cluster of their unit;   mixed = fiber-tune's merges (a second unit >= 20 %)
 #
-#                                         merges clusters purity  good  complete mixed   time
-#    fiber-session fibers (input)             -    1961    73.4   59.6     8.3     19      -
-#    fiber-xcorr-merge, tuned profile *     573    1388    73.2   65.2    24.9     18   337 s
-#    fiber-xcorr-merge, plan 10            1124     837    69.1   66.1    43.9     13    66 s
-#    this plan (defaults)                   399    1562    73.0   62.2    21.4     21   240 s
-#      --min-n 15                           798    1163    72.2   68.5    19.7     23   709 s
-#      --acc-thr 0.8                        149    1812    73.6   60.8    15.6     19   153 s
-#      --acc-thr 0.9                          1       -       -      -       -      -      -
-#      --shift 2                            428    1533    72.8   62.4    22.4     21      -
-#      --merge-align klusters               596    1365    72.7   63.1    22.2     22      -
+#  Whole session                         clusters   acc  purity  good  complete mixed   time
+#    fiber-session fibers (input)           1961   0.119   73.4  59.6     8.3     19      -
+#    fiber-xcorr-merge, tuned profile *     1388   0.176   73.2  65.2    24.9     18   337 s
+#    fiber-xcorr-merge, plan 10              837   0.317   69.1  66.1    43.9     13    66 s
+#    residual merge, 0.67.34 defaults       1562   0.187   73.0  62.2    21.4     21   240 s
+#    this plan (tuned defaults)             1345   0.241   72.1  62.5    27.8     16   407 s
 #    (* fiber-kit-best.yaml with FK_XCM_RVU_KNN 0: with the knn split on, the run was
 #       stopped unfinished after 23 CPU-minutes on 1,840 participating fibers)
 #
-#  What that says, on this ONE sort: at its defaults the residual merge is NOT ahead of
-#  the tuned fiber-xcorr-merge -- same purity, fewer unions, less `good` and less
-#  completeness.  It is the conservative of the two.  --min-n 15 gives the most `good`
-#  of any run here and costs a point of purity and 3x the time.  ACC_THR is read
-#  against a cluster's acceptance of ITSELF, which at k 3 / 3 is ~0.85-0.9: 0.9 is
-#  "never".  Untuned; nothing here was searched.
+#  Tuned on minutes 0-54, checked on 54-80 (same runs, scored on each part):
+#                                          0-54:  acc  purity  mixed |  54-80:  acc  purity  mixed
+#    input                                      0.124   77.0     12  |        0.165   61.8      7
+#    fiber-xcorr-merge, tuned profile           0.176   77.0     12  |        0.199   61.3      3
+#    fiber-xcorr-merge, plan 10                 0.333   72.9      7  |        0.313   59.0     11
+#    residual merge, 0.67.34 defaults           0.205   76.7     11  |        0.205   61.3     10
+#    this plan (tuned defaults)                 0.266   75.9      9  |        0.244   60.7     11
+#
+#  HOW IT WAS TUNED.  35 configurations on minutes 0-54, each ONE agglomeration at a low
+#  threshold: a run at any higher threshold is that run's pop log truncated there (exact;
+#  --replay does it from the .rsm table), so every configuration gave a whole ACC_THR curve.
+#  The choice: the highest acc whose purity stays within one point of the INPUT's.
+#  fiber-tune's objective (all_acc - 0.005 * merges) was not used to choose -- it rises all
+#  the way into a collapsed sort (the best objective of the search fuses 1,169 fibers into
+#  40 clusters and counts 4 "merges").  Moved: ACC_THR 0.7 -> 0.675, SHIFT 0 -> 2,
+#  STRIP_K_ON 3 -> 6.  Tried and not taken: the on-channel term off (a little more acc; it
+#  is what separates two cells at one site), MERGE_ALIGN klusters (no gain on top of SHIFT),
+#  MIN_N 25 (more `good`, no more acc, twice the time), K 2.5 / 4, COS 0.3 / 0.7, SPK_CAP 300,
+#  WIN 16, no refractory veto.  Per-knob numbers are in section [I] of fiber-kit-exp.yaml.
+#
+#  WHAT THAT SAYS.  Tuning bought accuracy and completeness for about a point of purity.
+#  Against the tuned fiber-xcorr-merge it is more accurate and more complete and a point less
+#  pure, with less `good`; on the held-out minutes it leaves 11 mixed clusters to that
+#  stage's 3.  Plan 10's settings remain far more complete at four points of purity.  One
+#  session, one curation, and the input is the unlinked session sort, not a linker's output.
 #
 #  Run:  fiber-pipeline <elec> --plan plans/11-session-residual.yaml
 # ============================================================================
