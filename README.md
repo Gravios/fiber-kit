@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.67.35-orange)
+![version](https://img.shields.io/badge/version-0.67.36-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -445,6 +445,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-view-gui` | A standalone, rotatable bundle viewer. |
 | `fiber-view-tour` | Interesting-projection tour video of the fibers. |
 | `fiber-plan-edit` | Qt editor for pipeline plans. |
+| `fiber-config-edit` | Qt form editor for a fiber-kit.yaml: the file's sections as drop-downs, typed fields, off knobs greyed, each knob's comment in a help pane on hover; saves losslessly (only the edited values change). |
 | `fiber-kit-init` | Write a shipped config profile (`--profile base\|exp\|best`) into the current directory as fiber-kit.yaml; the same as `fk set config`. |
 | `fiber-clu-header` | Check or repair the header of .clu/.clc/.clp files (the number of distinct ids); repairs the chunk-run files of 0.56.0-0.57.2 that Klusters refuses. |
 | `fiber-morpho` | Morphology modelling experiments (sub-commands; each writes an .npz beside its report). |

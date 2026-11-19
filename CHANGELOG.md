@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.36] — fiber-config-edit: a form editor for fiber-kit.yaml
+- **New command `fiber-config-edit [fiber-kit.yaml]`** (Qt >= 6.8, the `[editor]` extra; opens `$FK_CONFIG`,
+  else `./fiber-kit.yaml`).  The file's own banner sections are drop-downs; each `FK_*` knob is a row typed
+  from the lead of its comment -- `0 | 0/1` and `0 = off, 1 = on` are switches, `auto | nst | fil | spk` a
+  choice list, the rest a text field (numbers right-aligned, outlined when outside the documented `lo-hi`).
+  A knob that is off is greyed, and so is every `FK_X_*` under an off `FK_X`, with the gate named beside it.
+  A value that differs from the documented default shows that default and a button back to it; an edited
+  value shows what the file had.  The embedded plan's steps are rows with a tick (commented in or out).
+  Pointing at a knob, a section heading or a note between knobs shows its whole comment in a side pane.
+  Filter by name / value / help text, "Edited only", "Hide off", a review dialog with the diff.
+- **Lossless.**  The file is never re-serialised: only the value token of an edited line is rewritten (the
+  padding absorbs the width so the comment column stays), and a toggled step gains or loses its `# `.  All
+  five shipped configs round-trip byte for byte; a save is YAML-checked first and written atomically.
+- The typing is a heuristic read of the comments, not a schema: on fiber-kit-exp.yaml it finds 45 switches,
+  29 choice lists, 349 numbers and 29 text knobs; 33 numbers have no documented default, and the off/gating
+  rule (name prefix) marks 5 knobs as gated.  A knob it types wrongly is still editable as text-in-a-list;
+  the stage's own check of the value is unchanged.  `fiber-config-edit --check FILE` prints the reading.
+- Structural plan edits (add, reorder, rewire) stay in `fiber-plan-edit`.
+- Tests: `test/test_config_editor.py` (49 checks; the window is built off-screen when PySide6 is present).
+
 ## [0.67.35] — fiber-residual-merge tuned; a threshold sweep from one run (--replay)
 - **Tuned defaults: `FK_RSM_ACC_THR` 0.7 -> 0.675, `FK_RSM_SHIFT` 0 -> 2, `FK_RSM_STRIP_K_ON` 3 -> 6.**
   g6 of 0316, 80 min sorted without cross-chunk linking (1,961 fibers), curated `.clu` (contaminated:

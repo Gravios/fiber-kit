@@ -229,7 +229,7 @@ fiber-pipeline 5 --from fiber-cpos-2   # the plan from that step on (--to <step>
 A **plan** is a yaml list of steps, each `{stage, in, out, units?, spk?, params?}`; a stage may repeat
 with different tags.  `params:` map to that stage's CLI flags (`key: val` → `--key val`,
 `key: true` → bare `--flag`).  Edit plans by hand, from `plans/TEMPLATE-all-stages.yaml` (a menu of
-every stage and its parameters), or with the GUI editor `fiber-plan-edit`; lint them with
+every stage and its parameters), or with the GUI editor `fiber-plan-edit` (the knobs have their own form editor, `fiber-config-edit`: see config.md); lint them with
 `fiber-plan-lint`.
 
 **Preflight.**  Before step 1, fiber-pipeline checks that every selected step's inputs -- `in:`, `units:`,

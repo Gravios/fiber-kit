@@ -57,6 +57,14 @@ Values are read with YAML 1.2 booleans: `off`, `on`, `yes` and `no` are the word
 `true`/`false` are booleans.  A value that is not one of a knob's choices, or not a number where one is
 needed, stops the stage with the knob's name.
 
+**Editing the file.**  `fiber-config-edit [fiber-kit.yaml]` (Qt; `pip install 'fiber-kit[editor]'`) opens
+the config as a form: the file's sections as drop-downs, a switch / choice list / number field per knob
+(typed from the `default | range` lead of its comment), a knob that is off -- and every `FK_X_*` under an
+off `FK_X` -- greyed, values that leave the documented range outlined, and the knob's whole comment in a
+side pane while the pointer is on it.  Plan steps have a tick that comments them in or out.  It saves
+losslessly: only the value of an edited line changes, every comment and column is written back as it was.
+`fiber-config-edit --check FILE` prints what it reads from a file (kinds, off and out-of-range knobs).
+
 Each table lists a knob's value in **fiber-kit-exp.yaml**, in **fiber-kit-best.yaml** (**bold** where the
 tuning changed it; the plan-level part of the winner -- no `psame-chunk` step, `psame` at theta 0.9,
 chunk-aware -- is in that file's plan, not a knob) and in **fiber-kit.yaml** (— = not set there: the
