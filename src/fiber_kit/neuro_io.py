@@ -42,6 +42,7 @@
 import contextlib
 import glob
 import os
+import sys
 from collections import namedtuple
 
 import numpy as np
@@ -1266,10 +1267,14 @@ def write_eap(base, elec, cells, group=0, flags=0, tag=""):
     'EAP'\\x01, nSpikes u32, nClasses u32, group u32, flags u32, pad[12]) + N×T
     int8 row-major.  `cells` is an (N, T) array (EAP_ABSENT = absent).  Mirrors
     neurofileio::writeEap."""
+    return write_eap_file(session_path(base, "eap", elec, variant="", tag=tag), cells, group, flags)
+
+
+def write_eap_file(path, cells, group=0, flags=0):
+    """write_eap for an explicit path."""
     import struct
     arr = np.ascontiguousarray(cells, dtype=np.int8)
     n, t = (int(arr.shape[0]), int(arr.shape[1])) if arr.ndim == 2 else (0, 0)
-    path = session_path(base, "eap", elec, variant="", tag=tag)
     with atomic_write(path, "wb") as f:
         f.write(b"EAP" + bytes([EAP_VERSION[1]]))
         f.write(struct.pack("<IIII", n, t, int(group), int(flags)))
@@ -1281,10 +1286,14 @@ def write_eap(base, elec, cells, group=0, flags=0, tag=""):
 def read_eap(base, elec, tag=""):
     """Read a .eap -> dict(nSpikes, nClasses, group, flags, cells=(N,T) int8, ok).
     ok=False on a missing/short file or bad magic.  Mirrors neurofileio::readEap."""
+    return read_eap_file(session_path(base, "eap", elec, variant="", tag=tag))
+
+
+def read_eap_file(path):
+    """read_eap for an explicit path."""
     import struct
     out = dict(nSpikes=0, nClasses=0, group=0, flags=0,
                cells=np.zeros((0, 0), np.int8), ok=False)
-    path = session_path(base, "eap", elec, variant="", tag=tag)
     try:
         with open(path, "rb") as f:
             hdr = f.read(32)
@@ -1404,6 +1413,30 @@ def read_tcl(base, elec):
 # guard alone CANNOT distinguish it from a live file -- the name must.
 _PERSPIKE_SIDECAR = {"npz", "npy", "gz", "zip", "bak", "tmp", "swp", "units"}
 
+# Which files of a spike group hold ONE ROW PER SPIKE, in .res order.  A sweep over a group (the
+# dedup below) must rewrite every one of them or none; a type it does not know cannot be left
+# behind in silence.  PER_SPIKE_TYPES are the type tokens of <base>.<type>[.<variant>].<group>[.<stage>]
+# that are per-spike.  A waveform file's row LENGTH depends on its variant: a super-sampled
+# <token>_U<f> .spk holds f x nSamples samples per channel (waveform_geometry).  A .res under a _U
+# token is the tick .res: still one int64 per spike.
+PER_SPIKE_TYPES = ("res", "clu", "clc", "spk", "spkD", "fet", "fetD", "eap")
+# Group files that are NOT per-spike: a basis, a noise model, per-atom / per-cluster / per-template
+# tables, logs.  Left alone by a sweep.
+NOT_PER_SPIKE_TYPES = frozenset({"pca", "nst", "clp", "cli", "cur", "wti", "wtf", "wtl", "mti", "mtf",
+                                 "tcl", "model", "klg", "cpos", "probe"})
+# Group files a sweep handles by name (apply_spike_keep: the realign offsets are subset, the
+# manifests moved aside).
+_SWEEP_NAMED_TYPES = frozenset({"offsets", "deconv", "realign"})
+# Last name token of files that are never binary per-spike data, whatever their type token.
+_NOT_DATA_SUFFIX = frozenset({"tsv", "txt", "csv", "json", "yaml", "yml", "log", "md", "png", "pdf", "svg",
+                              "npy", "npz", "gz", "zip", "probe", "bak", "old", "tmp", "swp", "stalebkp"})
+
+
+def perspike_row_samples(nsamp, variant):
+    """Samples per channel in one row of the .spk of `variant`: the session's nSamples times the
+    token's super-sampling factor (waveform_geometry's first value)."""
+    return int(nsamp) * max(1, supersample_of(variant))
+
 
 def _is_live_perspike(stage):
     """True iff the stage tokens (everything after the electrode) name a live per-spike
@@ -1423,7 +1456,7 @@ def _is_live_perspike(stage):
 
 
 def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
-                     types=("res", "clu", "clc", "spk", "spkD", "fet", "fetD"), verbose=True, strict=True,
+                     types=PER_SPIKE_TYPES, verbose=True, strict=True,
                      stale=None):
     """Subset EVERY live per-spike file of one spike group to `keep`, in place, so the
     .res / .clu / .spk(/.spkD) / .fet(/.fetD) of the group stay row-aligned after a dedup --
@@ -1454,6 +1487,19 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     deconvolution manifest and realign pair list of the group (<base>.deconv.*.tsv,
     <base>.realign.*.tsv; rows indexed by spike) is moved aside as <file>.stalebkp -- its indices
     would otherwise name other spikes.
+
+    `nsamp` is the session's nSamples.  A waveform file under a super-sampled token
+    (<base>.spk.standard_U4.<g>) holds factor x nsamp samples per channel and is read that way
+    (perspike_row_samples); before 0.67.37 it was read at nsamp, came out at factor x the spike
+    count, and was quarantined as stale while its .fet / .clu / tick .res were subset.  The EAP
+    membership table (<base>.eap.<g>[.<stage>], one row per spike) is subset with its stage.
+
+    Two refusals, before anything is written:
+      - a Klusters working copy (<file>.pending) of the group exists: Klusters has the session
+        open, or left the copies after a crash.  Subsetting under it would desynchronise both;
+      - with stale='error', a binary group file of a type this sweep does not know (neither in
+        PER_SPIKE_TYPES nor in NOT_PER_SPIKE_TYPES).  By default such files are listed in a
+        warning and left: if one of them is per-spike it is now stale.
     Returns (rewritten_paths, skipped:[(path, rows)])."""
     import glob
     import os
@@ -1464,13 +1510,21 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     elec = str(elec)
     bname = os.path.basename(base)
 
+    variant_of = {}                                        # path -> its variant token ('' when none)
+
+    def _row_samples(path):                                # a _U<f> waveform file: f x nsamp per channel
+        return perspike_row_samples(nsamp, variant_of.get(path, ""))
+
     def _rows(path, t):                                    # spike-axis length, fixed binary dtype per type
         if t == "res":
             return int(np.fromfile(path, dtype=RES_DTYPE).size)
         if t in ("clu", "clc"):
             return int(max(np.fromfile(path, dtype=CLU_DTYPE).size - 1, 0))
         if t in ("spk", "spkD"):
-            return int(open_spk_file(path, nsamp, nchan).shape[0])
+            return int(open_spk_file(path, _row_samples(path), nchan).shape[0])
+        if t == "eap":
+            e = read_eap_file(path)
+            return int(e["nSpikes"]) if e["ok"] else None
         if t in ("fet", "fetD"):
             f = read_fet_file(path)
             return int(f.n_spikes) if f.ok else None
@@ -1491,7 +1545,10 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             raw = np.fromfile(path, dtype=CLU_DTYPE)
             write_clu_file(tmp, raw[1:][keep].astype(np.int64))
         elif t in ("spk", "spkD"):
-            write_spk_file(tmp, np.asarray(open_spk_file(path, nsamp, nchan)[keep]))
+            write_spk_file(tmp, np.asarray(open_spk_file(path, _row_samples(path), nchan)[keep]))
+        elif t == "eap":
+            e = read_eap_file(path)
+            write_eap_file(tmp, e["cells"][keep], e["group"], e["flags"])
         elif t in ("fet", "fetD"):
             write_fet_file(tmp, read_fet_file(path).values[keep])
         pending.append((tmp, path))
@@ -1509,6 +1566,7 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     stages = OrderedDict()                                 # stage_tuple -> [(path, type)]
     excluded = 0
     seen = set()
+    working = []                                           # <file>.pending: Klusters' working copies
     for t in types:
         for path in sorted(glob.glob(f"{glob.escape(base)}.{t}.*")):
             tail = os.path.basename(path)[len(bname) + 1:].split(".")  # <type>[.<variant>].<elec>[.<stage>]
@@ -1520,6 +1578,10 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             if ei is None or tail[ei] != elec:
                 continue
             stage = tail[ei + 1:]
+            if "pending" in stage:
+                working.append(path)                       # a Klusters working copy: refused below
+                continue
+            variant_of[path] = ".".join(tail[1:ei])
             if not _is_live_perspike(stage):
                 excluded += 1                              # backup / fragment / sidecar -- never touch
                 continue
@@ -1527,6 +1589,31 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                 continue
             seen.add(path)
             stages.setdefault(tuple(stage), []).append((path, t))
+
+    if working:
+        names = ", ".join(os.path.basename(p) for p in sorted(working))
+        raise RuntimeError(
+            f"dedup: group {elec} left unchanged -- Klusters working copies exist ({names}). Save and "
+            f"close the session in Klusters first; if Klusters is not running they are left from a "
+            f"crash: reopen the session to recover them, or remove them.")
+
+    # Binary group files of a type this sweep does not know: one of them may be per-spike.
+    unknown = []
+    known = set(types) | set(PER_SPIKE_TYPES) | NOT_PER_SPIKE_TYPES | _SWEEP_NAMED_TYPES
+    for path in sorted(glob.glob(f"{glob.escape(base)}.*")):
+        tail = os.path.basename(path)[len(bname) + 1:].split(".")
+        if len(tail) < 2 or tail[0] in known or tail[-1] in _NOT_DATA_SUFFIX:
+            continue
+        ei = next((i for i in range(1, len(tail)) if tail[i].isdigit()), None)
+        if ei is None or tail[ei] != elec or not _is_live_perspike(tail[ei + 1:]):
+            continue
+        unknown.append(path)
+    if unknown and policy == "error":
+        names = ", ".join(os.path.basename(p) for p in unknown)
+        raise RuntimeError(
+            f"dedup: group {elec} left unchanged -- {len(unknown)} file(s) of a type the dedup does not "
+            f"know: {names}. If a type is per-spike it must be subset with the group (neuro_io."
+            f"PER_SPIKE_TYPES); if not, add it to NOT_PER_SPIKE_TYPES.")
 
     rewritten = []
     base_changed = False                                   # the base spike set was subset by THIS call
@@ -1644,6 +1731,11 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             print(f"dedup: already deduped, left {os.path.basename(p)} (rows={c})")
         if excluded:
             print(f"dedup: left {excluded} backup/fragment/sidecar file(s) untouched")
+    if unknown and rewritten:                              # said even when not verbose: it may be data loss
+        print(f"dedup: WARNING -- {len(unknown)} file(s) of group {elec} are of a type the dedup does not "
+              f"know and were left as they are: " + ", ".join(os.path.basename(p) for p in unknown)
+              + ". Any of them that holds one row per spike, or indexes spikes by row, is now stale.",
+              file=sys.stderr)
     # stale stages: their rows do not correspond 1:1 to this spike set, so they cannot be subset by `keep`.
     if orphans and policy == "quarantine":
         moved = []

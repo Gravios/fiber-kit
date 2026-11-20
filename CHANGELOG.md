@@ -4,6 +4,27 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.67.37] — dedup: super-sampled spaces, the EAP table, Klusters working copies
+- **`fiber-refine --dedup` no longer breaks a super-sampled space.**  `neuro_io.apply_spike_keep` read
+  every `.spk` of the group at the session's `nSamples`.  A `<base>.spk.<token>_U4.<g>` (Klusters'
+  super-sample mode, `ndm_extractspikes --supersample`) holds 4 x that per channel, so it came out at
+  4 x the spike count, was judged stale and moved to `.stalebkp` -- while the same space's `.fet`,
+  `.clu` and tick `.res` were subset.  Each waveform file is now read at its token's geometry
+  (`perspike_row_samples`) and subset row for row.
+- **The EAP membership table is subset with its stage.**  `<base>.eap.<g>[.<stage>]` has one row per
+  spike and was not in the sweep: after a dedup every row past the first dropped spike named another
+  spike.  `read_eap_file` / `write_eap_file` take a path.
+- **A Klusters working copy refuses the dedup.**  With any `<file>.pending` of the group present the
+  dedup raises before writing: Klusters has the session open (or crashed with it), and its copies were
+  being treated as a stage named `pending` -- subset or quarantined under it.
+- **Files of a type the sweep does not know are named.**  `neuro_io.PER_SPIKE_TYPES` and
+  `NOT_PER_SPIKE_TYPES` list what a group's files are.  A binary group file in neither gets a warning
+  on stderr after the dedup (it may be per-spike, and is then stale); `--dedup-stale error` refuses
+  before writing.  Text sidecars and backups are not asked about.
+- Found by running the dedup on a 100-spike group with `standard` and `standard_U4` files
+  (claude/pipeline-audit-2026-11-20.md, H1).  Not run on a real session.
+- Tests: `test/test_dedup_perspike.py` (16 checks; on 0.67.36 it fails at the first: the `_U4` `.spk` is quarantined).
+
 ## [0.67.36] — fiber-config-edit: a form editor for fiber-kit.yaml
 - **New command `fiber-config-edit [fiber-kit.yaml]`** (Qt >= 6.8, the `[editor]` extra; opens `$FK_CONFIG`,
   else `./fiber-kit.yaml`).  The file's own banner sections are drop-downs; each `FK_*` knob is a row typed
