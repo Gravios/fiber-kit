@@ -27,7 +27,7 @@ except ImportError:
 # The ndm-plugin-protocol this plugin speaks; contract.yaml `plugin_protocol`.
 PROTOCOL = "1"
 # contract.yaml `contract`: bumped when plugin_protocol, session_schema or formats change.
-CONTRACT = 2
+CONTRACT = 3
 
 
 def formats():
@@ -39,6 +39,7 @@ def formats():
         ("wtl",) + neuro_io.WTL_VERSION,
         ("tcl",) + neuro_io.TCL_VERSION,
         ("eap",) + neuro_io.EAP_VERSION,
+        ("spkc",) + neuro_io.SPKC_VERSION,
         ("nst",) + neuro_io.NST_VERSION,
     ]
 

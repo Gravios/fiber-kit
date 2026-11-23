@@ -186,7 +186,12 @@ def main():
             print((r1.stdout + r1.stderr)[-3000:])
         check("fiber-unmix exits 0", r1.returncode == 0)
         _, got = nio.read_clu_file(f"{base}.clu.stderiv.1.clean_unmix")
-        check("the written .clu is relabel() of the same run", np.array_equal(got, new))
+        asu, _ = fu.relabel(clu, u, collision_as="unit")
+        check("the written .clu is relabel() of the same run (collisions into their first unit)",
+              np.array_equal(got, asu))
+        cu = noise_rows & (u["kind"] == fu.COLLISION) & np.isin(asu, (A, B, CC))
+        check("collisions moved into a unit went into the unit on the detection (>= 99 %)",
+              cu.sum() >= 500 and (asu[cu] == truth["k1"][cu]).mean() >= 0.99)
         with open(f"{base}.unmix.stderiv.1.clean_unmix.tsv") as fh:
             rows = [ln.rstrip("\n").split("\t") for ln in fh]
         check("manifest: header + one row per pursued detection",
@@ -211,7 +216,7 @@ def main():
         check(".eap: an unexplained row holds no class", (cells[un] == nio.EAP_ABSENT).all())
         r2 = run(["--clu-stage", "clean_unmix", "--skip-marked", "--eap", "off"])
         check("--skip-marked on the result: exits 0 and pursues only the rows without a class",
-              r2.returncode == 0 and f"{int(((new == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"
+              r2.returncode == 0 and f"{int(((asu == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"
               in r2.stderr)
         os.remove(f"{base}.fil")
         r3 = run(["--clu-stage", "clean"])

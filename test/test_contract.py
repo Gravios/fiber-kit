@@ -130,6 +130,15 @@ def main():
         write_bytes(p, raw)
         check(not nio.read_eap(base, 1)["ok"], f"read_eap rejects version byte {r + 1}")
 
+        r, w = nio.SPKC_VERSION
+        p = nio.write_spkc(base, 1, [1], np.zeros((1, 2, 1), np.int16), 4)
+        raw = read_bytes(p)
+        check(raw[:3] == b"SPC" and raw[3] == w, f"write_spkc writes version byte {w}")
+        check(nio.read_spkc(base, 1)["ok"], "read_spkc reads it")
+        raw[3] = r + 1
+        write_bytes(p, raw)
+        check(not nio.read_spkc(base, 1)["ok"], f"read_spkc rejects version byte {r + 1}")
+
         v = fiber_pca.PCAE_VERSION
         p = os.path.join(d, "s.pca.1")
         fiber_pca.write_pcad(p, np.zeros((1, 2)), np.ones((1, 1, 2)), 0)

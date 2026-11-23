@@ -4,6 +4,31 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.70.0] — the sparse .spkc: collision rows with the partner subtracted
+- **`.spkc`** (`neuro_io.read_spkc` / `write_spkc`, `SPKC_VERSION` 1; `contract.yaml` `contract: 3`):
+  the corrected records of the FEW spike rows whose `.eap` row names a partner unit, as a row index
+  plus those rows' records.  The `.spk` stays the raw cut of the recording.  The format is
+  neurosuite-3's (`doc/ndmanager-plugins/formats/spkc.md`); Klusters builds the same rows in memory
+  and serves them in place of the `.spk`'s.
+- **`fiber_spkc`** and the **`fiber-spkc`** command: the numpy mirror of neurosuite-3's
+  `core/decollide_fit.hpp`.  A partner's template is fitted into the record within a few samples of
+  the offset the `.eap` holds, jointly with the row's own template and to a fraction of a sample,
+  and subtracted when its amplitude is plausible and it removes at least 5 % of the residual.  The
+  amplitudes are not stored: the fit is redone each time and returns the offset it found
+  (`--write-offsets` puts it in the `.eap`).
+- **`fiber-unmix`**: a collision goes INTO the unit on its detection when that label is confident
+  (`--collision-as unit`, the new default; `cluster` is the 0.68 behaviour), and the stage's `.spkc`
+  is written for the standard and the method `.spk` (`--spkc 1`).
+- A dedup of a group moves its `.spkc` files aside as stale (they name rows).  Not covered by a test.
+- Parity, measured 2026-11-23 outside the test suite: on 2,000 random cases `fit_partner` and
+  `decollide_fit::fitPartner` made the same accept decision and found the same offset, the shift
+  within 2e-10 sample, and the corrected int16 records were identical; on a synthetic session with
+  40 planted collisions `fiber-spkc` wrote the `.spkc` Klusters wrote, row for row and record for
+  record.  `test/test_spkc.py`: 60 planted collisions among 900 rows are exactly the rows corrected
+  (error against the record before the partner under 0.1 % of the raw row's), rows naming a partner
+  that is not there are left alone, the fitted offsets are the planted ones.
+- Synthetic data only: no real session has been through it.
+
 ## [0.69.0] — fiber-clean: the core cut and the quality value as a stage
 - **New stage `fiber-clean`.**  One pass over a flat `.clu`: the core cut on every cluster of at least
   `--cc-min` spikes (RAW `.spk.standard`), then the quality value of what is left (method `.spk`);

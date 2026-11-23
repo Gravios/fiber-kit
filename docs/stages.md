@@ -1475,6 +1475,39 @@ Positional: `base`, `elec`
 | `--q-spikes` | `1000` | spikes per cluster the quality value is taken on |
 | `--min-keep` | `50` | a cluster left with fewer spikes goes to the noise |
 | `--out-tag` | — | output stage tag (default <clu-stage>_clean) |
+### `fiber-spkc`
+
+Write a stage's sparse `.spkc` (0.70.0): every collision row -- two or more template classes in
+its `.eap` row -- with its partners' fitted templates subtracted.  The `.spk` is not changed; a
+reader that wants the corrected waveform of row *i* takes it from the `.spkc` when the row is
+listed (neurosuite-3 `doc/ndmanager-plugins/formats/spkc.md`), which is what Klusters shows for it.
+
+The `.eap` says which partners and about where; the amplitude and the exact shift are fitted,
+jointly with the row's own template, within `--radius` samples of the stored offset.  A partner is
+subtracted only for an amplitude in `--amp-min`..`--amp-max` that removes at least `--min-gain` of
+the residual energy.  Templates are the mean of the 300 rows of a unit that are not collisions,
+nearest in time; which cluster a class is, is read off the membership.  One file per waveform
+variant (`--variants`, default `standard` and the clu method).  `--write-offsets` writes the
+fitted whole-sample offsets back to the stage's `.eap`.
+
+`fiber-unmix` writes the file itself (`--spkc 1`); run this after a stage's `.clu` or `.eap` was
+changed by something else.  The numpy fit mirrors neurosuite-3's `core/decollide_fit.hpp`: the
+same offsets, accept decisions and int16 records on 2,000 random cases, and the same file as
+Klusters on a synthetic session (measured 2026-11-23, outside the test suite).
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--variants` | — | waveform variants to write a .spkc for (default: standard and the clu method) |
+| `--write-offsets` | flag (off) | write the fitted whole-sample offsets of the subtracted partners back to the stage's .eap (from the FIRST variant listed) |
+| `--radius` | `4` | samples searched either side of the stored offset |
+| `--amp-min` | `0.3` |  |
+| `--amp-max` | `2.5` |  |
+| `--min-gain` | `0.05` | least share of the residual energy a partner must remove to be subtracted |
 ### `fiber-unmix`
 
 Explain the spikes OUTSIDE the kept units (0.68.0).  Input: a stage whose noise cluster holds what a
@@ -1490,10 +1523,14 @@ Each pursued detection gets a kind:
 | kind | meaning | `.clu` |
 |---|---|---|
 | `one` | one kept unit explains it, with a residual no larger than that unit's own spikes leave | `--one-as`: one new cluster, one per unit, or into the unit |
-| `collision` | a kept unit plus a second, non-equivalent kept unit in the same waveform (detected itself, or hidden) | one new cluster |
+| `collision` | a kept unit plus a second, non-equivalent kept unit in the same waveform (detected itself, or hidden) | `--collision-as`: into the unit on the detection when the label is confident (default), or one new cluster |
 | `shadow` | no unit on the detection; its window is explained by neighbouring spikes | one new cluster |
 | `partial` | a kept unit on it and a remainder: a candidate collision with a cell that has no template | keeps its label |
 | `unexplained` | nothing known fits | keeps its label |
+
+A collision that goes into its unit is that unit's spike with a partner in it: the `.eap` names the
+partner, and the stage's sparse `.spkc` (`--spkc 1`, see `fiber-spkc`) holds the row with the
+partner subtracted, for the standard and the method `.spk`.
 
 So the next round's sort (`fiber-session --in-stage <out> --exclude-units ... --exclude-as noise`)
 sees only `partial` and `unexplained`.  Outputs: the flat `.clu` (the `.clc`/`.clp` hierarchy is not
@@ -1534,7 +1571,9 @@ Positional: `base`, `elec`
 | `--extend` | `8` | samples the templates reach beyond the .spk window on each side (default 8) |
 | `--calib-n` | `300` | kept spikes per block the residual bound is measured on |
 | `--one-as` | `cluster` | where one-unit spikes go: one new cluster (default), one new cluster per unit, or into the unit itself when --margin-min is met — choices: `cluster`, `units`, `assign` |
-| `--margin-min` | `10.0` | --one-as assign: least gain margin over the best other unit |
+| `--collision-as` | `unit` | where collision spikes go: into the unit on the detection when --margin-min is met (default; the .eap names the partner and the .spkc subtracts it), or all to one new cluster — choices: `unit`, `cluster` |
+| `--margin-min` | `10.0` | --one-as assign / --collision-as unit: least gain margin over the best other unit |
+| `--spkc` | `1` | 1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner subtracted) for the standard and the method .spk (default); needs --eap |
 | `--eap` | `all` | the stage's .eap membership: kept spikes (own class, offset 0) and explained detections (default), the explained detections only, or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
 | `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
 | `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |

@@ -80,6 +80,7 @@ WTI_VERSION = (2, 2)   # "wti <v>"; v2 adds the parent column, written when a ro
 WTL_VERSION = (2, 1)   # "wtl <v>"; v2 node summaries are read, v1 spike lists written
 TCL_VERSION = (1, 1)   # "tcl <v>"
 EAP_VERSION = (1, 1)   # 4th byte of the b"EAP" magic
+SPKC_VERSION = (1, 1)  # 4th byte of the b"SPC" magic
 NST_VERSION = (1, 1)   # NSTE header int32 #1 (neurosuite-3 core/noise_stats.hpp kNsteVersion)
 NSTE_MAGIC = 0x4E535445
 
@@ -1283,6 +1284,81 @@ def write_eap_file(path, cells, group=0, flags=0):
     return path
 
 
+# ── .spkc — sparse corrected waveforms (neurosuite-3 doc/ndmanager-plugins/formats/spkc.md) ──
+# The records of the FEW spike rows whose .spk record is not what a reader should see: a
+# collision row (two or more classes in its .eap row) with its partners' fitted templates
+# subtracted (fiber_spkc).  The .spk stays the raw cut of the recording.  Per method and stage:
+# <base>.spkc.<method>.<group>[.<stage>].  Header 32 B: b"SPC" + version, nRows u32, nSamples u32,
+# nChannels u32, nSpikes u32 (rows of the .spk it overlays), group u32, flags u32, pad[4]; then
+# nRows int64 rows (0-based, strictly ascending); then nRows x nSamples x nChannels int16 in the
+# .spk record layout.  Mirrors neurofileio::readSpkc / writeSpkc.
+
+def _spkc_index_ok(rows, n_spikes):
+    r = np.asarray(rows, np.int64)
+    return bool(r.size == 0 or (r[0] >= 0 and r[-1] < int(n_spikes) and (np.diff(r) > 0).all()))
+
+
+def write_spkc_file(path, rows, waves, n_spikes, group=0, flags=0):
+    """Write a .spkc: `rows` (strictly ascending 0-based .spk rows) and their records `waves`
+    (len(rows), nSamples, nChannels) int16.  Raises ValueError on an index that is not strictly
+    ascending or names a row >= n_spikes, or on records that do not match it."""
+    import struct
+    rows = np.ascontiguousarray(rows, dtype=np.int64)
+    w = np.ascontiguousarray(waves, dtype=SPK_DTYPE)
+    if w.ndim != 3 or w.shape[0] != rows.size or w.shape[1] < 1 or w.shape[2] < 1:
+        raise ValueError("write_spkc: records must be (len(rows), nSamples, nChannels)")
+    if not _spkc_index_ok(rows, n_spikes):
+        raise ValueError("write_spkc: rows must be strictly ascending and below n_spikes")
+    with atomic_write(path, "wb") as f:
+        f.write(b"SPC" + bytes([SPKC_VERSION[1]]))
+        f.write(struct.pack("<IIIIII", int(rows.size), int(w.shape[1]), int(w.shape[2]),
+                            int(n_spikes), int(group), int(flags)))
+        f.write(b"\x00" * 4)
+        f.write(rows.tobytes())
+        f.write(w.tobytes())
+    return path
+
+
+def write_spkc(base, elec, rows, waves, n_spikes, variant="standard", tag="", flags=0):
+    """write_spkc_file at <base>.spkc.<variant>.<elec>[.<tag>]."""
+    return write_spkc_file(session_path(base, "spkc", elec, variant=variant, tag=tag), rows, waves,
+                           n_spikes, group=int(elec), flags=flags)
+
+
+def read_spkc_file(path):
+    """Read a .spkc -> dict(nSpikes, nSamples, nChannels, group, flags, rows (int64),
+    waves (nRows, nSamples, nChannels) int16, ok).  ok=False on a missing or short file, a bad
+    magic or version, or an index that is not strictly ascending within nSpikes."""
+    import struct
+    out = dict(nSpikes=0, nSamples=0, nChannels=0, group=0, flags=0, rows=np.zeros(0, np.int64),
+               waves=np.zeros((0, 0, 0), SPK_DTYPE), ok=False)
+    try:
+        with open(path, "rb") as f:
+            hdr = f.read(32)
+            if len(hdr) < 32 or hdr[:3] != b"SPC" or not 1 <= hdr[3] <= SPKC_VERSION[0]:
+                return out
+            n, ns, nc, nsp, grp, flags = struct.unpack("<IIIIII", hdr[4:28])
+            if ns < 1 or nc < 1:
+                return out
+            # the header is untrusted: the file must hold index and body before either is read
+            if os.fstat(f.fileno()).st_size - 32 < n * (8 + 2 * ns * nc):
+                return out
+            rows = np.frombuffer(f.read(8 * n), dtype=np.int64)
+            body = np.frombuffer(f.read(2 * n * ns * nc), dtype=SPK_DTYPE)
+        if rows.size != n or body.size != n * ns * nc or not _spkc_index_ok(rows, nsp):
+            return out
+        out.update(nSpikes=int(nsp), nSamples=int(ns), nChannels=int(nc), group=int(grp),
+                   flags=int(flags), rows=rows.copy(), waves=body.reshape(n, ns, nc).copy(), ok=True)
+    except OSError:
+        return out
+    return out
+
+
+def read_spkc(base, elec, variant="standard", tag=""):
+    """read_spkc_file at <base>.spkc.<variant>.<elec>[.<tag>]."""
+    return read_spkc_file(session_path(base, "spkc", elec, variant=variant, tag=tag))
+
+
 def read_eap(base, elec, tag=""):
     """Read a .eap -> dict(nSpikes, nClasses, group, flags, cells=(N,T) int8, ok).
     ok=False on a missing/short file or bad magic.  Mirrors neurofileio::readEap."""
@@ -1426,7 +1502,7 @@ NOT_PER_SPIKE_TYPES = frozenset({"pca", "nst", "clp", "cli", "cur", "wti", "wtf"
                                  "tcl", "model", "klg", "cpos", "probe"})
 # Group files a sweep handles by name (apply_spike_keep: the realign offsets are subset, the
 # manifests moved aside).
-_SWEEP_NAMED_TYPES = frozenset({"offsets", "deconv", "realign"})
+_SWEEP_NAMED_TYPES = frozenset({"offsets", "deconv", "realign", "spkc"})
 # Last name token of files that are never binary per-spike data, whatever their type token.
 _NOT_DATA_SUFFIX = frozenset({"tsv", "txt", "csv", "json", "yaml", "yml", "log", "md", "png", "pdf", "svg",
                               "npy", "npz", "gz", "zip", "probe", "bak", "old", "tmp", "swp", "stalebkp"})
@@ -1722,6 +1798,18 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
                 if verbose:
                     print(f"dedup: {os.path.basename(man)} indexes the old spike set -> "
                           f"{os.path.basename(man)}.stalebkp ({how})")
+        # A sparse .spkc names spike ROWS: after the subset every one of the group's is stale.
+        for sp in sorted(glob.glob(f"{glob.escape(base)}.spkc.*")):
+            if sp.endswith((".stalebkp", ".dedup.old")):
+                continue
+            toks = os.path.basename(sp)[len(bname) + 1:].split(".")      # spkc[.<variant>].<elec>[.<stage>]
+            ei = next((i for i in range(1, len(toks)) if toks[i].isdigit()), None)
+            if ei is None or toks[ei] != elec:
+                continue
+            os.replace(sp, sp + ".stalebkp")
+            if verbose:
+                print(f"dedup: {os.path.basename(sp)} names rows of the old spike set -> "
+                      f"{os.path.basename(sp)}.stalebkp (fiber-spkc rebuilds it)")
 
     if verbose:
         if rewritten:

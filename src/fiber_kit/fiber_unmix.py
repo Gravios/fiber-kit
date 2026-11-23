@@ -35,7 +35,11 @@
 #                 a collision with a cell that has no template yet
 #    unexplained  nothing known fits: a cell without a template, or not a spike
 #  `partial` and `unexplained` keep their noise label -- they are what the next
-#  round's sort should look at.  The others leave the noise cluster.
+#  round's sort should look at.  The others leave the noise cluster.  A
+#  `collision` goes to the unit on its detection (--collision-as unit): the row
+#  is that unit's spike with a partner in it, the .eap names the partner, and the
+#  stage's sparse .spkc (fiber_spkc) holds the row with the partner subtracted --
+#  what Klusters shows for it, while the .spk stays the raw cut.
 #
 #  Output: the stage's flat .clu, a manifest <base>.unmix.<method>.<g>.<tag>.tsv
 #  with one row per pursued detection, and (--eap) the stage's .eap membership:
@@ -241,11 +245,17 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
     return out
 
 
-def relabel(clu, u, *, one_as="cluster", margin_min=10.0, tol=4):
+def relabel(clu, u, *, one_as="cluster", collision_as="cluster", margin_min=10.0, tol=4):
     """The stage's .clu from the input labels and unmix()'s result.
 
-    partial / unexplained / not-pursued rows keep their label.  collision and
-    shadow rows each go to one new cluster.  `one` rows go, by `one_as`:
+    partial / unexplained / not-pursued rows keep their label.  shadow rows go
+    to one new cluster.  collision rows go, by `collision_as`:
+      cluster  to one new cluster
+      unit     INTO the unit on the detection (the first component), when that
+               label is confident (margin >= margin_min, |dt| <= tol) -- the row
+               is then that unit's spike with a partner in it, which the .eap
+               names and the .spkc subtracts; the others to the one new cluster
+    `one` rows go, by `one_as`:
       cluster  to one new cluster
       units    to one new cluster per unit they fit (to look at next to that unit)
       assign   INTO the unit, when the label is confident (margin >= margin_min)
@@ -256,7 +266,11 @@ def relabel(clu, u, *, one_as="cluster", margin_min=10.0, tol=4):
     nxt = fch.next_free_id(new)
     ids = dict(one=nxt, collision=nxt + 1, shadow=nxt + 2, units={})
     kind = u["kind"]
-    new[kind == COLLISION] = ids["collision"]
+    coll = kind == COLLISION
+    new[coll] = ids["collision"]
+    if collision_as == "unit":
+        sure = coll & (u["margin"] >= margin_min) & (np.abs(u["dt1"]) <= tol)
+        new[sure] = u["k1"][sure]
     new[kind == SHADOW] = ids["shadow"]
     one = kind == ONE
     if one_as == "assign":
@@ -312,6 +326,32 @@ def eap_manifest(u):
     return rows
 
 
+def _write_spkc(base, elec, clu, tag, method, nsamp, nchan, log):
+    """The stage's sparse .spkc, per waveform variant present (standard and the method's): every row
+    whose .eap row names a partner, with that partner's fitted template subtracted (fiber_spkc)."""
+    try:
+        from . import fiber_spkc as fsp
+    except ImportError:
+        import fiber_spkc as fsp
+    e = nio.read_eap(base, elec, tag=tag)
+    tcl = nio.read_tcl(base, elec)
+    if not e["ok"] or e["nSpikes"] != len(clu):
+        return
+    for v in dict.fromkeys(["standard", method]):
+        r = nio.resolve(base, "spk", elec, v)
+        if not (r.found and r.variant == v):
+            continue
+        spk = nio.open_spk_file(r.path, nsamp, nchan)
+        if spk.shape[0] != len(clu):
+            log(f"[unmix] {os.path.basename(r.path)} holds {spk.shape[0]:,} spikes: no .spkc for it")
+            continue
+        b = fsp.build(spk, e["cells"], clu, tcl_entries=tcl["entries"] if tcl["ok"] else None)
+        p = nio.write_spkc(base, elec, b["rows"], b["waves"], len(clu), variant=v, tag=tag)
+        s = b["stats"]
+        log(f"[unmix] wrote {os.path.basename(p)}: {s['corrected']:,} of {s['collision_rows']:,} rows naming "
+            f"a partner corrected ({s['partners_without_template']:,} partners without a template)")
+
+
 def _id_list(text):
     return tuple(int(x) for x in str(text).replace(",", " ").split())
 
@@ -359,8 +399,14 @@ def main(argv=None):
     ap.add_argument("--one-as", choices=("cluster", "units", "assign"), default="cluster",
                     help="where one-unit spikes go: one new cluster (default), one new cluster per unit, or "
                          "into the unit itself when --margin-min is met")
+    ap.add_argument("--collision-as", choices=("unit", "cluster"), default="unit",
+                    help="where collision spikes go: into the unit on the detection when --margin-min is met "
+                         "(default; the .eap names the partner and the .spkc subtracts it), or all to one new cluster")
     ap.add_argument("--margin-min", type=float, default=10.0,
-                    help="--one-as assign: least gain margin over the best other unit")
+                    help="--one-as assign / --collision-as unit: least gain margin over the best other unit")
+    ap.add_argument("--spkc", type=int, default=1,
+                    help="1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner "
+                         "subtracted) for the standard and the method .spk (default); needs --eap")
     ap.add_argument("--eap", choices=("all", "resolved", "off"), default="all",
                     help="the stage's .eap membership: kept spikes (own class, offset 0) and explained "
                          "detections (default), the explained detections only, or none.  The matrix is "
@@ -414,7 +460,7 @@ def main(argv=None):
         log(f"[unmix] collisions: second unit detected itself {int((u['k2_det'][coll] == 1).sum()):,}, "
             f"hidden {int((u['k2_det'][coll] == 0).sum()):,}; median |lag| "
             f"{float(np.nanmedian(np.abs(u['dt2'][coll] - np.nan_to_num(u['dt1'][coll])))):.1f} samples")
-    new, ids = relabel(clu, u, one_as=a.one_as, margin_min=a.margin_min)
+    new, ids = relabel(clu, u, one_as=a.one_as, collision_as=a.collision_as, margin_min=a.margin_min)
     path = nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=tag)
     man = write_manifest(nio.session_path(base, "unmix", a.elec, variant=a.clu_method, tag=tag) + ".tsv",
                          manifest_rows(res, u))
@@ -422,8 +468,11 @@ def main(argv=None):
     where = {"cluster": f"one-unit spikes -> cluster {ids['one']}",
              "units": f"one-unit spikes -> clusters {ids['one'] + 3}.. (one per unit, {len(ids['units'])})",
              "assign": f"one-unit spikes -> their unit when margin >= {a.margin_min:g}, else cluster {ids['one']}"}
+    in_unit = int(((u["kind"] == COLLISION) & (new != ids["collision"])).sum())
+    cwhere = (f"collisions -> their first unit ({in_unit:,}) when margin >= {a.margin_min:g}, else cluster {ids['collision']}"
+              if a.collision_as == "unit" else f"collisions -> {ids['collision']}")
     log(f"[unmix] wrote {os.path.basename(path)}: {moved:,} spikes left the noise | {where[a.one_as]}, "
-        f"collisions -> {ids['collision']}, shadows -> {ids['shadow']}; partial and unexplained keep their label")
+        f"{cwhere}, shadows -> {ids['shadow']}; partial and unexplained keep their label")
     log(f"[unmix] wrote {os.path.basename(man)}")
     if a.eap != "off":
         own = (np.flatnonzero(kept), clu[kept]) if a.eap == "all" else None
@@ -434,6 +483,10 @@ def main(argv=None):
                 f"{os.path.getsize(em['eap']) / 1e6:.0f} MB) + {os.path.basename(em['tcl'])}")
         else:
             log("[unmix] .eap not written (nothing to mark, or its spike count disagrees)")
+        if a.spkc and em:
+            _write_spkc(base, a.elec, new, tag, a.clu_method, int(cfg["nsamp"]), int(cfg["nchan"]), log)
+    elif a.spkc:
+        log("[unmix] --eap off: no .spkc (the .eap is what names the partners)")
     return 0
 
 
