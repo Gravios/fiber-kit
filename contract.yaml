@@ -38,8 +38,10 @@ vectors:
   golden/fk.wti.2: d350dbc5988dbafb8fa0d9dafce3bad3
   golden/fk.wtl.1: f22cb5a1d94baff7df6850f83f5b4dfa
   golden/golden.eap.1: 3e932a5c120de43897a01d58effd5744
+  golden/golden.spkc.standard.1: 5ff688170bca32f218b20096671fd06d
   golden/golden.tcl.1: 52830127deac1c273f904f229e96b3d3
   golden/golden.wtf.standard.1: 8bea6aa6c604b6f0ca41af81a3001841
   golden/golden.wti.1: 8a86cf159902a896e1451bbdd295392f
   golden/golden.wti.2: a3781cda6abb77fca579da87ba6395f8
   golden/golden.wtl.1: cea09cd10c9160b26e240f85a5be1b6a
+  golden/spkc_fit_cases.bin: 950f04c1e7eceda598c270090a4c5827

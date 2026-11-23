@@ -6,7 +6,8 @@
 #
 #   golden.*  written by neurosuite-3's C++ writers (core_test_golden_formats):
 #             golden.wti.1 (v1), golden.wti.2 (v2, parents), golden.wtf.standard.1,
-#             golden.wtl.1 (v2 summaries), golden.eap.1, golden.tcl.1
+#             golden.wtl.1 (v2 summaries), golden.eap.1, golden.tcl.1,
+#             golden.spkc.standard.1 (sparse corrected waveforms)
 #   fk.*      written by the neuro_io writers here: fk.wti.1, fk.wti.2 (with the
 #             src_clu_* columns) and fk.wtl.1 (v1, spike lists).  neurosuite-3's
 #             test reads them with the C++ readers.
@@ -15,7 +16,10 @@
 #   - neuro_io reads every field of every golden.* file;
 #   - write_wtf, write_eap and write_tcl reproduce the golden.* bytes (the same
 #     format, so the same bytes);
-#   - the neuro_io writers still produce the committed fk.* bytes.
+#   - the neuro_io writers still produce the committed fk.* bytes;
+#   - spkc_fit_cases.bin (tools/gen_spkc_fit_cases.py): collision records with the
+#     partner fit both repositories must make.  fiber_spkc reproduces it exactly;
+#     neurosuite-3's decollide_fit.hpp is run on the same file by its test.
 #
 #     python3 test/test_golden_formats.py            check
 #     python3 test/test_golden_formats.py --write    regenerate fk.* (then update
@@ -38,6 +42,12 @@ from fiber_kit import neuro_io as nio   # noqa: E402
 
 NS, NCH = 4, 2
 A = nio.EAP_ABSENT
+
+# golden.spkc.standard.1: rows 1, 4 and 8 of 9 spikes, with the extreme sample values
+SPKC_ROWS = np.array([1, 4, 8], np.int64)
+SPKC_WAVES = ((np.arange(3 * NS * NCH) * 37) % 211 - 100).astype(np.int16)
+SPKC_WAVES[5], SPKC_WAVES[18] = -32768, 32767
+SPKC_WAVES = SPKC_WAVES.reshape(3, NS, NCH)
 
 fails = 0
 ran = 0
@@ -162,13 +172,50 @@ def main():
     keys = ("col", "status", "label", "provenance_clu", "provenance_stage", "created", "merged_into")
     check([{k: x[k] for k in keys} for x in c["entries"]] == TCL, "golden.tcl.1: every entry")
 
+    k = nio.read_spkc(g, 1)
+    check(k["ok"] and (k["nSpikes"], k["nSamples"], k["nChannels"], k["group"], k["flags"]) == (9, NS, NCH, 1, 2),
+          "golden.spkc.standard.1: header")
+    check(np.array_equal(k["rows"], SPKC_ROWS) and np.array_equal(k["waves"], SPKC_WAVES),
+          "golden.spkc.standard.1: the index and every sample")
+
+    # The partner fit of a collision row on the cases shared with neurosuite-3
+    # (tools/gen_spkc_fit_cases.py; decollide_fit.hpp runs the same file there).
+    import struct
+    from fiber_kit import fiber_spkc as fsp
+    raw = read_bytes(os.path.join(GOLDEN, "spkc_fit_cases.bin"))
+    n_cases, ns, nc = struct.unpack("<III", raw[4:16]) if raw[:4] == b"SFC\x01" else (0, 0, 0)
+    rec = ns * nc
+    each = 4 + 2 * rec + 8 * rec + 8 + 2 * rec
+    check(n_cases > 0 and len(raw) == 16 + n_cases * each, "spkc_fit_cases.bin: header and size")
+    agree = exact = accepted = 0
+    for i in range(n_cases if len(raw) == 16 + n_cases * each else 0):
+        at = 16 + i * each
+        tau = struct.unpack_from("<i", raw, at)[0]
+        w = np.frombuffer(raw, np.int16, rec, at + 4).reshape(ns, nc)
+        own = np.frombuffer(raw, np.float32, rec, at + 4 + 2 * rec).reshape(ns, nc)
+        q = np.frombuffer(raw, np.float32, rec, at + 4 + 6 * rec).reshape(ns, nc)
+        want_acc, want_tau = struct.unpack_from("<Ii", raw, at + 4 + 10 * rec)
+        want = np.frombuffer(raw, np.int16, rec, at + 12 + 10 * rec).reshape(ns, nc)
+        f = fsp.fit_partner(w.astype(np.float32), own, q, tau)
+        c = w.astype(np.float32)
+        if f["accepted"]:
+            c = c - np.float32(f["amp"]) * fsp.shifted(q, f["shift"])
+        agree += bool(f["accepted"]) == bool(want_acc) and f["tau"] == want_tau
+        exact += np.array_equal(fsp.to_int16(c), want)
+        accepted += bool(f["accepted"])
+    print(f"  spkc_fit_cases.bin: {n_cases} cases, {accepted} accepted, {agree} agree, {exact} records identical")
+    check(agree == n_cases and exact == n_cases,
+          "spkc_fit_cases.bin: fiber_spkc gives the file's result for every case (accepted, offset, corrected record)")
+    check(0 < accepted < n_cases, "spkc_fit_cases.bin: the cases hold both accepted and refused partners")
+
     print("\nThe neuro_io writers give the same bytes for the same format:")
     with tempfile.TemporaryDirectory() as d:
         b = os.path.join(d, "golden")
         nio.write_wtf(b, 1, WTF, variant="standard")
         nio.write_eap(b, 1, EAP, group=EAP_GROUP, flags=EAP_FLAGS)
         nio.write_tcl(b, 1, TCL, n_classes=5)
-        for name in ("golden.wtf.standard.1", "golden.eap.1", "golden.tcl.1"):
+        nio.write_spkc(b, 1, SPKC_ROWS, SPKC_WAVES, 9, flags=2)
+        for name in ("golden.wtf.standard.1", "golden.eap.1", "golden.tcl.1", "golden.spkc.standard.1"):
             check(read_bytes(os.path.join(d, name)) == read_bytes(os.path.join(GOLDEN, name)),
                   f"{name}: neuro_io writes the C++ bytes")
 

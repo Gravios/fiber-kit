@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.4] — a reference .spkc and shared cases for the collision fit
+- `test/golden/golden.spkc.standard.1` (written by neurosuite-3's `writeSpkc`): `read_spkc` reads
+  every field and `write_spkc` reproduces the bytes.
+- `test/golden/spkc_fit_cases.bin`, written by `tools/gen_spkc_fit_cases.py`: 26 collision records
+  with the result `fiber_spkc.fit_partner` gives -- accepted or not, the offset, the corrected
+  record (21 accepted, 5 refused).  test_golden_formats checks `fiber_spkc` still gives it;
+  neurosuite-3's `core_test_golden_formats` runs `decollide_fit.hpp` on the same file (26 of 26
+  identical there).  A change of the fit on one side now fails the other's test.
+- Both files are in `contract.yaml` and `test_shared_contract.py`.
+
 ## [0.71.3] — a dedup renumbers the .spkc instead of moving it aside
 - `apply_spike_keep` (fiber-refine --dedup) moved every `.spkc` of the group aside as `.stalebkp`,
   because its index names spike rows.  A `.spkc` over the spike set being subset is now rewritten:
