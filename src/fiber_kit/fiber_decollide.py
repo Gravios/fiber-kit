@@ -233,14 +233,21 @@ def _blank_tcl_entry(col):
 
 
 def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
-                         n_cells=128, created=None):
+                         n_cells=128, created=None, own=None):
     """Record the decollide `manifest` as .eap membership (+ .tcl classes) on the
     PARENT stage (`parent_tag`).  Resolution: the parent stage's .eap; else a fresh
     all-absent N × n_cells (process_initeap normally pre-builds it).  Each unit maps
     to a stable .tcl class column (reuse by provenance, else allocate; grow when the
     free pool is exhausted).  Returns {'eap':…, 'tcl':…, 'cells':N_written} or None
-    (nothing to write / an N mismatch that would corrupt the matrix)."""
-    if not manifest:
+    (nothing to write / an N mismatch that would corrupt the matrix).
+
+    A manifest row whose k1 or k2 is negative names no unit there and writes no
+    cell for it (fiber-unmix: a spike explained by ONE unit, or by a neighbour
+    only).  `own` = (rows, units), two equal-length integer arrays: each of those
+    spike rows holds its own unit's class at offset 0 (fiber-unmix's mask of the
+    spikes that needed no explaining); written before the manifest rows."""
+    has_own = own is not None and len(own[0]) > 0
+    if not manifest and not has_own:
         return None
     if created is None:
         import datetime
@@ -298,11 +305,22 @@ def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
         return c
 
     written = 0
+    if has_own:
+        rows = np.asarray(own[0], np.int64); units = np.asarray(own[1], np.int64)
+        inside = (rows >= 0) & (rows < N) & (units >= 0)
+        rows, units = rows[inside], units[inside]
+        for u in np.unique(units):
+            col = col_for_unit(int(u))      # resolve (and grow) BEFORE indexing, as below
+            sel = rows[units == u]
+            cells[sel, col] = 0
+            written += int(sel.size)
     for r in manifest:
         i = int(r["source_idx"])
         if i < 0 or i >= N:
             continue
         for uk, tk in ((int(r["k1"]), int(r["tau1"])), (int(r["k2"]), int(r["tau2"]))):
+            if uk < 0:
+                continue                    # no unit in this slot
             col = col_for_unit(uk)          # may grow() + rebind `cells`; resolve BEFORE
             cells[i, col] = _eap_clamp(tk)  # indexing, so the store targets the grown array
             written += 1

@@ -4,6 +4,35 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.68.0] — fiber-unmix: the noise cluster explained on the .fil
+- **New stage `fiber-unmix`.**  After a cleaning pass the noise cluster is mostly spikes of units the
+  sort already holds, alone or summed (sirotaA-jg-000005-20120312 group 8: about 7 in 10 fit one kept
+  unit, 1 in 10 is a detectable sum of two; re-sorting that noise gave units 84 % pure against 96 % for
+  the kept ones -- analysis/fs-polish-clean-resort).  The stage takes the kept units as a MASK and as
+  templates, and pursues only the noise detections, on the continuous `.fil`, with `fiber_deconv`, per
+  block of the recording.  Each gets a kind: `one` (a kept unit), `collision` (two kept units in one
+  waveform, the second detected or hidden), `shadow` (a second detection of a neighbour's flank),
+  `partial` (a kept unit and a remainder) or `unexplained`.  The first three leave the noise cluster
+  (`--one-as cluster|units|assign`); the last two stay for the next sort.  Writes the stage's flat
+  `.clu`, `<base>.unmix.<method>.<g>.<stage>.tsv` and the `.eap`/`.tcl` membership (kept spikes: own
+  class at offset 0; explained detections: the classes in them).  Nothing is subtracted from a file.
+  Plannable (`{stage: fiber-unmix, in: ..., out: ...}`), not in `all`; skips reserved clusters itself.
+- **Templates reach beyond the `.spk` window** (`--extend`, default 8 samples each side).  With the
+  window's own length a spike's tail stays in the signal as if it were somebody else's: on the test
+  recording 37 % of the second detections on a flank were left unexplained at `--extend 0`, 4 % at 8.
+- `fiber_deconv.build_model` (noise model + atom bank + equivalence classes, what `deconvolve` built
+  inline) and `deconvolve(..., equiv=, thr=)`, so templates can come from other detections than the
+  ones pursued.  `deconvolve`'s results are unchanged (test_deconv, test_session_deconv).
+- `fiber_decollide.write_eap_membership(..., own=(rows, units))` marks spikes with their own class at
+  offset 0, and a manifest row with a negative `k1`/`k2` writes no cell for that slot.
+- Limits: only DETECTED events are examined -- a spike under a kept spike that never crossed the
+  threshold still needs a subtraction from the recording; two spikes a few samples apart are mostly
+  read as `one`; the `.eap` is spikes x classes bytes (`--eap resolved|off` for less).
+- Checked on a synthetic 150 s recording with planted cases (test/test_unmix.py: one 95 %, collision
+  94 % with both units right, shadow 96 %, unit + unknown cell 100 % kept in the noise, a cell without
+  a template 100 % kept in the noise, detections on bare noise 0 %).  NOT run on a real session: the
+  machine it was written on has no `.fil`.
+
 ## [0.67.37] — dedup: super-sampled spaces, the EAP table, Klusters working copies
 - **`fiber-refine --dedup` no longer breaks a super-sampled space.**  `neuro_io.apply_spike_keep` read
   every `.spk` of the group at the session's `nSamples`.  A `<base>.spk.<token>_U4.<g>` (Klusters'

@@ -159,6 +159,16 @@ CATALOG = {
         _p("min-n", "int", 50, "min spikes for a cluster to take part"),
         _p("spk-variant", "str", "", "waveform variant the cell models use (empty = the clu method; calibrated on stderiv_C5)"),
         _p("geo", "int", 0, "1 = add the shared-geometry term (fiber_srcgeom; standard .spk + probe geometry)")]),
+    "fiber-unmix": dict(input=True, tags=["in", "out"], params=[  # the noise cluster explained on the .fil; not in `all`
+        _p("noise-ids", "str", "0,1", "clusters whose spikes are explained; every other cluster is a kept unit"),
+        _p("block-min", "float", 30.0, "minutes per block (templates, noise model, thresholds are per block)"),
+        _p("one-as", "str", "cluster", "where one-unit spikes go", choices=("cluster", "units", "assign")),
+        _p("margin-min", "float", 10.0, "one-as assign: least gain margin over the best other unit"),
+        _p("eap", "str", "all", "the stage's .eap membership", choices=("all", "resolved", "off")),
+        _p("extend", "int", 8, "samples the templates reach beyond the .spk window on each side"),
+        _p("min-n", "int", 30, "spikes a kept unit needs in a block for a template"),
+        _p("resid-q", "float", 0.95, "a fit is clean within this quantile of the kept spikes' own residual"),
+        _p("equiv-cos", "float", 0.93, "templates at least this similar count as one unit")]),
     "fiber-polish": dict(input=True, tags=["in", "out"], params=[  # strip + pool rkk, islands, reverse-strip merge; not in `all`
         _p("loops", "int", 2, "strip -> pool -> full-dimensional rkk rounds (0 = skip)"),
         _p("rounds", "int", 2, "island -> merge rounds (0 = skip)"),
@@ -197,6 +207,7 @@ STAGE_MODULES = {
     "fiber-lowmix": "fiber_kit.fiber_lowmix",
     "fiber-rdr": "fiber_kit.fiber_rdr",
     "fiber-polish": "fiber_kit.fiber_polish",
+    "fiber-unmix": "fiber_kit.fiber_unmix",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning

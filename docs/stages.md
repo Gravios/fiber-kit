@@ -1427,6 +1427,69 @@ Positional: `base`, `elec`
 | `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
 | `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
 | `--fet-method` | `manifold` | method token of the written feature space |
+### `fiber-unmix`
+
+Explain the spikes OUTSIDE the kept units (0.68.0).  Input: a stage whose noise cluster holds what a
+cleaning pass removed (`--noise-ids`, default 0 and 1); every other non-reserved cluster is a kept
+unit.  Kept spikes are a mask: never pursued, never relabelled, they only supply the templates.  Each
+noise detection is pursued on the continuous `.fil` with `fiber_deconv` (noise-whitened, sub-sample
+phases, amplitude priors, joint refit) over a segment that also covers its neighbours; templates,
+noise model, pursuit threshold and the residual bound are taken per `--block-min` of recording.
+Nothing is subtracted from any file.
+
+Each pursued detection gets a kind:
+
+| kind | meaning | `.clu` |
+|---|---|---|
+| `one` | one kept unit explains it, with a residual no larger than that unit's own spikes leave | `--one-as`: one new cluster, one per unit, or into the unit |
+| `collision` | a kept unit plus a second, non-equivalent kept unit in the same waveform (detected itself, or hidden) | one new cluster |
+| `shadow` | no unit on the detection; its window is explained by neighbouring spikes | one new cluster |
+| `partial` | a kept unit on it and a remainder: a candidate collision with a cell that has no template | keeps its label |
+| `unexplained` | nothing known fits | keeps its label |
+
+So the next round's sort (`fiber-session --in-stage <out> --exclude-units ... --exclude-as noise`)
+sees only `partial` and `unexplained`.  Outputs: the flat `.clu` (the `.clc`/`.clp` hierarchy is not
+rebuilt), `<base>.unmix.<method>.<g>.<out>.tsv` (one row per pursued detection: kind, first and
+second unit with amplitude and offset in samples, gain, margin, residual, whether the second unit
+was detected), and with `--eap all` the stage's `.eap`/`.tcl`: every kept spike holds its own class
+at offset 0, every explained detection the classes found in it.  The `.eap` is spikes x classes
+bytes (one class per kept unit, in steps of `--n-cells`): about 0.6 GB for 800,000 spikes and 660
+units; `--eap resolved` writes the explained rows only, `--eap off` none.  `--skip-marked` leaves
+out the noise rows the input stage's `.eap` already explains.
+
+Limits: only DETECTED events are examined (a spike under a kept spike that never crossed the
+threshold needs a subtraction from the recording); two spikes within a few samples are mostly read
+as `one`; an impure kept unit explains what it should not.  Checked on synthetic recordings only
+(test/test_unmix.py) -- not yet run on a real session.
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
+| `--signal` | `""` | the filtered recording (default <base>.fil) |
+| `--noise-ids` | `0,1` | clusters whose spikes are explained (default 0,1); every other non-reserved cluster is a kept unit |
+| `--skip-marked` | flag (off) | leave out the noise rows the INPUT stage's .eap already holds a class for |
+| `--block-min` | `30.0` | minutes per block: templates, noise model and thresholds are per block (default 30) |
+| `--blocks` | `""` | run only these 0-based blocks, e.g. 0-2,7 (default all) |
+| `--phases` | `4` | sub-sample phases per template (1 = whole samples) |
+| `--order` | `4` | order of the VAR noise-whitening filter |
+| `--refrac-ms` | `1.0` | a unit is not placed twice within this |
+| `--floor` | `16.0` | lowest pursuit gain threshold |
+| `--null-q` | `0.995` | quantile of the off-spike gain taken as threshold |
+| `--min-n` | `30` | spikes a kept unit needs in a block for a template |
+| `--equiv-cos` | `0.93` | templates at least this similar count as one unit (a second component must differ) |
+| `--resid-q` | `0.95` | a fit is clean when its residual is within this quantile of the kept spikes' own |
+| `--extend` | `8` | samples the templates reach beyond the .spk window on each side (default 8) |
+| `--calib-n` | `300` | kept spikes per block the residual bound is measured on |
+| `--one-as` | `cluster` | where one-unit spikes go: one new cluster (default), one new cluster per unit, or into the unit itself when --margin-min is met — choices: `cluster`, `units`, `assign` |
+| `--margin-min` | `10.0` | --one-as assign: least gain margin over the best other unit |
+| `--eap` | `all` | the stage's .eap membership: kept spikes (own class, offset 0) and explained detections (default), the explained detections only, or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
+| `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
+| `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |
 ### `fiber-polish`
 
 Polish an over-split sort (0.67.33): a residual strip with a pooled full-dimensional rkk, a small-leaf

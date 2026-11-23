@@ -498,10 +498,44 @@ def _unit_margin(r, s, i, amp, bank, tol, same=None):
     return float(own - (oth.max() if oth.size else -np.inf))
 
 
+Model = namedtuple("Model", "nm bank equiv")
+
+
+def build_model(read_raw, res_abs, labels, nsamp, peak, *, s0=None, s1=None, R=4, order=4,
+                min_n=30, exclude=(), transform=None, seed=0, nm=None, equiv_cos=0.93):
+    """What a pursuit needs, from the detections `res_abs` and their clustering
+    `labels` (-1 = noise): the noise model of [s0, s1), the atom bank of every
+    unit with >= min_n spikes (amplitude prior from the unit's own spread) and
+    the template equivalence classes.  deconvolve() builds exactly this when it
+    is given neither `nm` nor `bank`; a caller that pursues OTHER detections
+    than the ones the templates come from (fiber-unmix: templates from the kept
+    units, pursuit around the spikes outside them) builds it once and passes it
+    in.  Raises ValueError when no unit has enough spikes."""
+    res_abs = np.asarray(res_abs, np.int64)
+    labels = np.asarray(labels)
+    if s0 is None:
+        s0 = int(res_abs.min()) - 4 * nsamp
+    if s1 is None:
+        s1 = int(res_abs.max()) + 4 * nsamp
+    if nm is None:
+        nm = fit_noise_model(read_raw, s0, s1, res_abs, order=order, seed=seed, transform=transform)
+    T = unit_templates(read_raw, res_abs, labels, nsamp, peak, min_n=min_n, seed=seed,
+                       transform=transform, exclude=exclude)
+    if not T:
+        raise ValueError("deconvolve: no unit with enough spikes for a template")
+    bank0 = build_bank(T, nm, nsamp, peak, R=1)
+    sd = amplitude_spread(read_raw, res_abs, labels, bank0, nm, seed=seed, transform=transform)
+    bank = build_bank(T, nm, nsamp, peak, R=R, amp_sd=sd)
+    counts = {k: int((labels == k).sum()) for k in T}
+    keys, S = template_similarity(T, nm, counts)
+    equiv = {k: {keys[j] for j in np.flatnonzero(S[i] >= equiv_cos)} for i, k in enumerate(keys)}
+    return Model(nm=nm, bank=bank, equiv=equiv)
+
+
 def deconvolve(read_raw, res_abs, labels, nsamp, peak, sr, *, s0=None, s1=None, R=4,
                order=4, refrac_ms=1.0, pad=None, tol=4, null_q=0.995, thr_floor=16.0,
                min_n=30, exclude=(), transform=None, seed=0, nm=None, bank=None,
-               equiv_cos=0.93):
+               equiv_cos=0.93, equiv=None, thr=None):
     """Deconvolve the detections `res_abs` (absolute samples) of one chunk.
 
     labels : clustering of those detections (local ids, -1 = noise); units with
@@ -510,6 +544,10 @@ def deconvolve(read_raw, res_abs, labels, nsamp, peak, sr, *, s0=None, s1=None, 
              are EQUIVALENT (template_similarity): indistinguishable to the pursuit,
              so naming one for the other is not a disagreement, and the margin is
              against the best non-equivalent template.  >1 = only identity.
+    equiv  : with a `bank` built elsewhere (build_model), its equivalence classes
+             {label: set of labels}; without it every unit of a given bank is
+             equivalent to itself only.
+    thr    : the pursuit's stopping gain; None = null_threshold of [s0, s1).
     Returns Result with per-detection arrays (aligned to res_abs):
       primary  label of the placement anchored on the detection, or -1
       amp/dt/gain  its amplitude, time correction (samples, float), gain
@@ -528,23 +566,19 @@ def deconvolve(read_raw, res_abs, labels, nsamp, peak, sr, *, s0=None, s1=None, 
         s0 = int(res_abs.min()) - 4 * nsamp
     if s1 is None:
         s1 = int(res_abs.max()) + 4 * nsamp
-    if nm is None:
-        nm = fit_noise_model(read_raw, s0, s1, res_abs, order=order, seed=seed, transform=transform)
     if bank is None:
-        T = unit_templates(read_raw, res_abs, labels, nsamp, peak, min_n=min_n, seed=seed,
-                           transform=transform, exclude=exclude)
-        if not T:
-            raise ValueError("deconvolve: no unit with enough spikes for a template")
-        bank0 = build_bank(T, nm, nsamp, peak, R=1)
-        sd = amplitude_spread(read_raw, res_abs, labels, bank0, nm, seed=seed, transform=transform)
-        bank = build_bank(T, nm, nsamp, peak, R=R, amp_sd=sd)
-        counts = {k: int((labels == k).sum()) for k in T}
-        keys, S = template_similarity(T, nm, counts)
-        equiv = {k: {keys[j] for j in np.flatnonzero(S[i] >= equiv_cos)} for i, k in enumerate(keys)}
+        m = build_model(read_raw, res_abs, labels, nsamp, peak, s0=s0, s1=s1, R=R, order=order,
+                        min_n=min_n, exclude=exclude, transform=transform, seed=seed, nm=nm,
+                        equiv_cos=equiv_cos)
+        nm, bank, equiv = m.nm, m.bank, m.equiv
     else:
-        equiv = {k: {k} for k in bank.keys}
-    thr, _ = null_threshold(read_raw, s0, s1, res_abs, bank, nm, q=null_q, floor=thr_floor,
-                            seed=seed + 1, transform=transform)
+        if nm is None:
+            nm = fit_noise_model(read_raw, s0, s1, res_abs, order=order, seed=seed, transform=transform)
+        if equiv is None:
+            equiv = {k: {k} for k in bank.keys}
+    if thr is None:
+        thr, _ = null_threshold(read_raw, s0, s1, res_abs, bank, nm, q=null_q, floor=thr_floor,
+                                seed=seed + 1, transform=transform)
     pad = int(nsamp // 2 if pad is None else pad)
     refr = fl_refrac(refrac_ms, sr)
     La = bank.atoms.shape[1]
