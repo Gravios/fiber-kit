@@ -1806,9 +1806,28 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             ei = next((i for i in range(1, len(toks)) if toks[i].isdigit()), None)
             if ei is None or toks[ei] != elec:
                 continue
+            # A file over the old spike set follows it: the records of the rows kept, under their
+            # new row numbers (a record is a row's own corrected waveform, so it stays right when
+            # other rows go).  Anything else -- another count, unreadable -- is moved aside.
+            d = read_spkc_file(sp)
+            if d["ok"] and d["nSpikes"] == n_orig:
+                try:
+                    mask = np.asarray(keep) if np.asarray(keep).dtype == bool else np.isin(np.arange(n_orig), keep)
+                    kept = np.flatnonzero(mask[d["rows"]])
+                    new_row = np.cumsum(mask, dtype=np.int64) - 1
+                    write_spkc_file(sp, new_row[d["rows"][kept]], d["waves"][kept], nkeep,   # atomic
+                                    group=d["group"], flags=d["flags"])
+                    rewritten.append(sp)
+                    if verbose:
+                        print(f"dedup: {os.path.basename(sp)}: {kept.size} of {d['rows'].size} corrected "
+                              f"row(s) kept, renumbered")
+                    continue
+                except Exception as e:  # noqa: BLE001
+                    if verbose:
+                        print(f"dedup: {os.path.basename(sp)} could not be renumbered ({e})")
             os.replace(sp, sp + ".stalebkp")
             if verbose:
-                print(f"dedup: {os.path.basename(sp)} names rows of the old spike set -> "
+                print(f"dedup: {os.path.basename(sp)} names rows of another spike set -> "
                       f"{os.path.basename(sp)}.stalebkp (fiber-spkc rebuilds it)")
 
     if verbose:

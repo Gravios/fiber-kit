@@ -143,6 +143,34 @@ def main():
         check("s.zzz.standard.1" in msg and snapshot(d) == before,
               "with stale='error' it is refused and every file is as it was")
 
+    # ── the sparse corrected waveforms (.spkc) follow the subset ───────────────────────────────────
+    with tempfile.TemporaryDirectory() as d:
+        b, m = session(d)
+        rows = np.array([0, 3, 10, 11, 57, N - 1], np.int64)          # rows 0 and 10 are dropped
+        waves = np.arange(rows.size * T * C, dtype=np.int16).reshape(rows.size, T, C)
+        nio.write_spkc(b, 1, rows, waves, N)
+        nio.write_spkc(b, 1, np.array([2], np.int64), waves[:1], N + 5, tag="other")   # another spike set
+        nio.write_spkc(b, 2, rows, waves, N)                                           # another group
+        nio.apply_spike_keep(b, 1, keep, N, T, C, verbose=False)
+        got = nio.read_spkc(b, 1)
+        new_row = np.cumsum(keep) - 1
+        stay = keep[rows]
+        check(got["ok"] and got["nSpikes"] == k, ".spkc: readable after the dedup, over the deduped count")
+        check(np.array_equal(got["rows"], new_row[rows[stay]]) and np.array_equal(got["waves"], waves[stay]),
+              ".spkc: the records of the rows kept, under their new row numbers; the dropped rows' are gone")
+        spk = np.fromfile(f"{b}.spk.standard.1", np.int16).reshape(-1, T, C)
+        check(spk.shape[0] == k and all(np.array_equal(spk[r], m["spk"][o]) for r, o in zip(got["rows"], rows[stay])),
+              ".spkc: each record still names the row holding its own raw waveform")
+        check(os.path.exists(f"{b}.spkc.standard.1.other.stalebkp") and not os.path.exists(f"{b}.spkc.standard.1.other"),
+              "NEGATIVE CONTROL: a .spkc over another spike count is moved aside, not renumbered")
+        g2 = nio.read_spkc(b, 2)
+        check(g2["ok"] and g2["nSpikes"] == N and np.array_equal(g2["rows"], rows),
+              "NEGATIVE CONTROL: another group's .spkc is untouched")
+        nio.apply_spike_keep(b, 1, keep, N, T, C, verbose=False)
+        again = nio.read_spkc(b, 1)
+        check(again["ok"] and np.array_equal(again["rows"], got["rows"]) and np.array_equal(again["waves"], got["waves"]),
+              "a second dedup with the same mask leaves the .spkc as it is")
+
     print(f"test_dedup_perspike: {'PASS' if not fails else 'FAIL'} ({fails} failed)")
     return 1 if fails else 0
 

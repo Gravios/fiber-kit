@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.3] — a dedup renumbers the .spkc instead of moving it aside
+- `apply_spike_keep` (fiber-refine --dedup) moved every `.spkc` of the group aside as `.stalebkp`,
+  because its index names spike rows.  A `.spkc` over the spike set being subset is now rewritten:
+  the records of the rows kept, under their new row numbers; the dropped rows' records go with them.
+  A record is its row's own corrected waveform, so it stays right when other rows are removed; the
+  `.eap` is subset with the same mask, and `fiber-spkc` rebuilds the file from it at any time.
+- A `.spkc` over any other count, or unreadable, is still moved aside.  The rewrite runs after the
+  group's files are committed and is not part of that transaction: if it fails the file is moved
+  aside as before.
+- test_dedup_perspike: 6 new checks (renumbering, the row still holds its own raw waveform, another
+  count moved aside, another group untouched, a second run changes nothing).
+
 ## [0.71.2] — the .spkc: three faults found in a review
 - **A class's home could be a mixture.**  It was the cluster holding most of the rows naming only
   that class, and `fiber-unmix` leaves every unit's one-unit spikes in ONE cluster: for a unit that
