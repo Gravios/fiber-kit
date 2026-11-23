@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.71.7-orange)
+![version](https://img.shields.io/badge/version-0.71.8-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -409,6 +409,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-clean` | Keep the clean part of a sort: Klusters' core cut per cluster and the quality value of what is left; cut-off spikes, dirty clusters and clusters left too small go to the noise cluster (flat `.clu` + report). |
 | `fiber-spkc` | Write a stage's sparse `.spkc`: every collision row (two or more classes in its `.eap` row) with its partners' fitted templates subtracted — what Klusters shows for it. The `.spk` is not changed. |
 | `fiber-unmix` | Explain the noise cluster's spikes on the `.fil` as kept units and their sums: one unit, a collision of two, a neighbour's flank, a unit plus a remainder, or nothing known. Kept spikes are a mask; writes a flat `.clu`, a manifest and the `.eap` membership (synthetic recordings only so far). |
+| `fiber-unmix-children` | A `fiber-unmix` stage as a hierarchical session (`.clu` + `.clc` + `.clp`): every one-unit spike under the unit it was named for, as a child of its own beside the unit's spikes. `fiber-unmix --children 1` runs it. |
 | `fiber-polish` | Polish an over-split sort: residual strip + pooled full-dimensional rkk, small-leaf t-SNE islands, and the reverse residual strip as a merge (flat `.clu`; untuned). |
 | `fiber-manifold` | Refine a unit: fit the field manifold of its off-spike channels in sliding windows (drift-following); children per class × time bin and a `.fet.manifold` feature space for Klusters. |
 | `fiber-template` | Linked per-unit median templates (one .wtf per variant, indexed by .wti) along time or energy. |

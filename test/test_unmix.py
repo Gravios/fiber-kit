@@ -281,7 +281,14 @@ def main():
         check("--skip-marked on the result: exits 0 and pursues only the rows without a class",
               r2.returncode == 0 and f"{int(((asu == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"
               in r2.stderr)
-        rab = run(["--clu-stage", "clean", "--out-tag", "ab", "--spkc", "2"])
+        rab = run(["--clu-stage", "clean", "--out-tag", "ab", "--spkc", "2", "--children", "1"])
+        _, flat = nio.read_clu_file(f"{base}.clu.stderiv.1.ab")
+        (_, hp), (_, hc) = (nio.read_clu_file(f"{base}.{t}.stderiv.1.ab_h") for t in ("clu", "clc"))
+        onerow = u["kind"] == fu.ONE
+        check("--children 1: the triple under <out>_h -- one-unit spikes in their unit, as a child of their own",
+              os.path.exists(f"{base}.clp.stderiv.1.ab_h") and np.array_equal(hp[onerow], u["k1"][onerow])
+              and hc[onerow].min() >= 20000 and np.array_equal(hp[~onerow], flat[~onerow])
+              and np.array_equal(hc[~onerow], np.where(flat[~onerow] >= 2, flat[~onerow] + 10000, flat[~onerow])))
         sab = nio.read_spkc(base, 1, variant="standard", tag="ab")
         check("--spkc 2: the add-back records as the stage's standard .spkc, the ones unmix() returned",
               rab.returncode == 0 and sab["ok"] and np.array_equal(sab["rows"], ua["ab_rows"])

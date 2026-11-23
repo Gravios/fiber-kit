@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.8] — fiber-unmix-children: the one-unit spikes as children of their unit
+- A flat `.clu` has to choose: the spikes `fiber-unmix` names one unit for sit apart from it
+  (`--one-as cluster`, one cluster of 236,571 spikes of 342 units on 0312 g8; `units`, one more
+  cluster per unit) or inside it (`assign`), where the one in ten that is wrong can no longer be
+  told from the unit's own.
+- `fiber-unmix-children <base> <g> --method M --stage S` writes the stage as the hierarchical
+  triple under `S_h`: in the `.clu` each one-unit spike is in its unit; in the `.clc` the unit's own
+  spikes are its self child (unit + 10000) and the one-unit spikes a second child (20000 and up);
+  the `.clp` maps child to parent.  Klusters then shows a unit with what unmix would add, as one
+  child to keep, cut or move.  It reads the stage's `.clu` and manifest only, so it runs on a
+  finished stage, and gives the same files from any `--one-as` form.  A row moved by hand since
+  stays where it is.  `--collisions` hangs the parked collision spikes under their first unit too.
+  The stage's `.eap` / `.spkc` are linked under the new tag.
+- `fiber-unmix --children 1` runs it at the end of the stage (plan: `params: {children: 1}`).
+- test_unmix_children: the triple from the three forms, hand-moved rows, id ranges, the refusals.
+  Opened in Klusters (offscreen, a synthetic session): the parents, children and sizes written are
+  the ones loaded, nothing renumbered.  Not looked at on a real session in Klusters.
+
 ## [0.71.7] — fiber-unmix --spkc 2: cleaned rows by residual add-back
 - The `.spkc` of 0.70.0 fits ONE partner template into a snippet by least squares, with two
   hand-set accept rules.  On the first real run (0312 g8) it left 10 % of the collision rows

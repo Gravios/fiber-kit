@@ -1584,6 +1584,20 @@ A collision that goes into its unit is that unit's spike with a partner in it: t
 partner, and the stage's sparse `.spkc` (`--spkc 1`, see `fiber-spkc`) holds the row with the
 partner subtracted, for the standard and the method `.spk`.
 
+`--children 1` (0.71.8) also writes the stage as a hierarchical session under `<out>_h`
+(`fiber-unmix-children`, which runs on a finished stage too):
+
+```
+fiber-unmix-children <base> <g> --method stderiv_C5 --stage fc_unmix     # -> .clu/.clc/.clp ...fc_unmix_h
+```
+
+In the `.clu` every `one` spike is in the unit it was named for; in the `.clc` the unit's own
+spikes are its self child (unit + 10000) and the `one` spikes a second child (20000 and up), so
+Klusters shows each unit with what unmix would add to it as one child -- to keep, cut or move.
+The result does not depend on `--one-as`.  A row no longer where fiber-unmix put it (moved by hand)
+is left alone; `--collisions` adds the parked collision spikes as a third child; the stage's
+`.eap` / `.spkc` are linked under the new tag.
+
 `--spkc 2` (0.71.7) writes the cleaned rows the way YASS and DARTsort do instead: **residual
 add-back**.  The pursuit has already placed every spike it found in the segment; a row's cleaned
 window is the raw window with every OTHER placement subtracted -- any number of them, at the
@@ -1639,6 +1653,7 @@ Positional: `base`, `elec`
 | `--eap` | `all` | the stage's .eap membership: every kept spike (own class, offset 0) and the explained detections (default); resolved = the explained detections and the kept spikes of the units they name (fewer classes, a narrower matrix); or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
 | `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
 | `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |
+| `--children` | `0` | 1 = also write the stage as a hierarchical session under <out-tag>_h (fiber-unmix-children: .clu + .clc + .clp, every one-unit spike under its unit as a child of its own). The flat .clu is written as always — choices: `0`, `1` |
 ### `fiber-polish`
 
 Polish an over-split sort (0.67.33): a residual strip with a pooled full-dimensional rkk, a small-leaf

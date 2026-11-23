@@ -62,12 +62,14 @@ try:
     from . import fiber_chunks as fch
     from . import fiber_decollide as fdc
     from . import fiber_deconv as fd
+    from . import fiber_unmix_children as fuc
     from . import neuro_io as nio
     from . import session_yaml as sy
 except ImportError:
     import fiber_chunks as fch
     import fiber_decollide as fdc
     import fiber_deconv as fd
+    import fiber_unmix_children as fuc
     import neuro_io as nio
     import session_yaml as sy
 
@@ -523,6 +525,10 @@ def main(argv=None):
                          "matrix is spikes x template classes bytes")
     ap.add_argument("--n-cells", type=int, default=128, help="template-class columns a fresh .eap starts with / grows by")
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_unmix)")
+    ap.add_argument("--children", type=int, default=0, choices=(0, 1),
+                    help="1 = also write the stage as a hierarchical session under <out-tag>_h "
+                         "(fiber-unmix-children: .clu + .clc + .clp, every one-unit spike under its unit "
+                         "as a child of its own).  The flat .clu is written as always")
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
 
@@ -616,6 +622,8 @@ def main(argv=None):
                 f"subtracted (residual add-back; {inunit:,} of them in a cluster)")
         else:
             log("[unmix] --spkc 2: no row had another placement in its window; no .spkc written")
+    if a.children:
+        fuc.main([base, str(a.elec), "--clu-method", a.clu_method, "--clu-stage", tag])
     return 0
 
 
