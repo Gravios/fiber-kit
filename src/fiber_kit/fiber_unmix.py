@@ -423,9 +423,10 @@ def main(argv=None):
                     help="1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner "
                          "subtracted) for the standard and the method .spk (default); needs --eap")
     ap.add_argument("--eap", choices=("all", "resolved", "off"), default="all",
-                    help="the stage's .eap membership: kept spikes (own class, offset 0) and explained "
-                         "detections (default), the explained detections only, or none.  The matrix is "
-                         "spikes x template classes bytes")
+                    help="the stage's .eap membership: every kept spike (own class, offset 0) and the "
+                         "explained detections (default); resolved = the explained detections and the kept "
+                         "spikes of the units they name (fewer classes, a narrower matrix); or none.  The "
+                         "matrix is spikes x template classes bytes")
     ap.add_argument("--n-cells", type=int, default=128, help="template-class columns a fresh .eap starts with / grows by")
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_unmix)")
     a = ap.parse_args(argv)
@@ -490,7 +491,15 @@ def main(argv=None):
         f"{cwhere}, shadows -> {ids['shadow']}; partial and unexplained keep their label")
     log(f"[unmix] wrote {os.path.basename(man)}")
     if a.eap != "off":
-        own = (np.flatnonzero(kept), clu[kept]) if a.eap == "all" else None
+        if a.eap == "all":
+            own = (np.flatnonzero(kept), clu[kept])
+        else:
+            # "resolved" still marks the kept spikes of every unit an explained detection names:
+            # without them the only rows naming a class alone are the one-unit spikes, which sit
+            # in a cluster of their own -- and a class's home, and its template, would be that mixture.
+            used = np.unique(np.r_[u["k1"][done], u["k2"][done]])
+            m = kept & np.isin(clu, used[used > 1])
+            own = (np.flatnonzero(m), clu[m])
         em = fdc.write_eap_membership(base, a.elec, parent_tag=tag, n_spikes=n, manifest=eap_manifest(u),
                                       n_cells=a.n_cells, own=own)
         if em:

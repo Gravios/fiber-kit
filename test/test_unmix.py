@@ -221,6 +221,25 @@ def main():
                   and cells[i, col[int(u["k2"][i])]] == int(np.rint(u["dt2"][i])) for i in cm))
         un = u["kind"] == fu.UNEXPLAINED
         check(".eap: an unexplained row holds no class", (cells[un] == nio.EAP_ABSENT).all())
+        # the .spkc: with the standard .spk present; the narrower .eap (resolved) gives the same file
+        idx = res[:, None] + np.arange(-PEAK, NSAMP - PEAK)[None, :]
+        fil[idx].astype(np.int16).tofile(f"{base}.spk.standard.1")
+        ra = run(["--clu-stage", "clean", "--out-tag", "ua"])
+        rr = run(["--clu-stage", "clean", "--out-tag", "ur", "--eap", "resolved"])
+        sa = nio.read_spkc(base, 1, variant="standard", tag="ua"); sr = nio.read_spkc(base, 1, variant="standard", tag="ur")
+        kinds = u["kind"][sa["rows"]] if sa["rows"].size else np.zeros(0, int)
+        ncoll = int((u["kind"] == fu.COLLISION).sum())
+        print(f"      .spkc: {sa['rows'].size} rows corrected -- {(kinds == fu.COLLISION).sum()} of the {ncoll} collisions, "
+              f"{(kinds == fu.PARTIAL).sum()} partial rows that also hold a second kept unit")
+        check("with the .spk present the stage's .spkc is written: >= 95 % of the collisions are in it",
+              ra.returncode == 0 and sa["ok"] and (kinds == fu.COLLISION).sum() >= 0.95 * ncoll)
+        check("... and nothing but rows whose .eap row names two units (collisions, and partial rows with a second unit)",
+              np.isin(kinds, (fu.COLLISION, fu.PARTIAL)).all())
+        check("--eap resolved: a narrower .eap, the SAME .spkc (each unit's own spikes are still named)",
+              rr.returncode == 0 and sr["ok"] and np.array_equal(sa["rows"], sr["rows"])
+              and np.array_equal(sa["waves"], sr["waves"])
+              and nio.read_eap(base, 1, tag="ur")["nClasses"] == nio.read_eap(base, 1, tag="ua")["nClasses"])
+
         r2 = run(["--clu-stage", "clean_unmix", "--skip-marked", "--eap", "off"])
         check("--skip-marked on the result: exits 0 and pursues only the rows without a class",
               r2.returncode == 0 and f"{int(((asu == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"

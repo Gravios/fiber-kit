@@ -41,6 +41,10 @@ def templ(depth, amp, width):
     return (amp * w * (np.exp(-0.5 * ((c * 20.0 - depth) / 28.0) ** 2) + 0.05)).astype(np.float32)
 
 
+def e_raw_of(spk16, base_w, rows):
+    return ((spk16[rows].astype(float) - base_w[rows]) ** 2).sum((1, 2))
+
+
 def main():
     ok = 0
 
@@ -109,6 +113,14 @@ def main():
         cor, fits = fs.correct_row(w, (0, 0), [(1, 8)], {0: A})
         check("correct_row: a partner without a template is skipped and the record is unchanged",
               not fits[0]["accepted"] and fits[0]["tau"] == 8 and np.array_equal(cor, w))
+        cor, fits = fs.correct_row(w, (0, 0), [(1, 8)], {1: B})
+        check("correct_row: without the OWN unit's template nothing is subtracted",
+              not fits[0]["accepted"] and fits[0]["tau"] == 8 and np.array_equal(cor, w))
+        # why: fitted alone, a look-alike partner within reach of the peak takes the own spike for itself
+        look = templ(45, 380, 1.0)                               # another unit, much like A
+        alone = fs.fit_partner(1.05 * A + noise(NS, NC), None, look, 2)
+        check("... because a look-alike fitted alone is ACCEPTED on a row that holds only the own spike",
+              alone["accepted"] and alone["amp"] > 0.8)
 
         # ── a group: 450 rows of each unit, 60 collisions ──
         n = 900
@@ -136,6 +148,22 @@ def main():
         own_m, partners = fs.split_row(cells[i0], int(clu[i0]), home)
         check("split_row: own = the class of the row's cluster, the other its partner",
               own_m == ((0, 0) if clu[i0] == 5 else (2, 0)) and len(partners) == 1 and partners[0][1] == stored[0])
+        # most single-class rows of BOTH classes sit in a mixed cluster (a sort's "one-unit spikes"):
+        # the units themselves, smaller, are the homes -- by the .tcl's provenance
+        mixed = clu.copy()
+        single = np.setdiff1d(np.arange(n), np.r_[coll, ghost])
+        out = single[np.arange(single.size) % 5 != 0]            # 4 in 5 of the clean rows leave their unit
+        mixed[out] = 77
+        tcl = [dict(col=0, provenance_clu=5), dict(col=2, provenance_clu=9)]
+        check("home_clusters alone would take the mixed cluster for both classes",
+              list(fs.home_clusters(cells, mixed)) == [77, -1, 77, -1])
+        bm = fs.build(spk16, cells, mixed, tcl_entries=tcl)
+        bw = fs.build(spk16, cells, mixed)
+        em = ((bm["waves"].astype(float) - base_w[bm["rows"]]) ** 2).sum((1, 2))
+        check("with the .tcl's provenance the units are the homes: the collisions are corrected as before",
+              np.array_equal(bm["rows"], coll) and np.median(em / e_raw_of(spk16, base_w, coll)) < 0.05)
+        check("without it the mixed cluster's template is used and fewer rows come out right",
+              bw["stats"]["corrected"] < 60 or not np.array_equal(bw["waves"], bm["waves"]))
         b = fs.build(spk16, cells, clu, write_offsets=True)
         st = b["stats"]
         check("build: exactly the 60 collisions are corrected; the 5 rows without a partner in them are not",

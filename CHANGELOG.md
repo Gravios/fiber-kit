@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.2] — the .spkc: three faults found in a review
+- **A class's home could be a mixture.**  It was the cluster holding most of the rows naming only
+  that class, and `fiber-unmix` leaves every unit's one-unit spikes in ONE cluster: for a unit that
+  lost more spikes than it kept, that cluster was the largest holder and its mean the "template".
+  `fiber_spkc.prefer_provenance`: the cluster the `.tcl` says the class was made from, while it
+  still holds 30 of those rows.
+- **`--eap resolved` named no unit's own spikes**, so the only rows naming a class alone were those
+  one-unit spikes: every class's home was that mixed cluster.  It now also marks the kept spikes of
+  the units the explained detections name (the same `.spkc` as `--eap all`: test_unmix).
+- **A partner was fitted and subtracted without the row's own template.**  Fitted alone, a
+  look-alike partner within reach of the peak takes the own spike for itself (test_spkc shows it
+  accepted at 0.8+ of its template on a row that holds only the own spike).  `correct_row` subtracts
+  nothing from a row whose own unit has no template.
+- The same rules are in neurosuite-3 (Klusters).  Parity re-measured: the same `.spkc` as Klusters,
+  byte for byte, on a synthetic session where three in four spikes of both units sit in one mixed
+  cluster.
+- test_unmix now runs the stage with the `.spk` present: 1,724 of 1,745 collisions are in the
+  `.spkc`, with 310 `partial` rows that also hold a second kept unit, and nothing else.
+
 ## [0.71.1] — docs: the plan for high-density probes
 - `docs/neuropixels-plan.md`: the design plan for Neuropixels 1.0 / 2.0 (2026-11-22), linked from
   `docs/index.md`.  A plan only: nothing in it is built, and no such recording has been sorted.

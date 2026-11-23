@@ -1536,7 +1536,9 @@ The `.eap` says which partners and about where; the amplitude and the exact shif
 jointly with the row's own template, within `--radius` samples of the stored offset.  A partner is
 subtracted only for an amplitude in `--amp-min`..`--amp-max` that removes at least `--min-gain` of
 the residual energy.  Templates are the mean of the 300 rows of a unit that are not collisions,
-nearest in time; which cluster a class is, is read off the membership.  One file per waveform
+nearest in time.  Which cluster a class is: the one its `.tcl` entry was made from while that still
+holds 30 rows naming only the class, else the cluster holding most of them.  A row whose own unit
+has no template is left as it is.  One file per waveform
 variant (`--variants`, default `standard` and the clu method).  `--write-offsets` writes the
 fitted whole-sample offsets back to the stage's `.eap`.
 
@@ -1624,7 +1626,7 @@ Positional: `base`, `elec`
 | `--collision-as` | `unit` | where collision spikes go: into the unit on the detection when --margin-min is met (default; the .eap names the partner and the .spkc subtracts it), or all to one new cluster — choices: `unit`, `cluster` |
 | `--margin-min` | `10.0` | --one-as assign / --collision-as unit: least gain margin over the best other unit |
 | `--spkc` | `1` | 1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner subtracted) for the standard and the method .spk (default); needs --eap |
-| `--eap` | `all` | the stage's .eap membership: kept spikes (own class, offset 0) and explained detections (default), the explained detections only, or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
+| `--eap` | `all` | the stage's .eap membership: every kept spike (own class, offset 0) and the explained detections (default); resolved = the explained detections and the kept spikes of the units they name (fewer classes, a narrower matrix); or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
 | `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
 | `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |
 ### `fiber-polish`

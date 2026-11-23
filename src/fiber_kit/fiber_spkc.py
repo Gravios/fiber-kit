@@ -147,6 +147,22 @@ def home_clusters(cells, clu):
     return home
 
 
+def prefer_provenance(home, cells, clu, provenance, min_rows=TEMPLATE_MIN):
+    """The home of a class is the cluster its .tcl entry says it was made from, when that cluster
+    still holds at least min_rows rows naming only that class -- whatever cluster holds MOST of
+    them (fiber-unmix's cluster of one-unit spikes holds every unit's: the largest holder is then a
+    mixture).  provenance: per class, the .tcl's provenance cluster or -1.  Returns home, changed in
+    place.  Mirrors decollide_fit::preferProvenance."""
+    cells = np.asarray(cells); clu = np.asarray(clu)
+    present = cells != nio.EAP_ABSENT
+    single = present.sum(1) == 1
+    for j in range(min(len(home), len(provenance))):
+        p = int(provenance[j])
+        if p > 1 and int((single & present[:, j] & (clu == p)).sum()) >= min_rows:
+            home[j] = p
+    return home
+
+
 def split_row(row_cells, cluster, home):
     """The classes of one .eap row as (own, partners): own = (class, offset) of the class whose home
     cluster is the row's cluster, else of the class nearest offset 0 (the lower id on a tie);
@@ -171,10 +187,14 @@ def correct_row(w, own, partners, templates, **fit_kw):
     """One collision record corrected: each partner with a template is fitted (in class order, each on
     what the ones before left) and, when accepted, subtracted.  templates: {class: (nSamples,
     nChannels)}.  Returns (record float32, fits) with one fit dict per partner (not accepted, at its
-    stored offset, for a partner without a template)."""
+    stored offset, for a partner without a template).  Without the OWN unit's template nothing
+    is subtracted: a partner fitted alone takes whatever of the row's own spike it can explain."""
     w = np.asarray(w, np.float32).copy()
     own_t = templates.get(own[0]) if own is not None else None
-    if own_t is not None and own[1] != 0:
+    if own_t is None:
+        return w, [dict(accepted=False, tau=int(off), shift=float(off), amp=0.0, amp_own=0.0,
+                        resid_before=0.0, resid_after=0.0) for _, off in partners]
+    if own[1] != 0:
         own_t = shifted(own_t, own[1])
     fits = []
     for cls, off in partners:
@@ -213,10 +233,13 @@ def build(spk, cells, clu, *, tcl_entries=None, write_offsets=False, log=None, *
     home = home_clusters(cells, clu)
     if tcl_entries:
         have = set(np.unique(clu[clu > 1]).tolist())
+        prov = np.full(home.size, -1, np.int64)
         for e in tcl_entries:
             j = int(e.get("col", -1))
-            if 0 <= j < home.size and home[j] < 0 and int(e.get("provenance_clu", -1)) in have:
-                home[j] = int(e["provenance_clu"])
+            if 0 <= j < home.size and int(e.get("provenance_clu", -1)) > 1 and int(e["provenance_clu"]) in have:
+                prov[j] = int(e["provenance_clu"])
+        prefer_provenance(home, cells, clu, prov)       # the unit a class was made from, while it holds its rows
+        home = np.where(home < 0, prov, home)           # ... and for a class with no row of its own
     clean_rows, cache = {}, {}
 
     def template(cls, row):
@@ -238,17 +261,22 @@ def build(spk, cells, clu, *, tcl_entries=None, write_offsets=False, log=None, *
     out_rows, out_waves = [], []
     new_cells = cells.copy() if write_offsets else cells
     st = dict(collision_rows=int(coll.size), corrected=0, partners_fitted=0, partners_subtracted=0,
-              partners_without_template=0, offsets_differ=0)
+              partners_without_template=0, rows_without_own_template=0, offsets_differ=0)
     for i in coll:
         own, partners = split_row(cells[i], int(clu[i]), home)
         if not partners:
             continue
         templates = {}
-        for cls, _ in [own] + partners:
+        t = template(own[0], int(i))
+        if t is None:                                   # nothing is subtracted without it (correct_row)
+            st["rows_without_own_template"] += 1
+            continue
+        templates[own[0]] = t
+        for cls, _ in partners:
             t = template(cls, int(i))
             if t is not None:
                 templates[cls] = t
-            elif cls != own[0]:
+            else:
                 st["partners_without_template"] += 1
         w, fits = correct_row(np.asarray(spk[i], np.float32), own, partners, templates, **fit_kw)
         done = 0
@@ -316,7 +344,8 @@ def main(argv=None):
         s = b["stats"]
         log(f"[spkc] {os.path.basename(path)}: {s['collision_rows']:,} rows with two or more classes, "
             f"{s['corrected']:,} corrected ({s['partners_subtracted']:,} of {s['partners_fitted']:,} partners "
-            f"subtracted, {s['partners_without_template']:,} without a template), "
+            f"subtracted, {s['partners_without_template']:,} without a template; "
+            f"{s['rows_without_own_template']:,} rows left as they are, their own unit having none), "
             f"{s['offsets_differ']:,} fitted offsets differ from the .eap's")
         if a.write_offsets and k == 0 and s["offsets_differ"]:
             p = nio.write_eap(base, a.elec, b["cells"], group=int(a.elec), tag=tag)
