@@ -114,6 +114,7 @@ The embedded plan of `fiber-kit-exp.yaml` (0.60.0), in order:
 
 | # | step | stage | in -> out | what |
 |---|---|---|---|---|
+| (opt) | flag-collisions | fiber-flag-collisions | -> the same mask (collisions as 2) | probable two-spike windows, from the off-spike energy of the `.spk` and from detections within half a window of each other; with `FK_SESSION_EXCLUDE=1` they stay out of every chunk and come out as cluster 0, where fiber-unmix explains them (docs/stages.md) |
 | 1 | flag | fiber-flag-artifacts | -> artifact mask | acquisition artifacts from the unwhitened derivative, handed to fiber-session |
 | 2 | session | fiber-session | -> fiber_session | per-chunk over-clustering (18-min chunks, 8-min overlap, method stderiv_C6_D34) |
 | 3 | realign-1 | fiber-realign | fiber_session (in place) | |

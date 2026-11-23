@@ -349,7 +349,7 @@ PEEL_BURST_FOOT_LO="${FK_PEEL_BURST_FOOT_LO:-0}"      # burst pass floor below f
 
 STAGES=(fiber-session fiber-realign fiber-refine fiber-peel fiber-cpos fiber-intrachunk fiber-link)
 CURATED_STAGES=(fiber-refit)                  # post-curation; recognized + plannable, but not part of `all`
-PRE_STAGES=(fiber-flag-artifacts)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
+PRE_STAGES=(fiber-flag-artifacts fiber-flag-collisions)              # preprocessing; runs BEFORE fiber-session, plannable, not in `all`
 ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-residual-merge fiber-psame-merge fiber-stochastic)              # alternative linker (fiber-session fragments); plannable, not in `all`
 POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr fiber-manifold fiber-polish fiber-unmix fiber-clean)   # post-sort review / refinement: runs AFTER the plan's final stage; plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}" "${POST_STAGES[@]}")
@@ -496,6 +496,15 @@ clu_path() {   # $1 = clu stage tag ('' = base over-cluster).
 fiber_flag_artifacts() {   # PREPROCESSING: flag acquisition artifacts -> per-spike exclusion mask
     echo "== fiber-flag-artifacts  (-> $(mask_path)) =="
     _run fiber-flag-artifacts "$SESS" "$ELEC" --spk-method "$FLAG_SPK" --out-stage "$FLAG_STAGE" \
+        "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
+}
+
+fiber_flag_collisions() {   # PREPROCESSING: probable two-spike windows -> the same exclusion mask (collisions as 2)
+    # Off-spike energy of the .spk + detections within half a window of each other.  Run it AFTER
+    # fiber-flag-artifacts: an existing mask is kept and added to.  fiber-session leaves the masked spikes out
+    # when FK_SESSION_EXCLUDE=1 and emits them as cluster 0; fiber-unmix (--noise-ids 0,1) explains them.
+    echo "== fiber-flag-collisions  (-> $(mask_path)) =="
+    _run fiber-flag-collisions "$SESS" "$ELEC" --spk-method "$FLAG_SPK" --out-stage "$FLAG_STAGE" \
         "${STEP_ARGS[@]+"${STEP_ARGS[@]}"}" "$@"
 }
 
@@ -923,6 +932,7 @@ run_stage_direct() {
         fiber-link)       fiber_link       "${ov[@]}" ;;
         fiber-refit)      fiber_refit      "${ov[@]}" ;;
         fiber-flag-artifacts) fiber_flag_artifacts "${ov[@]}" ;;
+        fiber-flag-collisions) fiber_flag_collisions "${ov[@]}" ;;
         fiber-backbone-link) fiber_backbone_link "${ov[@]}" ;;
         fiber-anchor-link) fiber_anchor_link "${ov[@]}" ;;
         fiber-xcorr-merge) fiber_xcorr_merge "${ov[@]}" ;;
@@ -958,6 +968,7 @@ run_plan_stage_direct() {
         fiber-stochastic) fiber_stochastic ;;
         fiber-refit)      fiber_refit      ;;
         fiber-flag-artifacts) fiber_flag_artifacts ;;
+        fiber-flag-collisions) fiber_flag_collisions ;;
         fiber-backbone-link) fiber_backbone_link ;;
         fiber-anchor-link) fiber_anchor_link ;;
         fiber-xcorr-merge) fiber_xcorr_merge ;;
@@ -988,7 +999,7 @@ except ImportError:                                   # a source checkout run wi
     from fiber_kit import plan_steps
 KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
          "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-residual-merge", "fiber-psame-merge",
-         "fiber-flag-artifacts", "fiber-consensus", "fiber-lowmix", "fiber-rdr", "fiber-manifold", "fiber-polish", "fiber-unmix", "fiber-clean"}
+         "fiber-flag-artifacts", "fiber-flag-collisions", "fiber-consensus", "fiber-lowmix", "fiber-rdr", "fiber-manifold", "fiber-polish", "fiber-unmix", "fiber-clean"}
 sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
 PYPLAN
 }

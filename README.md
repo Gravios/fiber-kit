@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.70.0-orange)
+![version](https://img.shields.io/badge/version-0.71.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -416,6 +416,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-backbone-link` | Link fiber-session fragments across chunks on the invariant backbone (median+/-sigma CI-overlap) with the Omlor-Giese warp veto. |
 | `fiber-anchor-link` | Link fiber-session fragments across chunks, SEEDED by the overlap anchors (links established from the same physical spikes in the chunk overlap, ... |
 | `fiber-adlp` | Amplitude-dependent low-pass of the spike snippets, written as a new waveform variant: every spike gets a zero-phase low-pass whose cutoff is a power ... |
+| `fiber-flag-collisions` | Flag probable collisions before clustering, from the energy a snippet holds away from its own spike, into the exclusion mask `fiber-session` reads; `fiber-unmix` explains them afterwards. |
 | `fiber-flag-artifacts` | Flag acquisition artifacts before clustering from the unwhitened temporal derivative (an exclusion mask .clu). |
 | `fiber-xcorr-merge` | Confidence-ordered Klusters roll-shift cosine merge (realign after each merge). |
 | `fiber-residual-merge` | Confidence-ordered merge by the reverse residual strip: a pair fuses when each cluster's strip keeps the other's spikes (re-template after each merge); takes `fiber-xcorr-merge`'s place in a plan. |

@@ -139,6 +139,13 @@ def main():
     print(f"      shadow: {r:.1%} of {n} named `shadow` of the planted neighbour")
     check("second detections of a flank: >= 80 % named `shadow` of that unit", r >= 0.80)
 
+    # a .res with rows out of time order (what a realign leaves): the same answers, row for row
+    sw = np.arange(len(res)); j = np.arange(50, len(res) - 1, 97)
+    sw[j], sw[j + 1] = sw[j + 1].copy(), sw[j].copy()
+    us = fu.unmix(read_raw, res[sw], clu[sw], NSAMP, PEAK, SR, n_samples=fil.shape[0], block_min=1.0)
+    check("a .res with 190 rows out of order: the same kinds and units, row for row",
+          np.any(np.diff(res[sw]) < 0) and all(np.array_equal(us[k], u[k][sw]) for k in ("kind", "k1", "k2")))
+
     # relabel
     new, ids = fu.relabel(clu, u)
     check("relabel: kept spikes keep their label", np.array_equal(new[~noise_rows], clu[~noise_rows]))

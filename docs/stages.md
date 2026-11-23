@@ -1427,6 +1427,56 @@ Positional: `base`, `elec`
 | `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
 | `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
 | `--fet-method` | `manifold` | method token of the written feature space |
+### `fiber-flag-collisions`
+
+Flag probable collisions BEFORE clustering (0.71.0), so the sort does not spend its effort on
+windows that hold two spikes -- they sit between their two units and pull the clusters together --
+and `fiber-unmix` explains them afterwards against units built without them.
+
+The score needs only the `.spk`: `p(s)` = the noise-normalised energy over the channels at sample
+`s`; spikes are binned by their peak energy, and a spike's score is how far, in MADs of its bin,
+its `p(s)` rises above the bin's median anywhere more than `--guard` samples from the peak.  A
+spike scoring above `--score-min` is flagged; so is, whatever its score, a spike with another
+detection within `--neighbour` samples.  The threshold is on the score, not a quantile of it, so it
+does not depend on how many collisions a group holds; `--max-share` caps the flagged share.
+
+Measured on sirotaA-jg-000005-20120312 group 8 (815,728 spikes; known two-spike windows = the 7,418
+spikes with another detection 9-26 samples away; kept / noise = what `fiber-clean` later made of
+the spike), the score alone:
+
+| `--score-min` | of all spikes | of the known pairs | of kept, isolated spikes | of noise |
+|---|---|---|---|---|
+| 8 | 10.7 % | 81 % | 3.5 % | 16.5 % |
+| 12 (default) | 5.8 % | 66 % | 1.5 % | 9.4 % |
+| 15 | 3.9 % | 55 % | 0.9 % | 6.5 % |
+| 20 | 2.2 % | 41 % | 0.4 % | 3.8 % |
+
+With the neighbour rule 6.2 % of that group is flagged.  Those known pairs are collisions in which
+BOTH spikes were detected; how often a collision with a smaller, undetected partner is flagged was
+not measured there (on the test fixture, partners at 0.6-1.1 of their template: 99 %).  A partner
+within `--guard` samples of the peak is not seen.
+
+What it buys is the flagged spikes kept out of the units, not a better sort of the rest: on
+chunks 2-5 of that group `fiber-session` reached 76.5 % time-local purity without the flagged
+spikes and 76.4 % when they were sorted along and dropped afterwards (75.0 % with them in).
+
+Output: the exclusion mask `<base>.clu.<spk-method>.<group>.<out-stage>` -- by default the one
+`fiber-flag-artifacts` writes, kept and added to (collisions as 2).  With `FK_SESSION_EXCLUDE=1`
+`fiber-session` leaves masked spikes out of every chunk and emits them as cluster 0;
+`fiber-unmix --noise-ids 0,1` then explains them.  Run it after `fiber-flag-artifacts`.
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--spk-method` (`--spk-variant`) | `standard` | waveform file the score is taken on (default standard) |
+| `--out-stage` (`--out-tag`) | `artifact` | stage tag of the mask .clu (default artifact: fiber-flag-artifacts' mask, which is kept and added to) |
+| `--score-min` | `12.0` | a spike whose off-spike score exceeds this is flagged (default 12, in MADs of its peak-energy bin; the module header has the measured rates for 8-20) |
+| `--max-share` | `0.0` | most of the spikes the score may flag: the threshold is raised to keep to it (default 0 = no cap) |
+| `--guard` | `8` | samples either side of the peak the score ignores |
+| `--neighbour` | `-1` | a spike with another detection within this many samples is flagged whatever its score (default -1 = half a window; 0 = off) |
+| `--bins` | `20` | peak-energy bins the expected tail is taken in |
+| `--dry-run` | flag (off) | report the flagged counts, write nothing |
 ### `fiber-clean`
 
 Keep the clean part of a sort (0.69.0): the two Klusters tools as one pass over a flat `.clu`.

@@ -4,6 +4,29 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.0] — fiber-flag-collisions: two-spike windows flagged before the sort
+- **New stage `fiber-flag-collisions`.**  A label-free score per spike from the `.spk` alone: how
+  far the noise-normalised energy away from the peak rises above what spikes of the same peak
+  energy have there (in MADs).  A spike above `--score-min` (default 12), or with another detection
+  within half a window, is added to the exclusion mask `fiber-session --exclude-clu` reads (as 2;
+  an existing artifact mask is kept).  The sort then runs without them and `fiber-unmix` explains
+  them afterwards.  Plannable, not in `all`.
+- Measured on sirotaA-jg-000005-20120312 group 8 against the 7,418 spikes with another detection
+  9-26 samples away: AUC 0.969 against kept, isolated spikes; at the default 66 % of those pairs,
+  5.8 % of all spikes and 1.5 % of kept, isolated spikes are flagged (docs/stages.md has 8-20).
+  How often a collision with an UNDETECTED partner is flagged was not measured on real data.
+- **What it does NOT do** (same group, chunks 2-5, 130,441 spikes, `fiber-session` with and without
+  the flags, against the curated file, time-local purity): the sort is no better for having been
+  made without the flagged spikes.  Purity 75.0 % without the flags, 76.5 % with them excluded --
+  and 76.4 % when the same spikes are simply dropped from the sort made WITH them; clusters >= 90 %
+  pure 26 %, 25 % and 29 %.  The gain is the spikes removed, not better clusters.  The run with
+  the flags took 27 minutes against 33, but other jobs shared the machine: not a timing.
+- The threshold is on the score, not on a quantile of it: a quantile flags a fixed share whatever
+  the group holds (with one spike in ten a collision, the top 2 % is a fifth of them).
+- **`fiber-unmix` and a `.res` that is not sorted.**  `unmix()` refused one, and the real session's
+  `.res` has 74 rows out of time order (a realign leaves them).  It now works in time order and
+  returns in row order; the same answers, row for row (test_unmix).
+
 ## [0.70.0] — the sparse .spkc: collision rows with the partner subtracted
 - **`.spkc`** (`neuro_io.read_spkc` / `write_spkc`, `SPKC_VERSION` 1; `contract.yaml` `contract: 3`):
   the corrected records of the FEW spike rows whose `.eap` row names a partner unit, as a row index

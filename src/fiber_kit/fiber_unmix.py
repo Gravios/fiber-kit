@@ -156,7 +156,8 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
     end where its snippet does, and a tail the template lacks is left in the
     signal as if it were somebody else's.
 
-    res must be sorted.  `blocks` restricts the run to those block indices (the
+    The .res need not be sorted (a realign leaves a few rows out of order): the work is done in
+    time order and the results are returned in row order.  `blocks` restricts the run to those block indices (the
     other blocks' rows stay NONE).  Returns a dict of per-spike arrays (kind, k1,
     a1, dt1, gain, margin, resid, k2, a2, dt2, k2_det; NONE / -1 / NaN where a
     row was not pursued) plus `blocks`: one dict per block with its counts,
@@ -164,12 +165,26 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
     log = log or (lambda s: None)
     res = np.asarray(res, np.int64); clu = np.asarray(clu, np.int64)
     N = res.size
-    if N and np.any(np.diff(res) < 0):
-        raise ValueError("unmix: the .res is not sorted")
-    kept = kept_mask(clu, noise_ids)
     if todo is None:
         todo = np.isin(clu, list(noise_ids))
-    todo = np.asarray(todo, bool) & ~kept
+    todo = np.asarray(todo, bool)
+    if N and np.any(np.diff(res) < 0):                       # rows out of time order: sort, work, put back
+        o = np.argsort(res, kind="stable")
+        r = unmix(read_raw, res[o], clu[o], nsamp, peak, sr, todo=todo[o], noise_ids=noise_ids,
+                  n_samples=n_samples, block_min=block_min, blocks=blocks, R=R, order=order,
+                  refrac_ms=refrac_ms, thr_floor=thr_floor, null_q=null_q, min_n=min_n,
+                  equiv_cos=equiv_cos, resid_q=resid_q, calib_n=calib_n, tol=tol, extend=extend, seed=seed,
+                  transform=transform, log=log)
+        back = {}
+        for key, val in r.items():
+            if key == "blocks":
+                back[key] = val
+            else:
+                arr = np.empty_like(val); arr[o] = val
+                back[key] = arr
+        return back
+    kept = kept_mask(clu, noise_ids)
+    todo = todo & ~kept
     if n_samples is None:
         n_samples = int(res.max()) + 4 * nsamp if N else 0
     out = dict(kind=np.zeros(N, np.int8), k1=np.full(N, -1, np.int64), a1=np.full(N, np.nan),
