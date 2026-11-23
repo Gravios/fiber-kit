@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.69.0] — fiber-clean: the core cut and the quality value as a stage
+- **New stage `fiber-clean`.**  One pass over a flat `.clu`: the core cut on every cluster of at least
+  `--cc-min` spikes (RAW `.spk.standard`), then the quality value of what is left (method `.spk`);
+  cut-off spikes, clusters at or above `--q-dirty`, clusters left under `--min-keep` and the `--junk`
+  clusters go to the noise cluster.  Cluster 0, the noise and reserved clusters are untouched.  Writes
+  the stage's flat `.clu` and `<base>.clean.<method>.<g>.<stage>.tsv`.  Plannable, not in `all`.  With
+  `fiber-unmix` it closes the loop clean -> unmix -> sort what is left (docs/stages.md).
+- **`fiber_corecut`**: a numpy port of neurosuite-3's `corecut.h` (Klusters' Split Off Spurious Spikes)
+  and of `waveformquality.h` (the waveform view's quality dot).  Against the header on
+  sirotaA-jg-000005-20120312 group 8: the same keep mask, spike for spike, on 40 clusters of 200-5,000
+  spikes, 8 of 6,000-22,000 and (ordering a subset of 2,000) 4 of 6,400-10,400; `fiber_clean.clean`
+  relabels 643 clusters (279,964 spikes) exactly as the analysis script that drives the header.  No
+  cluster above 40,000 spikes was compared.  The port was 3 x faster than the header's serial loop on
+  the large clusters (BLAS).
+- It trades yield for purity (same group, fs_polish, time-local purity against the curated file):
+  purity 93.0 -> 95.8 %, clusters >= 90 % pure 57 -> 66 %, curated spikes held 77.1 -> 53.7 %.
+- Run through `fiber-pipeline` on that group (fs_polish, `junk: 2769`, 4 minutes): 456 clusters kept,
+  the same labels as the analysis script's except that the 3 artefact spikes stay in cluster 0.
+
 ## [0.68.0] — fiber-unmix: the noise cluster explained on the .fil
 - **New stage `fiber-unmix`.**  After a cleaning pass the noise cluster is mostly spikes of units the
   sort already holds, alone or summed (sirotaA-jg-000005-20120312 group 8: about 7 in 10 fit one kept

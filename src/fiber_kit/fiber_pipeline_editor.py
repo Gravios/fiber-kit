@@ -159,6 +159,13 @@ CATALOG = {
         _p("min-n", "int", 50, "min spikes for a cluster to take part"),
         _p("spk-variant", "str", "", "waveform variant the cell models use (empty = the clu method; calibrated on stderiv_C5)"),
         _p("geo", "int", 0, "1 = add the shared-geometry term (fiber_srcgeom; standard .spk + probe geometry)")]),
+    "fiber-clean": dict(input=True, tags=["in", "out"], params=[  # core cut + quality value -> noise; not in `all`
+        _p("junk", "str", "", "clusters sent to the noise whole (fiber-polish's residue cluster)"),
+        _p("core-cut", "int", 1, "1 = core cut per cluster, 0 = quality only"),
+        _p("cc-min", "int", 200, "smallest cluster the core cut runs on"),
+        _p("q-dirty", "float", 0.52, "a cluster at or above this quality value is dirty (0 = off)"),
+        _p("min-keep", "int", 50, "a cluster left with fewer spikes goes to the noise"),
+        _p("noise-id", "int", 1, "cluster the removed spikes go to")]),
     "fiber-unmix": dict(input=True, tags=["in", "out"], params=[  # the noise cluster explained on the .fil; not in `all`
         _p("noise-ids", "str", "0,1", "clusters whose spikes are explained; every other cluster is a kept unit"),
         _p("block-min", "float", 30.0, "minutes per block (templates, noise model, thresholds are per block)"),
@@ -208,6 +215,7 @@ STAGE_MODULES = {
     "fiber-rdr": "fiber_kit.fiber_rdr",
     "fiber-polish": "fiber_kit.fiber_polish",
     "fiber-unmix": "fiber_kit.fiber_unmix",
+    "fiber-clean": "fiber_kit.fiber_clean",
 }
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning

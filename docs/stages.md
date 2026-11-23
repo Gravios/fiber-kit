@@ -1427,6 +1427,54 @@ Positional: `base`, `elec`
 | `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
 | `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
 | `--fet-method` | `manifold` | method token of the written feature space |
+### `fiber-clean`
+
+Keep the clean part of a sort (0.69.0): the two Klusters tools as one pass over a flat `.clu`.
+
+1. **Core cut** (`fiber_corecut`, a numpy port of Klusters' "Split Off Spurious Spikes",
+   `corecut.h`) on every cluster of at least `--cc-min` spikes, on the RAW `.spk.standard` windows:
+   the spikes past the cut go to the noise cluster.
+2. **Quality value** of what is left (`fiber_corecut.residual_variance`, the waveform view's quality
+   dot), on the session's method `.spk`: a cluster at or above `--q-dirty` goes to the noise whole.
+3. A cluster left with fewer than `--min-keep` spikes, and every cluster in `--junk`, goes to the noise.
+
+Cluster 0, the noise cluster and reserved clusters are left as they are.  Writes a flat `.clu` (the
+`.clc`/`.clp` hierarchy is not rebuilt) and `<base>.clean.<method>.<g>.<out>.tsv` (cluster, spikes
+in, spikes kept, the cut's channel, quality value, kept | passed | dirty | small | junk).
+
+It trades yield for purity.  On sirotaA-jg-000005-20120312 group 8 (fs_polish, against the curated
+file, purity within 10-minute bins): purity 93.0 -> 95.8 %, clusters >= 90 % pure 57 -> 66 %,
+curated spikes held 77.1 -> 53.7 %.  The cut took 29 % of the kept clusters' spikes, most of them
+spikes of the same unit -- what `fiber-unmix` is for.  The loop:
+
+```yaml
+pipeline:
+  - {stage: fiber-clean,   in: fs_polish,       out: fs_clean, params: {junk: "<polish residue id>"}}
+  - {stage: fiber-unmix,   in: fs_clean,        out: fs_clean_unmix}
+  - {stage: fiber-session, in: fs_clean_unmix,  out: round2, params: {exclude-units: "<every id above 1>", exclude-as: noise}}
+```
+
+The port gives the header's keep mask spike for spike on the clusters it was compared on
+(test/test_clean.py states which).
+
+Positional: `base`, `elec`
+
+| flag | default | description |
+|---|---|---|
+| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
+| `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
+| `--noise-id` | `1` | cluster the removed spikes go to (default 1) |
+| `--junk` | `""` | clusters sent to the noise whole, e.g. fiber-polish's residue cluster |
+| `--keep-ids` | `""` | clusters passed through untouched |
+| `--core-cut` | `1` | 1 = core cut per cluster (default), 0 = quality only |
+| `--cc-min` | `200` | smallest cluster the core cut runs on (default 200) |
+| `--cc-max` | `40000` | most spikes of a cluster that are ordered; above it an evenly spaced subset (default 40000) |
+| `--q-dirty` | `0.52` | a cluster whose quality value is at or above this is dirty (default 0.52, the red of Klusters' quality dot; 0 = no quality test) |
+| `--q-spikes` | `1000` | spikes per cluster the quality value is taken on |
+| `--min-keep` | `50` | a cluster left with fewer spikes goes to the noise |
+| `--out-tag` | — | output stage tag (default <clu-stage>_clean) |
 ### `fiber-unmix`
 
 Explain the spikes OUTSIDE the kept units (0.68.0).  Input: a stage whose noise cluster holds what a

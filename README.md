@@ -5,7 +5,7 @@
 
 ![python](https://img.shields.io/badge/python-%E2%89%A53.9-blue)
 ![license](https://img.shields.io/badge/license-MIT-green)
-![version](https://img.shields.io/badge/version-0.68.0-orange)
+![version](https://img.shields.io/badge/version-0.69.0-orange)
 
 Drift-stable **fiber** reorganization of over-split spike sorts, for the
 [neurosuite-3](https://github.com/Gravios/neurosuite-3) electrophysiology toolchain.
@@ -406,6 +406,7 @@ shipped yaml.  Run stages through the pipeline with `fiber-pipeline <elec> [<sta
 | `fiber-envelope` | Collision-robust per-unit variance envelope sigma(t,c) (noise floor from off-spike windows + amplitude + jitter + robust excess) and near-collision ... |
 | `fiber-consensus` | Resampled-t-SNE consensus over a neighbourhood of similar clusters (the ones a curator would lasso together): many t-SNE runs of random subsets in ... |
 | `fiber-lowmix` | Split low-amplitude units that are mixtures of sources; return the parts that copy existing units. |
+| `fiber-clean` | Keep the clean part of a sort: Klusters' core cut per cluster and the quality value of what is left; cut-off spikes, dirty clusters and clusters left too small go to the noise cluster (flat `.clu` + report). |
 | `fiber-unmix` | Explain the noise cluster's spikes on the `.fil` as kept units and their sums: one unit, a collision of two, a neighbour's flank, a unit plus a remainder, or nothing known. Kept spikes are a mask; writes a flat `.clu`, a manifest and the `.eap` membership (synthetic recordings only so far). |
 | `fiber-polish` | Polish an over-split sort: residual strip + pooled full-dimensional rkk, small-leaf t-SNE islands, and the reverse residual strip as a merge (flat `.clu`; untuned). |
 | `fiber-manifold` | Refine a unit: fit the field manifold of its off-spike channels in sliding windows (drift-following); children per class × time bin and a `.fet.manifold` feature space for Klusters. |
