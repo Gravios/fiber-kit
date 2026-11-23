@@ -556,6 +556,9 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_POLISH_STRIP_K_ON` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  strip: robust-tail multiplier, on-channel residual (0 = term off). |
 | `FK_POLISH_STRIP_K_OFF` | `3.0` | `3.0` | `3.0` | 3.0 \| 2.5-4.  strip: robust-tail multiplier, off-channel residual (0 = term off). |
 | `FK_POLISH_STRIP_MIN` | `100` | `100` | `100` | 100.  strip: smallest cluster that is stripped. |
+| `FK_POLISH_CORE_CUT` | `0` | `0` | `0` | 0 \| 0/1/2.  strip: 0 = the residual strip alone, 1 = Klusters' core cut as well (fiber_corecut, "Split Off Spurious Spikes": a spike either of them parks is parked), 2 = the core cut in its place.  On 0312 g8: +2 pt purity for a quarter of the spikes (1), worse than the strip (2) -- fiber_polish.py's header. |
+| `FK_POLISH_CC_MIN` | `200` | `200` | `200` | 200.  strip: smallest cluster the core cut runs on. |
+| `FK_POLISH_CC_MAX` | `40000` | `40000` | `40000` | 40000.  strip: most spikes of a cluster the core cut orders (an even subset above it). |
 | `FK_POLISH_POOL_MAX` | `50` | `50` | `50` | 50.  pool: clusters below this many spikes join the pool whole. |
 | `FK_POLISH_POOL_MIN` | `50` | `50` | `50` | 50.  pool: smallest cluster the pool rkk may create; smaller -> the run's residue cluster (a real cluster id, never 0 or 1). |
 | `FK_POLISH_POOL_K` | `50` | `50` | `50` | 50.  pool: starting cluster count of the full-dimensional rkk. |
@@ -570,6 +573,8 @@ built-in default applies), then the yaml's own description, which usually starts
 | `FK_POLISH_MERGE` | `1` | `1` | `1` | 1 \| 0.  0 = islands only. |
 | `FK_POLISH_MERGE_THR` | `0.7` | `0.7` | `0.7` | 0.7 \| 0.7-0.9.  merge: min share of each cluster surviving the other's strip. DO NOT go below 0.7 unexamined: 0.3 separated clean pairs at AUC 0.99 and collapsed a whole sort to 9 clusters.  0.9 for a standard-space sort. |
 | `FK_POLISH_MERGE_MIN` | `50` | `50` | `50` | 50.  merge: smallest cluster that takes part. |
+| `FK_POLISH_MERGE_Q` | `-1` | `-1` | `-1` | -1 \| 0-0.05.  merge: the quality guard.  A union is refused when its quality value (Klusters' quality dot, on the raw windows) exceeds the worse of its two parts' by more than this.  -1 = no guard.  Did not separate wrong unions from right ones on 0312 g8 (AUC 0.48; fiber_polish.py's header). |
+| `FK_POLISH_MERGE_Q_MAX` | `0` | `0` | `0` | 0 \| 0.1-0.5.  merge: the quality bound.  A union whose quality value exceeds this is refused, whatever its parts'.  0 = no bound.  0.2 moved purity by 0.2 pt on 0312 g8 (measured in fiber_polish.py's header); no gain there. |
 | `FK_POLISH_COS` | `0.5` | `0.5` | `0.5` | 0.5.  template cosine a pair needs to be a candidate (islands and merge). |
 | `FK_POLISH_TPL_CAP` | `1000` | `1000` | `1000` | 1000.  spikes per cluster used for a template and its tails. |
 | `FK_POLISH_HYBRID_PCS` | `3` | `3` | `3` | 3 \| 1-3.  features: standard-basis components per channel in the raw block.  The stage's OWN knob (not FK_SESSION_HYBRID_PCS): 3 / 2.0 is what the measurements used. |

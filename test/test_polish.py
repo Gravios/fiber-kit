@@ -6,6 +6,11 @@
   * merge_pass unions two fragments of one cell and leaves a different cell alone; a pair is scored
     under the CLEANER cluster's tails, so a cluster whose own tails are inflated by contamination
     does not accept a different cell (the failure that collapsed a whole sort at threshold 0.3);
+  * the quality guard refuses a union that is a worse cluster than either part (two amplitude
+    levels of one shape, which the reverse strip accepts) and still unions two fragments of
+    one cell; off, the merge is unchanged;
+  * the core cut beside or in place of the residual strip parks an intruder and leaves a cluster
+    of one kind whole;
   * strip_pool_pass parks displaced intruders, pools them with the sub-`pool_max` clusters, and
     leaves NOTHING in cluster 0 or 1 -- the remainder is a real residue cluster below the reserved block;
   * island_pass moves a foreign island to its own cell and leaves a homogeneous cluster whole
@@ -21,6 +26,7 @@ import numpy as np
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "src"))
 from fiber_kit import fiber_chunks as fch               # noqa: E402
+from fiber_kit import fiber_corecut as fcc              # noqa: E402
 from fiber_kit import fiber_polish as fpo               # noqa: E402
 from fiber_kit import neuro_io as nio                   # noqa: E402
 
@@ -84,6 +90,64 @@ check(eMix["thr"][0] > 3 * eA["thr"][0], "merge: a contaminated cluster's own on
 check(fpo.pair_acceptance(eMix, eA) < 0.7,
       "merge: scored under the CLEANER cluster's tails, the contaminated one is not merged into the clean one")
 check(0.0 <= fpo.pair_acceptance(eA, eD) < 0.3, "merge: a different shape on the same channels is not accepted")
+
+# ── merge: the quality guard ──
+# G2 is G1's waveform at 1.2x: the reverse strip accepts the pair (0.80), the union is a worse cluster.
+G1 = cell(400, (0, 1), (100, 60), bump, rng)
+G2 = cell(400, (0, 1), (120, 72), bump, rng)
+WG = np.concatenate([G1, G2, A]).astype(np.float32)      # + cell A as two fragments (the control)
+labg = np.concatenate([np.full(400, 2), np.full(400, 3), np.full(300, 4), np.full(300, 5)]).astype(np.int64)
+rawg = lambda ix: np.asarray(WG[np.asarray(ix)], float)   # noqa: E731
+g_lab, g_un = fpo.merge_pass(labg, rawg, thr=0.7, rng=np.random.default_rng(0))
+check(g_lab[0] == g_lab[400], "merge, no guard: two amplitude levels of one shape, 1.2 apart, are unioned")
+st = {}
+q_lab, q_un = fpo.merge_pass(labg, rawg, thr=0.7, rng=np.random.default_rng(0), merge_q=0.004, stats=st)
+qv = [fcc.residual_variance(rawg(np.flatnonzero(labg == k))) for k in (2, 3)] + [fcc.residual_variance(rawg(np.arange(800)))]
+print(f"      quality values: {qv[0]:.4f} and {qv[1]:.4f} apart, {qv[2]:.4f} as one cluster")
+check(q_lab[0] != q_lab[400] and st.get("refused", 0) >= 1,
+      "merge, quality guard: that union is refused -- it is a worse cluster than either part")
+check(q_lab[800] == q_lab[1100], "merge, quality guard: NEGATIVE CONTROL: the two fragments of one cell are still unioned")
+st3 = {}
+x_lab, _ = fpo.merge_pass(labg, rawg, thr=0.7, rng=np.random.default_rng(0), merge_q_max=0.025, stats=st3)
+check(x_lab[0] != x_lab[400] and x_lab[800] == x_lab[1100] and st3.get("refused", 0) >= 1,
+      "merge, quality bound: a union above the bound is refused (0.0305 > 0.025), one below it is made")
+n_lab, n_un = fpo.merge_pass(lab0, raw, thr=0.7, rng=np.random.default_rng(0), merge_q=-1.0)
+check((n_lab == m_lab).all() and n_un == m_un, "merge: with the guard off the result is the one without the option")
+
+# ── strip: the core cut ──
+SRc, NSc, NCc, PKc = 32552.0, 52, 8, 26
+
+
+def tmpl(depth, amp):
+    tt = (np.arange(NSc) - PKc) / SRc * 1e3
+    w = -np.exp(-0.5 * (tt / 0.12) ** 2) + 0.35 * np.exp(-0.5 * ((tt - 0.45) / 0.25) ** 2)
+    foot = np.exp(-0.5 * ((np.arange(NCc) * 20.0 - depth) / 28.0) ** 2) + 0.05
+    return amp * w[:, None] * foot[None, :]
+
+
+TAc = tmpl(60, 420)
+TBc = TAc.copy(); TBc[:, 6:] += tmpl(140, 260)[:, 6:]     # the same cell with a second one on far channels
+mk = lambda T, n: (T[None] * rng.normal(1.0, 0.05, (n, 1, 1)) + rng.normal(0, 18.0, (n, NSc, NCc))).astype(np.float32)   # noqa: E731
+Wc = np.concatenate([mk(TAc, 1500), mk(TBc, 500), mk(tmpl(100, 300), 600)])
+labc = np.concatenate([np.full(2000, 2), np.full(600, 3)]).astype(np.int64)
+rawc = lambda ix: np.asarray(Wc[np.asarray(ix)], float)   # noqa: E731
+c_lab, c_parked, c_cut = fpo.core_cut_pass(labc, rawc, SRc)
+cut_b, kept_a = float((c_lab[1500:2000] == 1).mean()), float((c_lab[:1500] == 2).mean())
+print(f"      core cut: {cut_b:.1%} of the intruder parked, {kept_a:.1%} of the unit kept; {c_parked} parked from {c_cut} cluster(s)")
+check(cut_b >= 0.8 and kept_a >= 0.8, "core cut pass: most of the intruder is parked, most of the unit kept")
+check((c_lab[2000:] == 3).mean() >= 0.95, "core cut pass: NEGATIVE CONTROL: a cluster of one kind is left (nearly) whole")
+featc = lambda ix: Wc[np.asarray(ix)].reshape(len(ix), -1)[:, ::7].astype(float)   # noqa: E731
+only, st2, res2 = fpo.strip_pool_pass(labc, rawc, featc, rkk=(lambda F, max_clusters, min_size, seed: np.full(len(F), -1)),
+                                      rng=np.random.default_rng(0), core_cut=2, sr=SRc)
+check(st2["stripped"] == 0 and st2["core_cut"] == c_parked and (only[1500:2000] == res2).mean() >= 0.8,
+      "strip, core_cut 2: the core cut alone parks (no residual strip), and what it parks goes to the pool")
+both, st1, res1 = fpo.strip_pool_pass(labc, rawc, featc, rkk=(lambda F, max_clusters, min_size, seed: np.full(len(F), -1)),
+                                      rng=np.random.default_rng(0), core_cut=1, sr=SRc)
+plain, st0, res0 = fpo.strip_pool_pass(labc, rawc, featc, rkk=(lambda F, max_clusters, min_size, seed: np.full(len(F), -1)),
+                                       rng=np.random.default_rng(0))
+check(((plain == res0) <= (both == res1)).all() and ((only == res2) <= (both == res1)).all(),
+      "strip, core_cut 1: a spike either the residual strip or the core cut parks is parked")
+check(st0["core_cut"] == 0, "strip: without the option the core cut does not run")
 
 # ── strip -> pool ──
 sp = lab0.copy()

@@ -54,6 +54,30 @@ What that table does and does not say:
     unions under the earlier union-find rule) and is the default; nothing below it is.
 Every default here is the value those runs used.  None has been tuned.
 
+OPTIONS FROM KLUSTERS' TOOLS (0.71.6; all off by default).  fiber_corecut's core cut beside or in
+place of the residual strip (CORE_CUT 1 / 2), and its quality value as a check on a union (MERGE_Q:
+not worse than the worse part by more than a tolerance; MERGE_Q_MAX: not above a bound).  MEASURED
+2026-11-23 on sirotaA-jg-000005-20120312 group 8 from the fiber_session sort, against the curated
+cur_pl, the ISLAND pass off (2 loops, 2 merge rounds; the residue cluster counted as noise; purity
+within 10-minute bins, held = curated-unit spikes in a cluster):
+
+  variant                         clusters   purity   >=90% pure    held   right
+  as before                            495    83.8%        35%     85.8%   74.5%
+  CORE_CUT 1 (beside the strip)        525    85.9%        40%     59.6%   52.5%
+  CORE_CUT 2 (in its place)            632    82.3%        26%     67.4%   58.1%
+  MERGE_Q_MAX 0.2                      612    84.0%        30%     85.8%   74.7%
+
+  * the core cut parks far more than the strip (308,000 spikes over the two loops against 176,000)
+    and buys two points of purity for a quarter of the spikes; alone it is worse than the strip.
+  * of the unions that could be judged (both parts with a curated unit: 242 of 927) 46 were wrong.
+    "Worse than the worse part" does not tell them from the right ones (AUC 0.48): a wrong union
+    mostly involves a part that is already poor.  The union's quality value itself does better
+    (AUC 0.74; median 0.18 wrong, -0.02 right), and a bound of 0.2 would have refused 20 of the 46.
+    Run for real, the bound refused 1,347 pairs and the merge made other unions instead: 33 wrong
+    unions in place of 46, carrying 22,400 spikes in place of 24,000, and the purity moved by 0.2.
+  None of the three is a gain on this group; they are options to measure elsewhere, not defaults.
+  Not measured: any of them with the island pass on (a full polish), and MERGE_Q run for real.
+
 The strip, the island fit and the merge all score the RAW (.spk.standard) windows at their stored
 alignment -- the space the residual was validated in, and a self-derived realign spends the timing
 offset that marks contamination (0.67.32).  The feature space of the pool rkk and of the island
@@ -75,6 +99,7 @@ try:
     from . import config as cfgmod
     from . import fiber_chunks as _fch
     from . import fiber_consolidate as fcn
+    from . import fiber_corecut as fcc
     from . import fiber_pca as fp
     from . import neuro_io as nio
     from . import session_yaml as sy
@@ -82,6 +107,7 @@ except ImportError:                                    # run as a script from sr
     import config as cfgmod
     import fiber_chunks as _fch
     import fiber_consolidate as fcn
+    import fiber_corecut as fcc
     import fiber_pca as fp
     import neuro_io as nio
     import session_yaml as sy
@@ -91,6 +117,10 @@ _KNOBS = {
     "FK_POLISH_STRIP_K_ON": ("strip_k_on", float, 3.0, "strip: robust-tail multiplier of the on-channel residual (0 = term off)"),
     "FK_POLISH_STRIP_K_OFF": ("strip_k_off", float, 3.0, "strip: robust-tail multiplier of the off-channel residual (0 = term off)"),
     "FK_POLISH_STRIP_MIN": ("strip_min", int, 100, "strip: smallest cluster that is stripped"),
+    "FK_POLISH_CORE_CUT": ("core_cut", int, 0, "strip: 0 = the residual strip alone, 1 = Klusters' core cut as well "
+                                                "(a spike either of them parks is parked), 2 = the core cut in its place"),
+    "FK_POLISH_CC_MIN": ("cc_min", int, 200, "strip: smallest cluster the core cut runs on"),
+    "FK_POLISH_CC_MAX": ("cc_max", int, 40000, "strip: most spikes of a cluster the core cut orders (above it an even subset)"),
     "FK_POLISH_POOL_MAX": ("pool_max", int, 50, "pool: clusters below this many spikes join the pool whole"),
     "FK_POLISH_POOL_MIN": ("pool_min", int, 50, "pool: smallest cluster the pool rkk may create (smaller -> the residue cluster)"),
     "FK_POLISH_POOL_K": ("pool_k", int, 50, "pool: starting cluster count of the full-dimensional rkk"),
@@ -105,6 +135,12 @@ _KNOBS = {
     "FK_POLISH_MERGE": ("merge", int, 1, "1 = run the reverse-strip merge, 0 = islands only"),
     "FK_POLISH_MERGE_THR": ("merge_thr", float, 0.7, "merge: min share of each cluster that survives the other's strip (0.3 collapses a sort)"),
     "FK_POLISH_MERGE_MIN": ("merge_min", int, 50, "merge: smallest cluster that takes part"),
+    "FK_POLISH_MERGE_Q": ("merge_q", float, -1.0, "merge: quality guard -- a union is refused when its quality value (Klusters' "
+                                                   "quality dot, on the raw windows) exceeds the worse of its two parts' by more "
+                                                   "than this (0 = no worse than the worse part; -1 = no guard)"),
+    "FK_POLISH_MERGE_Q_MAX": ("merge_q_max", float, 0.0, "merge: quality bound -- a union whose quality value exceeds this is refused "
+                                                         "(0 = no bound; 0.2 moved purity by 0.2 pt on 0312 g8: the "
+                                                         "module header)"),
     "FK_POLISH_COS": ("cos", float, 0.5, "template cosine a pair needs to be a candidate (islands and merge)"),
     "FK_POLISH_TPL_CAP": ("tpl_cap", int, 1000, "spikes per cluster used for a median template and its tails"),
     "FK_POLISH_HYBRID_PCS": ("hybrid_pcs", int, 3, "features: standard-basis components per channel in the raw block of the hybrid space"),
@@ -159,16 +195,46 @@ def kd_leaves(P, leaf):
 
 
 # ── loop: strip -> pool -> full-dimensional rkk ──────────────────────────────
+def core_cut_pass(labels, raw, sr, *, cc_min=200, cc_max=40000, skip=(), noise_id=1):
+    """Klusters' core cut (fiber_corecut.analyse, "Split Off Spurious Spikes") on every real cluster
+    of at least cc_min spikes: the spikes past the cut go to `noise_id`.  Returns (labels, spikes
+    parked, clusters cut)."""
+    lab = np.asarray(labels).astype(np.int64).copy()
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
+    parked = cut = 0
+    for u, c in zip(ids, cnt):
+        if c < cc_min or int(u) in skip:
+            continue
+        j = np.flatnonzero(lab == u)
+        r = fcc.analyse(raw(j), sr, min_spikes=cc_min, max_ordered=cc_max)
+        if r["ok"] and not r["keep"].all():
+            lab[j[~r["keep"]]] = noise_id
+            parked += int((~r["keep"]).sum()); cut += 1
+    return lab, parked, cut
+
+
 def strip_pool_pass(labels, raw, feats, *, k_on=3.0, k_off=3.0, strip_min=100, pool_max=50, pool_min=50,
-                    pool_k=50, pool_cap=30000, residue=None, rng=None, seed=42, rkk=None, log=None):
+                    pool_k=50, pool_cap=30000, residue=None, rng=None, seed=42, rkk=None, log=None,
+                    core_cut=0, cc_min=200, cc_max=40000, sr=0.0):
     """One loop round.  `raw(ix)` -> (m, S, C) raw windows; `feats(ix)` -> (m, d) full features.
-    Returns (labels, stats, residue id)."""
+    core_cut 1 / 2 (needs `sr`, the sampling rate): the core cut beside / in place of the residual
+    strip.  Both are taken on the clusters as they came in, so with 1 a spike either parks is
+    parked.  Returns (labels, stats, residue id)."""
     rng = rng or np.random.default_rng(0)
     lab = np.asarray(labels).astype(np.int64).copy()
     idx = np.flatnonzero(_real(lab) | (lab == 1))
     excl = tuple([0] + ([int(residue)] if residue is not None else []))
-    lab, tot = fcn.resid_pass(raw, lab, idx, k_on=k_on, k_off=k_off, minspk=strip_min, exclude=excl,
-                              rng=rng)
+    cc_lab, cc_parked, cc_cut = None, 0, 0
+    if int(core_cut) and sr > 0:
+        cc_lab, cc_parked, cc_cut = core_cut_pass(lab, raw, sr, cc_min=cc_min, cc_max=cc_max,
+                                                  skip=() if residue is None else (int(residue),))
+    if int(core_cut) == 2 and cc_lab is not None:
+        lab, tot = cc_lab, dict(resid=0, resid_clusters=0)
+    else:
+        lab, tot = fcn.resid_pass(raw, lab, idx, k_on=k_on, k_off=k_off, minspk=strip_min, exclude=excl,
+                                  rng=rng)
+        if cc_lab is not None:
+            lab[(cc_lab == 1) & _real(lab)] = 1               # also parked by the core cut
     ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
     small = ids[(cnt < pool_max) & (ids != (residue if residue is not None else -1))]
     pool = np.flatnonzero((lab == 1) | np.isin(lab, small) |
@@ -191,8 +257,10 @@ def strip_pool_pass(labels, raw, feats, *, k_on=3.0, k_off=3.0, strip_min=100, p
             lab[use[sub == c]] = _fch.next_free_id(lab)
             stats["born"] += 1
     stats["residue"] = int((lab == residue).sum())
+    stats["core_cut"] = int(cc_parked)
     if log:
-        log(f"  strip parked {stats['stripped']:,} from {tot['resid_clusters']} clusters; pool {stats['pool']:,} "
+        cc = f"; core cut parked {cc_parked:,} from {cc_cut} clusters" if cc_lab is not None else ""
+        log(f"  strip parked {stats['stripped']:,} from {tot['resid_clusters']} clusters{cc}; pool {stats['pool']:,} "
             f"-> {stats['born']} clusters, {stats['residue']:,} in residue cluster {residue}")
     return lab, stats, residue
 
@@ -266,7 +334,14 @@ def _entry(W, k):
         return None
     ok = t["ok"]
     return dict(W=W, T=T, tn=T.ravel() / max(np.linalg.norm(T), 1e-12),
-                thr=(fcn._resid_tail(t["onr"][ok], k), fcn._resid_tail(t["offr"][ok], k)))
+                thr=(fcn._resid_tail(t["onr"][ok], k), fcn._resid_tail(t["offr"][ok], k)), q=None)
+
+
+def _quality(e):
+    """The entry's quality value (fiber_corecut.residual_variance of its sampled raw windows), cached."""
+    if e["q"] is None:
+        e["q"] = fcc.residual_variance(e["W"])
+    return e["q"]
 
 
 def pair_acceptance(A, B):
@@ -280,8 +355,15 @@ def pair_acceptance(A, B):
     return min(out)
 
 
-def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, skip=(), rng=None, log=None):
-    """Greedy reverse-strip merge with re-templating.  Returns (labels, unions)."""
+def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, skip=(), rng=None, log=None,
+               merge_q=-1.0, merge_q_max=0.0, stats=None):
+    """Greedy reverse-strip merge with re-templating.  merge_q >= 0: the quality guard -- the union's
+    quality value (of a sample of its raw windows) may exceed the worse of its two parts' by at most
+    merge_q, else the pair is refused (and scored again only when one side has changed).
+    merge_q_max > 0: the quality bound -- a union whose quality value exceeds it is refused,
+    whatever its parts'.  `stats`
+    (a dict) receives unions, refused and, with either on, `pairs`: one (a, b, quality of a, of
+    b, of the union, refused) per pair that reached the guard, in order.  Returns (labels, unions)."""
     rng = rng or np.random.default_rng(0)
     lab = np.asarray(labels).astype(np.int64).copy()
     ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
@@ -300,15 +382,24 @@ def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, 
                 if s >= thr:
                     heap.append((-s, a, b, 0, 0))
     heapq.heapify(heap)
-    unions = 0
+    unions = refused = 0
+    pairs = []
     while heap:
         _, a, b, va, vb = heapq.heappop(heap)
         if a not in E or b not in E or ver[a] != va or ver[b] != vb:
             continue                                           # stale: one side changed since it was scored
+        e = _entry(raw(_sub(np.flatnonzero((lab == a) | (lab == b)), tpl_cap, rng)), k)   # the union, re-templated
+        if (merge_q >= 0 or merge_q_max > 0) and e is not None:
+            qa, qb, qu = _quality(E[a]), _quality(E[b]), _quality(e)
+            no = bool(merge_q >= 0 and np.isfinite(qa) and np.isfinite(qb) and np.isfinite(qu) and qu > max(qa, qb) + merge_q)
+            no = no or bool(merge_q_max > 0 and np.isfinite(qu) and qu > merge_q_max)
+            pairs.append((int(a), int(b), float(qa), float(qb), float(qu), no))
+            if no:
+                refused += 1                                   # the union is too poor a cluster
+                continue
         lab[lab == b] = a
         del E[b]
         unions += 1
-        e = _entry(raw(_sub(np.flatnonzero(lab == a), tpl_cap, rng)), k)
         if e is None:
             del E[a]
             continue
@@ -319,8 +410,14 @@ def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, 
                 s = pair_acceptance(e, E[x])
                 if s >= thr:
                     heapq.heappush(heap, (-s, a, x, ver[a], ver[x]))
+    if stats is not None:
+        stats.update(unions=unions, refused=refused, pairs=pairs)
     if log:
-        log(f"  merge: {len(keys)} clusters, {unions} unions at acceptance >= {thr:g}")
+        log(f"  merge: {len(keys)} clusters, {unions} unions at acceptance >= {thr:g}"
+            + (f"; {refused} refused by the quality guard"
+               + (f" (worse than the worse part by > {merge_q:g})" if merge_q >= 0 else "")
+               + (f" (quality value > {merge_q_max:g})" if merge_q_max > 0 else "")
+               if (merge_q >= 0 or merge_q_max > 0) else ""))
     return lab, unions
 
 
@@ -328,8 +425,10 @@ def merge_pass(labels, raw, *, thr=0.7, cos=0.5, min_n=50, tpl_cap=1000, k=3.0, 
 def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, strip_k_on=3.0,
            strip_k_off=3.0, strip_min=100, pool_max=50, pool_min=50, pool_k=50, pool_cap=30000, leaf=300,
            island_runs=8, island_min=10, island_min_clu=60, island_margin=0.5, merge_thr=0.7, merge_min=50,
-           cos=0.5, tpl_cap=1000, seed=0, rkk=None, log=None, on_stage=None):
-    """Run the chain.  `F` is the full feature matrix (needed for islands; feats(arange) if None).
+           cos=0.5, tpl_cap=1000, seed=0, rkk=None, log=None, on_stage=None,
+           core_cut=0, cc_min=200, cc_max=40000, merge_q=-1.0, merge_q_max=0.0, sr=0.0, merge_stats=None):
+    """Run the chain.  `sr` (the sampling rate) is needed for core_cut 1 / 2.  `merge_stats` (a
+    list) receives each merge round's stats dict, with the labels it started from as `before`.  `F` is the full feature matrix (needed for islands; feats(arange) if None).
     `on_stage(tag, labels)` is called after every stage (the CLI's scoring hook)."""
     rng = np.random.default_rng(int(seed))
     lab = np.asarray(labels).astype(np.int64).copy()   # cluster 0 (artifacts, a shielded chunk) is never touched
@@ -341,7 +440,8 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
         lab, _, residue = strip_pool_pass(lab, raw, feats, k_on=strip_k_on, k_off=strip_k_off,
                                           strip_min=strip_min, pool_max=pool_max, pool_min=pool_min,
                                           pool_k=pool_k, pool_cap=pool_cap, residue=residue, rng=rng,
-                                          seed=42 + it + int(seed), rkk=rkk, log=log)
+                                          seed=42 + it + int(seed), rkk=rkk, log=log,
+                                          core_cut=core_cut, cc_min=cc_min, cc_max=cc_max, sr=sr)
         if on_stage:
             on_stage(f"loop {it} ({time.time() - t0:.0f}s)", lab)
     skip = () if residue is None else (int(residue),)
@@ -361,8 +461,11 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
             t0 = time.time()
             if log:
                 log(f"[polish] merge {it}/{rounds}")
+            st = dict(before=lab.copy()) if merge_stats is not None else None
             lab, _ = merge_pass(lab, raw, thr=merge_thr, cos=cos, min_n=merge_min, tpl_cap=tpl_cap,
-                                skip=skip, rng=rng, log=log)
+                                skip=skip, rng=rng, log=log, merge_q=merge_q, merge_q_max=merge_q_max, stats=st)
+            if merge_stats is not None:
+                merge_stats.append(st)
             if on_stage:
                 on_stage(f"merge {it} ({time.time() - t0:.0f}s)", lab)
     if residue is not None:
@@ -486,7 +589,9 @@ def main(argv=None):
     if a.rounds > 0 and a.island:
         F = np.vstack([np.asarray(feats(np.arange(i, min(i + 20000, n))), float) for i in range(0, n, 20000)])
     kw = {dest: getattr(a, dest) for dest, *_ in _KNOBS.values() if not dest.startswith("hybrid_")}
-    new, residue = polish(clu, raw, feats, F, log=log, on_stage=on_stage, **kw)
+    if a.core_cut and not float(cfg.get("sr") or 0) > 0:
+        raise SystemExit("fiber-polish --core-cut needs the sampling rate (the session .yaml)")
+    new, residue = polish(clu, raw, feats, F, log=log, on_stage=on_stage, sr=float(cfg.get("sr") or 0), **kw)
     tag = a.out_tag or (f"{a.clu_stage}_polish" if a.clu_stage else "polish")
     path = nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=tag)
     log(f"[polish] wrote {os.path.basename(path)}"

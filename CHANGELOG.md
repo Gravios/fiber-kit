@@ -4,6 +4,28 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.6] — fiber-polish: the core cut and the quality value as options (off; no gain measured)
+- `fiber-polish` used none of the tools ported from Klusters.  Three options, all OFF by default:
+  - `FK_POLISH_CORE_CUT` 1 / 2 (`--core-cut`): `fiber_corecut`'s core cut beside / in place of the
+    residual strip, on clusters of at least `FK_POLISH_CC_MIN` spikes.
+  - `FK_POLISH_MERGE_Q` (`--merge-q`): a union is refused when its quality value exceeds the worse
+    of its two parts' by more than this.
+  - `FK_POLISH_MERGE_Q_MAX` (`--merge-q-max`): a union is refused when its quality value exceeds
+    this.
+- **Measured** on sirotaA-jg-000005-20120312 group 8 against the curated file, island pass off
+  (table in the module header): the core cut beside the strip gives +2.1 points of purity for a
+  quarter of the spikes held (85.8 -> 59.6 %); in the strip's place it is worse than the strip
+  (82.3 % against 83.8 %).  "Worse than the worse part" does not separate wrong unions from right
+  ones (AUC 0.48 on 242 judged unions, 46 of them wrong).  The union's quality value does better
+  (AUC 0.74), but a bound of 0.2 run for real moved purity by 0.2 points: the merge made other
+  unions in place of the refused ones (33 wrong in place of 46, about the same number of spikes).
+- So: no default changes, and with the options off the result is the one before (the merge draws
+  the same samples in the same order).  Not measured: a full polish with islands, and `MERGE_Q`
+  run for real.
+- test_polish: 31 checks (the guard and the bound refuse a union of two amplitude levels and keep
+  two fragments of one cell; the core cut parks an intruder and leaves a cluster of one kind).
+  `analysis/polish-corecut-quality` in the project has the runs.
+
 ## [0.71.5] — fiber-pipeline: a super-sampled .spk beside the base-rate one is the same method
 - A group holding `.spk.stderiv_C5.<g>` and Klusters' super-sampled `.spk.stderiv_C5_U4.<g>` made
   the launcher report "cannot pin ONE method token" and name everything `stderiv`; `fiber-session`

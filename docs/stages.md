@@ -1652,6 +1652,9 @@ Positional: `base`, `elec`
 | `--strip-k-on` | `3.0` | strip: robust-tail multiplier of the on-channel residual (0 = term off) [FK_POLISH_STRIP_K_ON; default 3.0] |
 | `--strip-k-off` | `3.0` | strip: robust-tail multiplier of the off-channel residual (0 = term off) [FK_POLISH_STRIP_K_OFF; default 3.0] |
 | `--strip-min` | `100` | strip: smallest cluster that is stripped [FK_POLISH_STRIP_MIN; default 100] |
+| `--core-cut` | `0` | strip: 0 = the residual strip alone, 1 = Klusters' core cut as well (a spike either of them parks is parked), 2 = the core cut in its place [FK_POLISH_CORE_CUT; default 0] |
+| `--cc-min` | `200` | strip: smallest cluster the core cut runs on [FK_POLISH_CC_MIN; default 200] |
+| `--cc-max` | `40000` | strip: most spikes of a cluster the core cut orders (above it an even subset) [FK_POLISH_CC_MAX; default 40000] |
 | `--pool-max` | `50` | pool: clusters below this many spikes join the pool whole [FK_POLISH_POOL_MAX; default 50] |
 | `--pool-min` | `50` | pool: smallest cluster the pool rkk may create (smaller -> the residue cluster) [FK_POLISH_POOL_MIN; default 50] |
 | `--pool-k` | `50` | pool: starting cluster count of the full-dimensional rkk [FK_POLISH_POOL_K; default 50] |
@@ -1666,6 +1669,8 @@ Positional: `base`, `elec`
 | `--merge` | `1` | 1 = run the reverse-strip merge, 0 = islands only [FK_POLISH_MERGE; default 1] |
 | `--merge-thr` | `0.7` | merge: min share of each cluster that survives the other's strip (0.3 collapses a sort) [FK_POLISH_MERGE_THR; default 0.7] |
 | `--merge-min` | `50` | merge: smallest cluster that takes part [FK_POLISH_MERGE_MIN; default 50] |
+| `--merge-q` | `-1.0` | merge: quality guard -- a union is refused when its quality value (Klusters' quality dot, on the raw windows) exceeds the worse of its two parts' by more than this (0 = no worse than the worse part; -1 = no guard) [FK_POLISH_MERGE_Q; default -1.0] |
+| `--merge-q-max` | `0.0` | merge: quality bound -- a union whose quality value exceeds this is refused (0 = no bound; 0.2 moved purity by 0.2 pt on 0312 g8: the module header) [FK_POLISH_MERGE_Q_MAX; default 0.0] |
 | `--cos` | `0.5` | template cosine a pair needs to be a candidate (islands and merge) [FK_POLISH_COS; default 0.5] |
 | `--tpl-cap` | `1000` | spikes per cluster used for a median template and its tails [FK_POLISH_TPL_CAP; default 1000] |
 | `--hybrid-pcs` | `3` | features: standard-basis components per channel in the raw block of the hybrid space [FK_POLISH_HYBRID_PCS; default 3] |
