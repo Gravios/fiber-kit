@@ -43,6 +43,7 @@ def build(rng, dur_s=150.0):
     """(fil int16, res, clu, truth) -- truth: dict of per-row arrays kind / k1 / k2."""
     dur = int(dur_s * SR)
     fil = noise(rng, dur, 14.0)
+    fil0 = fil.copy()                                 # the same recording WITHOUT the hidden partners
     T = {k: raw_template(*v) for k, v in SHAPES.items()}
     ev = []                                           # (detection time, cluster, kind, k1, k2)
     t = 2000.0
@@ -56,13 +57,17 @@ def build(rng, dur_s=150.0):
         tf = t + rng.uniform(0, 1)
         a = rng.normal(1.0, 0.06)
         if case == "kept":
-            place(fil, T[k], tf, a); ev.append((tf, k, fu.NONE, k, -1))
+            place(fil, T[k], tf, a); place(fil0, T[k], tf, a); ev.append((tf, k, fu.NONE, k, -1))
         elif case == "one":
-            place(fil, T[k], tf, a); ev.append((tf, 1, fu.ONE, k, -1))
+            place(fil, T[k], tf, a); place(fil0, T[k], tf, a); ev.append((tf, 1, fu.ONE, k, -1))
         elif case in ("hid", "det"):
             k2 = int(rng.choice([u for u in (A, B, CC) if u != k]))
             lag = rng.uniform(8, 18) if case == "hid" else rng.uniform(21, 24)
-            place(fil, T[k], tf, a); place(fil, T[k2], tf + lag, rng.normal(0.9, 0.05))
+            a2 = rng.normal(0.9, 0.05)
+            place(fil, T[k], tf, a); place(fil, T[k2], tf + lag, a2)
+            place(fil0, T[k], tf, a)
+            if case == "det":
+                place(fil0, T[k2], tf + lag, a2)
             ev.append((tf, 1, fu.COLLISION, k, k2))
             if case == "det":
                 ev.append((tf + lag, k2, fu.NONE, k2, -1))      # the partner is a kept spike
@@ -79,7 +84,7 @@ def build(rng, dur_s=150.0):
     res = np.array([int(round(e[0])) for e in ev], np.int64)
     clu = np.array([e[1] for e in ev], np.int64)
     truth = dict(kind=np.array([e[2] for e in ev]), k1=np.array([e[3] for e in ev]),
-                 k2=np.array([e[4] for e in ev]))
+                 k2=np.array([e[4] for e in ev]), fil0=fil0)
     return np.clip(np.round(fil), -32768, 32767).astype(np.int16), res, clu, truth
 
 
@@ -139,12 +144,44 @@ def main():
     print(f"      shadow: {r:.1%} of {n} named `shadow` of the planted neighbour")
     check("second detections of a flank: >= 80 % named `shadow` of that unit", r >= 0.80)
 
+    # residual add-back: a row with every OTHER placement of the pursuit subtracted in the raw signal
+    ua = fu.unmix(read_raw, res, clu, NSAMP, PEAK, SR, n_samples=fil.shape[0], block_min=1.0, addback=True)
+    check("add-back: the kinds and units are those of the run without it",
+          all(np.array_equal(ua[k], u[k]) for k in ("kind", "k1", "k2")))
+    ar, aw = ua["ab_rows"], ua["ab_waves"].astype(np.float64)
+    check("add-back: rows ascending, one record of the .spk window each",
+          len(ar) > 50 and bool((np.diff(ar) > 0).all()) and aw.shape[1:] == (NSAMP, C))
+    cut = lambda sig, r: sig[int(res[r]) - PEAK:int(res[r]) - PEAK + NSAMP].astype(np.float64)   # noqa: E731
+    # hidden-partner collisions named with both units: the record before the partner is known (fil0)
+    lag_any = np.array([res[i + 1] - res[i] if i + 1 < len(res) else 10**9 for i in range(len(res))])
+    hid = np.flatnonzero((truth["kind"] == fu.COLLISION) & (u["kind"] == fu.COLLISION)
+                         & (u["k1"] == truth["k1"]) & (u["k2"] == truth["k2"]) & (lag_any > 26))
+    pos = {int(r): i for i, r in enumerate(ar)}
+    have = [r for r in hid if int(r) in pos]
+    check("add-back: (nearly) every collision with a hidden partner has a record", len(have) >= 0.95 * len(hid) > 20)
+    e_raw = np.array([((cut(fil, r) - cut(truth["fil0"], r)) ** 2).sum() for r in have])
+    e_ab = np.array([((aw[pos[int(r)]] - cut(truth["fil0"], r)) ** 2).sum() for r in have])
+    print(f"      add-back: error against the record before the partner, as a share of the raw row's: "
+          f"median {np.median(e_ab / e_raw):.3f}, worst {np.max(e_ab / e_raw):.3f} ({len(have)} hidden-partner collisions)")
+    check("add-back: the partner is gone -- error <= 5 % of the raw row's (median), <= 30 % (worst)",
+          np.median(e_ab / e_raw) <= 0.05 and np.max(e_ab / e_raw) <= 0.30)
+    one_rows = np.flatnonzero((truth["kind"] == fu.ONE) | ((truth["kind"] == fu.NONE) & (lag_any > 60)
+                              & (np.r_[10**9, np.diff(res)] > 60)))
+    check("add-back: NEGATIVE CONTROL: a spike with nothing else in its window gets no record",
+          np.isin(one_rows, ar).mean() <= 0.02)
+
     # a .res with rows out of time order (what a realign leaves): the same answers, row for row
     sw = np.arange(len(res)); j = np.arange(50, len(res) - 1, 97)
     sw[j], sw[j + 1] = sw[j + 1].copy(), sw[j].copy()
     us = fu.unmix(read_raw, res[sw], clu[sw], NSAMP, PEAK, SR, n_samples=fil.shape[0], block_min=1.0)
     check("a .res with 190 rows out of order: the same kinds and units, row for row",
           np.any(np.diff(res[sw]) < 0) and all(np.array_equal(us[k], u[k][sw]) for k in ("kind", "k1", "k2")))
+    usa = fu.unmix(read_raw, res[sw], clu[sw], NSAMP, PEAK, SR, n_samples=fil.shape[0], block_min=1.0, addback=True)
+    inv = np.empty(len(sw), np.int64); inv[sw] = np.arange(len(sw))
+    q = np.argsort(inv[ar], kind="stable")
+    check("add-back with rows out of order: the same records, under the rows' new numbers",
+          bool((np.diff(usa["ab_rows"]) > 0).all()) and np.array_equal(usa["ab_rows"], inv[ar][q])
+          and np.array_equal(usa["ab_waves"], ua["ab_waves"][q]))
 
     # relabel
     new, ids = fu.relabel(clu, u)
@@ -244,6 +281,13 @@ def main():
         check("--skip-marked on the result: exits 0 and pursues only the rows without a class",
               r2.returncode == 0 and f"{int(((asu == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"
               in r2.stderr)
+        rab = run(["--clu-stage", "clean", "--out-tag", "ab", "--spkc", "2"])
+        sab = nio.read_spkc(base, 1, variant="standard", tag="ab")
+        check("--spkc 2: the add-back records as the stage's standard .spkc, the ones unmix() returned",
+              rab.returncode == 0 and sab["ok"] and np.array_equal(sab["rows"], ua["ab_rows"])
+              and np.array_equal(sab["waves"], ua["ab_waves"]) and "residual add-back" in rab.stderr)
+        check("--spkc 2: no .spkc of the method .spk, and the first run's files are untouched",
+              not os.path.exists(f"{base}.spkc.stderiv.1.ab") and os.path.exists(f"{base}.clu.stderiv.1.clean_unmix"))
         os.remove(f"{base}.fil")
         r3 = run(["--clu-stage", "clean"])
         check("without the .fil: refuses, naming the file", r3.returncode != 0 and "syn.fil not found" in r3.stderr)

@@ -112,7 +112,8 @@ def classify(r, res_sub, todo_sub, nsamp, peak, resid_max):
     out = dict(kind=np.full(n, UNEXPLAINED, np.int8), k1=np.full(n, -1, np.int64),
                a1=np.full(n, np.nan), dt1=np.full(n, np.nan), gain=np.full(n, np.nan),
                margin=np.full(n, np.nan), resid=np.full(n, np.nan), k2=np.full(n, -1, np.int64),
-               a2=np.full(n, np.nan), dt2=np.full(n, np.nan), k2_det=np.zeros(n, np.int8))
+               a2=np.full(n, np.nan), dt2=np.full(n, np.nan), k2_det=np.zeros(n, np.int8),
+               j1=np.full(n, -1, np.int64))                  # the unanchored placement taken as the first component
     for i, d in enumerate(todo_sub):
         td = float(res_sub[d])
         lo, hi = np.searchsorted(pt, [td - before, td + after])
@@ -127,6 +128,7 @@ def classify(r, res_sub, todo_sub, nsamp, peak, resid_max):
                 j = max(free, key=lambda q: pg[q])
                 k1 = int(pu[j]); near.remove(j)
                 out["a1"][i] = pa[j]; out["dt1"][i] = pt[j] - td; out["gain"][i] = pg[j]
+                out["j1"][i] = int(o[j])
         own = r.equiv.get(k1, {k1}) if k1 >= 0 else set()
         other = [j for j in near if int(pu[j]) not in own]
         rs = float(r.resid[d])
@@ -144,10 +146,73 @@ def classify(r, res_sub, todo_sub, nsamp, peak, resid_max):
     return out
 
 
+def raw_templates(read_raw, r, nst, pkt, *, min_n=20, max_n=400):
+    """Each unit's template in the RAW signal, at the pursuit's own placements: the least-squares
+    waveform T with  raw window at a placement = amp * T  over the unit's placements that have no
+    other placement within a template length (all of them when fewer than min_n are that
+    isolated).  Taken at the placements, so a placement's time and amplitude mean in the raw
+    signal exactly what they meant to the pursuit.  Returns {unit: (nst, C)}."""
+    P = r.placements
+    if not len(P):
+        return {}
+    o = np.argsort(P["t"], kind="stable")
+    t, u, a = P["t"][o], P["unit"][o], P["amp"][o]
+    gap = np.minimum(np.diff(t, prepend=-np.inf), np.diff(t, append=np.inf))
+    T = {}
+    for k in np.unique(u):
+        idx = np.flatnonzero(u == k)
+        iso = idx[gap[idx] >= nst]
+        use = iso if iso.size >= min_n else idx
+        if use.size > max_n:
+            use = use[np.linspace(0, use.size - 1, max_n).round().astype(np.int64)]
+        num, den = 0.0, 0.0
+        for j in use:
+            ti = int(np.floor(t[j] + 0.5))
+            w = np.asarray(read_raw(ti - pkt, ti - pkt + nst), np.float64)
+            w = fd._frac_shift(w, -(t[j] - ti))              # bring the placement onto the sample grid
+            num = num + a[j] * w; den += a[j] * a[j]
+        if den > 0:
+            T[int(k)] = num / den
+    return T
+
+
+def add_back(read_raw, r, res_sub, own_free, nsamp, peak, nst, pkt, T):
+    """The detections' windows with every OTHER placement of the pursuit subtracted -- "residual
+    plus the spike's own template", as YASS and DARTsort clean a waveform.  A detection's own
+    placements are the ones anchored on it and `own_free[d]` (an unanchored placement taken as its
+    first component; -1 = none).  Only detections with another placement whose template reaches
+    their window are returned.  Returns (indices into res_sub, records (m, nsamp, C) float64)."""
+    P = r.placements
+    if not len(P) or not T:
+        return np.zeros(0, np.int64), np.zeros((0, nsamp, 0))
+    o = np.argsort(P["t"], kind="stable")
+    t, u, a, an = P["t"][o], P["unit"][o], P["amp"][o], P["anchor"][o]
+    orig = o                                                 # sorted position -> placement index
+    ti = np.floor(t + 0.5).astype(np.int64)
+    idx, recs = [], []
+    for d in range(len(res_sub)):
+        w0 = int(res_sub[d]) - peak                          # the .spk window is [w0, w0 + nsamp)
+        lo, hi = np.searchsorted(t, [w0 - (nst - pkt) - 1, w0 + nsamp + pkt + 1])
+        others = [j for j in range(lo, hi) if an[j] != d and int(orig[j]) != int(own_free[d]) and int(u[j]) in T]
+        if not others:
+            continue
+        w = np.asarray(read_raw(w0, w0 + nsamp), np.float64).copy()
+        for j in others:
+            tpl = fd._frac_shift(T[int(u[j])], t[j] - ti[j])   # (nst, C), its sample 0 at time ti - pkt
+            s0 = int(ti[j]) - pkt - w0                       # where the template starts in the window
+            a0, a1 = max(0, s0), min(nsamp, s0 + nst)
+            if a1 > a0:
+                w[a0:a1] -= a[j] * tpl[a0 - s0:a1 - s0]
+        idx.append(d); recs.append(w)
+    if not idx:
+        return np.zeros(0, np.int64), np.zeros((0, nsamp, 0))
+    return np.asarray(idx, np.int64), np.stack(recs)
+
+
 def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n_samples=None,
           block_min=30.0, blocks=None, R=4, order=4, refrac_ms=1.0, thr_floor=16.0, null_q=0.995,
           min_n=30, equiv_cos=0.93, resid_q=0.95, calib_n=300, tol=4, extend=8, seed=0,
-          transform=None, log=None):
+          transform=None, log=None, addback=False):
     """Explain the detections `todo` (default: the rows of a noise cluster) by
     the kept units of `clu`, on the continuous signal `read_raw` (see the header).
 
@@ -161,7 +226,12 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
     other blocks' rows stay NONE).  Returns a dict of per-spike arrays (kind, k1,
     a1, dt1, gain, margin, resid, k2, a2, dt2, k2_det; NONE / -1 / NaN where a
     row was not pursued) plus `blocks`: one dict per block with its counts,
-    pursuit threshold, residual bound and the kept spikes' self-agreement."""
+    pursuit threshold, residual bound and the kept spikes' self-agreement.
+
+    addback: also return `ab_rows` (ascending) and `ab_waves` (m, nsamp, C) int16 -- for every
+    detection the pursuit covered (the explained ones AND the kept spikes near them) that has
+    another placement reaching into its window, the raw window with those others subtracted
+    (add_back, with raw_templates per block)."""
     log = log or (lambda s: None)
     res = np.asarray(res, np.int64); clu = np.asarray(clu, np.int64)
     N = res.size
@@ -174,14 +244,21 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
                   n_samples=n_samples, block_min=block_min, blocks=blocks, R=R, order=order,
                   refrac_ms=refrac_ms, thr_floor=thr_floor, null_q=null_q, min_n=min_n,
                   equiv_cos=equiv_cos, resid_q=resid_q, calib_n=calib_n, tol=tol, extend=extend, seed=seed,
-                  transform=transform, log=log)
+                  transform=transform, log=log, addback=addback)
         back = {}
         for key, val in r.items():
             if key == "blocks":
                 back[key] = val
+            elif key == "ab_rows":
+                back[key] = o[val]                           # sorted position -> row
+            elif key == "ab_waves":
+                back[key] = val
             else:
                 arr = np.empty_like(val); arr[o] = val
                 back[key] = arr
+        if "ab_rows" in back:
+            q = np.argsort(back["ab_rows"], kind="stable")
+            back["ab_rows"], back["ab_waves"] = back["ab_rows"][q], back["ab_waves"][q]
         return back
     kept = kept_mask(clu, noise_ids)
     todo = todo & ~kept
@@ -192,6 +269,7 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
                resid=np.full(N, np.nan), k2=np.full(N, -1, np.int64), a2=np.full(N, np.nan),
                dt2=np.full(N, np.nan), k2_det=np.zeros(N, np.int8))
     stats = []
+    ab_rows, ab_waves = [], []
     blk = max(1, int(round(float(block_min) * 60.0 * float(sr))))
     nb = int(np.ceil(n_samples / blk)) if N else 0
     ext = max(0, int(extend))
@@ -248,6 +326,15 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
         g = rows[sub[tsub]]
         for key in ("kind", "k1", "a1", "dt1", "gain", "margin", "resid", "k2", "a2", "dt2", "k2_det"):
             out[key][g] = c[key]
+        if addback:
+            own_free = np.full(len(sub), -1, np.int64)
+            own_free[tsub] = c["j1"]
+            Traw = raw_templates(read_raw, r, nst, pkt)
+            ai, aw = add_back(read_raw, r, rb[sub], own_free, nsamp, peak, nst, pkt, Traw)
+            if ai.size:
+                ab_rows.append(rows[sub[ai]])
+                ab_waves.append(np.clip(np.rint(aw), -32768, 32767).astype(np.int16))
+            st["addback"] = int(ai.size)
         st.update(units=len(bank.keys), thr=float(thr), resid_max=rmax,
                   counts={int(k): int(v) for k, v in zip(*np.unique(c["kind"], return_counts=True))})
         stats.append(st)
@@ -257,6 +344,10 @@ def unmix(read_raw, res, clu, nsamp, peak, sr, *, todo=None, noise_ids=(0, 1), n
             + f" | thr {thr:.1f}, resid <= {rmax:.2f}, kept spikes named as their unit {st['agree']:.1%}"
               f" (n {st['n_calib']})")
     out["blocks"] = stats
+    if addback:
+        out["ab_rows"] = np.concatenate(ab_rows) if ab_rows else np.zeros(0, np.int64)
+        out["ab_waves"] = (np.concatenate(ab_waves) if ab_waves
+                           else np.zeros((0, nsamp, 0), np.int16))
     return out
 
 
@@ -421,7 +512,10 @@ def main(argv=None):
                     help="--one-as assign / --collision-as unit: least gain margin over the best other unit")
     ap.add_argument("--spkc", type=int, default=1,
                     help="1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner "
-                         "subtracted) for the standard and the method .spk (default); needs --eap")
+                         "subtracted) for the standard and the method .spk (default); needs --eap.  "
+                         "2 = residual add-back instead: every row the pursuit covered with ALL other "
+                         "placements subtracted in the raw signal (the standard .spk only; kept spikes "
+                         "included).  0 = none", choices=(0, 1, 2))
     ap.add_argument("--eap", choices=("all", "resolved", "off"), default="all",
                     help="the stage's .eap membership: every kept spike (own class, offset 0) and the "
                          "explained detections (default); resolved = the explained detections and the kept "
@@ -465,7 +559,8 @@ def main(argv=None):
     u = unmix(read_raw, res, clu, NS, peak, sr, todo=todo, noise_ids=noise_ids, n_samples=mm.shape[0],
               block_min=a.block_min, blocks=_block_set(a.blocks), R=a.phases, order=a.order,
               refrac_ms=a.refrac_ms, thr_floor=a.floor, null_q=a.null_q, min_n=a.min_n,
-              equiv_cos=a.equiv_cos, resid_q=a.resid_q, calib_n=a.calib_n, extend=a.extend, log=log)
+              equiv_cos=a.equiv_cos, resid_q=a.resid_q, calib_n=a.calib_n, extend=a.extend, log=log,
+              addback=(a.spkc == 2))
     done = u["kind"] != NONE
     nd = max(1, int(done.sum()))
     log("[unmix] " + "  ".join(f"{KIND_NAMES[k]} {int((u['kind'] == k).sum()):,} ({(u['kind'] == k).sum() / nd:.1%})"
@@ -507,10 +602,20 @@ def main(argv=None):
                 f"{os.path.getsize(em['eap']) / 1e6:.0f} MB) + {os.path.basename(em['tcl'])}")
         else:
             log("[unmix] .eap not written (nothing to mark, or its spike count disagrees)")
-        if a.spkc and em:
+        if a.spkc == 1 and em:
             _write_spkc(base, a.elec, new, tag, a.clu_method, int(cfg["nsamp"]), int(cfg["nchan"]), log)
-    elif a.spkc:
+    elif a.spkc == 1:
         log("[unmix] --eap off: no .spkc (the .eap is what names the partners)")
+    if a.spkc == 2:
+        # The pursuit's own cleaned windows, for the RAW waveforms only: every row with another
+        # placement in its window, kept spikes included.  No .eap is needed for it.
+        if len(u["ab_rows"]):
+            p = nio.write_spkc(base, a.elec, u["ab_rows"], u["ab_waves"], n, variant="standard", tag=tag)
+            inunit = int((new[u["ab_rows"]] > 1).sum())
+            log(f"[unmix] wrote {os.path.basename(p)}: {len(u['ab_rows']):,} rows with every other placement "
+                f"subtracted (residual add-back; {inunit:,} of them in a cluster)")
+        else:
+            log("[unmix] --spkc 2: no row had another placement in its window; no .spkc written")
     return 0
 
 

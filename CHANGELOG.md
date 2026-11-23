@@ -4,6 +4,25 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.7] — fiber-unmix --spkc 2: cleaned rows by residual add-back
+- The `.spkc` of 0.70.0 fits ONE partner template into a snippet by least squares, with two
+  hand-set accept rules.  On the first real run (0312 g8) it left 10 % of the collision rows
+  uncorrected and made 4.4 % of the corrected records larger.
+- `--spkc 2`: the cleaned window is the raw window with every OTHER placement of the pursuit
+  subtracted (`fiber_unmix.add_back`) -- what YASS and DARTsort call the cleaned waveform.  The
+  pursuit is the one `fiber-unmix` already runs (whitened, sub-sample, amplitude prior, joint
+  refit); the templates of the subtraction are taken in the raw signal at its own placements
+  (`raw_templates`), so a placement's time and amplitude mean there what they meant to the pursuit.
+  Any number of partners; kept spikes near a noise detection are cleaned too; no `.eap` needed.
+- Written as the stage's `.spkc.standard` only.  `--spkc 1` (the two-template fit, both waveform
+  variants) stays the default, and Klusters still rebuilds its own corrected rows from the `.eap`:
+  this is a file to measure with, not yet what Klusters shows.
+- test_unmix: 39 checks.  On the synthetic recording, 1,117 collisions with a hidden partner: the
+  error against the record before the partner is 1.9 % of the raw row's (median), 10 % (worst);
+  isolated spikes get no record; rows out of time order give the same records.
+- Not measured: a real session (it needs the `.fil`), and two kept spikes that overlap far from
+  any noise detection are not covered (the pursuit only runs around the spikes it explains).
+
 ## [0.71.6] — fiber-polish: the core cut and the quality value as options (off; no gain measured)
 - `fiber-polish` used none of the tools ported from Klusters.  Three options, all OFF by default:
   - `FK_POLISH_CORE_CUT` 1 / 2 (`--core-cut`): `fiber_corecut`'s core cut beside / in place of the

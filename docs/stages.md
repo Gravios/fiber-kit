@@ -1584,6 +1584,16 @@ A collision that goes into its unit is that unit's spike with a partner in it: t
 partner, and the stage's sparse `.spkc` (`--spkc 1`, see `fiber-spkc`) holds the row with the
 partner subtracted, for the standard and the method `.spk`.
 
+`--spkc 2` (0.71.7) writes the cleaned rows the way YASS and DARTsort do instead: **residual
+add-back**.  The pursuit has already placed every spike it found in the segment; a row's cleaned
+window is the raw window with every OTHER placement subtracted -- any number of them, at the
+pursuit's own sub-sample times and amplitudes, with templates taken in the raw signal at those
+placements.  It covers every row the pursuit saw that has another placement in its window (kept
+spikes near a noise detection included), needs no `.eap`, and is written for the raw waveforms
+only (`.spkc.standard`).  On the synthetic recording the error against the record before the
+partner is 1.9 % of the raw row's (median).  Klusters does not read this file: it rebuilds its own
+corrected rows from the `.eap`.  Not yet compared with the two-template fit on a real session.
+
 So the next round's sort (`fiber-session --in-stage <out> --exclude-units ... --exclude-as noise`)
 sees only `partial` and `unexplained`.  Outputs: the flat `.clu` (the `.clc`/`.clp` hierarchy is not
 rebuilt), `<base>.unmix.<method>.<g>.<out>.tsv` (one row per pursued detection: kind, first and
@@ -1625,7 +1635,7 @@ Positional: `base`, `elec`
 | `--one-as` | `cluster` | where one-unit spikes go: one new cluster (default), one new cluster per unit, or into the unit itself when --margin-min is met — choices: `cluster`, `units`, `assign` |
 | `--collision-as` | `unit` | where collision spikes go: into the unit on the detection when --margin-min is met (default; the .eap names the partner and the .spkc subtracts it), or all to one new cluster — choices: `unit`, `cluster` |
 | `--margin-min` | `10.0` | --one-as assign / --collision-as unit: least gain margin over the best other unit |
-| `--spkc` | `1` | 1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner subtracted) for the standard and the method .spk (default); needs --eap |
+| `--spkc` | `1` | 1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner subtracted) for the standard and the method .spk (default); needs --eap. 2 = residual add-back instead: every row the pursuit covered with ALL other placements subtracted in the raw signal (the standard .spk only; kept spikes included). 0 = none — choices: `0`, `1`, `2` |
 | `--eap` | `all` | the stage's .eap membership: every kept spike (own class, offset 0) and the explained detections (default); resolved = the explained detections and the kept spikes of the units they name (fewer classes, a narrower matrix); or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
 | `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
 | `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |
