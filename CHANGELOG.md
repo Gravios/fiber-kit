@@ -4,6 +4,17 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.5] — fiber-pipeline: a super-sampled .spk beside the base-rate one is the same method
+- A group holding `.spk.stderiv_C5.<g>` and Klusters' super-sampled `.spk.stderiv_C5_U4.<g>` made
+  the launcher report "cannot pin ONE method token" and name everything `stderiv`; `fiber-session`
+  then stopped on "several 'stderiv' variants exist" (sirotaA-jg-000005-20120312 group 8).
+- `infer_session_variant` leaves `_U<f>` tokens out, as it does `_D` aliases: the token is the
+  base-rate one and the stages are handed it.  Two different base-rate methods are still not
+  pinned.  The resolver itself (`neuro_io.resolve_input`) is unchanged: a stage called by hand
+  with the bare family name still asks for the exact token.
+- test_pin_method_supersampled (4 checks, dry runs).  Checked on the launcher's dry run only;
+  the later stages were not run on a session that holds a `_U` copy.
+
 ## [0.71.4] — a reference .spkc and shared cases for the collision fit
 - `test/golden/golden.spkc.standard.1` (written by neurosuite-3's `writeSpkc`): `read_spkc` reads
   every field and `write_spkc` reproduces the bytes.

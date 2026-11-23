@@ -464,7 +464,9 @@ infer_session_variant() {   # stdout: the session's stderiv-family method token 
     # The .spk is the right file to ask because a _D<lag><dims> feature-space alias deliberately
     # never owns one (fiber-session emits alias .clu/.fet/.pca only, precisely so the waveform
     # family stays unambiguous) -- but _D tokens are excluded anyway in case one was written by
-    # hand.  0 or >=2 candidates after the exclusions: no inference (the caller falls back out
+    # hand.  A super-sampled space DOES own a .spk (<method>_U<f>, made in Klusters); it is the
+    # same method at another sampling and never the one the pipeline sorts on, so it is left out
+    # too.  0 or >=2 candidates after the exclusions: no inference (the caller falls back out
     # loud); guessing here is how a wrong token would end up baked into every composed filename.
     [ -e "$SESS.spk.stderiv.$ELEC" ] && { echo stderiv; return 0; }
     local m t tok="" n=0
@@ -473,6 +475,8 @@ infer_session_variant() {   # stdout: the session's stderiv-family method token 
         t="${m#"$SESS.spk."}"; t="${t%".$ELEC"}"
         case "$t" in *.*) continue ;; esac             # dotted = an off-slot name, not a method token
         case "$t" in *_D[0-9]*) continue ;; esac       # a _D feature-space alias never names the method
+        case "$t" in *_U[0-9]*) continue ;; esac       # a super-sampled copy (_U<f>) is another geometry of the
+                                                       #   same method: stderiv_C5 beside stderiv_C5_U4 is ONE method
         n=$((n + 1)); tok="$t"
     done
     [ "$n" = 1 ] && echo "$tok"
