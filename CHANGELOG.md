@@ -4,6 +4,10 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.1] — docs: the plan for high-density probes
+- `docs/neuropixels-plan.md`: the design plan for Neuropixels 1.0 / 2.0 (2026-11-22), linked from
+  `docs/index.md`.  A plan only: nothing in it is built, and no such recording has been sorted.
+
 ## [0.71.0] — fiber-flag-collisions: two-spike windows flagged before the sort
 - **New stage `fiber-flag-collisions`.**  A label-free score per spike from the `.spk` alone: how
   far the noise-normalised energy away from the peak rises above what spikes of the same peak

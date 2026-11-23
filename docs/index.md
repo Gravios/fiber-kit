@@ -24,6 +24,11 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   refractory cross-correlogram gate and the burst signature, template deconvolution (`fiber_deconv`),
   with signatures, parameters and validation.
 
+- **[neuropixels-plan.md](neuropixels-plan.md)** — a **design plan** (nothing built yet) for
+  high-density probes: tiles with a detection set wider than the sorting set, sizes from the row
+  pitch and the cell size, spikes assigned to a tile by their spatial profile, a drift field from
+  the signal's depth profile, a transient filtered file and a sparse kept one.
+
 - **fiber-view/**, **linking/** — the figures the README and `WORKFLOW.md` show, and the
   synthetic hybrid-linker prototype that made `linking/hybrid_linker.png`.
 
