@@ -13,7 +13,7 @@
   Install:   fk install klusters-plugin   (copies this file and fiber-kit-klusters-manifold.yaml into
              Klusters' plugin directory; then Plugins > Reload Plugins)
   Run:       select the unit(s), then Plugins > fiber-kit-manifold, or choose "Refine" in the wheel's
-             Recluster > Plugin ring (Actions > Recluster > Engine > Refine: fiber-kit manifold) and press
+             Recluster > Plugin ring (Recluster > Engine > Refine: fiber-kit manifold) and press
              Shift+R.  The parents keep their ids; only their children change (neurosuite-3 0948).
   The knobs below are the stage's FK_MANIFOLD_* knobs; Klusters passes them as `fk run -FK_... value`,
   which wins over the profile.  The remaining knobs are in the profile beside this file.

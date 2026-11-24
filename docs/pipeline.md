@@ -337,7 +337,7 @@ fk subsession clean <sub>                                        # remove it and
 | `<sub>.yaml` / `.yml` / `.xml` | copies of the parameter files (geometry, rate, `sdiffPairs`) |
 | `<sub>.fil`, `.dat`, `.nst.<v>.<g>`, `.pca.<v>.<g>`, `.eap.*`, `.tcl.*` | **symlinks** to the session's: `fiber-realign --reextract`, deconv, the consensus envelope and refeaturize read the real recording; nothing large is copied |
 
-**From Klusters** this is *Actions → Recluster → Recluster with fiber-kit* (`Shift+Q`), or `Shift+R`
+**From Klusters** this is *Recluster → Recluster with fiber-kit* (`Shift+Q`), or `Shift+R`
 with fiber-kit as the active engine, through the `fiber-kit-recluster` plugin.  `fk install
 klusters-plugin` installs two files in Klusters' plugin directory
 (`~/.local/share/neurosuite-3/klusters/plugins/descriptions/`):
@@ -411,7 +411,7 @@ Units run in parallel (`FK_MANIFOLD_JOBS`, one process each; the BLAS threads ar
 
 **From Klusters**: the plugin fits in the waveform space Klusters shows (`FK_MANIFOLD_SPK` defaults to the
 `%spk` context token: `standard`, `stderiv_C5`, `standard_U4` in super-sample mode).  Select the unit(s) (or their children), choose **Refine** in the wheel's
-*Recluster ▸ Plugin* ring (or *Actions ▸ Recluster ▸ Engine ▸ Refine: fiber-kit manifold*) and press
+*Recluster ▸ Plugin* ring (or *Recluster ▸ Engine ▸ Refine: fiber-kit manifold*) and press
 `Shift+R`; or run *Plugins ▸ fiber-kit-manifold* with the dialog.  `fk install klusters-plugin`
 installs its descriptor and the `klusters-manifold` profile (`fiber-kit-klusters-manifold.yaml`, the
 one step `fiber-manifold` with `in: ""`) beside the recluster plugin's.  The descriptor declares
