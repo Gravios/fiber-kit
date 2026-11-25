@@ -222,6 +222,11 @@ with tempfile.TemporaryDirectory() as d:
         os.chdir(old)
     out = base + ".clu.standard.1.in_polish"
     check(os.path.exists(out), "CLI: writes <base>.clu.<method>.<group>.<in>_polish")
+    from fiber_kit import fiber_clean as _fcl
+    rid = _fcl.read_residue_record(base, 1, "standard", "in_polish") if os.path.exists(base + ".polish.standard.1.in_polish.tsv") else -1
+    _, o_ = nio.read_clu_file(out, n_spikes=len(W))
+    check(rid is not None and rid > 1 and (np.asarray(o_) == rid).any(),
+          f"CLI: the residue cluster's id is recorded beside the .clu, for fiber-clean --junk residue (id {rid})")
     if os.path.exists(out):
         _, o = nio.read_clu_file(out, n_spikes=len(W))
         o = np.asarray(o)

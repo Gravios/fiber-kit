@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.10] — fiber-clean --junk residue: polish and clean in one plan
+- fiber-polish's residue cluster has an id that is only known once it has run, so a plan could not
+  go from polish to clean: the id was read off the log and typed into the next plan.
+- fiber-polish now writes `<base>.polish.<method>.<group>.<out-tag>.tsv` beside its `.clu` (the
+  residue id, its spike count, the stage it read).  `fiber-clean --junk residue` reads the id
+  recorded for its input stage; ids can still be given, alone or with the word (`residue,17`).
+  On a stage without a record (not a polish output, or one from before this version) it stops and
+  names the file it looked for.  A polish that made no residue cluster records that, and nothing is
+  junked.
+- test_clean, test_polish: the record is written and read back; the word, the word with ids, the
+  missing record, the empty record.
+
 ## [0.71.9] — fiber-polish: realign each cluster on its largest channels (option, off)
 - In Klusters, realigning a cluster on its two highest-amplitude channels (*Realign top-ch*) lets a
   recluster and the strips separate its spikes better.  fiber-polish scored every pass at the

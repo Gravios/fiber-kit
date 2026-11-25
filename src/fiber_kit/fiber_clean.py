@@ -103,6 +103,58 @@ def _id_list(text):
     return tuple(int(x) for x in str(text).replace(",", " ").split())
 
 
+# ── fiber-polish's residue cluster, handed on without a human reading a log ──────────────────
+# fiber-polish parks what it could not place in a "residue" cluster whose id is only known when
+# it has run.  It records the id beside its .clu, and `--junk residue` here reads it back, so a
+# plan can run polish and clean in one go.
+def residue_record_path(base, elec, method, stage):
+    return nio.session_path(base, "polish", elec, variant=method, tag=stage) + ".tsv"
+
+
+def write_residue_record(base, elec, method, stage, residue, n_spikes, source=""):
+    """<base>.polish.<method>.<group>.<stage>.tsv: the residue cluster of that polish output."""
+    path = residue_record_path(base, elec, method, stage)
+    with open(path, "w") as f:
+        f.write("key\tvalue\n")
+        f.write(f"residue\t{'' if residue is None else int(residue)}\n")
+        f.write(f"residue_spikes\t{int(n_spikes)}\n")
+        f.write(f"from_stage\t{source}\n")
+    return path
+
+
+def read_residue_record(base, elec, method, stage):
+    """The residue cluster id recorded for `stage`: an int, None when that polish made no residue
+    cluster.  FileNotFoundError when the stage has no record (not a polish output, or one written
+    before 0.71.10)."""
+    path = residue_record_path(base, elec, method, stage)
+    with open(path) as f:
+        rows = dict(line.rstrip("\n").split("\t", 1) for line in f if "\t" in line)
+    v = rows.get("residue", "").strip()
+    return int(v) if v else None
+
+
+def junk_ids(text, base, elec, method, stage):
+    """--junk: cluster ids, and the word `residue` for the residue cluster fiber-polish recorded
+    for the input stage."""
+    out = []
+    for tok in str(text).replace(",", " ").split():
+        if tok.lower() == "residue":
+            if not stage:
+                raise SystemExit("fiber-clean --junk residue needs the input given as a stage (--clu-stage)")
+            try:
+                r = read_residue_record(base, elec, method, stage)
+            except FileNotFoundError:
+                raise SystemExit(
+                    f"fiber-clean --junk residue: no {os.path.basename(residue_record_path(base, elec, method, stage))} "
+                    f"-- stage '{stage}' is not a fiber-polish output of 0.71.10 or later.  Give the id "
+                    f"fiber-polish printed (\"residue cluster N\") instead.") from None
+            if r is not None:
+                out.append(r)
+        else:
+            out.append(int(tok))
+    return tuple(out)
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         description="Keep the clean part of a sort: core cut per cluster (Klusters' Split Off Spurious "
@@ -113,7 +165,8 @@ def main(argv=None):
                      stage_alias=None)
     ap.add_argument("--res-variant", default="", help="pin the .res variant ('' = the shared .res)")
     ap.add_argument("--noise-id", type=int, default=1, help="cluster the removed spikes go to (default 1)")
-    ap.add_argument("--junk", default="", help="clusters sent to the noise whole, e.g. fiber-polish's residue cluster")
+    ap.add_argument("--junk", default="", help="clusters sent to the noise whole: ids, and/or the word `residue` for "
+                                                "the residue cluster fiber-polish recorded for the input stage")
     ap.add_argument("--keep-ids", default="", help="clusters passed through untouched")
     ap.add_argument("--core-cut", type=int, default=1, help="1 = core cut per cluster (default), 0 = quality only")
     ap.add_argument("--cc-min", type=int, default=200, help="smallest cluster the core cut runs on (default 200)")
@@ -158,7 +211,11 @@ def main(argv=None):
     log(f"[clean] {os.path.basename(base)} group {a.elec}: {n:,} spikes, stage '{a.clu_stage}' | core cut "
         f"{'on >= ' + str(a.cc_min) if a.core_cut else 'off'}, dirty at quality >= {a.q_dirty:g} ({qname}), "
         f"kept >= {a.min_keep}")
-    new, rows = clean(clu, raw, qual, sr, noise_id=a.noise_id, junk=_id_list(a.junk),
+    junk = junk_ids(a.junk, base, a.elec, a.clu_method, a.clu_stage)
+    if "residue" in str(a.junk).lower():
+        log(f"[clean] --junk residue: {'cluster ' + str(junk[-1]) if junk else 'the polish made no residue cluster'}"
+            if len(junk) <= 1 else f"[clean] --junk: clusters {list(junk)}")
+    new, rows = clean(clu, raw, qual, sr, noise_id=a.noise_id, junk=junk,
                       keep_ids=_id_list(a.keep_ids), core_cut=bool(a.core_cut), cc_min=a.cc_min,
                       cc_max=a.cc_max, q_dirty=a.q_dirty, q_spikes=a.q_spikes, min_keep=a.min_keep, log=log)
     for kind in ("kept", "passed", "dirty", "small", "junk"):

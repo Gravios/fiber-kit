@@ -1516,7 +1516,7 @@ Positional: `base`, `elec`
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--noise-id` | `1` | cluster the removed spikes go to (default 1) |
-| `--junk` | `""` | clusters sent to the noise whole, e.g. fiber-polish's residue cluster |
+| `--junk` | `""` | clusters sent to the noise whole: ids, and/or the word `residue` for the residue cluster fiber-polish recorded for the input stage |
 | `--keep-ids` | `""` | clusters passed through untouched |
 | `--core-cut` | `1` | 1 = core cut per cluster (default), 0 = quality only |
 | `--cc-min` | `200` | smallest cluster the core cut runs on (default 200) |

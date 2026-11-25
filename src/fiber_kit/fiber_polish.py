@@ -116,7 +116,9 @@ deconvolution off: no .fil), islands off, against the curation in progress (fc_u
 embedding is the session's: [method block | raw block] when the method .spk and both .pca bases
 are present (the hybrid), else the standard basis, else a local SVD.
 
-Writes <base>.clu.<method>.<group>.<out-tag>.  The .clc/.clp hierarchy is NOT rebuilt -- islands
+Writes <base>.clu.<method>.<group>.<out-tag>, and beside it <base>.polish.<method>.<group>.<out-tag>.tsv
+with the id of the residue cluster, which `fiber-clean --junk residue` reads (0.71.10) so that a plan can
+run the two stages without the id being copied by hand.  The .clc/.clp hierarchy is NOT rebuilt -- islands
 and the pool cut across atoms -- so the output is a flat clu.
 """
 import argparse
@@ -130,6 +132,7 @@ import numpy as np
 try:
     from . import config as cfgmod
     from . import fiber_chunks as _fch
+    from . import fiber_clean as fcl
     from . import fiber_consolidate as fcn
     from . import fiber_corecut as fcc
     from . import fiber_pca as fp
@@ -138,6 +141,7 @@ try:
 except ImportError:                                    # run as a script from src/fiber_kit
     import config as cfgmod
     import fiber_chunks as _fch
+    import fiber_clean as fcl
     import fiber_consolidate as fcn
     import fiber_corecut as fcc
     import fiber_pca as fp
@@ -731,6 +735,9 @@ def main(argv=None):
     new, residue = polish(clu, raw, feats, F, log=log, on_stage=on_stage, sr=float(cfg.get("sr") or 0), **kw)
     tag = a.out_tag or (f"{a.clu_stage}_polish" if a.clu_stage else "polish")
     path = nio.write_clu(base, a.elec, new, variant=a.clu_method, tag=tag)
+    # the residue id, for `fiber-clean --junk residue` on this stage
+    fcl.write_residue_record(base, a.elec, a.clu_method, tag, residue,
+                             0 if residue is None else int((new == residue).sum()), source=a.clu_stage or "")
     log(f"[polish] wrote {os.path.basename(path)}"
         + (f"  (residue cluster {residue}: {int((new == residue).sum()):,} spikes)" if residue is not None else "")
         + "  -- flat .clu; the .clc/.clp hierarchy is not rebuilt")

@@ -30,6 +30,7 @@ sys.path.insert(0, os.path.join(HERE, "..", "src"))
 
 from fiber_kit import fiber_chunks as fch         # noqa: E402
 from fiber_kit import fiber_corecut as fcc        # noqa: E402
+from fiber_kit import fiber_clean as fcl          # noqa: E402
 from fiber_kit import neuro_io as nio             # noqa: E402
 
 SR, NS, NC, PEAK = 32552.0, 52, 8, 26
@@ -141,6 +142,26 @@ def main():
                              "--out-tag", "noop"], capture_output=True, text=True, env=env, timeout=900)
         _, same = nio.read_clu_file(f"{base}.clu.standard.1.noop")
         check("with the cut and the quality test off, nothing moves", r2.returncode == 0 and np.array_equal(same, lab))
+        # --junk residue: the id fiber-polish recorded for the input stage
+        common = [sys.executable, "-m", "fiber_kit.fiber_clean", base, "1", "--clu-method", "standard", "--clu-stage", "in",
+                  "--core-cut", "0", "--q-dirty", "0", "--min-keep", "1"]
+        r3 = subprocess.run(common + ["--junk", "residue", "--out-tag", "nores"], capture_output=True, text=True, env=env, timeout=900)
+        check("--junk residue on a stage without a polish record stops and names the file",
+              r3.returncode != 0 and "polish.standard.1.in.tsv" in (r3.stdout + r3.stderr) and not os.path.exists(f"{base}.clu.standard.1.nores"))
+        rec = fcl.write_residue_record(base, 1, "standard", "in", 9, int((lab == 9).sum()), source="x")
+        check("the record is <base>.polish.<method>.<group>.<stage>.tsv and reads back",
+              rec.endswith(".polish.standard.1.in.tsv") and fcl.read_residue_record(base, 1, "standard", "in") == 9)
+        r4 = subprocess.run(common + ["--junk", "residue", "--out-tag", "res"], capture_output=True, text=True, env=env, timeout=900)
+        _, g4 = nio.read_clu_file(f"{base}.clu.standard.1.res")
+        check("--junk residue sends the recorded residue cluster to the noise and nothing else",
+              r4.returncode == 0 and (g4[lab == 9] == 1).all() and np.array_equal(g4[lab != 9], lab[lab != 9]))
+        r5 = subprocess.run(common + ["--junk", "residue,6", "--out-tag", "res6"], capture_output=True, text=True, env=env, timeout=900)
+        _, g5 = nio.read_clu_file(f"{base}.clu.standard.1.res6")
+        check("the word and ids can be given together", r5.returncode == 0 and (g5[np.isin(lab, (6, 9))] == 1).all())
+        fcl.write_residue_record(base, 1, "standard", "in", None, 0)
+        r6 = subprocess.run(common + ["--junk", "residue", "--out-tag", "res0"], capture_output=True, text=True, env=env, timeout=900)
+        _, g6 = nio.read_clu_file(f"{base}.clu.standard.1.res0")
+        check("a polish that made no residue cluster: nothing is junked", r6.returncode == 0 and np.array_equal(g6, lab))
 
     print(f"test_clean: {ok} checks passed")
 
