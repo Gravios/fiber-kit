@@ -195,6 +195,23 @@ its plan. The history of a value belongs in the changelog and in `docs/bench.md`
 **Fix.** Measure coverage once (`coverage run test/run_all.py`) and decide per module: test it,
 or move it to the list of finding 8. `run_all.py` should put `scripts/` first on `PATH`.
 
+*Measured at 0.71.12* (`tools/audit/coverage_run.sh`): the suite executes 62% of the statements of
+`src/fiber_kit` (17,450 of 28,106); 38 of 101 modules are under 50%.
+
+| Covered | Modules |
+|---|---|
+| 0% | `fiber_provenance`, `fiber_trajectory`, `graph_link` |
+| under 20% | `laplacian_link`, `fiber_methods`, `fiber_collision`, `fiber_view_gui`, `fiber_stochastic`, `fiber_merge`, `fiber_link`, `fiber_contam`, `fiber_view`, `fiber_score`, `fiber_defrag`, `fiber_drift`, `fiber_qc` |
+| 20 to 35% | `raw_vs_stderiv`, `fiber_cfiber`, `morpho_study`, `fiber_position`, `fiber_relink`, `fiber_reject`, `ndm_fiber_kit`, `fiber_stats`, `fiber_refit`, `fiber_pipeline_editor`, `fiber_calibrate`, `fiber_branch`, `fiber_refiber`, `fiber_refine`, `fiber_microfiberize`, `fiber_intrachunk` |
+
+- In most of these the covered part is the import and the argument parser (`test_stage_startup`
+  starts every stage); the algorithm is not run.
+- Three stages of the canonical order are among them: `fiber-refine` 30%, `fiber-intrachunk` 35%,
+  `fiber-link` 16%. The plans in use (session, polish, clean, xcorr-merge, unmix) are at 64%, 86%,
+  89%, 72% and 91%.
+- The textual list above was close: 26 of its 28 modules are under 50% (`fiber_backbone_link` is
+  at 60%, `fiber_link_core` at 51%).
+
 ## 8. Where things are
 
 - **One directory, three subsystems.** 74 `fiber_*` modules (the sorter), 13 `morpho_*` (5,925

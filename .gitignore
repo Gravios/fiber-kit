@@ -219,3 +219,4 @@ __marimo__/
 
 # setuptools writes this into sdists; the metadata of record is pyproject.toml
 /PKG-INFO
+.coverage-audit/
