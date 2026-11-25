@@ -1696,6 +1696,9 @@ Positional: `base`, `elec`
 | `--merge-min` | `50` | merge: smallest cluster that takes part [FK_POLISH_MERGE_MIN; default 50] |
 | `--merge-q` | `-1.0` | merge: quality guard -- a union is refused when its quality value (Klusters' quality dot, on the raw windows) exceeds the worse of its two parts' by more than this (0 = no worse than the worse part; -1 = no guard) [FK_POLISH_MERGE_Q; default -1.0] |
 | `--merge-q-max` | `0.0` | merge: quality bound -- a union whose quality value exceeds this is refused (0 = no bound; 0.2 moved purity by 0.2 pt on 0312 g8: the module header) [FK_POLISH_MERGE_Q_MAX; default 0.0] |
+| `--realign-topch` | `0` | realign: > 0 = before every loop and every round each cluster is realigned to its own median, only its N largest channels voting (Klusters' Realign top-ch; N >= the channel count = all of them), and every pass reads the windows at that alignment. 0 = the stored alignment, as before [FK_POLISH_REALIGN_TOPCH; default 0] |
+| `--realign-maxlag` | `3` | realign: furthest a spike is moved from its stored position (samples) [FK_POLISH_REALIGN_MAXLAG; default 3] |
+| `--realign-min` | `20` | realign: smallest cluster that is realigned (smaller ones stay as stored) [FK_POLISH_REALIGN_MIN; default 20] |
 | `--cos` | `0.5` | template cosine a pair needs to be a candidate (islands and merge) [FK_POLISH_COS; default 0.5] |
 | `--tpl-cap` | `1000` | spikes per cluster used for a median template and its tails [FK_POLISH_TPL_CAP; default 1000] |
 | `--hybrid-pcs` | `3` | features: standard-basis components per channel in the raw block of the hybrid space [FK_POLISH_HYBRID_PCS; default 3] |

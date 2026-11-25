@@ -4,6 +4,26 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.9] — fiber-polish: realign each cluster on its largest channels (option, off)
+- In Klusters, realigning a cluster on its two highest-amplitude channels (*Realign top-ch*) lets a
+  recluster and the strips separate its spikes better.  fiber-polish scored every pass at the
+  stored alignment.
+- `--realign-topch N` (`FK_POLISH_REALIGN_TOPCH`, default 0 = as before): before every loop and
+  every round each cluster of at least `--realign-min` (20) spikes is realigned to its own median,
+  only its N largest channels voting; the shift moves every channel of the raw windows and of the
+  method's, at most `--realign-maxlag` (3) samples from the stored position.  The strip, the pool
+  rkk, the islands and the merge read the windows at that alignment.  Each realign starts from the
+  stored windows and removes the cluster's median shift; no file is re-timed.
+- Measured on 0312 g8, two chunks, islands off, against the curation in progress: ARI 0.682 off,
+  0.756 / 0.757 / 0.755 at top 1 / top 2 / all channels; purity 71.4 / 72.4 / 72.6 / 71.2 %; spikes
+  in clusters holding two curated cells 14.1 / 12.5 / 11.2 / 15.7 %.  Realigning at all is the
+  large step; top 2 is the best count by a small margin.  The table and its limits are in
+  `fiber_polish.py`'s header.  Not measured: the island pass with it, a whole session, a session
+  with its `.fil`.
+- With 0 the stage writes what it wrote before (test).  test_polish: the shifts recover a planted
+  jitter, a third channel with its own timing does not vote at top 2, small / reserved / noise
+  clusters stay as stored, repeated realigns do not accumulate.
+
 ## [0.71.8] — fiber-unmix-children: the one-unit spikes as children of their unit
 - A flat `.clu` has to choose: the spikes `fiber-unmix` names one unit for sit apart from it
   (`--one-as cluster`, one cluster of 236,571 spikes of 342 units on 0312 g8; `units`, one more

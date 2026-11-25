@@ -228,5 +228,69 @@ with tempfile.TemporaryDirectory() as d:
         check(not np.isin(o, (0, 1)).any() and o[100] == o[500],
               "CLI: no spike in cluster 0 or 1, and cell A's fragments are one cluster")
 
+# ── per-cluster realignment on the largest channels (FK_POLISH_REALIGN_TOPCH) ───────────────────────
+print("-- realign on the top channels")
+rng = np.random.default_rng(5)
+St = 40; tt = np.arange(St)
+T3 = np.zeros((St, 8))
+T3[:, 0] = -200 * np.exp(-(tt - 20) ** 2 / 8.0); T3[:, 2] = -150 * np.exp(-(tt - 21) ** 2 / 10.0)
+T3[:, 5] = -40 * np.exp(-(tt - 20) ** 2 / 8.0)
+late = rng.uniform(-2, 2, 500)
+Wj = fpo.shift_windows(np.repeat(T3[None], 500, 0), -late) + rng.normal(0, 20, (500, St, 8))   # spike i is `late[i]` late
+check(fpo.shift_windows(Wj[:5], np.zeros(5)) is not None and np.array_equal(fpo.shift_windows(Wj[:5], np.zeros(5)), Wj[:5]),
+      "shift_windows: a zero shift returns the windows unchanged")
+check(np.allclose(fpo.shift_windows(Wj[:5], np.full(5, 2.0)), np.roll(Wj[:5], -2, axis=1), atol=1e-6),
+      "shift_windows: a whole-sample shift is the roll (the convention of fiber_lib.align_xcorr)")
+s2, top2 = fpo.cluster_shifts(Wj, topch=2, maxlag=3)
+check(top2.tolist() == [0, 2], f"cluster_shifts: the two largest channels of the median vote (got {top2.tolist()})")
+check(np.corrcoef(s2, late)[0, 1] > 0.97 and abs(np.median(s2)) < 1e-9,
+      f"cluster_shifts: the planted lateness is recovered (r {np.corrcoef(s2, late)[0, 1]:.3f}) and the cluster's median shift is 0")
+check(fpo.shift_windows(Wj, s2).var(0).mean() < 0.95 * Wj.var(0).mean(), "cluster_shifts: the realigned cluster is tighter")
+check(np.abs(s2 - np.median(s2)).max() <= 3.5 + 3.5, "cluster_shifts: no spike is moved beyond the lag window")
+# a channel outside the top two that carries ANOTHER timing must not vote
+Wm = Wj.copy(); other = rng.uniform(-2, 2, 500)
+Wm[:, :, 5] = fpo.shift_windows(np.repeat((3.0 * T3[:, 5:6])[None], 500, 0), -other)[:, :, 0] + rng.normal(0, 20, (500, St))
+sa, _ = fpo.cluster_shifts(Wm, topch=0, maxlag=3); st, tp = fpo.cluster_shifts(Wm, topch=2, maxlag=3)
+check(tp.tolist() == [0, 2] and np.corrcoef(st, late)[0, 1] > np.corrcoef(sa, late)[0, 1],
+      f"cluster_shifts: a third channel with its own timing does not vote at top 2 (r {np.corrcoef(st, late)[0, 1]:.3f} "
+      f"against {np.corrcoef(sa, late)[0, 1]:.3f} with every channel)")
+s8, top8 = fpo.cluster_shifts(Wj, topch=8, maxlag=3); s0, top0 = fpo.cluster_shifts(Wj, topch=0, maxlag=3)
+check(np.array_equal(s8, s0) and top8.tolist() == list(range(8)), "cluster_shifts: top = the channel count is every channel")
+labr = np.r_[np.full(300, 5), np.full(190, 6), np.full(10, 7)].astype(np.int64); labr[:3] = (0, 1, fch.RESERVED_LO + 2)
+sh = np.full(500, 9.0, np.float32)
+nre = fpo.realign_clusters(labr, lambda ix: Wj[np.asarray(ix)], sh, topch=2, maxlag=3, min_n=20)
+check(nre == 2 and not sh[:3].any() and not sh[490:].any() and sh[3:490].any(),
+      "realign_clusters: clusters of at least min_n are realigned; 0, 1, a reserved cluster and a small cluster stay as stored")
+sh2 = sh.copy(); fpo.realign_clusters(labr, lambda ix: Wj[np.asarray(ix)], sh2, topch=2, maxlag=3, min_n=20)
+check(np.array_equal(sh, sh2), "realign_clusters: a second call gives the same shifts (each starts from the stored windows)")
+calls = []
+lab_in = np.r_[np.full(250, 5), np.full(250, 6)].astype(np.int64)
+fpo.polish(lab_in, lambda ix: Wj[np.asarray(ix)], lambda ix: Wj[np.asarray(ix)].reshape(len(ix), -1)[:, ::7], None,
+           loops=2, rounds=1, island=0, realign=lambda lab, skip: calls.append(len(lab)))
+check(len(calls) == 3, f"polish: the realign runs before each of the 2 loops and the 1 round ({len(calls)} calls)")
+
+with tempfile.TemporaryDirectory() as d:
+    base = os.path.join(d, "sess")
+    open(base + ".yaml", "w").write(
+        "acquisitionSystem:\n  nChannels: 8\n  samplingRate: 32552\n  nBits: 16\n"
+        "spikeDetection:\n  channelGroups:\n  - channels: [0, 1, 2, 3, 4, 5, 6, 7]\n"
+        f"    nSamples: {S}\n    peakSampleIndex: 20\n    nFeatures: 3\n")
+    nio.write_res_file(base + ".res.1", np.arange(len(W)) * 100)
+    W.astype(np.int16).tofile(base + ".spk.standard.1")
+    nio.write_clu(base, 1, sp, variant="standard", tag="in")
+    old = os.getcwd(); os.chdir(d)
+    try:
+        common = ["sess", "1", "--clu-method", "standard", "--clu-stage", "in", "--island", "0", "--loops", "1", "--rounds", "1"]
+        fpo.main(common + ["--out-tag", "plain"])
+        fpo.main(common + ["--realign-topch", "0", "--out-tag", "t0"])
+        fpo.main(common + ["--realign-topch", "2", "--out-tag", "t2"])
+    finally:
+        os.chdir(old)
+    rd = lambda t: np.asarray(nio.read_clu_file(base + ".clu.standard.1." + t, n_spikes=len(W))[1])   # noqa: E731
+    check(np.array_equal(rd("plain"), rd("t0")), "CLI: --realign-topch 0 writes what the stage wrote before")
+    o2 = rd("t2")
+    check(not np.isin(o2, (0, 1)).any() and o2[100] == o2[500],
+          "CLI: --realign-topch 2 runs the chain on the realigned windows (cell A's fragments still one cluster)")
+
 print(f"\n{ran} checks, {fails} failed")
 sys.exit(1 if fails else 0)

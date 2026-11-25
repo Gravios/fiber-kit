@@ -940,6 +940,14 @@ FK_POLISH_MERGE_Q:       -1       # -1 | 0-0.05.  merge: the quality guard.  A u
 FK_POLISH_MERGE_Q_MAX:   0        # 0 | 0.1-0.5.  merge: the quality bound.  A union whose quality value exceeds this is
                                   #   refused, whatever its parts'.  0 = no bound.  0.2 moved purity by 0.2 pt on
                                   #   0312 g8 (measured in fiber_polish.py's header); no gain there.
+FK_POLISH_REALIGN_TOPCH: 0        # 0 | 1-3, or the channel count for all.  realign: > 0 = before every loop and every round
+                                  #   each cluster is realigned to its own median, only its N largest channels voting
+                                  #   (Klusters' Realign top-ch); the strip, the pool, the islands and the merge then read
+                                  #   the windows at that alignment.  0 = the stored alignment.  On two chunks of 0312 g8
+                                  #   (islands off) 2 was the best of off / 1 / 2 / all, by a small margin over all
+                                  #   (fiber_polish.py's header).
+FK_POLISH_REALIGN_MAXLAG: 3       # 3 | 1-6.  realign: furthest a spike is moved from its stored position (samples).
+FK_POLISH_REALIGN_MIN:   20       # 20.  realign: smallest cluster that is realigned; smaller ones stay as stored.
 FK_POLISH_COS:           0.5      # 0.5.  template cosine a pair needs to be a candidate (islands and merge).
 FK_POLISH_TPL_CAP:       1000     # 1000.  spikes per cluster used for a template and its tails.
 FK_POLISH_HYBRID_PCS:    3        # 3 | 1-3.  features: standard-basis components per channel in the raw block.  The stage's

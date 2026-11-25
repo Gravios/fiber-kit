@@ -80,7 +80,34 @@ within 10-minute bins, held = curated-unit spikes in a cluster):
 
 The strip, the island fit and the merge all score the RAW (.spk.standard) windows at their stored
 alignment -- the space the residual was validated in, and a self-derived realign spends the timing
-offset that marks contamination (0.67.32).  The feature space of the pool rkk and of the island
+offset that marks contamination (0.67.32).
+
+REALIGN ON THE TOP CHANNELS (0.71.9; off by default).  REALIGN_TOPCH N > 0: before every loop and
+every round each cluster of at least REALIGN_MIN spikes is realigned to its own median, with only
+the N channels on which that median is largest voting -- Klusters' "Realign top-ch" -- and the
+shift applied to every channel, of the raw windows and of the method's.  Each spike is moved at
+most REALIGN_MAXLAG samples from where it is stored, each realign starts from the stored windows
+(the passes do not accumulate), and the cluster's median shift is removed, so a cluster stays
+where it was.  Nothing is written back: the .res and the .spk are not touched, only what this
+run's passes read.  MEASURED 2026-11-25 on sirotaA-jg-000005-20120312 group 8, two 18-minute
+chunks (162-198 min, 121,352 spikes) of a fiber-session sort (noise model from the .nst,
+deconvolution off: no .fil), islands off, against the curation in progress (fc_unmix_h):
+
+  realign            clusters   purity   spikes in >=90%-pure   spikes in two-cell   ARI
+  off                     148    71.4%            36%                 14.1%         0.682
+  top 1                   151    72.4%            62%                 12.5%         0.756
+  top 2                   161    72.6%            62%                 11.2%         0.757
+  all channels            156    71.2%            62%                 15.7%         0.755
+
+  * realigning at all is the large step (ARI 0.68 -> 0.76, the strip parks a quarter fewer
+    spikes); between the channel counts the difference is small, with 2 ahead on purity and on
+    the spikes in clusters that hold two curated cells.
+  * the same on a second sort of the chunks (fiber-session's own aligner at top 2): off 0.691,
+    top 2 0.750.
+  * the curation is unfinished and holds two clusters of over 170,000 spikes, so the last three
+    columns mostly say how well the large clusters are kept together.  Not measured: the island
+    pass with it, a whole session, a session with its .fil.
+  That is one group, two chunks: an option to measure, not yet a default.  The feature space of the pool rkk and of the island
 embedding is the session's: [method block | raw block] when the method .spk and both .pca bases
 are present (the hybrid), else the standard basis, else a local SVD.
 
@@ -141,6 +168,13 @@ _KNOBS = {
     "FK_POLISH_MERGE_Q_MAX": ("merge_q_max", float, 0.0, "merge: quality bound -- a union whose quality value exceeds this is refused "
                                                          "(0 = no bound; 0.2 moved purity by 0.2 pt on 0312 g8: the "
                                                          "module header)"),
+    "FK_POLISH_REALIGN_TOPCH": ("realign_topch", int, 0, "realign: > 0 = before every loop and every round each cluster is "
+                                                         "realigned to its own median, only its N largest channels voting "
+                                                         "(Klusters' Realign top-ch; N >= the channel count = all of them), and "
+                                                         "every pass reads the windows at that alignment.  0 = the stored "
+                                                         "alignment, as before"),
+    "FK_POLISH_REALIGN_MAXLAG": ("realign_maxlag", int, 3, "realign: furthest a spike is moved from its stored position (samples)"),
+    "FK_POLISH_REALIGN_MIN": ("realign_min", int, 20, "realign: smallest cluster that is realigned (smaller ones stay as stored)"),
     "FK_POLISH_COS": ("cos", float, 0.5, "template cosine a pair needs to be a candidate (islands and merge)"),
     "FK_POLISH_TPL_CAP": ("tpl_cap", int, 1000, "spikes per cluster used for a median template and its tails"),
     "FK_POLISH_HYBRID_PCS": ("hybrid_pcs", int, 3, "features: standard-basis components per channel in the raw block of the hybrid space"),
@@ -263,6 +297,71 @@ def strip_pool_pass(labels, raw, feats, *, k_on=3.0, k_off=3.0, strip_min=100, p
         log(f"  strip parked {stats['stripped']:,} from {tot['resid_clusters']} clusters{cc}; pool {stats['pool']:,} "
             f"-> {stats['born']} clusters, {stats['residue']:,} in residue cluster {residue}")
     return lab, stats, residue
+
+
+# ── per-cluster realignment on the largest channels ──────────────────────────────
+def shift_windows(W, total):
+    """(m, S, C) windows moved by the per-spike sub-sample shifts `total` (Fourier; the convention of
+    fiber_lib.align_xcorr: the result is roll(W, -total)).  A zero shift returns the windows as given."""
+    W = np.asarray(W, float); total = np.asarray(total, float)
+    if not total.size or not np.any(total):
+        return W
+    f = np.fft.fftfreq(W.shape[1])
+    return np.fft.ifft(np.fft.fft(W, axis=1) * np.exp(2j * np.pi * f[None, :, None] * total[:, None, None]), axis=1).real
+
+
+def cluster_shifts(W, topch=2, maxlag=3, iters=2, cap=2000, rng=None, batch=20000):
+    """Per-spike shifts that align one cluster's windows W (m, S, C), as stored, to the cluster's
+    own median -- Klusters' "Realign top-ch": the cross-correlation sums over only the `topch`
+    channels on which the median has the largest peak |amplitude| (all of them when topch is 0
+    or >= C), and the shift found is for every channel.  Each shift is the lag within +-maxlag of
+    the stored position that maximises the raw correlation, refined by a 3-point parabola.  The
+    median is taken on at most `cap` spikes and re-taken after each pass; the cluster's median
+    shift is removed at the end, so the cluster as a whole stays where it was stored.
+    Returns (shifts (m,), the voting channels)."""
+    W = np.asarray(W); m, S, C = W.shape
+    rng = rng or np.random.default_rng(0)
+    total = np.zeros(m)
+    if m < 3:
+        return total, np.arange(C)
+    sub = np.sort(rng.choice(m, cap, replace=False)) if m > cap else np.arange(m)
+    lag = ((np.arange(S) + S // 2) % S) - S // 2
+    inwin = np.abs(lag) <= int(maxlag)
+    top = np.arange(C)
+    for _ in range(max(1, int(iters))):
+        T = np.median(shift_windows(np.asarray(W[sub], float), total[sub]), axis=0)
+        if 0 < int(topch) < C:
+            top = np.sort(np.argsort(-np.abs(T).max(0), kind="stable")[:int(topch)])
+        Ft = np.conj(np.fft.fft(T[:, top], axis=0))[None]
+        for a in range(0, m, int(batch)):
+            w = np.asarray(W[a:a + int(batch)], float)[:, :, top]
+            xc = np.fft.ifft(np.fft.fft(w, axis=1) * Ft, axis=1).real.sum(2)
+            k = np.where(inwin[None, :], xc, -np.inf).argmax(1); d = lag[k].astype(float)
+            r = np.arange(len(w)); y0 = xc[r, (k - 1) % S]; y1 = xc[r, k]; y2 = xc[r, (k + 1) % S]
+            den = y0 - 2 * y1 + y2; ok = np.abs(den) > 1e-9
+            d += np.where(ok, 0.5 * (y0 - y2) / np.where(ok, den, 1.0), 0.0).clip(-0.5, 0.5)
+            total[a:a + len(w)] = d
+    return total - np.median(total), top
+
+
+def realign_clusters(labels, windows, shift, *, topch=2, maxlag=3, min_n=20, skip=(), rng=None, log=None):
+    """Fill `shift` (N,) in place: every real cluster of at least `min_n` spikes gets cluster_shifts
+    of its STORED windows (`windows(ix)` -> (m, S, C), unshifted); every other spike gets 0.  Each
+    call starts from the stored windows, so repeated calls do not accumulate.  Returns the number
+    of clusters realigned."""
+    lab = np.asarray(labels); shift[:] = 0
+    ids, cnt = np.unique(lab[_real(lab)], return_counts=True); done = 0; moved = []
+    for u, c in zip(ids, cnt):
+        if c < int(min_n) or int(u) in skip:
+            continue
+        ix = np.flatnonzero(lab == u)
+        s, _ = cluster_shifts(windows(ix), topch=topch, maxlag=maxlag, rng=rng)
+        shift[ix] = s; done += 1; moved.append(np.abs(s))
+    if log:
+        mv = np.concatenate(moved) if moved else np.zeros(1)
+        log(f"  realign (top {int(topch)} channels, +-{int(maxlag)}): {done} clusters, {mv.size:,} spikes; "
+            f"|shift| median {np.median(mv):.2f}, 90th pct {np.quantile(mv, .9):.2f} samples")
+    return done
 
 
 # ── islands ──────────────────────────────────────────────────────────────────
@@ -426,8 +525,12 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
            strip_k_off=3.0, strip_min=100, pool_max=50, pool_min=50, pool_k=50, pool_cap=30000, leaf=300,
            island_runs=8, island_min=10, island_min_clu=60, island_margin=0.5, merge_thr=0.7, merge_min=50,
            cos=0.5, tpl_cap=1000, seed=0, rkk=None, log=None, on_stage=None,
-           core_cut=0, cc_min=200, cc_max=40000, merge_q=-1.0, merge_q_max=0.0, sr=0.0, merge_stats=None):
-    """Run the chain.  `sr` (the sampling rate) is needed for core_cut 1 / 2.  `merge_stats` (a
+           core_cut=0, cc_min=200, cc_max=40000, merge_q=-1.0, merge_q_max=0.0, sr=0.0, merge_stats=None,
+           realign=None, refeat=None):
+    """Run the chain.  `realign(labels, skip)` (optional) is called before every loop and every round:
+    it re-times each cluster's spikes, and `raw` / `feats` must then return the windows and features at
+    that timing (the CLI's do); `refeat()` returns the full feature matrix after it, for the islands.
+    Without `realign` nothing is re-timed.  `sr` (the sampling rate) is needed for core_cut 1 / 2.  `merge_stats` (a
     list) receives each merge round's stats dict, with the labels it started from as `before`.  `F` is the full feature matrix (needed for islands; feats(arange) if None).
     `on_stage(tag, labels)` is called after every stage (the CLI's scoring hook)."""
     rng = np.random.default_rng(int(seed))
@@ -437,6 +540,8 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
         t0 = time.time()
         if log:
             log(f"[polish] loop {it}/{loops}")
+        if realign is not None:
+            realign(lab, () if residue is None else (int(residue),))
         lab, _, residue = strip_pool_pass(lab, raw, feats, k_on=strip_k_on, k_off=strip_k_off,
                                           strip_min=strip_min, pool_max=pool_max, pool_min=pool_min,
                                           pool_k=pool_k, pool_cap=pool_cap, residue=residue, rng=rng,
@@ -446,6 +551,10 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
             on_stage(f"loop {it} ({time.time() - t0:.0f}s)", lab)
     skip = () if residue is None else (int(residue),)
     for it in range(1, int(rounds) + 1):
+        if realign is not None:
+            realign(lab, skip)
+            if island and refeat is not None:
+                F = refeat()
         if island:
             if F is None:
                 F = np.asarray(feats(np.arange(lab.size)), float)
@@ -559,6 +668,21 @@ def main(argv=None):
             spk_m = nio.open_spk_file(r.path, NS, NC)
             if spk_m.shape[0] != n:
                 raise SystemExit(f"{os.path.basename(r.path)} holds {spk_m.shape[0]:,} spikes, the .res {n:,}")
+    shift = np.zeros(n, np.float32) if a.realign_topch > 0 else None       # per-spike re-timing, 0 = as stored
+
+    class _Timed:
+        """A waveform file read at the current re-timing: [ix] -> float windows moved by shift[ix]."""
+        def __init__(self, mm):
+            self.mm = mm; self.shape = mm.shape
+
+        def __getitem__(self, ix):
+            ix = np.asarray(ix)
+            return shift_windows(self.mm[ix], shift[ix])
+
+    stored = rawmm
+    if shift is not None:
+        rawmm = _Timed(rawmm)
+        spk_m = _Timed(spk_m) if spk_m is not None else None
     feats = build_features(base, a.elec, a.clu_method, spk_m, rawmm, NC, a.hybrid_pcs, a.hybrid_scale, log=log)
     if feats is None:
         log("[polish] features: no .pca basis -- local SVD of the raw windows (24 components)")
@@ -586,9 +710,17 @@ def main(argv=None):
         f"'{a.clu_stage}', raw {NS}x{NC}")
     on_stage("input", clu)
     F = None
-    if a.rounds > 0 and a.island:
-        F = np.vstack([np.asarray(feats(np.arange(i, min(i + 20000, n))), float) for i in range(0, n, 20000)])
-    kw = {dest: getattr(a, dest) for dest, *_ in _KNOBS.values() if not dest.startswith("hybrid_")}
+    all_feats = lambda: np.vstack([np.asarray(feats(np.arange(i, min(i + 20000, n))), float)   # noqa: E731
+                                   for i in range(0, n, 20000)])
+    if a.rounds > 0 and a.island and shift is None:
+        F = all_feats()
+    kw = {dest: getattr(a, dest) for dest, *_ in _KNOBS.values() if not dest.startswith(("hybrid_", "realign_"))}
+    if shift is not None:
+        rrng = np.random.default_rng(int(a.seed) + 7)
+        kw["realign"] = lambda lab, skip: realign_clusters(                                    # noqa: E731
+            lab, lambda ix: stored[np.asarray(ix)], shift, topch=a.realign_topch, maxlag=a.realign_maxlag,
+            min_n=a.realign_min, skip=skip, rng=rrng, log=log)
+        kw["refeat"] = all_feats
     if a.core_cut and not float(cfg.get("sr") or 0) > 0:
         raise SystemExit("fiber-polish --core-cut needs the sampling rate (the session .yaml)")
     new, residue = polish(clu, raw, feats, F, log=log, on_stage=on_stage, sr=float(cfg.get("sr") or 0), **kw)
