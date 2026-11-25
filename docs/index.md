@@ -24,6 +24,10 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   refractory cross-correlogram gate and the burst signature, template deconvolution (`fiber_deconv`),
   with signatures, parameters and validation.
 
+- **[organization-audit.md](organization-audit.md)** — a legibility and organization **audit** of the
+  source (2026-11-25): function sizes, the two routes of a knob, the stage lists that disagree, option
+  names, the profiles; findings and fixes, nothing changed.
+
 - **[neuropixels-plan.md](neuropixels-plan.md)** — a **design plan** (nothing built yet) for
   high-density probes: tiles with a detection set wider than the sorting set, sizes from the row
   pitch and the cell size, spikes assigned to a tile by their spatial profile, a drift field from
