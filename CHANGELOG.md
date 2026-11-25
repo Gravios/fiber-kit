@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.12] — one table of the stages; fiber-plan-lint knows every stage the runner plans
+- A stage was listed in the runner (five arrays, their summaries, two dispatch tables, the plan
+  parser's known set), in the plan editor's catalogue and in its module map.  The lists had drifted:
+  - `fiber-plan-lint` and the editor did not know `fiber-flag-artifacts`, `fiber-flag-collisions`,
+    `fiber-peel` and `fiber-manifold`: the exp, best and klusters profiles stopped at step 0 with
+    "missing or unknown 'stage'";
+  - `fiber-pipeline --list` stopped with "POST_SUMMARY[$i]: unbound variable" (seven post stages,
+    five summaries) and never printed the preprocessing stages;
+  - a plan step `fiber-stochastic` was dispatched by the runner and refused by its plan parser.
+- `fiber_kit/stages.py` is the one table (name, module, group, summary).  `--list` and the plan
+  parser's known set are read from it; the editor's module map is derived from it and its catalogue
+  has the five stages it lacked.  The runner's arrays and dispatch tables stay in bash and
+  test_stage_table (new) compares them with the table, with the editor's catalogue and with the
+  console entry points, lints every shipped profile and dry-runs a plan of every stage.
+
 ## [0.71.11] — the runner and the package it starts are one version
 - pip copies `scripts/fiber-pipeline` to the bin directory when fiber-kit is installed.  An editable
   install keeps importing the checkout, so after an update the copy on `PATH` is older than the

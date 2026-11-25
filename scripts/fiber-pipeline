@@ -42,7 +42,7 @@ set -euo pipefail
 # keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
 # starts.  When the versions differ: hand over to the checkout's own script if there is one,
 # otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
-FK_RUNNER_VERSION="0.71.11"
+FK_RUNNER_VERSION="0.71.12"
 if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
     _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
 print(fiber_kit.__version__)
@@ -377,56 +377,22 @@ ALT_STAGES=(fiber-backbone-link fiber-anchor-link fiber-xcorr-merge fiber-residu
 POST_STAGES=(fiber-consensus fiber-lowmix fiber-rdr fiber-manifold fiber-polish fiber-unmix fiber-clean)   # post-sort review / refinement: runs AFTER the plan's final stage; plannable, not in `all`
 KNOWN_STAGES=("${STAGES[@]}" "${CURATED_STAGES[@]}" "${ALT_STAGES[@]}" "${PRE_STAGES[@]}" "${POST_STAGES[@]}")
 
-# One-line summary per stage for -l/--list (indices align with STAGES, then CURATED_STAGES).
-STAGE_SUMMARY=(
-    "initial over-clustering -> deliberately over-split clean fragments (.clu.stderiv + .spk)"
-    "Klusters-style per-spike realign, in-place commit (re-extract raw+stderiv from .fil)"
-    "per-chunk split + fold gates + merge-back -> .refine"
-    "footprint + refractory consolidation of the refine fragments (in-place relabel on .refine)"
-    "per-chunk positions/templates on the refine clu, from the raw/standard .spk"
-    "within-chunk precision merge (depth/shape/warp/offset/refractory) + emit .units.npz"
-    "cross-chunk link across drift (union-find bundles) -> .refine_linked"
-)
-CURATED_SUMMARY=(
-    "post-curation: rebuild the per-unit/per-chunk model from a curated .clu (no regrouping)"
-)
-PRE_SUMMARY=(
-    "flag acquisition artifacts from the unwhitened derivative -> a per-spike exclusion mask (run BEFORE fiber-session)"
-)
-ALT_SUMMARY=(
-    "link fiber-session fragments on the invariant backbone (CI-overlap + warp veto); alt to intrachunk+link"
-    "link fiber-session fragments seeded by the overlap anchors, on a within-session calibrated null; alt to backbone-link"
-    "fuse near-identical clusters by Klusters roll-shift cosine + refractory veto; realign after each merge"
-    "fuse clusters whose residual strips keep each other's spikes + refractory veto; re-template after each merge"
-    "merge clusters by a calibrated P(same cell) from history-conditioned cell models (refit + cannot-link)"
-    "DIAGNOSTIC: ensemble/consensus fibering over resampled draws -> <SESS>.fiberens.<ELEC>.npz"
-)
-POST_SUMMARY=(
-    "resampled t-SNE consensus over similar clusters -> cells + island/rim quarantine clusters + .qrn review table"
-    "split low-amplitude mixture units after noise whitening -> copies returned, novel groups quarantined + .lmx table"
-    "residual-derivative contamination score per cluster -> .rdr table (nothing moves)"
-    "off-spike-channel field manifold per unit, in sliding windows -> children (.clc/.clp) + .fet.manifold.<g> + .mft table"
-    "residual strip + pooled full-dim rkk, small-leaf t-SNE islands, reverse-strip merge -> .<in>_polish (flat .clu)"
-)
+# The stage lists above are compared with fiber_kit/stages.py (the one table: name, module, group,
+# summary) by test_stage_table; --list and the plan parser's known set are read from it.
+_fkpy() {   # run python with fiber_kit importable: the installed package, else this checkout's src/
+    "${FK_PYTHON:-python3}" - "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" "$@"
+}
 
 list_stages() {   # -l/--list : short per-stage summary
-    local i
-    echo "fiber-kit pipeline stages (canonical order; 'all' runs these in sequence):"
-    for i in "${!STAGES[@]}"; do
-        printf '  %-18s %s\n' "${STAGES[$i]}" "${STAGE_SUMMARY[$i]}"
-    done
-    echo "post-curation (recognized + plannable, NOT part of 'all'):"
-    for i in "${!CURATED_STAGES[@]}"; do
-        printf '  %-18s %s\n' "${CURATED_STAGES[$i]}" "${CURATED_SUMMARY[$i]}"
-    done
-    echo "alternative linkers (recognized + plannable, NOT part of 'all'):"
-    for i in "${!ALT_STAGES[@]}"; do
-        printf '  %-18s %s\n' "${ALT_STAGES[$i]}" "${ALT_SUMMARY[$i]}"
-    done
-    echo "post-sort review (recognized + plannable, NOT part of 'all'):"
-    for i in "${!POST_STAGES[@]}"; do
-        printf '  %-18s %s\n' "${POST_STAGES[$i]}" "${POST_SUMMARY[$i]}"
-    done
+    _fkpy <<'PYLIST'
+import os, sys
+try:
+    from fiber_kit import stages
+except ImportError:                                   # a source checkout run without installing
+    sys.path.insert(0, os.path.join(sys.argv[1], "..", "src"))
+    from fiber_kit import stages
+print(stages.listing())
+PYLIST
 }
 
 # ----- modular step plumbing ------------------------------------------------
@@ -1024,10 +990,8 @@ try:
 except ImportError:                                   # a source checkout run without installing
     sys.path.insert(0, os.path.join(sys.argv[1], "..", "src"))
     from fiber_kit import plan_steps
-KNOWN = {"fiber-session", "fiber-realign", "fiber-refine", "fiber-peel", "fiber-cpos", "fiber-intrachunk",
-         "fiber-link", "fiber-refit", "fiber-backbone-link", "fiber-anchor-link", "fiber-xcorr-merge", "fiber-residual-merge", "fiber-psame-merge",
-         "fiber-flag-artifacts", "fiber-flag-collisions", "fiber-consensus", "fiber-lowmix", "fiber-rdr", "fiber-manifold", "fiber-polish", "fiber-unmix", "fiber-clean"}
-sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=KNOWN))
+from fiber_kit import stages
+sys.exit(plan_steps._runner_main(["rows"] + sys.argv[2:], known=set(stages.names())))
 PYPLAN
 }
 

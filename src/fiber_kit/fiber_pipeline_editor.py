@@ -25,6 +25,11 @@ try:
 except ImportError:                                              # script / direct execution
     from config import yaml_load as _yaml_load
 
+try:
+    from . import stages as _stages                              # the one stage table
+except ImportError:
+    import stages as _stages
+
 TAG_FIELDS = ("in", "out", "units", "cpos", "spk")
 
 
@@ -192,31 +197,20 @@ CATALOG = {
         _p("min-n", "int", 40, "clusters with fewer spikes are skipped"),
         _p("fit-quantile", "float", 0.25, "clean line = this quantile regression of D^2 on A^2 (lower envelope)"),
         _p("line", "str", "", "fixed clean line D0SQ,K instead of fitting it (empty = fit)")]),
+    # stages the plan wires by position only: no tags the editor draws, their flags come from the module
+    "fiber-flag-artifacts": dict(input=False, tags=[], params=[]),    # preprocessing: writes the exclusion mask
+    "fiber-flag-collisions": dict(input=False, tags=[], params=[]),   # preprocessing: adds to the same mask
+    "fiber-peel": dict(input=True, tags=["in", "out"], params=[]),    # in-place relabel of the refine fragments
+    "fiber-manifold": dict(input=True, tags=["in", "out"], params=[]),   # children + .fet.manifold, no spike moves
+    "fiber-stochastic": dict(input=False, tags=[], params=[]),        # diagnostic: writes .fiberens, no .clu
 }
 STAGES = list(CATALOG)
 
 
 # ── derive each stage's fields from its module's argparse, so the inspector tracks the modules ──
-STAGE_MODULES = {
-    "fiber-session": "fiber_kit.fiber_session",
-    "fiber-realign": "fiber_kit.fiber_realign",
-    "fiber-refine": "fiber_kit.fiber_refine",
-    "fiber-cpos": "fiber_kit.fiber_cpos",
-    "fiber-intrachunk": "fiber_kit.fiber_intrachunk",
-    "fiber-link": "fiber_kit.fiber_link",
-    "fiber-refit": "fiber_kit.fiber_refit",
-    "fiber-backbone-link": "fiber_kit.fiber_backbone_link",
-    "fiber-anchor-link": "fiber_kit.fiber_anchor_link",
-    "fiber-xcorr-merge": "fiber_kit.fiber_xcorr_merge",
-    "fiber-residual-merge": "fiber_kit.fiber_residual_merge",
-    "fiber-psame-merge": "fiber_kit.fiber_psame",
-    "fiber-consensus": "fiber_kit.fiber_consensus",
-    "fiber-lowmix": "fiber_kit.fiber_lowmix",
-    "fiber-rdr": "fiber_kit.fiber_rdr",
-    "fiber-polish": "fiber_kit.fiber_polish",
-    "fiber-unmix": "fiber_kit.fiber_unmix",
-    "fiber-clean": "fiber_kit.fiber_clean",
-}
+# the module of each stage, from the one stage table (fiber_kit/stages.py); test_stage_table checks that
+# CATALOG and that table name the same stages
+STAGE_MODULES = {_n: _stages.module(_n) for _n in _stages.names()}
 
 # flags the PLAN expresses structurally (node tags / edges) or that come from the session, not per-node tuning
 _STRUCTURAL_FLAGS = {

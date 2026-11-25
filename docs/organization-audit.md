@@ -116,6 +116,11 @@ whether it is shielded on a chunk run, one line of summary). The runner asks it
 documentation generator read it. A test that every entry point is in it or on a short list of
 tools.
 
+*Done in 0.71.12, in part:* `fiber_kit/stages.py` (name, module, group, summary); `--list`, the
+plan parser, the editor and the linter read it; `test_stage_table` compares the runner's arrays
+and dispatch tables with it.  The per-stage option names and default tags are still in the
+runner's functions.
+
 ## 4. `fk run` takes the runner from `PATH` before the checkout
 
 `plan_steps._cmd_run` uses `shutil.which("fiber-pipeline")` and falls back to the checkout's
