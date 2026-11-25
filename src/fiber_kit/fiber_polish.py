@@ -104,9 +104,14 @@ deconvolution off: no .fil), islands off, against the curation in progress (fc_u
     the spikes in clusters that hold two curated cells.
   * the same on a second sort of the chunks (fiber-session's own aligner at top 2): off 0.691,
     top 2 0.750.
-  * the curation is unfinished and holds two clusters of over 170,000 spikes, so the last three
-    columns mostly say how well the large clusters are kept together.  Not measured: the island
-    pass with it, a whole session, a session with its .fil.
+  * with the island pass ON (the full polish), same sort: purity 74.3% with and without; ARI
+    0.456 off, 0.723 at top 2; curated cells found (a >=80%-pure cluster holding half the cell)
+    11 off, 14 at top 2; spikes in two-cell clusters 5.8% off, 7.4% at top 2.  The island pass
+    moves less than half as many spikes on realigned clusters (15,326 + 9,238 against 35,395 +
+    22,389 over the two rounds): much of what it carries off at the stored alignment is timing.
+  * the curation is unfinished and holds two clusters of over 170,000 spikes, so the ARI and the
+    >=90%-pure column mostly say how well the large clusters are kept together.  Not measured: a
+    whole session, a session with its .fil.
   That is one group, two chunks: an option to measure, not yet a default.  The feature space of the pool rkk and of the island
 embedding is the session's: [method block | raw block] when the method .spk and both .pca bases
 are present (the hybrid), else the standard basis, else a local SVD.

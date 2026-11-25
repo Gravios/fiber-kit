@@ -18,8 +18,10 @@ All notable changes to **fiber-kit**. Format loosely follows
   0.756 / 0.757 / 0.755 at top 1 / top 2 / all channels; purity 71.4 / 72.4 / 72.6 / 71.2 %; spikes
   in clusters holding two curated cells 14.1 / 12.5 / 11.2 / 15.7 %.  Realigning at all is the
   large step; top 2 is the best count by a small margin.  The table and its limits are in
-  `fiber_polish.py`'s header.  Not measured: the island pass with it, a whole session, a session
-  with its `.fil`.
+  `fiber_polish.py`'s header.
+- With the island pass on (the full polish): purity 74.3 % with and without; ARI 0.456 off, 0.723
+  at top 2; curated cells found 11 / 14; the island pass moves less than half as many spikes on
+  realigned clusters.  Not measured: a whole session, a session with its `.fil`.
 - With 0 the stage writes what it wrote before (test).  test_polish: the shifts recover a planted
   jitter, a third channel with its own timing does not vote at top 2, small / reserved / noise
   clusters stay as stored, repeated realigns do not accumulate.
