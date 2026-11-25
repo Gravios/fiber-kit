@@ -84,6 +84,13 @@ on the command line says which kind a knob is. There are also 59 reads of `os.en
 tags and the step's `params`. The runner's stage functions then shrink to one line each
 (`fiber_polish`, `fiber_clean` and `fiber_unmix` already are).
 
+*Done in 0.71.14, the stage side:* `config.RUNNER_KNOBS` and `config.apply_profile_knobs`; nine
+stages read the knobs the runner passes, and `test_runner_knobs` holds a run by hand equal to a
+run through the runner under every shipped profile.  The runner still passes the flags, so its
+stage functions are as long as before.  Found on the way: `FK_SESSION_DIPSPLIT: 0` did nothing
+(0.71.13), and with no profile 23 settings of four stages differ between the two routes because
+the stages' own defaults are an older configuration than the runner's.
+
 ## 3. A stage is listed in five places, and the lists disagree
 
 A plannable stage is named in: the runner (a function, two dispatch tables, the known-stage set,

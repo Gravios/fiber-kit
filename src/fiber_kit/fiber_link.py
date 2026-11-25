@@ -779,6 +779,7 @@ def main():
                     help="spatial field model for off-probe completion (1/r^2 default)")
     ap.add_argument("--complete-edge-frac", type=float, default=0.5,
                     help="array-end amplitude fraction above which a footprint counts as truncated")
+    cfgmod.apply_profile_knobs(ap, "fiber-link")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     import os as _os

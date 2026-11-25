@@ -430,6 +430,13 @@ Point `$FK_CONFIG` at a `fiber-kit.yaml` (or use the shipped `fiber-kit-exp.yaml
 is **CLI/plan-param > `FK_*` env > `$FK_CONFIG` > default**; stages print their resolved knobs at
 startup so you can confirm what took effect.
 
+A stage started by hand (`fiber-session <base> 8`) reads the same profile as one started by
+`fiber-pipeline`: the knobs the runner passes as flags are the stage's defaults too (0.71.14;
+`config.RUNNER_KNOBS`).  With no profile and no `FK_*` variable a stage falls back to its own
+defaults, which for fiber-session, fiber-refine, fiber-link and fiber-stochastic are not the
+runner's in 23 settings (the list is in `test/test_runner_knobs.py`); run them through
+`fiber-pipeline`, or beside a profile.
+
 The two shipped templates embed different plans.  `fiber-kit-exp.yaml` links with fiber-anchor-link (see
 its "SINCE 0.60.0" notes).  `fiber-kit.yaml` links with fiber-link off intrachunk's units, and since
 0.60.1 it carries the same two P(same) merges:

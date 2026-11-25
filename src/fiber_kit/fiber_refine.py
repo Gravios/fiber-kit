@@ -1427,6 +1427,7 @@ def main():
                     help="enable (--subsample) or disable (--no-subsample) realign's per-spike "
                          "sub-sample (parabolic) refine in the feature build; default leaves the "
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
+    cfgmod.apply_profile_knobs(ap, "fiber-refine")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     if a.feature_align:

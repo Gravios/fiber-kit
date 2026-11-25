@@ -4,6 +4,31 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.14] — a stage started by hand reads the knobs fiber-pipeline passes as flags
+- `fiber-pipeline` hands about a hundred knobs to seven stages as flags (`FK_SESSION_*`,
+  `FK_REFINE_*`, `FK_LINK_*`, `FK_PEEL_*`, `FK_STOCH_*`, `FK_FLAG_SPK` / `FK_FLAG_STAGE` and a few
+  more).  A stage started by hand never saw them: `fiber-session <base> 8` beside a profile ran on
+  its argparse defaults -- 37 of fiber-session's 42 such knobs were ignored, all of fiber-refine's 26
+  and fiber-link's 21.
+- `config.RUNNER_KNOBS` lists, per stage, the flag each of those knobs becomes (a value, or a
+  switch passed when the knob is on or off); `config.apply_profile_knobs` makes them the parser's
+  defaults in fiber-session, fiber-stochastic, fiber-refine, fiber-peel, fiber-realign,
+  fiber-intrachunk, fiber-link, fiber-flag-artifacts and fiber-flag-collisions.  A flag on the
+  command line still wins, so a run through `fiber-pipeline` is unchanged.
+- **What changes:** a stage started by hand where a `fiber-kit.yaml` (or `$FK_CONFIG`, or an `FK_*`
+  variable) sets one of these knobs now uses it.  With the exp, best, klusters or production
+  profile in force the nine stages parse to the same settings by hand and through the runner.
+- **What does not:** with no profile the stages keep their own defaults, and those are not the
+  runner's.  23 settings differ (fiber-session 9: `--inclusion-k` 3.0 by hand, 2.5 through the
+  runner; `--merge-algo` template / sliding; the cfiber gate and the inclusion-tail assignment off /
+  on; fiber-refine 8: `--large` 800 / 150, `--merge-min-sim` 0.92 / 0.96; fiber-link 3: `--cos-thr`
+  0.975 / 0.75; fiber-stochastic 3).  test_runner_knobs pins the list.  Which side is the default
+  is left to decide.
+- Two flags stay the runner's: `--exclude-clu` and `--artifact-clu` take the mask path it builds.
+- test_runner_knobs: the table is what the runner's functions pass; under a profile that gives
+  every such knob a value of its own, and under each shipped profile, the runner's command and
+  the bare command parse to the same settings.
+
 ## [0.71.13] — FK_SESSION_DIPSPLIT 0 turns the dip split off
 - `FK_SESSION_DIPSPLIT: 0` did not turn the dip split off through `fiber-pipeline`: the runner
   passed `--dipsplit` when the knob was on and nothing when it was off, and fiber-session's default

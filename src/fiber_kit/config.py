@@ -148,6 +148,229 @@ def check_choice_defaults(ap):
         act.default = d
 
 
+# ───────────────── knobs the runner passes as flags: a stage run by hand reads them too ─────────────────
+# scripts/fiber-pipeline reads these knobs into shell variables and hands them to the stage as flags
+# (the older route; the newer stages read their FK_* knobs themselves).  A stage started by hand never
+# saw them: `fiber-session <base> 8` beside a profile ran on its argparse defaults.  The table says,
+# per stage, which flag a knob becomes:
+#     "value"  --flag <the knob's value>
+#     "on"     --flag when the knob is on            "off"   --flag when the knob is off
+# apply_profile_knobs() makes those the parser's DEFAULTS, so a flag on the command line -- the
+# runner's included -- still wins, and a knob that is set nowhere leaves the stage's own default.
+# test_runner_knobs keeps the table equal to what the runner's stage functions pass.
+RUNNER_KNOBS = {
+    "fiber-session": (
+        ("--eband-width", "FK_SESSION_EBAND_WIDTH", "value"),
+        ("--eband-overlap", "FK_SESSION_EBAND_OVERLAP", "value"),
+        ("--eband-confound", "FK_SESSION_EBAND_CONFOUND", "value"),
+        ("--eband-min-span", "FK_SESSION_EBAND_MIN_SPAN", "value"),
+        ("--eband-low-assign", "FK_SESSION_EBAND_LOW_ASSIGN", "value"),
+        ("--cfiber-q", "FK_SESSION_CFIBER_Q", "value"),
+        ("--dip-dim", "FK_SESSION_DIP_DIM", "value"),
+        ("--dip-alpha", "FK_SESSION_DIP_ALPHA", "value"),
+        ("--dip-min", "FK_SESSION_DIP_MIN", "value"),
+        ("--keep-small-min", "FK_SESSION_KEEP_SMALL_MIN", "value"),
+        ("--fine-algo", "FK_SESSION_FINE_METHOD", "value"),
+        ("--chunk-minutes", "FK_SESSION_CHUNK_MIN", "value"),
+        ("--merge-algo", "FK_SESSION_MERGE_METHOD", "value"),
+        ("--merge-corr", "FK_SESSION_MERGE_CORR", "value"),
+        ("--coarse-dr", "FK_SESSION_COARSE_DR", "value"),
+        ("--seed-density", "FK_SESSION_SEED_DENSITY", "value"),
+        ("--reseed-residual-thr", "FK_SESSION_RESEED_RESIDUAL_THR", "value"),
+        ("--reseed-min-reduction", "FK_SESSION_RESEED_MIN_REDUCTION", "value"),
+        ("--refit-iters", "FK_SESSION_REFIT_ITERS", "value"),
+        ("--resplit-passes", "FK_SESSION_RESPLIT_PASSES", "value"),
+        ("--resplit-residual-thr", "FK_SESSION_RESPLIT_RESIDUAL_THR", "value"),
+        ("--resplit-topch", "FK_SESSION_RESPLIT_TOPCH", "value"),
+        ("--resplit-min-reduction", "FK_SESSION_RESPLIT_MIN_REDUCTION", "value"),
+        ("--resplit-merge-corr", "FK_SESSION_RESPLIT_MERGE_CORR", "value"),
+        ("--resplit-detrend-win", "FK_SESSION_RESPLIT_DETREND_WIN", "value"),
+        ("--resplit-detrend-min-n", "FK_SESSION_RESPLIT_DETREND_MIN_N", "value"),
+        ("--feature-align", "FK_SESSION_FEATURE_ALIGN", "value"),
+        ("--inclusion-k", "FK_SESSION_INCLUSION_K", "value"),
+        ("--realign", "FK_SESSION_REALIGN", "value"),
+        ("--realign-algo", "FK_REALIGN_ALGO", "value"),
+        ("--energy-band", "FK_EBAND", "on"),
+        ("--cfiber-gate", "FK_SESSION_CFIBER_GATE", "on"),
+        ("--dipsplit", "FK_SESSION_DIPSPLIT", "on"),
+        ("--incl-assign-rejected", "FK_SESSION_INCL_ASSIGN", "on"),
+        ("--no-noise", "FK_SESSION_NO_NOISE", "on"),
+        ("--keep-small-groups", "FK_SESSION_KEEP_SMALL", "on"),
+        ("--assign-unsorted", "FK_SESSION_ASSIGN_UNSORTED", "on"),
+        ("--deconv", "FK_SESSION_DECONV", "on"),
+        ("--deconv-assign", "FK_SESSION_DECONV_ASSIGN", "on"),
+        ("--no-rkk-delete", "FK_SESSION_RKK_DELETE", "off"),
+        ("--no-link", "FK_SESSION_LINK", "off"),
+        ("--no-dipsplit", "FK_SESSION_DIPSPLIT", "off"),
+    ),
+    "fiber-realign": (
+        ("--variant", "FK_REALIGN_VARIANT", "value"),
+        ("--align-algo", "FK_REALIGN_ALGO", "value"),
+    ),
+    "fiber-refine": (
+        ("--merge-warp-recall", "FK_MERGE_WARP_RECALL", "value"),
+        ("--merge-amp-thr", "FK_MERGE_AMP_THR", "value"),
+        ("--merge-warp-thr", "FK_MERGE_WARP_THR", "value"),
+        ("--merge-warp-resid-thr", "FK_MERGE_WARP_RESID_THR", "value"),
+        ("--merge-warp-resid-thr-int", "FK_MERGE_WARP_RESID_THR_INT", "value"),
+        ("--merge-warp-resid-thr-pyr", "FK_MERGE_WARP_RESID_THR_PYR", "value"),
+        ("--ab-distinct", "FK_REFINE_AB_DISTINCT", "value"),
+        ("--ab-abs", "FK_REFINE_AB_ABS", "value"),
+        ("--ab-margin", "FK_REFINE_AB_MARGIN", "value"),
+        ("--ab-min", "FK_REFINE_AB_MIN", "value"),
+        ("--ab-sigcap", "FK_REFINE_AB_SIGCAP", "value"),
+        ("--ab-jobs", "FK_REFINE_AB_JOBS", "value"),
+        ("--large", "FK_REFINE_LARGE", "value"),
+        ("--min-group", "FK_REFINE_MIN_GROUP", "value"),
+        ("--drop-min", "FK_REFINE_DROP_MIN", "value"),
+        ("--feature-align", "FK_SESSION_FEATURE_ALIGN", "value"),
+        ("--merge-min-sim", "FK_REFINE_MERGE_MIN_SIM", "value"),
+        ("--merge-budget", "FK_REFINE_MERGE_BUDGET", "value"),
+        ("--split-min-corr", "FK_REFINE_SPLIT_MIN_CORR", "value"),
+        ("--split-var-mult", "FK_REFINE_SPLIT_VAR_MULT", "value"),
+        ("--fold-off-thr", "FK_REFINE_FOLD_OFF_THR", "value"),
+        ("--chunk-minutes", "FK_REFINE_CHUNK_MINUTES", "value"),
+        ("--chunk-jobs", "FK_REFINE_CHUNK_JOBS", "value"),
+        ("--dedup", "FK_REFINE_DEDUP", "on"),
+        ("--ab-reclaim", "FK_REFINE_AB_RECLAIM", "on"),
+        ("--no-rkk-delete", "FK_REFINE_RKK_DELETE", "off"),
+    ),
+    "fiber-peel": (
+        ("--foot-hi", "FK_PEEL_FOOT_HI", "value"),
+        ("--foot-lo", "FK_PEEL_FOOT_LO", "value"),
+        ("--refrac-ms", "FK_PEEL_REFRAC_MS", "value"),
+        ("--refrac-thr", "FK_PEEL_REFRAC_THR", "value"),
+        ("--refrac-min-exp", "FK_PEEL_REFRAC_MIN_EXP", "value"),
+        ("--refrac-censor-ms", "FK_PEEL_REFRAC_CENSOR_MS", "value"),
+        ("--min-n", "FK_PEEL_MIN_N", "value"),
+        ("--burst-foot-lo", "FK_PEEL_BURST_FOOT_LO", "value"),
+    ),
+    "fiber-intrachunk": (
+        ("--backbone-std-cos", "FK_INTRA_BACKBONE_STD_COS", "value"),
+        ("--backbone-warp", "FK_INTRA_BACKBONE_WARP", "value"),
+    ),
+    "fiber-link": (
+        ("--warp-thr", "FK_LINK_WARP_THR", "value"),
+        ("--warp-amp-thr", "FK_LINK_WARP_AMP_THR", "value"),
+        ("--warp-resid-thr", "FK_LINK_WARP_RESID_THR", "value"),
+        ("--cfiber-q", "FK_LINK_CFIBER_Q", "value"),
+        ("--tan-thr", "FK_LINK_TAN_THR", "value"),
+        ("--bundle", "FK_LINK_BUNDLE", "value"),
+        ("--var-scale", "FK_LINK_VAR_SCALE", "value"),
+        ("--n-pc", "FK_LINK_N_PC", "value"),
+        ("--var-allow", "FK_LINK_VAR_ALLOW", "value"),
+        ("--dr-k", "FK_LINK_DR_K", "value"),
+        ("--dr-thr", "FK_LINK_DR_THR", "value"),
+        ("--cos-thr", "FK_LINK_COS_THR", "value"),
+        ("--pos-thr", "FK_LINK_POS_THR", "value"),
+        ("--off-thr", "FK_LINK_OFF_THR", "value"),
+        ("--max-gap", "FK_LINK_MAX_GAP", "value"),
+        ("--amp-gate", "FK_LINK_AMP_GATE", "value"),
+        ("--min-a", "FK_LINK_MIN_A", "value"),
+        ("--amp-span", "FK_LINK_AMP_SPAN", "value"),
+        ("--align-lag", "FK_LINK_ALIGN_LAG", "value"),
+        ("--align-upsample", "FK_LINK_ALIGN_UPSAMPLE", "value"),
+        ("--primary-amp-frac", "FK_LINK_PRIMARY_AMP_FRAC", "value"),
+    ),
+    "fiber-flag-artifacts": (
+        ("--spk-method", "FK_FLAG_SPK", "value"),
+        ("--out-stage", "FK_FLAG_STAGE", "value"),
+    ),
+    "fiber-flag-collisions": (
+        ("--spk-method", "FK_FLAG_SPK", "value"),
+        ("--out-stage", "FK_FLAG_STAGE", "value"),
+    ),
+    "fiber-stochastic": (
+        ("--fine-algo", "FK_SESSION_FINE_METHOD", "value"),
+        ("--chunk-minutes", "FK_SESSION_CHUNK_MIN", "value"),
+        ("--merge-algo", "FK_SESSION_MERGE_METHOD", "value"),
+        ("--merge-corr", "FK_SESSION_MERGE_CORR", "value"),
+        ("--coarse-dr", "FK_SESSION_COARSE_DR", "value"),
+        ("--seed-density", "FK_SESSION_SEED_DENSITY", "value"),
+        ("--reseed-residual-thr", "FK_SESSION_RESEED_RESIDUAL_THR", "value"),
+        ("--reseed-min-reduction", "FK_SESSION_RESEED_MIN_REDUCTION", "value"),
+        ("--refit-iters", "FK_SESSION_REFIT_ITERS", "value"),
+        ("--resplit-passes", "FK_SESSION_RESPLIT_PASSES", "value"),
+        ("--resplit-residual-thr", "FK_SESSION_RESPLIT_RESIDUAL_THR", "value"),
+        ("--resplit-topch", "FK_SESSION_RESPLIT_TOPCH", "value"),
+        ("--resplit-min-reduction", "FK_SESSION_RESPLIT_MIN_REDUCTION", "value"),
+        ("--resplit-merge-corr", "FK_SESSION_RESPLIT_MERGE_CORR", "value"),
+        ("--feature-align", "FK_SESSION_FEATURE_ALIGN", "value"),
+        ("--inclusion-k", "FK_SESSION_INCLUSION_K", "value"),
+        ("--stochastic-draws", "FK_STOCH_DRAWS", "value"),
+        ("--stochastic-frac", "FK_STOCH_FRAC", "value"),
+        ("--stochastic-match-corr", "FK_STOCH_MATCH_CORR", "value"),
+        ("--stochastic-stable-freq", "FK_STOCH_STABLE_FREQ", "value"),
+        ("--stochastic-peel-rounds", "FK_STOCH_PEEL_ROUNDS", "value"),
+        ("--stochastic-link", "FK_STOCH_LINK", "value"),
+        ("--stochastic-jobs", "FK_STOCH_JOBS", "value"),
+        ("--stochastic-seed", "FK_STOCH_SEED", "value"),
+    ),
+}
+
+
+def knob_is_on(name, v, where=""):
+    """A 0/1 switch as the runner's _on reads it: 1/on/yes/true and 0/off/no/false, any case."""
+    if isinstance(v, bool):
+        return v
+    low = str(v).strip().lower()
+    if low in ("1", "on", "yes", "true"):
+        return True
+    if low in ("0", "off", "no", "false"):
+        return False
+    raise KnobError(f"{name}={v!r}" + (f" (from {where})" if where else "") + " is not a switch: use 0/1")
+
+
+def apply_profile_knobs(ap, stage, gcfg=None, env=None):
+    """Make the knobs of RUNNER_KNOBS[stage] the defaults of the parser `ap` (see the table above).
+    Call it after the arguments are added and before parse_args.  Returns the knobs applied, as
+    {flag: (knob, value, where)}."""
+    env = os.environ if env is None else env
+    rows = RUNNER_KNOBS.get(stage, ())
+    if not rows:
+        return {}
+    gcfg = load_global_config() if gcfg is None else gcfg
+    acts = {s: a for a in ap._actions for s in a.option_strings}
+    applied = {}
+    for flag, name, kind in rows:
+        act = acts.get(flag)
+        if act is None:
+            continue
+        v, where = env.get(name), "the environment"
+        if _blank(v):
+            v, where = (gcfg or {}).get(name), "$FK_CONFIG"
+        if _blank(v):
+            continue
+        if kind == "value":
+            if isinstance(v, bool):
+                v = int(v)
+            if act.choices is not None:
+                val = normalize_choice(v, tuple(act.choices))
+                if val not in act.choices:
+                    raise KnobError(f"{name}={v!r} (from {where}) is not one of: "
+                                    + ", ".join(repr(c) for c in act.choices))
+            elif act.type is None:
+                val = str(v)
+            else:
+                try:
+                    val = act.type(str(v))
+                except (TypeError, ValueError, argparse.ArgumentTypeError):
+                    tn = getattr(act.type, "__name__", str(act.type))
+                    raise KnobError(f"{name}={v!r} (from {where}) cannot be read as {tn}") from None
+        else:
+            if knob_is_on(name, v, where) != (kind == "on"):
+                continue                                     # the runner passes no flag in this state
+            if isinstance(act, argparse.BooleanOptionalAction):
+                val = not flag.startswith("--no-")
+            elif act.nargs == 0:
+                val = act.const                              # store_true / store_false / store_const
+            else:
+                continue                                     # a flag that takes a path: the runner's to build
+        ap.set_defaults(**{act.dest: val})
+        applied[flag] = (name, val, where)
+    return applied
+
+
 def load_global_config(path=None):
     """Load the global fiber-kit.yaml (a FLAT FK_* mapping) that OVERRIDES per-session
     tuning when present.  Search order: explicit `path`, then $FK_CONFIG, then

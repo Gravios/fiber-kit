@@ -1233,6 +1233,7 @@ def main():
     ap.add_argument("--emit-units", action="store_true", help="also write a <...>.units.npz unit-signature table for fiber-link")
     ap.add_argument("--no-provenance", dest="provenance", action="store_false", default=True,
                     help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
+    cfgmod.apply_profile_knobs(ap, "fiber-intrachunk")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
 

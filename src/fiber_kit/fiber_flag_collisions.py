@@ -64,10 +64,12 @@ import sys
 import numpy as np
 
 try:
+    from . import config as cfgmod
     from . import fiber_chunks as fch
     from . import neuro_io as nio
     from . import session_yaml as sy
 except ImportError:
+    import config as cfgmod
     import fiber_chunks as fch
     import neuro_io as nio
     import session_yaml as sy
@@ -163,6 +165,7 @@ def main(argv=None):
                          "score (default -1 = half a window; 0 = off)")
     ap.add_argument("--bins", type=int, default=20, help="peak-energy bins the expected tail is taken in")
     ap.add_argument("--dry-run", action="store_true", help="report the flagged counts, write nothing")
+    cfgmod.apply_profile_knobs(ap, "fiber-flag-collisions")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
     if not 0.0 <= a.max_share <= 1.0:

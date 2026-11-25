@@ -110,6 +110,7 @@ def main():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ,
                         default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    cfgmod.apply_profile_knobs(ap, "fiber-flag-artifacts", gcfg)     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
 

@@ -1017,6 +1017,7 @@ def main(argv=None):
     ap.add_argument("--out-res", default=None)
     ap.add_argument("--out-off", default=None)
     _fch.add_argument(ap, _g)
+    cfgmod.apply_profile_knobs(ap, "fiber-realign")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args(argv)
     if a.recut and a.check:

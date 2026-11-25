@@ -45,6 +45,10 @@ try:
 except ImportError:
     import neuro_io as nio
 try:
+    from . import config as cfgmod
+except ImportError:
+    import config as cfgmod
+try:
     from . import session_yaml as sy
 except ImportError:
     import session_yaml as sy
@@ -313,6 +317,7 @@ def main():
                     help="forward count must reach this multiple of the flank expectation")
     ap.add_argument("--burst-min-count", type=int, default=10,
                     help="min forward+backward pairs to test the burst signature (else abstain)")
+    cfgmod.apply_profile_knobs(ap, "fiber-peel")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     a = ap.parse_args()
 
     def _pair(txt):

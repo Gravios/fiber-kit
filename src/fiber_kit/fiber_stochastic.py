@@ -792,6 +792,7 @@ def main():
     sy.add_session_args(ap, sdiff=True)   # same session/group/channels resolution as fiber_session
     fsess.add_core_arguments(ap)       # identical clusterer knobs
     add_arguments(ap)                  # the --stochastic-* diagnostic knobs
+    cfgmod.apply_profile_knobs(ap, "fiber-stochastic")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     run_stochastic(a)

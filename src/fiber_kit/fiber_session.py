@@ -2384,6 +2384,7 @@ def main():
     add_core_arguments(ap)
     add_realign_arguments(ap)
     _fch.add_argument(ap, cfgmod.load_global_config(), length=False)    # --chunks (FK_CHUNKS); counts in --chunk-min
+    cfgmod.apply_profile_knobs(ap, "fiber-session")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
