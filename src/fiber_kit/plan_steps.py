@@ -255,6 +255,19 @@ def _cmd_list(a):
     return 0
 
 
+def runner_path():
+    """The fiber-pipeline script that belongs to THIS package: the checkout's scripts/fiber-pipeline
+    when the package is imported from a checkout (a clone, an editable install), else the one
+    installed beside this python, else the first on PATH.  PATH comes last: pip copies the script
+    at install time, so the copy on PATH can be older than an editable checkout."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "..", "..", "scripts", "fiber-pipeline"),
+              os.path.join(os.path.dirname(os.path.abspath(sys.executable)), "fiber-pipeline")):
+        if os.path.isfile(p):
+            return os.path.normpath(p)
+    return shutil.which("fiber-pipeline") or "fiber-pipeline"
+
+
 def _cmd_run(a):
     """`fk run <elec>` runs what `fiber-pipeline <elec>` runs: the whole plan (--plan, else the
     pipeline: of $FK_CONFIG), or the canonical stages when there is no plan.  Steps, --from and --to
@@ -283,9 +296,8 @@ def _cmd_run(a):
         steps = load_steps(path)
         if sel:
             resolve(steps, sel)
-    exe = shutil.which("fiber-pipeline") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "fiber-pipeline")
-    cmd = [exe, str(a.elec)] + (["--plan", path] if path else []) + [x for s in sel for x in ("--step", s)]
+    exe = runner_path()
+    cmd = ["bash", exe, str(a.elec)] + (["--plan", path] if path else []) + [x for s in sel for x in ("--step", s)]
     if a.method:
         cmd += ["--method", a.method]
     if a.session:

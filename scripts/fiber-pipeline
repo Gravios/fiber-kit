@@ -37,6 +37,29 @@
 # ============================================================================
 set -euo pipefail
 
+# ---------- this script and the fiber_kit package it starts must be one version --------------
+# pip copies this script to the bin directory when the package is installed; an editable install
+# keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
+# starts.  When the versions differ: hand over to the checkout's own script if there is one,
+# otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
+FK_RUNNER_VERSION="0.71.11"
+if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
+    _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
+print(fiber_kit.__version__)
+print(os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(fiber_kit.__file__)), "..", "..", "scripts", "fiber-pipeline")))' 2>/dev/null)" || _pk=""
+    _pkv="${_pk%%$'\n'*}"; _pkr="${_pk#*$'\n'}"
+    if [ -n "$_pkv" ] && [ "$_pkv" != "$FK_RUNNER_VERSION" ]; then
+        if [ -z "${FK_RUNNER_HANDED_OVER:-}" ] && [ -f "$_pkr" ] && ! [ "$_pkr" -ef "${BASH_SOURCE[0]}" ]; then
+            echo "fiber-pipeline: this script is $FK_RUNNER_VERSION, the fiber_kit package is $_pkv: running $_pkr  (reinstall to update the copy on PATH)" >&2
+            FK_RUNNER_HANDED_OVER=1 exec bash "$_pkr" "$@"
+        fi
+        echo "fiber-pipeline: this script is $FK_RUNNER_VERSION but the fiber_kit package python imports is $_pkv." >&2
+        echo "  Reinstall fiber-kit (pip install [-e] <checkout>) so the two match, or set FK_RUNNER_ANY_VERSION=1." >&2
+        exit 2
+    fi
+    unset _pk _pkv _pkr
+fi
+
 # ---------- optional YAML config (sets the FK_* knobs the block below reads) --------------
 # fiber-kit.yaml is a FLAT <FK_KEY: value> mapping of tuning knobs.  Run `fiber-kit-init` to
 # drop a template into the current directory, then edit it.  Precedence:

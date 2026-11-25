@@ -69,6 +69,15 @@ def _version():
         return "0+unknown"
 
 
+def _runner():
+    """The fiber-pipeline script of this package (plan_steps.runner_path)."""
+    try:
+        from . import plan_steps
+    except ImportError:
+        import plan_steps
+    return plan_steps.runner_path()
+
+
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv and argv[0] == "--ndm-describe":
@@ -105,7 +114,7 @@ def main(argv=None):
     # explicit group (leading numeric arg): hand straight to fiber-pipeline (exec, single process).
     if rest and rest[0].isdigit():
         try:
-            os.execvpe("fiber-pipeline", ["fiber-pipeline", *rest], env)
+            os.execvpe("bash", ["bash", _runner(), *rest], env)
         except FileNotFoundError:
             sys.stderr.write("ndm_fiber-kit: 'fiber-pipeline' not found on PATH (is fiber-kit installed?)\n")
             return 127
@@ -123,7 +132,7 @@ def main(argv=None):
     for g in groups:
         sys.stderr.write("== ndm_fiber-kit: group %d/%d ==\n" % (g, len(groups)))
         try:
-            r = subprocess.call(["fiber-pipeline", str(g), *rest], env=env)
+            r = subprocess.call(["bash", _runner(), str(g), *rest], env=env)
         except FileNotFoundError:
             sys.stderr.write("ndm_fiber-kit: 'fiber-pipeline' not found on PATH (is fiber-kit installed?)\n")
             return 127

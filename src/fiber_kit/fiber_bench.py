@@ -47,7 +47,6 @@ import itertools
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -280,10 +279,13 @@ def _fk_version():
 
 
 def _pipeline_exe():
-    here = os.path.dirname(os.path.abspath(__file__))
-    for c in (os.path.join(here, "..", "..", "scripts", "fiber-pipeline"), shutil.which("fiber-pipeline")):
-        if c and os.path.exists(c):
-            return os.path.abspath(c)
+    try:
+        from . import plan_steps
+    except ImportError:                                          # script / direct execution
+        import plan_steps
+    c = plan_steps.runner_path()
+    if os.path.exists(c):
+        return os.path.abspath(c)
     raise SystemExit(f"{_LP} · fiber-pipeline not found")
 
 

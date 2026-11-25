@@ -4,7 +4,8 @@
 The version is written in two places: pyproject.toml (what pip installs) and
 fiber_kit/__init__.py (what `fiber_kit.__version__` reports).  They had drifted
 apart (0.40.6 vs 0.25.0).  The newest CHANGELOG.md heading must name the same
-version, so a release is one bump in three places, checked here.
+version, and so must the runner script (it refuses to start stages of another version), so a
+release is one bump in four places, checked here.
 Exits non-zero on a mismatch.
 """
 import os
@@ -26,6 +27,7 @@ def main():
         "src/fiber_kit/__init__.py": grab(os.path.join("src", "fiber_kit", "__init__.py"),
                                           r'^__version__\s*=\s*"([^"]+)"'),
         "CHANGELOG.md (newest entry)": grab("CHANGELOG.md", r'^## \[([^\]]+)\]'),
+        "scripts/fiber-pipeline": grab(os.path.join("scripts", "fiber-pipeline"), r'^FK_RUNNER_VERSION="([^"]+)"'),
     }
     for where, v in found.items():
         print(f"  {v or '(not found)':10s} {where}")

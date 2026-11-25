@@ -128,6 +128,9 @@ version, so the two cannot be told apart from the log.
 **Fix.** Prefer the runner beside the package that is running; have the runner print its version
 and refuse a Python package of another version.
 
+*Done in 0.71.11:* `plan_steps.runner_path()`, the runner's version check and hand-over,
+`test_runner_version`.
+
 ## 5. Several names for one option
 
 642 distinct long options over 1,163 `add_argument` calls.

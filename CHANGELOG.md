@@ -4,6 +4,20 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.11] — the runner and the package it starts are one version
+- pip copies `scripts/fiber-pipeline` to the bin directory when fiber-kit is installed.  An editable
+  install keeps importing the checkout, so after an update the copy on `PATH` is older than the
+  stages it starts; `fk run` took that copy first.  On a machine with a 0.67.9 copy on `PATH` a
+  0.71.10 checkout's plan stopped at "unknown stage 'fiber-flag-collisions'".
+- `plan_steps.runner_path()`: the checkout's script when the package is imported from a checkout,
+  else the one beside this python, else the first on `PATH`.  `fk run`, the plan editor, fiber-bench
+  and `ndm_fiber-kit` use it.
+- The runner carries its version (`FK_RUNNER_VERSION`).  When the fiber_kit package python imports
+  has another version it hands over to that package's own script and says so; with no such script it
+  stops (exit 2) and names both versions.  `FK_RUNNER_ANY_VERSION=1` runs regardless.  After this
+  version is installed once, an old copy on `PATH` can no longer run a newer checkout's stages.
+- test_runner_version (new); test_version also compares the runner's version.
+
 ## [0.71.10] — fiber-clean --junk residue: polish and clean in one plan
 - fiber-polish's residue cluster has an id that is only known once it has run, so a plan could not
   go from polish to clean: the id was read off the log and typed into the next plan.

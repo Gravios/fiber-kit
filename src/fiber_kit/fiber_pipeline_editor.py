@@ -568,18 +568,12 @@ PRIMARY_MARKER = "# ---- primary pipeline plan (run by `fiber-pipeline <elec>` w
 
 
 def find_pipeline_exe():
-    """Locate the fiber-pipeline runner: prefer the installed console script, else the scripts/ copy next
-    to this package (so the editor previews correctly from a source checkout too)."""
+    """Locate the fiber-pipeline runner that belongs to this package (plan_steps.runner_path: the
+    checkout's script before a copy on PATH)."""
     import os
-    import shutil
-    exe = shutil.which("fiber-pipeline")
-    if exe:
-        return [exe]
-    here = os.path.dirname(os.path.abspath(__file__))
-    cand = os.path.normpath(os.path.join(here, "..", "..", "scripts", "fiber-pipeline"))
-    if os.path.isfile(cand):
-        return ["bash", cand]
-    return None
+    from . import plan_steps
+    exe = plan_steps.runner_path()
+    return ["bash", exe] if os.path.isfile(exe) else None
 
 
 def render_dry_run(steps, elec="5", exe=None, timeout=20):
