@@ -265,3 +265,17 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 4. Finding 1 for `fiber_session` once its knobs are a settings object.
 5. Findings 5 and 6, which change what a user types and reads, together in one release.
 6. Findings 7 to 9 as they are met.
+
+## State after 0.71.14
+
+| Finding | State |
+|---|---|
+| 1 Large functions | open. `cluster_chunk_fine` and the `main` functions are as they were |
+| 2 Two routes of a knob | the stage side done (0.71.14); the runner still builds the flags. 23 defaults differ with no profile: to decide |
+| 3 Stage lists | one table, tested (0.71.12); every command documented. The runner's per-stage functions remain |
+| 4 Runner from `PATH` | done (0.71.11) |
+| 5 Option names | open: the names are a choice (`--in` / `--out` / `--method`, or the present ones) |
+| 6 Profiles | open: the layout of the profiles is a choice |
+| 7 Untested modules | measured (62%); no test added |
+| 8 Where things are | open: sub-packages change import paths |
+| 9 Small debts | lint, the environment variables and the exception count done; the unused public functions left |
