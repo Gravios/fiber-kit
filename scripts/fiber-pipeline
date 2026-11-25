@@ -42,7 +42,7 @@ set -euo pipefail
 # keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
 # starts.  When the versions differ: hand over to the checkout's own script if there is one,
 # otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
-FK_RUNNER_VERSION="0.71.12"
+FK_RUNNER_VERSION="0.71.13"
 if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
     _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
 print(fiber_kit.__version__)
@@ -510,6 +510,7 @@ fiber_session() {     # 1. initial over-clustering -> <SESS>.clu.stderiv.<ELEC> 
     _off "$SESSION_LINK" SESSION_LINK       && sess_args+=(--no-link)
     _on "$SESSION_CFIBER_GATE" SESSION_CFIBER_GATE && sess_args+=(--cfiber-gate --cfiber-q "$CFIBER_Q")
     _on "$SESSION_DIPSPLIT" SESSION_DIPSPLIT   && sess_args+=(--dipsplit --dip-dim "$DIP_DIM" --dip-alpha "$DIP_ALPHA" --dip-min "$DIP_MIN")
+    _off "$SESSION_DIPSPLIT" SESSION_DIPSPLIT  && sess_args+=(--no-dipsplit)            # the stage's default is ON: say off
     _on "$SESSION_INCL_ASSIGN" SESSION_INCL_ASSIGN && sess_args+=(--incl-assign-rejected)   # keep inclusion-tail spikes in the sort
     _on "$SESSION_NO_NOISE" SESSION_NO_NOISE    && sess_args+=(--no-noise)               # remaining noise -> one undefined fiber
     _on "$SESSION_KEEP_SMALL" SESSION_KEEP_SMALL  && sess_args+=(--keep-small-groups --keep-small-min "$SESSION_KEEP_SMALL_MIN")

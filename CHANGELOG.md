@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.13] — FK_SESSION_DIPSPLIT 0 turns the dip split off
+- `FK_SESSION_DIPSPLIT: 0` did not turn the dip split off through `fiber-pipeline`: the runner
+  passed `--dipsplit` when the knob was on and nothing when it was off, and fiber-session's default
+  is on.  It passes `--no-dipsplit` now.  Every shipped profile sets the knob to 1, so no shipped
+  plan changes; a profile that set it to 0 gets what it asked for.
+- test_runner_knobs (new): every switch flag the runner passes changes its stage's default in the
+  state it is passed in, or is paired with the flag of the other state.  The dip split was the
+  only one of 18 that did not.
+
 ## [0.71.12] — one table of the stages; fiber-plan-lint knows every stage the runner plans
 - A stage was listed in the runner (five arrays, their summaries, two dispatch tables, the plan
   parser's known set), in the plan editor's catalogue and in its module map.  The lists had drifted:
