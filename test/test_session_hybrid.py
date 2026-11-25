@@ -25,7 +25,7 @@ import tempfile
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-from fiber_kit import fiber_lib as fl, fiber_pca as fpca, neuro_io as nio   # noqa: E402
+from fiber_kit import fiber_lib as fl, fiber_pca as fpca   # noqa: E402
 
 SR = 20000.0
 NSAMP, NCH, NTOTAL = 32, 3, 4

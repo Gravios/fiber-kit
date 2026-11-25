@@ -176,7 +176,6 @@ def estimate_drift(store, chunks):
 
 
 def make_temporal_cost(chunks, D, lam, use_drift):
-    cidx = {c: i for i, c in enumerate(chunks)}
     carr = np.array(chunks, float)
     def Dinterp(mc):
         return float(np.interp(mc, carr, D))

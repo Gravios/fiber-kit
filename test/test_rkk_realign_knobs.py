@@ -4,7 +4,6 @@
     Block N); the default is still 6 and the environment moves it;
   * FK_SESSION_RKK_DIMS: --rkk-dims had no knob (default 6), so a plan could not set it.
 """
-import argparse
 import os
 import subprocess
 import sys

@@ -27,7 +27,7 @@ expression are approximate. Whether an algorithm is right was not asked here (se
 | 6 | The profiles repeat each other | four files, 6,504 lines; 9 in 10 comment lines are copies | medium |
 | 7 | 28 modules are named by no test | among them the three linkers' shared code | medium |
 | 8 | Where things are | 100 modules in one directory, three subsystems in one package | medium |
-| 9 | Small debts | swallowed exceptions, seven unregistered environment knobs, long lines | low |
+| 9 | Small debts | swallowed exceptions, six unregistered environment knobs, long lines | low |
 
 What is in good order: no `TODO` or `FIXME` anywhere; no function body occurs twice; 29
 functions (287 lines) are named nowhere else, against 107 in Klusters; every registered knob is
@@ -216,10 +216,13 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 
 ## 9. Small debts
 
-- 38 `except Exception: pass` (4 in `fiber_realign.py`); 65 `except Exception` in all.
+- 11 `except Exception` followed by `pass` (4 in `fiber_realign.py`, 4 in `fiber_session.py`), 7
+  of them without a word on why; 65 `except Exception` in all. *Corrected the same day:* this
+  said 38; that count took every `except <anything>: pass`.
 - Environment knobs outside the registry: `FIBER_ALIGN`, `FIBER_ALIGN_CHANNELS`,
   `FIBER_SUBSAMPLE`, `FIBER_PROBE_FLIP_Y`, `FIBER_KIT_GPU`, `FK_SPK_VARIANT`; the profiles still
-  explain the retired `FK_REFINE_DEDUP_STRICT`.
+  explain the retired `FK_REFINE_DEDUP_STRICT`. *Done after 0.71.12:* `docs/pipeline.md` lists the
+  environment variables that are not knobs.
 - 448 `print` calls and no logging level: a stage cannot be made quiet or verbose.
 - 343 lines over 120 columns, 26 over 160.
 - 47 function names are defined in more than one module with different bodies

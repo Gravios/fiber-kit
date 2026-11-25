@@ -119,7 +119,6 @@ def main():
                                  merge_corr=0.90, merge_method="sliding")
 
     # raw waveforms + raw whitener
-    T2 = fl.fil_to_spkD_space(span)           # only to reuse the off-spike baseline mask logic
     forb = np.zeros(len(span), bool)
     for sp in rel:
         forb[max(0, sp - 24):min(len(span), sp + 24)] = True

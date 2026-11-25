@@ -104,7 +104,7 @@ def main(base, suffix):
         if just_above.size:
             print(f"  {just_above.size} bad child id(s) sit within +64 of it "
                   f"({just_above.min()}..{just_above.max()}) — the recluster/promote")
-            print(f"  id-offset signature (new atom ids = target Data's highestClusterId()+k).")
+            print("  id-offset signature (new atom ids = target Data's highestClusterId()+k).")
 
     # ── (2b) COVERAGE: does each parent == union of its children? ────────────
     print("\n" + "=" * 70)

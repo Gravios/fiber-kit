@@ -2548,7 +2548,6 @@ def main():
     # take `_lag` take the hybrid -- again no signature change and no call site to miss.  The
     # aligner sums only the method channels (fl.set_align_channels), so the raw block follows the
     # stderiv alignment instead of voting in it.
-    hybrid = False
     if a.feat_hybrid and cluster_basis is not None:
         std_basis = _fpca.read_cluster_basis(a.base, a.elec, "standard")
         if nio.parse_variant_token(a.method).family == "standard":
@@ -2587,7 +2586,6 @@ def main():
                 elif a.hybrid_deriv_basis == "high":
                     det("hybrid", "deriv-basis high: ignored in the lag space (the lag basis is derived from the session basis)")
                 cluster_basis["_hyb"]["gain"] = _fpca.fit_hybrid_gain(_wm, _wr, cluster_basis, fit=a.hybrid_gain_fit)
-                hybrid = True
                 hb = cluster_basis["_hyb"]
                 log(f"hybrid features: + standard basis {hb['basis']['evec'].shape[0]}ch x {hb['pcs']} "
                     f"of the raw window, scale {hb['scale']:g} (gain {hb['gain']:.4g}, fit on {a.hybrid_gain_fit}"

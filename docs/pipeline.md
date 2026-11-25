@@ -442,3 +442,23 @@ session -> psame-chunk (per-chunk: 1) -> cpos-session -> chunk -> realign-chunk 
 `psame-chunk` runs before intrachunk there, not just before the linker, because fiber-link reads
 intrachunk's `units.npz`, which a relabel after intrachunk would leave stale.  That combination has not
 been scored on a ground truth; the plan without the merges is kept commented out in the template.
+
+### Environment variables that are not knobs
+
+The `FK_*` knobs of [config.md](config.md) can be set in a profile.  These cannot; they are read
+from the environment only.
+
+| Variable | Read by | Meaning |
+|---|---|---|
+| `FK_CONFIG` | runner, stages | the `fiber-kit.yaml` in force (default: the one in the working directory) |
+| `FK_DIR`, `FK_SESS` | runner | session directory and session name (default: `$PWD` and its basename); `--session <base>` sets both |
+| `FK_ELEC` | runner | the group, when no leading `<elec>` argument is given (older invocations) |
+| `FK_DRYRUN` | runner | set by `--dry-run`: print each command instead of running it |
+| `FK_PYTHON` | runner | the python the runner's own helpers use (default `python3`) |
+| `FK_RUNNER_ANY_VERSION` | runner | `1` = start even when the runner and the fiber_kit package differ in version |
+| `FK_SPK_VARIANT` | `neuro_io` | names the exact `.spk` when a method family has more than one on disk and the caller gave no token |
+| `FIBER_KIT_GPU` | `backend` | `1` = use CuPy where a stage supports it (off by default) |
+| `FIBER_ALIGN` | `fiber_lib` | feature alignment `xcorr` / `centroid` / `off`; `--feature-align` of fiber-session and fiber-refine sets it so pool workers see it |
+| `FIBER_ALIGN_CHANNELS` | `fiber_lib` | only the first N channels of a window vote in the alignment (0 = all); fiber-session sets it for the hybrid feature space |
+| `FIBER_SUBSAMPLE` | `fiber_lib` | `0` = realign on the integer grid (default: sub-sample) |
+| `FIBER_PROBE_FLIP_Y` | `fiber_localize` | probe indices whose shanks are mirrored top to bottom, e.g. `0` or `0,2` |

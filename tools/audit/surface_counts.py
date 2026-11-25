@@ -50,7 +50,7 @@ for y in ('fiber-kit-exp.yaml', 'fiber-kit.yaml'):
     L = open(S + y).read().split('\n'); c = [l for l in L if l.strip().startswith('#')]; print(f'{y}: {len(c)} comment lines of {len(L)}; narrating history/version: {sum(bool(pat.search(l)) for l in c)}; longest line {max(map(len, L))}')
 cl = open(R + '/CHANGELOG.md').read(); print('CHANGELOG entries:', len(re.findall(r'^## \[', cl, re.M)))
 # --- debts
-print('\nTODO/FIXME/XXX:', len(re.findall(r'\b(TODO|FIXME|XXX)\b', allsrc)), '| bare except:', len(re.findall(r'except\s*:', allsrc)), '| except Exception:', len(re.findall(r'except Exception', allsrc)), '| ...followed by pass:', len(re.findall(r'except[^\n]*:\s*\n\s*pass\b', allsrc)) + len(re.findall(r'except[^\n]*:\s*pass\b', allsrc)))
+print('\nTODO/FIXME/XXX:', len(re.findall(r'\b(TODO|FIXME|XXX)\b', allsrc)), '| bare except:', len(re.findall(r'except\s*:', allsrc)), '| except Exception:', len(re.findall(r'except Exception', allsrc)), '| except Exception followed by pass:', len(re.findall(r'except Exception[^\n]*:\s*(#[^\n]*)?\n\s*pass\b', allsrc)))
 print('print(', len(re.findall(r'\bprint\(', allsrc)), '| logging.', len(re.findall(r'\blogging\.|\blog\.(info|warning|debug|error)\(', allsrc)), '| sys.exit / SystemExit:', len(re.findall(r'sys\.exit\(|SystemExit\(', allsrc)), '| global statements:', len(re.findall(r'^\s+global \w', allsrc, re.M)))
 print('functions with a docstring:', sum(bool(ast.get_docstring(n)) for s in T.values() for n in ast.walk(ast.parse(s)) if isinstance(n, ast.FunctionDef)), '| classes:', len(re.findall(r'^class \w', allsrc, re.M)))
 print('lazy imports inside functions:', len(re.findall(r'^\s{4,}(import|from) \w', allsrc, re.M)))

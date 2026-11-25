@@ -107,7 +107,6 @@ def bundle_within_chunk(uf, F, prof_thr=0.10, tcorr_min=0.96, veto=None):
             reps = sorted({uf.find(r) for r in rows})    # current bundle reps in this chunk
             if len(reps) < 2:
                 continue
-            geo = {r: (uf.find(r)) for r in reps}        # rep row -> itself
             D = np.full((len(reps), len(reps)), 9.0)
             for i in range(len(reps)):
                 for j in range(i + 1, len(reps)):
