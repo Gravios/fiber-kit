@@ -14,8 +14,9 @@ WHAT IT PRESERVES.  Section headings, stage ORDER and every hand-written
 paragraph are editorial and are left exactly as they are.  Only each stage's
 "Positional:" line and its flag table are rewritten, keyed by the
 `### `fiber-name`` heading already in the file.  A stage that exists in the code
-but has no heading in the doc is REPORTED, not inserted: where it belongs in the
-narrative is a judgement the generator does not get to make.
+but has no heading in the doc is not inserted: where it belongs in the narrative
+is a judgement the generator does not get to make.  It is reported, and --check
+fails on it, so a new console command cannot ship without its section.
 
 LIMITS, stated because they are the reason to read the output rather than trust
 it.  A default that is a literal (97% of them) or a module-level constant is
@@ -308,7 +309,7 @@ def render_block(stage):
 
 
 # ── rewriting the doc, in place, per heading ─────────────────────────────────
-HEAD = re.compile(r"^### `([a-z0-9-]+)`\s*$", re.M)
+HEAD = re.compile(r"^### `([a-z0-9_-]+)`[^\n]*$", re.M)   # a heading may carry a remark after the name
 
 
 def rebuild(doc_text, stages):
@@ -333,12 +334,13 @@ def rebuild(doc_text, stages):
         used.add(name)
         # keep prose before the Positional line / table, and any trailing
         # "## " section heading that belongs to the NEXT section
-        m = re.search(r"^(Positional:.*?$|\| flag \| default \| description \|)", body, re.M)
-        prose = body[:m.start()] if m else body
         tail = ""
         t = re.search(r"\n(## .*)$", body, re.S)
-        if t:
-            tail = "\n" + t.group(1)
+        if t:                                    # the next section's heading is not this stage's prose:
+            tail = "\n" + t.group(1)             # a block that has no table yet would otherwise keep it
+            body = body[:t.start()] + "\n"       # as prose and get it appended a second time
+        m = re.search(r"^(Positional:.*?$|\| flag \| default \| description \|)", body, re.M)
+        prose = body[:m.start()] if m else body
         if not prose.endswith("\n\n"):
             prose = prose.rstrip("\n") + "\n\n"
         out.append(prose + render_block(st) + "\n" + tail)
@@ -464,6 +466,7 @@ def main():
     for n in undocumented:
         print(f"  note: stage '{n}' has a parser but no `### `{n}`` heading in {a.doc} "
               f"(placement is editorial \u2014 add the heading where it belongs)")
+    unknown = [n for n in unknown if n not in cmds]      # a console script whose parser could not be read
     for n in unknown:
         print(f"  note: heading '{n}' in {a.doc} has no matching console script")
     for n in dynamic:
@@ -491,6 +494,10 @@ def main():
         if new != doc:
             print(f"DRIFT: {a.doc} does not match the argument parsers. "
                   f"Run: python3 tools/gen_stages_doc.py")
+            return 1
+        if undocumented:
+            print(f"UNDOCUMENTED: {len(undocumented)} console command(s) have no heading in {a.doc}: "
+                  f"{', '.join(undocumented)}")
             return 1
         print(f"OK: {a.doc} matches the argument parsers "
               f"({len(stages)} stages, {len(unknown)} unmatched heading(s))")

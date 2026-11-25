@@ -107,6 +107,7 @@ for `fiber-session`); the plan editor's `CATALOG` and `STAGE_MODULES`; `pyprojec
   `fiber-template`, `fiber-unmix-children`, `fiber-morpho`, `fiber-morpho-fetch`,
   `fiber-config-edit`, `fiber-plan-lint`, `fiber-view-tour`. `gen_stages_doc.py --check` passes:
   it checks that each section matches its parser, not that each entry point has a section.
+  *Done after 0.71.12:* the ten have a section, and `--check` fails on a command without one.
 - `fiber_chunks` and `fiber_subsession` have a `main` and no entry point (reached through `fk`
   and the runner).
 
