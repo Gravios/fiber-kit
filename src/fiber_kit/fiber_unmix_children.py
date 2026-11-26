@@ -19,7 +19,7 @@ decided here: the unit's own spikes stay one child, exactly as they were.
 Read:   <base>.clu.<method>.<g>.<stage>            any --one-as form of the stage
         <base>.unmix.<method>.<g>.<stage>.tsv      the stage's manifest
 Write:  <base>.{clu,clc,clp}.<method>.<g>.<out>    (default <stage>_h)
-        and, beside them, links to the stage's .eap and .spkc files under the
+        and, beside them, copies of the stage's .eap and .spkc files under the
         new tag, so Klusters shows the collision rows as it does for the stage.
 
 Which rows move.  A `one` row goes under its unit (the manifest's k1) when the
@@ -146,9 +146,11 @@ def check_nesting(parent, child):
     return bool(np.unique(pairs[:, 0]).size == pairs.shape[0])
 
 
-def link_collision_files(base, elec, stage, out, log):
-    """The stage's .eap and .spkc files under the new tag (a hard link, a copy where links are not
-    possible): the rows are the same, so the files are."""
+def copy_collision_files(base, elec, stage, out, log):
+    """The stage's .eap and .spkc files under the new tag, as COPIES.  The rows are the same, so the
+    contents are; but the two stages are then curated apart.  Klusters rewrites its stage's .eap
+    (the offsets, at Save) and .spkc in place, so a hard link -- what this made until 0.71.21 --
+    gave the flat stage whatever was saved from the hierarchical one."""
     import glob
     made = []
     src = [nio.session_path(base, "eap", elec, tag=stage)]
@@ -157,17 +159,14 @@ def link_collision_files(base, elec, stage, out, log):
         if not os.path.exists(s):
             continue
         d = s[: len(s) - len(stage)] + out
-        if os.path.exists(d):
-            os.remove(d)
-        try:
-            os.link(s, d)
-        except OSError:
-            shutil.copyfile(s, d)
+        tmp = f"{d}.tmp{os.getpid()}"
+        shutil.copyfile(s, tmp)
+        os.replace(tmp, d)                      # a link left by an earlier version is replaced, not written through
         made.append(os.path.basename(d))
     if made:
-        log("[unmix-children] collision files under the new tag: " + ", ".join(made))
+        log("[unmix-children] collision files copied under the new tag: " + ", ".join(made))
     else:
-        log(f"[unmix-children] stage '{stage}' has no .eap / .spkc of its own -- none linked")
+        log(f"[unmix-children] stage '{stage}' has no .eap / .spkc of its own -- none copied")
     return made
 
 
@@ -188,7 +187,7 @@ def main(argv=None):
                     help="also put the collision rows fiber-unmix parked in its collision cluster "
                          "under their first unit, as one more child")
     ap.add_argument("--no-collision-files", action="store_true",
-                    help="do not link the stage's .eap / .spkc files under the new tag")
+                    help="do not copy the stage's .eap / .spkc files under the new tag")
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
 
@@ -220,7 +219,7 @@ def main(argv=None):
     log(f"[unmix-children] wrote {', '.join(os.path.basename(p) for p in paths)}: "
         f"{st['parents']} parents, {st['children']} children")
     if not a.no_collision_files:
-        link_collision_files(base, a.elec, stage, out, log)
+        copy_collision_files(base, a.elec, stage, out, log)
     return 0
 
 

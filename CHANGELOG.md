@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.21] — fiber-unmix-children: the collision files are copies, not hard links
+`fiber-unmix-children` put the stage's `.eap` and `.spkc` under `<tag>_h` as hard links. Klusters
+writes its stage's `.eap` (the fitted offsets, at Save) and `.spkc` in place, so a Save of the
+hierarchical stage rewrote the flat stage's files as well.
+
+- `copy_collision_files` (was `link_collision_files`) copies, through a temporary file and a
+  rename, so a link left by an earlier version is replaced and not written through.
+- Cost: the `.eap` is spikes x classes bytes, once more per `_h` stage.
+- `test_unmix_children`: a write in place under the new tag leaves the stage's file as it was; a
+  hard link from an earlier run becomes a copy.
+
+A session made before this still has the two tags on one file: run `fiber-unmix-children` again,
+or copy the files by hand. Found while checking the `.eap` contract with neurosuite-3
+(`claude/eap-contract-fk-ns3-2026-11-26.md`, item 2).
+
 ## [0.71.20] — fiber-unmix: a second run does not keep the first run's .eap
 `fiber-unmix` wrote its output stage's `.eap` by adding cells to the table already under that tag.
 A second run under the same tag, after the clustering it reads had changed, left every kept row

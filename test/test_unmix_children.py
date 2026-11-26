@@ -165,9 +165,20 @@ def main():
               hu == np.unique(parent).size and hc == np.unique(child).size and hp == clp.size)
         check("the stage's .eap and .spkc files are there under the new tag",
               all(_bytes(f"{base}.{t}_h") == t.encode() for t in ("eap.1.um", "spkc.standard.1.um", "spkc.m.1.um")))
+        # ... as files of their own: Klusters rewrites its stage's .eap and .spkc in place
+        with open(f"{base}.eap.1.um_h", "r+b") as fh:
+            fh.write(b"X")
+        check("they are copies: a write in place under the new tag leaves the stage's file as it was",
+              _bytes(f"{base}.eap.1.um") == b"eap.1.um"
+              and not any(os.path.samefile(f"{base}.{t}", f"{base}.{t}_h") for t in ("eap.1.um", "spkc.standard.1.um")))
+        os.remove(f"{base}.eap.1.um_h"); os.link(f"{base}.eap.1.um", f"{base}.eap.1.um_h")
+        r = run(base, ["--stage", "um"])
+        check("a hard link an earlier version left under the new tag is replaced by a copy",
+              r.returncode == 0 and not os.path.samefile(f"{base}.eap.1.um", f"{base}.eap.1.um_h")
+              and _bytes(f"{base}.eap.1.um_h") == b"eap.1.um")
         check("the stage's own .clu is untouched", np.array_equal(nio.read_clu_file(f"{base}.clu.m.1.um")[1], f["units"]))
         r = run(base, ["--stage", "um", "--collisions", "--out-tag", "umc", "--no-collision-files"])
-        check("--collisions --out-tag: written under that tag, no collision files linked",
+        check("--collisions --out-tag: written under that tag, no collision files copied",
               r.returncode == 0 and np.array_equal(read(base, "umc")[1][1], c4) and not os.path.exists(f"{base}.eap.1.umc"))
         r = run(base, ["--stage", "um", "--out-tag", "um"])
         check("an output tag equal to the stage is refused", r.returncode != 0 and "overwritten" in r.stderr)

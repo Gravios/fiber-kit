@@ -1671,7 +1671,8 @@ spikes are its self child (unit + 10000) and the `one` spikes a second child (20
 Klusters shows each unit with what unmix would add to it as one child -- to keep, cut or move.
 The result does not depend on `--one-as`.  A row no longer where fiber-unmix put it (moved by hand)
 is left alone; `--collisions` adds the parked collision spikes as a third child; the stage's
-`.eap` / `.spkc` are linked under the new tag.
+`.eap` / `.spkc` are copied under the new tag (hard links until 0.71.21: Klusters writes its
+stage's `.eap` and `.spkc` in place, so a Save of `<tag>_h` rewrote the flat stage's files too).
 
 `--spkc 2` (0.71.7) writes the cleaned rows the way YASS and DARTsort do instead: **residual
 add-back**.  The pursuit has already placed every spike it found in the segment; a row's cleaned
@@ -1745,7 +1746,7 @@ Positional: `base`, `elec`
 | `--clu-stage` (`--stage`) | — | the fiber-unmix stage to read (its .clu and its .unmix...tsv) |
 | `--out-tag` | — | output stage tag (default <clu-stage>_h) |
 | `--collisions` | flag (off) | also put the collision rows fiber-unmix parked in its collision cluster under their first unit, as one more child |
-| `--no-collision-files` | flag (off) | do not link the stage's .eap / .spkc files under the new tag |
+| `--no-collision-files` | flag (off) | do not copy the stage's .eap / .spkc files under the new tag |
 ### `fiber-decollide`
 
 Write collisions resolved by matching pursuit back to a derived stage.
