@@ -184,6 +184,8 @@ _KNOBS = {
                                                          "alignment, as before"),
     "FK_POLISH_REALIGN_MAXLAG": ("realign_maxlag", int, 3, "realign: furthest a spike is moved from its stored position (samples)"),
     "FK_POLISH_REALIGN_MIN": ("realign_min", int, 20, "realign: smallest cluster that is realigned (smaller ones stay as stored)"),
+    "FK_POLISH_JOBS": ("jobs", int, 1, "worker processes that find the islands (1 = none, 0 = one per core); "
+                                       "the labels do not depend on it"),
     "FK_POLISH_COS": ("cos", float, 0.5, "template cosine a pair needs to be a candidate (islands and merge)"),
     "FK_POLISH_TPL_CAP": ("tpl_cap", int, 1000, "spikes per cluster used for a median template and its tails"),
     "FK_POLISH_HYBRID_PCS": ("hybrid_pcs", int, 3, "features: standard-basis components per channel in the raw block of the hybrid space"),
@@ -374,14 +376,47 @@ def realign_clusters(labels, windows, shift, *, topch=2, maxlag=3, min_n=20, ski
 
 
 # ── islands ──────────────────────────────────────────────────────────────────
-def island_pass(labels, raw, F, *, leaf=300, runs=8, island_min=10, min_clu=60, margin=0.5, cos=0.5,
-                tpl_cap=1000, skip=(), rng=None, log=None):
-    """Per-cluster small-leaf t-SNE consensus; reassign an island only where its median fits another
-    cluster better than its parent.  `F` (n, d) full features of every spike.  Returns (labels, stats)."""
+def _island_cluster(task):
+    """The islands of ONE cluster, from its features alone: kd leaves, `runs` subsampled t-SNE embeddings per
+    leaf, co-neighbour communities.  Returns (ci, leaves, [rows of the cluster forming an island, ...]).
+
+    A top-level function with picklable arguments, so a worker process can run it (95% of the island
+    pass's time is here).  Its random subsets come from a generator of its own, seeded by (seed, cluster
+    id): the result does not depend on which process runs it, on how many there are, or on the order."""
+    ci, f, Fm, leaf, runs, min_clu, island_min, seed = task
     try:
         from . import fiber_consensus as fcs
     except ImportError:
         import fiber_consensus as fcs
+    rng = np.random.default_rng([int(seed), int(f)])
+    Z = Fm - Fm.mean(0)
+    U, Sv, _ = np.linalg.svd(Z, full_matrices=False)
+    leaves, out = 0, []
+    for loc in kd_leaves(U[:, :2] * Sv[:2], int(leaf)):
+        if loc.size < min_clu:
+            continue
+        leaves += 1
+        Zc = Fm[loc]
+        Zc = (Zc - Zc.mean(0)) / Zc.std(0).clip(1e-9)
+        sub = max(17, int(round(0.7 * loc.size)))
+        rr = [fcs._one_run(Zc, np.sort(rng.choice(loc.size, sub, replace=False)),
+                           min(30.0, (sub - 2) / 3.0), 1000 * ci + r, 15, 1, 120, 300)
+              for r in range(int(runs))]
+        com = fcs.coneighbour_communities(rr, loc.size, seed=ci)
+        sizes = np.bincount(com)
+        core = int(sizes.argmax())                             # the leaf's core stays
+        out += [loc[com == k] for k in np.flatnonzero(sizes >= island_min) if k != core]
+    return ci, leaves, out
+
+
+def island_pass(labels, raw, F, *, leaf=300, runs=8, island_min=10, min_clu=60, margin=0.5, cos=0.5,
+                tpl_cap=1000, skip=(), rng=None, log=None, pool=None):
+    """Per-cluster small-leaf t-SNE consensus; reassign an island only where its median fits another
+    cluster better than its parent.  `F` (n, d) full features of every spike.  Returns (labels, stats).
+
+    `pool` (a concurrent.futures executor, or None) finds the islands of the clusters in worker
+    processes; what is done with them -- medians, the two residuals, the move -- stays here, in cluster
+    order.  The result is the same with any pool and with none (see _island_cluster)."""
     rng = rng or np.random.default_rng(0)
     lab = np.asarray(labels).astype(np.int64)
     ids, cnt = np.unique(lab[_real(lab)], return_counts=True)
@@ -390,51 +425,38 @@ def island_pass(labels, raw, F, *, leaf=300, runs=8, island_min=10, min_clu=60, 
     tn = {f: tmpl[f].ravel() / max(np.linalg.norm(tmpl[f]), 1e-12) for f in clus}
     new = lab.copy()
     st = dict(leaves=0, islands=0, moved=0, spikes=0)
-    for ci, f in enumerate(clus):
-        m = np.flatnonzero(lab == f)
-        Z = F[m] - F[m].mean(0)
-        U, Sv, _ = np.linalg.svd(Z, full_matrices=False)
-        for loc in kd_leaves(U[:, :2] * Sv[:2], int(leaf)):
-            if loc.size < min_clu:
+    seed = int(rng.integers(2 ** 31))                         # one draw: this pass's seed for every cluster's own stream
+    rows = {f: np.flatnonzero(lab == f) for f in clus}
+    tasks = ((ci, f, F[rows[f]], leaf, runs, min_clu, island_min, seed) for ci, f in enumerate(clus))
+    found = pool.map(_island_cluster, tasks) if pool is not None else map(_island_cluster, tasks)
+    for (ci, leaves, islands), f in zip(found, clus):
+        m = rows[f]
+        st["leaves"] += leaves
+        for loc in islands:
+            isl = m[loc]
+            st["islands"] += 1
+            TI = np.median(raw(isl), 0)
+            rest = np.setdiff1d(m, isl)
+            if rest.size < 8:
                 continue
-            st["leaves"] += 1
-            Zc = F[m[loc]]
-            Zc = (Zc - Zc.mean(0)) / Zc.std(0).clip(1e-9)
-            sub = max(17, int(round(0.7 * loc.size)))
-            rr = [fcs._one_run(Zc, np.sort(rng.choice(loc.size, sub, replace=False)),
-                               min(30.0, (sub - 2) / 3.0), 1000 * ci + r, 15, 1, 120, 300)
-                  for r in range(int(runs))]
-            com = fcs.coneighbour_communities(rr, loc.size, seed=ci)
-            sizes = np.bincount(com)
-            core = int(sizes.argmax())
-            for k in np.flatnonzero(sizes >= island_min):
-                if k == core:
-                    continue                                   # the leaf's core stays
-                isl = m[loc[com == k]]
-                st["islands"] += 1
-                TI = np.median(raw(isl), 0)
-                rest = np.setdiff1d(m, isl)
-                if rest.size < 8:
-                    continue
-                dP = gain_residual(TI, np.median(raw(_sub(rest, tpl_cap, rng)), 0))
-                ti = TI.ravel() / max(np.linalg.norm(TI), 1e-12)
-                best, dB = None, np.inf
-                for x in clus:
-                    if x != f and float(ti @ tn[x]) >= cos:
-                        d = gain_residual(TI, tmpl[x])
-                        if d < dB:
-                            best, dB = x, d
-                if best is not None and dB < margin * dP:
-                    new[isl] = best
-                    st["moved"] += 1
-                    st["spikes"] += int(isl.size)
+            dP = gain_residual(TI, np.median(raw(_sub(rest, tpl_cap, rng)), 0))
+            ti = TI.ravel() / max(np.linalg.norm(TI), 1e-12)
+            best, dB = None, np.inf
+            for x in clus:
+                if x != f and float(ti @ tn[x]) >= cos:
+                    d = gain_residual(TI, tmpl[x])
+                    if d < dB:
+                        best, dB = x, d
+            if best is not None and dB < margin * dP:
+                new[isl] = best
+                st["moved"] += 1
+                st["spikes"] += int(isl.size)
     if log:
         log(f"  islands: {len(clus)} clusters -> {st['leaves']} leaves -> {st['islands']} islands, "
             f"{st['moved']} moved ({st['spikes']:,} spikes)")
     return new, st
 
 
-# ── merge: the reverse residual strip ────────────────────────────────────────
 def _entry(W, k):
     T = np.median(W, 0)
     t = fcn.resid_terms(W, T)
@@ -535,8 +557,9 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
            island_runs=8, island_min=10, island_min_clu=60, island_margin=0.5, merge_thr=0.7, merge_min=50,
            cos=0.5, tpl_cap=1000, seed=0, rkk=None, log=None, on_stage=None,
            core_cut=0, cc_min=200, cc_max=40000, merge_q=-1.0, merge_q_max=0.0, sr=0.0, merge_stats=None,
-           realign=None, refeat=None):
-    """Run the chain.  `realign(labels, skip)` (optional) is called before every loop and every round:
+           realign=None, refeat=None, jobs=1):
+    """Run the chain.  `jobs` worker processes find the islands (1 = none, 0 = one per core); the labels
+    do not depend on it.  `realign(labels, skip)` (optional) is called before every loop and every round:
     it re-times each cluster's spikes, and `raw` / `feats` must then return the windows and features at
     that timing (the CLI's do); `refeat()` returns the full feature matrix after it, for the islands.
     Without `realign` nothing is re-timed.  `sr` (the sampling rate) is needed for core_cut 1 / 2.  `merge_stats` (a
@@ -559,6 +582,32 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
         if on_stage:
             on_stage(f"loop {it} ({time.time() - t0:.0f}s)", lab)
     skip = () if residue is None else (int(residue),)
+    pool = None
+    if island and int(rounds) > 0 and int(jobs) != 1:
+        try:
+            from . import fiber_consensus as _fcs
+        except ImportError:
+            import fiber_consensus as _fcs
+        pool = _fcs._pool(int(jobs))                           # spawned workers, BLAS pinned to one thread each
+        if log and pool is not None:
+            log(f"[polish] islands in {pool._max_workers} worker processes")
+    try:
+        lab = _rounds(lab, raw, feats, F, rounds, island, merge, realign, refeat, skip, rng, log, on_stage, pool,
+                      dict(leaf=leaf, runs=island_runs, island_min=island_min, min_clu=island_min_clu,
+                           margin=island_margin, cos=cos, tpl_cap=tpl_cap),
+                      dict(thr=merge_thr, cos=cos, min_n=merge_min, tpl_cap=tpl_cap, merge_q=merge_q,
+                           merge_q_max=merge_q_max), merge_stats)
+    finally:
+        if pool is not None:
+            pool.shutdown()
+    if residue is not None:
+        lab[lab == 1] = residue                               # nothing this stage parked stays in the noise cluster
+    return lab, residue
+
+
+def _rounds(lab, raw, feats, F, rounds, island, merge, realign, refeat, skip, rng, log, on_stage, pool, isl_kw,
+            merge_kw, merge_stats):
+    """polish()'s island / merge rounds."""
     for it in range(1, int(rounds) + 1):
         if realign is not None:
             realign(lab, skip)
@@ -570,9 +619,7 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
             t0 = time.time()
             if log:
                 log(f"[polish] islands {it}/{rounds}")
-            lab, _ = island_pass(lab, raw, F, leaf=leaf, runs=island_runs, island_min=island_min,
-                                 min_clu=island_min_clu, margin=island_margin, cos=cos, tpl_cap=tpl_cap,
-                                 skip=skip, rng=rng, log=log)
+            lab, _ = island_pass(lab, raw, F, skip=skip, rng=rng, log=log, pool=pool, **isl_kw)
             if on_stage:
                 on_stage(f"islands {it} ({time.time() - t0:.0f}s)", lab)
         if merge:
@@ -580,15 +627,12 @@ def polish(labels, raw, feats, F=None, *, loops=2, rounds=2, island=1, merge=1, 
             if log:
                 log(f"[polish] merge {it}/{rounds}")
             st = dict(before=lab.copy()) if merge_stats is not None else None
-            lab, _ = merge_pass(lab, raw, thr=merge_thr, cos=cos, min_n=merge_min, tpl_cap=tpl_cap,
-                                skip=skip, rng=rng, log=log, merge_q=merge_q, merge_q_max=merge_q_max, stats=st)
+            lab, _ = merge_pass(lab, raw, skip=skip, rng=rng, log=log, stats=st, **merge_kw)
             if merge_stats is not None:
                 merge_stats.append(st)
             if on_stage:
                 on_stage(f"merge {it} ({time.time() - t0:.0f}s)", lab)
-    if residue is not None:
-        lab[lab == 1] = residue                               # nothing this stage parked stays in the noise cluster
-    return lab, residue
+    return lab
 
 
 def score_against(labels, truth, min_n=50):

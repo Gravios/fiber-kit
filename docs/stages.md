@@ -1809,6 +1809,7 @@ Positional: `base`, `elec`
 | `--realign-topch` | `0` | realign: > 0 = before every loop and every round each cluster is realigned to its own median, only its N largest channels voting (Klusters' Realign top-ch; N >= the channel count = all of them), and every pass reads the windows at that alignment. 0 = the stored alignment, as before [FK_POLISH_REALIGN_TOPCH; default 0] |
 | `--realign-maxlag` | `3` | realign: furthest a spike is moved from its stored position (samples) [FK_POLISH_REALIGN_MAXLAG; default 3] |
 | `--realign-min` | `20` | realign: smallest cluster that is realigned (smaller ones stay as stored) [FK_POLISH_REALIGN_MIN; default 20] |
+| `--jobs` | `1` | worker processes that find the islands (1 = none, 0 = one per core); the labels do not depend on it [FK_POLISH_JOBS; default 1] |
 | `--cos` | `0.5` | template cosine a pair needs to be a candidate (islands and merge) [FK_POLISH_COS; default 0.5] |
 | `--tpl-cap` | `1000` | spikes per cluster used for a median template and its tails [FK_POLISH_TPL_CAP; default 1000] |
 | `--hybrid-pcs` | `3` | features: standard-basis components per channel in the raw block of the hybrid space [FK_POLISH_HYBRID_PCS; default 3] |

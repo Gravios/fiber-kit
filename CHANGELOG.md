@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.19] — fiber-polish finds the islands in worker processes
+- The island pass was 84% of fiber-polish's time on the 0312 g8 test (two chunks, 121,352 spikes:
+  1,547 of 1,800 s), and 95% of the pass is the search inside each cluster: kd leaves, eight
+  subsampled t-SNE embeddings per leaf, co-neighbour communities.  The whole stage ran in one process.
+- `--jobs` / `FK_POLISH_JOBS` (1 = none, 0 = one per core) runs that search in worker processes;
+  the medians, residuals and moves stay in the parent, in cluster order.  Measured on the same test,
+  2 cores: 25 min 50 s with no workers, 16 min 34 s with two (islands 1,294 s -> 738 s).
+- **The labels do not depend on the worker count**: the `.clu` of the run with two workers is
+  byte-identical to the run with none.  For that, a cluster's random subsets now come from a
+  generator seeded by the pass and the cluster's id instead of one stream shared by all clusters.
+- **This changes the stage's output once**, with or without workers: the subsets drawn are not the
+  ones 0.71.18 drew.  On the test the two sorts agree with each other at ARI 0.824 and with the
+  curations alike (previous curation 0.723 before, 0.747 after; the curation of 2026-11-26 0.705,
+  0.724).  That 0.82 is how much the island pass depends on its random subsets; it is not new,
+  it was not visible with one fixed stream.
+- test_polish_jobs (new).  test_polish's island check passes for about half of the seeds, before
+  and after (3 and 4 of 8); it uses one that does.
+
 ## [0.71.18] — fiber-pipeline's log says how long every step took
 - The log of a `fiber-pipeline` run had no times; how long a stage took had to be read off the
   modification times of its output files.

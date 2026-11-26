@@ -1822,6 +1822,10 @@ FK_POLISH_REALIGN_TOPCH: 0        # 0 | 1-3, or the channel count for all.  real
                                   #   (fiber_polish.py's header).
 FK_POLISH_REALIGN_MAXLAG: 3       # 3 | 1-6.  realign: furthest a spike is moved from its stored position (samples).
 FK_POLISH_REALIGN_MIN:   20       # 20.  realign: smallest cluster that is realigned; smaller ones stay as stored.
+FK_POLISH_JOBS:          1        # 1 | 0 or 2-N (processes).  Worker processes for the island pass: each cluster's kd leaves, t-SNE runs and
+                                  #   co-neighbour communities (95% of the pass, 81% of the stage on the 0312 g8 test) run in a worker;
+                                  #   0 = one per core.  The labels are the same with any count: a cluster's random subsets come from a
+                                  #   generator seeded by its id.  Workers are spawned (~1.5 s each) and run one BLAS thread.
 FK_POLISH_COS:           0.5      # 0.5.  template cosine a pair needs to be a candidate (islands and merge).
 FK_POLISH_TPL_CAP:       1000     # 1000.  spikes per cluster used for a template and its tails.
 FK_POLISH_HYBRID_PCS:    3        # 3 | 1-3.  features: standard-basis components per channel in the raw block.  The stage's
