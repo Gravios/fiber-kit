@@ -606,8 +606,10 @@ def main(argv=None):
             used = np.unique(np.r_[u["k1"][done], u["k2"][done]])
             m = kept & np.isin(clu, used[used > 1])
             own = (np.flatnonzero(m), clu[m])
+        # fresh: the stage is this run's.  A table left under the tag by an earlier run names the
+        # classes of the clustering that run read.
         em = fdc.write_eap_membership(base, a.elec, parent_tag=tag, n_spikes=n, manifest=eap_manifest(u),
-                                      n_cells=a.n_cells, own=own)
+                                      n_cells=a.n_cells, own=own, fresh=True)
         if em:
             log(f"[unmix] wrote {os.path.basename(em['eap'])} ({em['cells']:,} cells, "
                 f"{os.path.getsize(em['eap']) / 1e6:.0f} MB) + {os.path.basename(em['tcl'])}")

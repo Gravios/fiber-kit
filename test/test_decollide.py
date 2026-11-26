@@ -306,6 +306,24 @@ def test_eap_writer_reuse_allocation_and_grow():
         assert int(e["cells"][5, c10]) == 2                                 # unit 10's offset updated
         assert int(e["cells"][10, c10]) == 0                                # first call's cell preserved
 
+        # fresh=True: the stage's table is made anew.  Rows 0-9 were unit 10's; after a re-sort
+        # they are unit 55's.  Added to the old table every one of them would name two classes.
+        own1 = (np.arange(10), np.full(10, 10))
+        fd.write_eap_membership(b, 6, parent_tag="st", n_spikes=30, manifest=man1, n_cells=4, own=own1)
+        own2 = (np.arange(10), np.full(10, 55))
+        fd.write_eap_membership(b, 6, parent_tag="st", n_spikes=30, manifest=[], n_cells=4, own=own2)
+        kept = (nio.read_eap(b, 6, tag="st")["cells"] != nio.EAP_ABSENT).sum(1)
+        assert (kept[:10] == 2).all()                                       # the fault, without fresh
+        fd.write_eap_membership(b, 6, parent_tag="st", n_spikes=30, manifest=[], n_cells=4, own=own2, fresh=True)
+        e = nio.read_eap(b, 6, tag="st")
+        reg = nio.read_tcl(b, 6)
+        c55 = fd._eap_class_for_unit(reg["entries"], 55)
+        present = e["cells"] != nio.EAP_ABSENT
+        assert (present.sum(1)[:10] == 1).all() and present[:10, c55].all() and not present[10:].any()
+        assert e["nClasses"] == len(reg["entries"])                         # as wide as the registry
+        assert fd._eap_class_for_unit(reg["entries"], 10) == c10             # the registry is kept
+        assert int(nio.read_eap(b, 6, tag="")["cells"][10, c10]) == 0       # another stage's table is not touched
+
 
 if __name__ == "__main__":
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]

@@ -42,7 +42,7 @@ set -euo pipefail
 # keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
 # starts.  When the versions differ: hand over to the checkout's own script if there is one,
 # otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
-FK_RUNNER_VERSION="0.71.19"
+FK_RUNNER_VERSION="0.71.20"
 if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
     _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
 print(fiber_kit.__version__)

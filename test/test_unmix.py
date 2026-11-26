@@ -277,6 +277,18 @@ def main():
               and np.array_equal(sa["waves"], sr["waves"])
               and nio.read_eap(base, 1, tag="ur")["nClasses"] == nio.read_eap(base, 1, tag="ua")["nClasses"])
 
+        # a second run under the same tag, the clustering it reads renumbered (A and B swapped):
+        # the stage's .eap is this run's alone -- no kept row names two classes
+        swapped = np.where(clu == A, B, np.where(clu == B, A, clu))
+        nio.write_clu(base, 1, swapped, variant="stderiv", tag="clean")
+        rs = run(["--clu-stage", "clean"])
+        es = np.asarray(nio.read_eap(base, 1, tag="clean_unmix")["cells"])
+        check("run again under the same tag after the input changed: every kept spike names one class, its own",
+              rs.returncode == 0 and ((es[kept] != nio.EAP_ABSENT).sum(1) == 1).all()
+              and all((es[kept & (swapped == k), c] == 0).all() for k, c in col.items()))
+        nio.write_clu(base, 1, clu, variant="stderiv", tag="clean")
+        run(["--clu-stage", "clean"])                       # back to the first run's files for what follows
+
         r2 = run(["--clu-stage", "clean_unmix", "--skip-marked", "--eap", "off"])
         check("--skip-marked on the result: exits 0 and pursues only the rows without a class",
               r2.returncode == 0 and f"{int(((asu == 1) & (cells != nio.EAP_ABSENT).any(1)).sum()):,} noise rows already"

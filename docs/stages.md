@@ -1688,7 +1688,9 @@ sees only `partial` and `unexplained`.  Outputs: the flat `.clu` (the `.clc`/`.c
 rebuilt), `<base>.unmix.<method>.<g>.<out>.tsv` (one row per pursued detection: kind, first and
 second unit with amplitude and offset in samples, gain, margin, residual, whether the second unit
 was detected), and with `--eap all` the stage's `.eap`/`.tcl`: every kept spike holds its own class
-at offset 0, every explained detection the classes found in it.  The `.eap` is spikes x classes
+at offset 0, every explained detection the classes found in it.  The table is made anew by each run:
+what an earlier run left under the tag is not kept (0.71.20; before, a second run under the same
+tag added its cells to the old ones, and after a re-sort every kept row named two classes).  The `.eap` is spikes x classes
 bytes (one class per kept unit, in steps of `--n-cells`): about 0.6 GB for 800,000 spikes and 660
 units; `--eap resolved` writes the explained rows only, `--eap off` none.  `--skip-marked` leaves
 out the noise rows the input stage's `.eap` already explains.

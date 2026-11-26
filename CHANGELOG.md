@@ -4,6 +4,21 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.20] — fiber-unmix: a second run does not keep the first run's .eap
+`fiber-unmix` wrote its output stage's `.eap` by adding cells to the table already under that tag.
+A second run under the same tag, after the clustering it reads had changed, left every kept row
+naming its old class beside its new one -- to Klusters and `fiber-spkc`, a collision in every row.
+
+- `write_eap_membership(..., fresh=True)` starts from a table that names nobody; `fiber-unmix`
+  passes it. `fiber-decollide` and `fiber-envelope` annotate a stage they did not make and still
+  add to its table. The `.tcl` is kept either way: its classes are shared by the session's stages.
+- Tests: `test_decollide` shows the fault without `fresh` (2 classes per row) and one class with
+  it, the registry and another stage's table untouched; `test_unmix` runs the command twice under
+  one tag with two units' ids swapped in between (fails without the change).
+
+Found while checking the `.eap` contract with neurosuite-3
+(`claude/eap-contract-fk-ns3-2026-11-26.md`, item 1).
+
 ## [0.71.19] — fiber-polish finds the islands in worker processes
 - The island pass was 84% of fiber-polish's time on the 0312 g8 test (two chunks, 121,352 spikes:
   1,547 of 1,800 s), and 95% of the pass is the search inside each cluster: kd leaves, eight

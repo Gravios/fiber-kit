@@ -233,7 +233,7 @@ def _blank_tcl_entry(col):
 
 
 def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
-                         n_cells=128, created=None, own=None):
+                         n_cells=128, created=None, own=None, fresh=False):
     """Record the decollide `manifest` as .eap membership (+ .tcl classes) on the
     PARENT stage (`parent_tag`).  Resolution: the parent stage's .eap; else a fresh
     all-absent N × n_cells (process_initeap normally pre-builds it).  Each unit maps
@@ -245,7 +245,14 @@ def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
     cell for it (fiber-unmix: a spike explained by ONE unit, or by a neighbour
     only).  `own` = (rows, units), two equal-length integer arrays: each of those
     spike rows holds its own unit's class at offset 0 (fiber-unmix's mask of the
-    spikes that needed no explaining); written before the manifest rows."""
+    spikes that needed no explaining); written before the manifest rows.
+
+    `fresh`: the stage's table is made anew -- what the stage's .eap held before is not kept.
+    For a stage that WRITES its tag (fiber-unmix): a second run under the same tag, after the
+    clustering it reads has changed, must not leave each row naming its old class beside its
+    new one.  Without it the cells are added to the table that is there (fiber-decollide and
+    fiber-envelope annotate a stage they did not make).  The .tcl is kept either way: its
+    classes are shared by the session's stages."""
     has_own = own is not None and len(own[0]) > 0
     if not manifest and not has_own:
         return None
@@ -254,7 +261,7 @@ def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
         created = datetime.date.today().isoformat()
     grow_by = int(n_cells) if (n_cells and int(n_cells) > 0) else 128
 
-    cur = nio.read_eap(base, elec, tag=parent_tag)
+    cur = dict(ok=False) if fresh else nio.read_eap(base, elec, tag=parent_tag)
     if cur["ok"]:
         cells = np.array(cur["cells"], dtype=np.int8, copy=True)
         N = int(cur["nSpikes"])
