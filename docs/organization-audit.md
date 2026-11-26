@@ -274,7 +274,7 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 | 2 Two routes of a knob | the stage side done (0.71.14); the runner still builds the flags. 23 defaults differ with no profile: to decide |
 | 3 Stage lists | one table, tested (0.71.12); every command documented. The runner's per-stage functions remain |
 | 4 Runner from `PATH` | done (0.71.11) |
-| 5 Option names | open: the names are a choice (`--in` / `--out` / `--method`, or the present ones) |
+| 5 Option names | `--in`, `--out`, `--method` on every stage that has them (0.71.16); the longer names remain as aliases |
 | 6 Profiles | open: the layout of the profiles is a choice |
 | 7 Untested modules | measured (62%); no test added |
 | 8 Where things are | open: sub-packages change import paths |

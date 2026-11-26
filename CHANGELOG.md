@@ -4,6 +4,16 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.16] — --in, --out and --method on every stage
+- The stage of the clustering a stage reads was `--clu-stage` on 18 stages and `--in-stage` on two;
+  the one it writes `--out-stage` on some and `--out-tag` on others; the method token `--clu-method`
+  or `--method`.  Every stage that has them now also takes `--in`, `--out` and `--method`, the words
+  a plan uses.  `fiber-polish <base> 8 --in fc_session --out fc_polish --method stderiv_C5`.
+- The longer names keep working, and the runner still passes them.  Not given a short name: `--out`
+  on fiber-session, fiber-stochastic and fiber-rdr, where `--out` already names a file.
+- `stages.IO` is the table and `stages.add_io_aliases` applies it; test_stage_table checks it against
+  every stage's parser and against what the runner passes for a plan's `in:` and `out:`.
+
 ## [0.71.15] — unused functions removed
 - 20 functions that nothing in the repository names were removed (275 lines with their comments): `fiber_geometry`
   `temporal_offset`, `cross_spectrum_match`, `curl_feature`, `curl_distance`, `geo_veto`;

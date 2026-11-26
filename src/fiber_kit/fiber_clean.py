@@ -178,6 +178,11 @@ def main(argv=None):
     ap.add_argument("--q-spikes", type=int, default=1000, help="spikes per cluster the quality value is taken on")
     ap.add_argument("--min-keep", type=int, default=50, help="a cluster left with fewer spikes goes to the noise")
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_clean)")
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-clean")
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
 

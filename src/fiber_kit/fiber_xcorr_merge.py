@@ -525,6 +525,11 @@ def main():
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
     _fch.add_argument(ap, gcfg)
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-xcorr-merge")
     a = ap.parse_args()
     if a.merge_align not in ("peak", "klusters"):
         raise SystemExit(f"{_LP} · --merge-align must be peak or klusters, not {a.merge_align!r}")

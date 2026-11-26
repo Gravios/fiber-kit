@@ -318,6 +318,11 @@ def main():
     ap.add_argument("--burst-min-count", type=int, default=10,
                     help="min forward+backward pairs to test the burst signature (else abstain)")
     cfgmod.apply_profile_knobs(ap, "fiber-peel")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-peel")
     a = ap.parse_args()
 
     def _pair(txt):

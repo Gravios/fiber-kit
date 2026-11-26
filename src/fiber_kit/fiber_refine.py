@@ -1429,6 +1429,11 @@ def main():
                          "FIBER_SUBSAMPLE env var / lever untouched (off).  Reaches pool workers.")
     cfgmod.apply_profile_knobs(ap, "fiber-refine")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-refine")
     a = ap.parse_args()
     if a.feature_align:
         os.environ["FIBER_ALIGN"] = a.feature_align    # reach any spawned workers

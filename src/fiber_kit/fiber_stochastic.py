@@ -794,6 +794,11 @@ def main():
     add_arguments(ap)                  # the --stochastic-* diagnostic knobs
     cfgmod.apply_profile_knobs(ap, "fiber-stochastic")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-stochastic")
     a = ap.parse_args()
     run_stochastic(a)
 

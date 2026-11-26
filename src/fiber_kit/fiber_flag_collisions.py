@@ -166,6 +166,11 @@ def main(argv=None):
     ap.add_argument("--bins", type=int, default=20, help="peak-energy bins the expected tail is taken in")
     ap.add_argument("--dry-run", action="store_true", help="report the flagged counts, write nothing")
     cfgmod.apply_profile_knobs(ap, "fiber-flag-collisions")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-flag-collisions")
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
     if not 0.0 <= a.max_share <= 1.0:

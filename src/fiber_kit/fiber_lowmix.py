@@ -312,6 +312,11 @@ def main(argv=None):
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=d, help=f"{hlp} [{name}; default {d}]")
     ap.add_argument("--out-tag", default=None, help="output stage tag (default <clu-stage>_lowmix)")
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-lowmix")
     a = ap.parse_args(argv)
     if a.novel not in ("noise", "keep"):
         ap.error("--novel must be noise or keep")

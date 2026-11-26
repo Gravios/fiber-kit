@@ -1019,6 +1019,11 @@ def main(argv=None):
     _fch.add_argument(ap, _g)
     cfgmod.apply_profile_knobs(ap, "fiber-realign")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-realign")
     a = ap.parse_args(argv)
     if a.recut and a.check:
         raise SystemExit("[realign] --recut writes, --check does not: pick one")

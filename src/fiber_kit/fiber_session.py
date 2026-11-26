@@ -2376,6 +2376,11 @@ def main():
     _fch.add_argument(ap, cfgmod.load_global_config(), length=False)    # --chunks (FK_CHUNKS); counts in --chunk-min
     cfgmod.apply_profile_knobs(ap, "fiber-session")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-session")
     a = ap.parse_args()
     P = "\u25b8 fiber-session"; IND = " " * (len(P) + 3)
     def log(m=""):  print(f"{P} \u00b7 {m}" if m else P)

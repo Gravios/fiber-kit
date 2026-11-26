@@ -437,6 +437,11 @@ def main():
     fcons.add_consolidate_args(ap, gcfg, stage="ALINK")   # per-spike strip+knn cleanup of the linked
                                               # cells (default off; FK_ALINK_CONS_MODE scopes the mode)
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-anchor-link")
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
 

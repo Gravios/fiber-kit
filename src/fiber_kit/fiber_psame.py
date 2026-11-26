@@ -525,6 +525,11 @@ def main():
     for name, (dest, typ, fb) in _KNOBS.items():
         ap.add_argument("--" + dest.replace("_", "-"), dest=dest, type=typ, default=_knob_default(name, typ, fb, gcfg),
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-psame-merge")
     a = ap.parse_args()
     cfg = sy.resolve_session_params(a.session, a.elec)
     base = cfg["base"]; sr = cfg["sr"]; ns = cfg["nsamp"]; nc = cfg["nchan"]

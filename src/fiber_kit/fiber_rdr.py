@@ -211,6 +211,11 @@ def main(argv=None):
     # counting in it selected other minutes than the session sorted and scored nothing (until 0.57.1)
     _fch.add_argument(ap, gcfg)
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-rdr")
     a = ap.parse_args(argv)
     rng = np.random.default_rng(a.seed)
 

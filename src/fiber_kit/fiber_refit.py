@@ -90,6 +90,11 @@ def main():
     ap.add_argument("--chunk-minutes", "--chunk-min", type=float, default=12.0)
     ap.add_argument("--min-n", type=int, default=ic.DEFAULT_MIN_N, help="min spikes for a per-chunk signature")
     ap.add_argument("--out-stage", default=None, help="stage tag for the refit units (default '<variant>_refit')")
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-refit")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal,

@@ -91,6 +91,46 @@ STAGES = (
 _BY_NAME = {s.name: s for s in STAGES}
 
 
+# ─────────────── one spelling for a stage's input, output and method: --in / --out / --method ───────────────
+# A plan says `in:` and `out:`; on the command line the same two were --clu-stage or --in-stage, and
+# --out-stage or --out-tag, and the method token --clu-method or --method, depending on the stage.
+# IO names, per stage, the flag each of the three is an alias of.  A stage is absent from a row when it
+# has no such thing (fiber-realign reads no clustering) or when the short name already means something
+# else there: fiber-session, fiber-stochastic and fiber-rdr have an --out that names a file, and in the
+# first two --clu-stage is the OUTPUT, so they get --in only.  The longer names keep working.
+IO = {
+    "fiber-session": {"--in": "--in-stage"},
+    "fiber-stochastic": {"--in": "--in-stage"},
+    "fiber-refine": {"--out": "--out-stage"},
+    "fiber-realign": {"--out": "--out-stage"},
+    "fiber-flag-artifacts": {"--out": "--out-stage"},
+    "fiber-flag-collisions": {"--out": "--out-stage"},
+    "fiber-rdr": {"--in": "--clu-stage", "--method": "--clu-method"},
+}
+for _n in ("fiber-peel", "fiber-cpos", "fiber-intrachunk", "fiber-link", "fiber-refit", "fiber-backbone-link",
+           "fiber-anchor-link", "fiber-xcorr-merge", "fiber-residual-merge", "fiber-psame-merge"):
+    IO[_n] = {"--in": "--clu-stage", "--out": "--out-stage", "--method": "--clu-method"}
+for _n in ("fiber-consensus", "fiber-lowmix", "fiber-manifold", "fiber-polish", "fiber-unmix", "fiber-clean"):
+    IO[_n] = {"--in": "--clu-stage", "--out": "--out-tag", "--method": "--clu-method"}
+del _n
+
+
+def add_io_aliases(ap, stage):
+    """Give the parser `ap` of `stage` the short names of IO, as further spellings of the flags they
+    stand for.  Call it after the arguments are added and before parse_args."""
+    acts = ap._option_string_actions
+    for short, full in IO.get(stage, {}).items():
+        act = acts.get(full)
+        if act is None:
+            raise KeyError(f"{stage}: stages.IO names {full}, which the stage does not take")
+        if short in acts:
+            if acts[short] is not act:
+                raise KeyError(f"{stage}: {short} already means something else")
+            continue
+        act.option_strings.append(short)
+        acts[short] = act
+
+
 def names(group=None):
     """Stage names in table order; one group's when `group` is given."""
     if group is not None and group not in dict(GROUPS):

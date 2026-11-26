@@ -36,6 +36,19 @@ others; `-method` was also used for algorithm choices.  **Every previous spellin
 still works as an alias**, so existing scripts and `plans/*.yaml` are unaffected —
 the tables below show the canonical name first with the old one in parentheses.
 
+**The clustering a stage reads and writes, in three short names** (0.71.16).  A plan says `in:`
+and `out:`; every stage that has them takes the same on the command line:
+
+| short | stands for | absent on |
+|---|---|---|
+| `--in` | the stage of the clustering read: `--clu-stage` (`--in-stage` in fiber-session and fiber-stochastic, where `--clu-stage` names the output) | stages that read no clustering |
+| `--out` | the stage of the clustering written: `--out-stage` or `--out-tag` | fiber-session, fiber-stochastic and fiber-rdr, whose `--out` names a file |
+| `--method` | the method token of that clustering: `--clu-method` | — |
+
+So `fiber-polish <base> 8 --in fc_session --out fc_polish --method stderiv_C5` and
+`fiber-xcorr-merge <base> 8 --in fc_polish --out fc_xcm --method stderiv_C5` read alike.  The
+longer names keep working; `fiber_kit/stages.py` (`IO`) holds the table.
+
 ---
 
 ## Core pipeline (canonical order)
@@ -194,7 +207,7 @@ Positional: `session`, `group`
 | `--hybrid-gain-fit` | `all` | FK_SESSION_HYBRID_GAIN_FIT. energy half of the spikes the block-equalising gain is fit over: all (default) \| low \| high. Over all, the big spikes set the gain and the low-energy spikes load more on the derivative block than the nominal share. — choices: `all`, `low`, `high` |
 | `--hybrid-deriv-basis` | `session` | FK_SESSION_HYBRID_DERIV_BASIS. basis of the method (derivative) block: session (the .pca.<method> basis, default) \| high (refit per channel on the high-energy half of a spike sample -- the low half's derivative variance is nearly unstructured). — choices: `session`, `high` |
 | `--exclude-clu` | — | per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0. |
-| `--in-stage` | — | input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused |
+| `--in-stage` (`--in`) | — | input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused |
 | `--in-method` | — | variant token of the input-stage clu (default: --method), e.g. the --out-variant alias a curated clu was saved under |
 | `--exclude-units` | — | clusters of the input-stage clu whose spikes are excluded from the sort: comma-separated ids and ranges, e.g. 3,7,12-15. Excluded spikes never enter a chunk; see --exclude-as for what the output holds for them |
 | `--exclude-as` | `carry` | carry (default): each excluded unit is written back as one cluster of its own (one atom), after the new fibers; ids 0 and 1 of the input go to 0. noise: excluded spikes are cluster 0, like --exclude-clu — choices: `carry`, `noise` |
@@ -282,7 +295,7 @@ Positional: `session`, `group`
 | `--refeaturize` | flag (off) | reproject the re-extracted/rolled windows onto .pca.<variant> -> new .fet (implies --reextract, or --shift-spk when that is set) |
 | `--fil` | — | filtered signal path (default <base>.fil) |
 | `--variants` | — | 'all' = every base-rate waveform variant with a .spk for the group (+ the --variant's waveform token; a super-sampled _U<factor> space is never written by a commit -- Klusters' Sync Feature Spaces or ndm_extractspikes --supersample rebuilds it); or a comma list of feature spaces to refresh from .fil (default: standard + stderiv if present). Each is re-derived from the re-extracted raw window: standard=raw; stderiv=SDIFF_ALLPAIRS+temporal-diff; stderiv_C4/_C5 use the session's own spikeDetection.channelGroups[N].sdiffPairs pattern (partner map / reference sets); then projected onto its .pca |
-| `--out-stage` (`--out-tag`) | `""` | stage tag for committed outputs (default: empty -> overwrite the canonical .res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned |
+| `--out-stage` (`--out-tag`, `--out`) | `""` | stage tag for committed outputs (default: empty -> overwrite the canonical .res/.clu/.spk/.fet[.<variant>].<group> in place; the realign IS the commit). Pass a tag only if you want a side-by-side copy, e.g. --out-tag realigned |
 | `--variant` | `""` | feature variant the .clu/.spk/.fet adhere to (e.g. stderiv_C5): drives which .spk is aligned and which .fet is refreshed, OVERRIDING the --clu-name inference. The pipeline hard-codes 'stderiv' in the clu path, so a custom-sdiffPairs session (stderiv_C5) needs this to name its real variant instead of leaning on family-matching. The .res stays the single shared copy (resolve_any). (FK_REALIGN_VARIANT) |
 | `--out-variant` | — | variant the .res/.clu adhere to (default: inferred from --clu, e.g. stderiv; falls back to standard). There is one .res/.clu under this variant; .spk/.fet are written per feature space in --variants (standard raw, stderiv transform) |
 | `--emit-clu` | flag (off) | re-emit the (label-unchanged) clu next to the committed .res/.spk/.fet so the set opens in Klusters as a unit (default on) |
@@ -311,7 +324,7 @@ Positional: `session`, `group`
 | `--in-clu` | — | path to the input sort to refine; default = canonical .clu if present, else a fresh fine sort |
 | `--out-method` | `stderiv` | feature space written BEFORE the group (standard\|stderiv\|...); refine operates in stderiv space, so default stderiv |
 | `--no-cluster-basis` | flag (off) | ignore the global .pca basis for the split-stage shape features and use a per-call local SVD (legacy behaviour) |
-| `--out-stage` | `refine` | fiber STAGE written AFTER the group, e.g. 'refine' -> <base>.clu.<out-method>.<group>.refine ('' for none). (was --out-variant; renamed so --out-variant is free for the feature variant, as in fiber-realign) |
+| `--out-stage` (`--out`) | `refine` | fiber STAGE written AFTER the group, e.g. 'refine' -> <base>.clu.<out-method>.<group>.refine ('' for none). (was --out-variant; renamed so --out-variant is free for the feature variant, as in fiber-realign) |
 | `--emit-hierarchy` / `--no-emit-hierarchy` | flag (on) | after writing the .clu, also emit the .clc/.clp microfiber triple via the fiber-microfiberize identity lift (each fiber = one atom) so the refine output is a hierarchy intrachunk/link can consume; --no-emit-hierarchy writes the flat .clu only |
 | `--refr-floor` | — | imposed detection refractory (samples); default = from yaml |
 | `--refr-window-ms` | `2.0` | biological/ISI-violation window upper bound (ms); contamination is [floor, window) |
@@ -403,9 +416,9 @@ Positional: `session`, `group`
 | `--sr` | — | override: sampling rate |
 | `--cpos-method` | `stderiv` |  |
 | `--cpos-stage` | `refine` |  |
-| `--clu-method` | — |  |
-| `--clu-stage` | — |  |
-| `--out-stage` | — | output clu stage (default: same as input == in-place relabel) |
+| `--clu-method` (`--method`) | — |  |
+| `--clu-stage` (`--in`) | — |  |
+| `--out-stage` (`--out`) | — | output clu stage (default: same as input == in-place relabel) |
 | `--foot-hi` | `0.97` | anneal start: strict footprint-cosine for the first, most certain merges |
 | `--foot-lo` | `0.9` | anneal floor: loosest footprint-cosine accepted (best g5 result at 0.90) |
 | `--anneal-steps` | `4` |  |
@@ -436,11 +449,11 @@ Positional: `session`, `group`
 | `--spk-method` | `standard` | method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec> |
 | `--fil` | — | path to raw .fil (fallback if no standard .spk) |
 | `--fil-offset` | `0` | first absolute sample of the .fil (0 for full recording) |
-| `--clu-method` | `stderiv` | source-clu feature space BEFORE the group (standard\|stderiv\|...) |
-| `--clu-stage` | `refine` | source-clu fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<clu-stage> |
+| `--clu-method` (`--method`) | `stderiv` | source-clu feature space BEFORE the group (standard\|stderiv\|...) |
+| `--clu-stage` (`--in`) | `refine` | source-clu fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<clu-stage> |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--clu-stage) |
 | `--out-method` | — | cpos method BEFORE the group (default: mirror --clu-method) |
-| `--out-stage` | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
+| `--out-stage` (`--out`) | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
 | `--min-spikes` | `15` |  |
 | `--max-spikes` | `20000` | spikes per cluster its template and position are taken from (seeded random sample; 0 = all). Bounds memory: a 380k-spike cluster in float64 alone is ~1.3 GB |
 | `--no-dipole` | flag (off) |  |
@@ -461,8 +474,8 @@ Positional: `session`, `group`
 | `--probe` | — | probe file(s) for on-the-fly localisation when no fiber-cpos table exists (else the probe named in <session>.yaml) |
 | `--cpos-method` | `stderiv` |  |
 | `--cpos-stage` | — | positions (.cpos) stage tag; default follows --clu-stage, else 'refine' |
-| `--clu-method` | — |  |
-| `--clu-stage` | — |  |
+| `--clu-method` (`--method`) | — |  |
+| `--clu-stage` (`--in`) | — |  |
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
 | `--gate` | (from config) | shape gate: cosine\|mmd\|kcov\|cfiber\|band (default band: energy-scaled median+/-sigma overlap) — choices: `cosine`, `mmd`, `kcov`, `cfiber`, `band` |
 | `--cos-thr` | (from config) | cosine recall prefilter |
@@ -556,7 +569,7 @@ Positional: `session`, `group`
 | `--boundary-minutes` | `3.0` | half-window (min) of straddling spikes for the overlap backbone anchor (--emit-units) |
 | `--backbone-std-cos` | `0.75` | STANDARD median-template cosine a backbone pair must also clear (--emit-units). The stderiv boundary match is near-blind to depth/amplitude; this co-gate on the raw axis rejects the different-unit anchors it lets through. 0 disables. |
 | `--backbone-warp` | — | optional Omlor-Giese group-delay coherence a backbone pair must also clear. OFF by default: on octrodes most units span <=2 channels so group-delay is degenerate (non-discriminative). Set only if energy spreads over >=3 channels. |
-| `--out-stage` | — | output .clu stage (default: <clu-stage>_intrachunk) |
+| `--out-stage` (`--out`) | — | output .clu stage (default: <clu-stage>_intrachunk) |
 | `--emit-units` | flag (off) | also write a <...>.units.npz unit-signature table for fiber-link |
 | `--no-provenance` | flag (on) | skip the .merge.tsv per-merge provenance sidecar (default: write it) |
 ### `fiber-link`
@@ -569,8 +582,8 @@ Positional: `session`, `group`
 |---|---|---|
 | `--cpos-method` | `stderiv` |  |
 | `--cpos-stage` | `refine` |  |
-| `--clu-method` | — | source .clu method (default: mirror --cpos-method) |
-| `--clu-stage` | — | source .clu stage (default: mirror --cpos-stage) |
+| `--clu-method` (`--method`) | — | source .clu method (default: mirror --cpos-method) |
+| `--clu-stage` (`--in`) | — | source .clu stage (default: mirror --cpos-stage) |
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
 | `--cos-thr` | `0.975` |  |
 | `--pos-thr` | `1.5` |  |
@@ -601,7 +614,7 @@ Positional: `session`, `group`
 | `--traj-ext-min` | `0.0` | minutes an attach may extend beyond a bundle's member time span (0=interpolation only; ~chunk length allows extrapolation-based extension) |
 | `--cfiber-thr` | — | cfiber shape co-gate: veto a candidate whose affine-invariant cfiber shape distance exceeds this (drift-invariant complement to the cosine gate). Fixed value. |
 | `--cfiber-q` | — | enable the cfiber co-gate with the threshold self-calibrated at link time to this quantile of the overlap-backbone same-unit shape distances (e.g. 0.90; needs --from-units). |
-| `--out-stage` | — | output .clu stage (default: <clu-stage>_linked) |
+| `--out-stage` (`--out`) | — | output .clu stage (default: <clu-stage>_linked) |
 | `--gt-clu` | — | ground-truth .clu to score the clustering before vs after linking |
 | `--gt-res` | — | .res for the ground truth (timestamp alignment if it covers a window) |
 | `--overlap-refrac-ms` | `0.0` | DEFAULT OFF. >0 enables a power-aware refractory veto on the chunk-OVERLAP region: a candidate cross-chunk link is vetoed if, in the time window the two fragments share, their spikes coincide at chance level (two neurons) rather than showing a refractory dip (one neuron). Censors zero-lag duplicate detections; abstains (keeps the link) when underpowered, so it only ever removes well-supported wrong links. Needs sr + .res; abstains on sparse data (g5). Only the default 'cogated' linkage is gated. |
@@ -635,15 +648,15 @@ Positional: `args`
 | `--channels` | — | override: comma-separated physical channels |
 | `--ntotal` | — | override: total channels in the recording |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
-| `--clu-method` | `stderiv` | fragment .clu feature space (before the group) |
-| `--clu-stage` | `fiber_session` | fragment .clu stage tag |
+| `--clu-method` (`--method`) | `stderiv` | fragment .clu feature space (before the group) |
+| `--clu-stage` (`--in`) | `fiber_session` | fragment .clu stage tag |
 | `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
 | `--frag-layer` | `atoms` | which layer of the source stage is the fragment layer: 'atoms' (default) prefers the .clc sibling -- the overlap anchors index .clc labels; 'units' reads the stage's FLAT .clu, so the linker consolidates the stage's UNITS (e.g. fiber-intrachunk output) instead of re-linking its atoms from scratch. An explicit --in-clu overrides both. — choices: `atoms`, `units` |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--anchor-stage` | `fiber_session` | stage whose .clc atoms fiber-session's anchors index (used when the anchors come from the unstaged .fibers): fiber_session, or fs_clean after fiber-consensus |
 | `--anchor-majority` | `0.6` | an anchor atom maps to the fragment holding at least this fraction of its spikes |
 | `--fibers` | — | path to the .fibers npz carrying the overlap anchors (default: derive from --clu-method/--clu-stage) |
-| `--out-stage` (`--out-tag`) | `anchor_linked` | post-fiber stage tag of the output .clu (single token) |
+| `--out-stage` (`--out-tag`, `--out`) | `anchor_linked` | post-fiber stage tag of the output .clu (single token) |
 | `--hierarchy` | `1` | 1 = also write the .clc/.clp sibling hierarchy |
 | `--promote-noise` | `1` | 1 (default) = treat cluster 0 as a real cell (its own atom + cell); 0 = leave it as noise |
 | `--artifact-clu` | — | per-spike artifact mask in .clu form (nonzero = artifact), the SAME mask given to fiber-session --exclude-clu. Masked spikes are withheld from --promote-noise and left in cluster 0, so a promoted cell is the genuine unassigned population only. |
@@ -711,12 +724,12 @@ Positional: `session`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` | fragment .clu feature space (before the group) |
-| `--clu-stage` (`--variant`) | `fiber_session` | fragment .clu stage tag (the fiber-session output) |
+| `--clu-method` (`--method`) | `stderiv` | fragment .clu feature space (before the group) |
+| `--clu-stage` (`--variant`, `--in`) | `fiber_session` | fragment .clu stage tag (the fiber-session output) |
 | `--in-clu` | — | explicit fragment .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates/warp (standard = curation axis) |
 | `--channels` | — | pin backbone channels (global ids, e.g. 33,34); default = per-pair shared primary |
-| `--out-stage` (`--out-tag`) | `backbone_linked` | post-fiber stage tag of the output .clu (single token) |
+| `--out-stage` (`--out-tag`, `--out`) | `backbone_linked` | post-fiber stage tag of the output .clu (single token) |
 | `--gt-stage` (`--gt-clu`) | — | post-fiber stage tag (or path) of the curated .clu to score purity+completeness against |
 | `--gt-res` | — | reserved: .res for the GT (unused when GT shares the session res) |
 | `--spk-cap` | `600` | spikes per fragment for the template |
@@ -747,11 +760,11 @@ Positional: `session`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` |  |
-| `--clu-stage` (`--variant`) | `backbone_linked` | input .clu stage tag (e.g. the fiber-backbone-link output) |
+| `--clu-method` (`--method`) | `stderiv` |  |
+| `--clu-stage` (`--variant`, `--in`) | `backbone_linked` | input .clu stage tag (e.g. the fiber-backbone-link output) |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates (curation axis) |
-| `--out-stage` (`--out-tag`) | `xcorr_merged` | post-fiber stage tag of the output .clu |
+| `--out-stage` (`--out-tag`, `--out`) | `xcorr_merged` | post-fiber stage tag of the output .clu |
 | `--refrac-censor-ms` | `0.0` | detection censor window (ms) |
 | `--nsamp` | — | override; default from <session>.yaml |
 | `--nchan` | — | override; default from <session>.yaml |
@@ -796,11 +809,11 @@ Positional: `session`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` |  |
-| `--clu-stage` (`--variant`) | `backbone_linked` | input .clu stage tag (e.g. the linker's output) |
+| `--clu-method` (`--method`) | `stderiv` |  |
+| `--clu-stage` (`--variant`, `--in`) | `backbone_linked` | input .clu stage tag (e.g. the linker's output) |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis for templates and residuals (RAW: the strip was measured there) |
-| `--out-stage` (`--out-tag`) | `resid_merged` | post-fiber stage tag of the output .clu |
+| `--out-stage` (`--out-tag`, `--out`) | `resid_merged` | post-fiber stage tag of the output .clu |
 | `--refrac-censor-ms` | `0.0` | detection censor window (ms) |
 | `--nsamp` | — | override; default from <session>.yaml |
 | `--nchan` | — | override; default from <session>.yaml |
@@ -836,11 +849,11 @@ Positional: `session`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` |  |
-| `--clu-stage` | `xcorr_merged` | input .clu stage tag |
+| `--clu-method` (`--method`) | `stderiv` |  |
+| `--clu-stage` (`--in`) | `xcorr_merged` | input .clu stage tag |
 | `--in-clu` | — | explicit input .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` (`--spk-variant`) | — | waveform variant the cell models are fitted on (default: the WAVEFORM token of --clu-method, e.g. stderiv_C5_D34 -> stderiv_C5; the shipped coefficients were calibrated on stderiv_C5) |
-| `--out-stage` (`--out-tag`) | `psame_merged` |  |
+| `--out-stage` (`--out-tag`, `--out`) | `psame_merged` |  |
 | `--cap` | — | spikes per cluster model (default: all) |
 | `--seed` | `0` |  |
 | `--chunk-min` | `12.0` | chunk length (min) for --per-chunk's fallback partition and --chunk-aware's chunks (default FK_SESSION_CHUNK_MIN) |
@@ -1004,11 +1017,11 @@ Positional: `session`, `group`
 | `--spk-method` | `standard` | method of the raw .spk to resolve: <base>.spk.<spk-method>.<elec> |
 | `--fil` | — | path to raw .fil (fallback if no standard .spk) |
 | `--fil-offset` | `0` | first absolute sample of the .fil (0 for full recording) |
-| `--clu-method` | `stderiv` | source-clu feature space BEFORE the group (standard\|stderiv\|...) |
-| `--clu-stage` | `refine` | source-clu fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<clu-stage> |
+| `--clu-method` (`--method`) | `stderiv` | source-clu feature space BEFORE the group (standard\|stderiv\|...) |
+| `--clu-stage` (`--in`) | `refine` | source-clu fiber STAGE AFTER the group: read <base>.clu.<clu-method>.<elec>.<clu-stage> |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--clu-stage) |
 | `--out-method` | — | cpos method BEFORE the group (default: mirror --clu-method) |
-| `--out-stage` | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
+| `--out-stage` (`--out`) | — | cpos fiber STAGE AFTER the group (default: mirror --clu-stage) |
 | `--min-spikes` | `15` |  |
 | `--max-spikes` | `20000` | spikes per cluster its template and position are taken from (seeded random sample; 0 = all). Bounds memory: a 380k-spike cluster in float64 alone is ~1.3 GB |
 | `--no-dipole` | flag (off) |  |
@@ -1203,8 +1216,8 @@ Positional: `session`, `group`
 | `--nchan` (`--nch`) | — | override: channels in this group |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--sr` | — | override: sampling rate |
-| `--clu-method` | `stderiv` | feature space of the curated clu |
-| `--clu-stage` (`--variant`) | `curated` | stage tag of the curated .clu to refit (e.g. 'curated') |
+| `--clu-method` (`--method`) | `stderiv` | feature space of the curated clu |
+| `--clu-stage` (`--variant`, `--in`) | `curated` | stage tag of the curated .clu to refit (e.g. 'curated') |
 | `--in-clu` | — | explicit curated .clu path |
 | `--cpos-method` | — | cpos method for positions (default: --clu-method) |
 | `--cpos-stage` | — | cpos stage for positions (default: --variant) |
@@ -1213,7 +1226,7 @@ Positional: `session`, `group`
 | `--gate` | `cfiber` | shape descriptor to attach to each signature (default cfiber) — choices: `cfiber`, `wave`, `none` |
 | `--chunk-minutes` (`--chunk-min`) | `12.0` |  |
 | `--min-n` | `12` | min spikes for a per-chunk signature |
-| `--out-stage` | — | stage tag for the refit units (default '<variant>_refit') |
+| `--out-stage` (`--out`) | — | stage tag for the refit units (default '<variant>_refit') |
 ### `fiber-reject`
 
 Reassign per-cluster outlier spikes to a better-fitting cluster or to noise.
@@ -1343,8 +1356,8 @@ Positional: `base`, `elec`
 | `--signal-start` | `0` | absolute sample of the signal's first row |
 | `--total-channels` | — |  |
 | `--channels` | — | group channels, e.g. 40-47 (default: session yaml) |
-| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--spk-variant` | `standard` | waveforms to split on (raw: the amplitude law holds) |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
@@ -1366,7 +1379,7 @@ Positional: `base`, `elec`
 | `--copy-on-abstain` | `0` | 1 = a shape copy also returns when the refractory test has no power; 0 = it stays its own unit (measured on g6: shape-only copies sit at 0.68 of the local rate against their target -- half of them are not the same neuron) [FK_LOWMIX_COPY_ON_ABSTAIN; default 0] |
 | `--novel` | `noise` | noise = novel groups to noise (1), as a reviewable .clc child; keep = each novel group becomes its own unit [FK_LOWMIX_NOVEL; default noise] |
 | `--seed` | `0` | seed for subsampling, noise snippets and the GMM [FK_LOWMIX_SEED; default 0] |
-| `--out-tag` | — | output stage tag (default <clu-stage>_lowmix) |
+| `--out-tag` (`--out`) | — | output stage tag (default <clu-stage>_lowmix) |
 ### `fiber-rdr`
 
 Per-cluster contamination score from the RMS of the residual's temporal derivative, against the clean amplitude line (a QC table; moves no spike).
@@ -1389,8 +1402,8 @@ Positional: `session`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` |  |
-| `--clu-stage` | `""` | post-fiber stage tag of the .clu to score |
+| `--clu-method` (`--method`) | `stderiv` |  |
+| `--clu-stage` (`--in`) | `""` | post-fiber stage tag of the .clu to score |
 | `--in-clu` | — | explicit .clu path (overrides --clu-method/--clu-stage) |
 | `--spk-method` | `standard` | waveform axis (raw windows; default standard) |
 | `--nst` | — | .nst path (default <base>.nst.<spk-method>.<elec> if present) |
@@ -1439,8 +1452,8 @@ Positional: `base`, `elec`
 | `--signal-start` | `0` | absolute sample of the signal's first row |
 | `--total-channels` | — |  |
 | `--channels` | — | group channels, e.g. 40-47 (default: session yaml) |
-| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--units` | — | comma-separated units to examine (default: every unit with >= --min-n) |
@@ -1464,7 +1477,7 @@ Positional: `base`, `elec`
 | `--write-fet` | `1` | write the .fet.manifold.<g> feature space (1) or not (0) [FK_MANIFOLD_WRITE_FET; default 1] |
 | `--seed` | `0` | random seed (noise draws) [FK_MANIFOLD_SEED; default 0] |
 | `--jobs` | `0` | units examined in parallel (processes); 0 = one per CPU, 1 = serial [FK_MANIFOLD_JOBS; default 0] |
-| `--out-tag` | — | output stage tag (default <clu-stage>_manifold) |
+| `--out-tag` (`--out`) | — | output stage tag (default <clu-stage>_manifold) |
 | `--fet-method` | `manifold` | method token of the written feature space |
 ### `fiber-flag-artifacts`
 
@@ -1481,7 +1494,7 @@ Positional: `args`
 | `--ntotal` | — | override: total channels in the recording |
 | `--nsamp` | — | override: samples per spike (default from YAML) |
 | `--spk-method` (`--spk-variant`) | `standard` | waveform axis (standard = the unwhitened curation axis these features assume) |
-| `--out-stage` (`--out-tag`) | `artifact` | stage tag of the emitted mask .clu |
+| `--out-stage` (`--out-tag`, `--out`) | `artifact` | stage tag of the emitted mask .clu |
 | `--dry-run` | flag (off) | report the flagged count, write nothing |
 | `--chunks` | `""` | FK_CHUNKS: process only these 0-based chunks, e.g. 14-16 or 3,7 ('' = all); the other chunks' spikes go to the reserved clusters 16777116+chunk |
 | `--chunk-length` | `12.0` | FK_SESSION_CHUNK_MIN: chunk length in minutes that --chunks counts in |
@@ -1532,7 +1545,7 @@ Positional: `base`, `elec`
 | flag | default | description |
 |---|---|---|
 | `--spk-method` (`--spk-variant`) | `standard` | waveform file the score is taken on (default standard) |
-| `--out-stage` (`--out-tag`) | `artifact` | stage tag of the mask .clu (default artifact: fiber-flag-artifacts' mask, which is kept and added to) |
+| `--out-stage` (`--out-tag`, `--out`) | `artifact` | stage tag of the mask .clu (default artifact: fiber-flag-artifacts' mask, which is kept and added to) |
 | `--score-min` | `12.0` | a spike whose off-spike score exceeds this is flagged (default 12, in MADs of its peak-energy bin; the module header has the measured rates for 8-20) |
 | `--max-share` | `0.0` | most of the spikes the score may flag: the threshold is raised to keep to it (default 0 = no cap) |
 | `--guard` | `8` | samples either side of the peak the score ignores |
@@ -1573,8 +1586,8 @@ Positional: `base`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `fiber_session` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--noise-id` | `1` | cluster the removed spikes go to (default 1) |
@@ -1586,7 +1599,7 @@ Positional: `base`, `elec`
 | `--q-dirty` | `0.52` | a cluster whose quality value is at or above this is dirty (default 0.52, the red of Klusters' quality dot; 0 = no quality test) |
 | `--q-spikes` | `1000` | spikes per cluster the quality value is taken on |
 | `--min-keep` | `50` | a cluster left with fewer spikes goes to the noise |
-| `--out-tag` | — | output stage tag (default <clu-stage>_clean) |
+| `--out-tag` (`--out`) | — | output stage tag (default <clu-stage>_clean) |
 ### `fiber-spkc`
 
 Write a stage's sparse `.spkc` (0.70.0): every collision row -- two or more template classes in
@@ -1689,8 +1702,8 @@ Positional: `base`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `fiber_session` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--signal` | `""` | the filtered recording (default <base>.fil) |
@@ -1714,7 +1727,7 @@ Positional: `base`, `elec`
 | `--spkc` | `1` | 1 = write the stage's sparse .spkc (fiber_spkc: collision rows with the partner subtracted) for the standard and the method .spk (default); needs --eap. 2 = residual add-back instead: every row the pursuit covered with ALL other placements subtracted in the raw signal (the standard .spk only; kept spikes included). 0 = none — choices: `0`, `1`, `2` |
 | `--eap` | `all` | the stage's .eap membership: every kept spike (own class, offset 0) and the explained detections (default); resolved = the explained detections and the kept spikes of the units they name (fewer classes, a narrower matrix); or none. The matrix is spikes x template classes bytes — choices: `all`, `resolved`, `off` |
 | `--n-cells` | `128` | template-class columns a fresh .eap starts with / grows by |
-| `--out-tag` | — | output stage tag (default <clu-stage>_unmix) |
+| `--out-tag` (`--out`) | — | output stage tag (default <clu-stage>_unmix) |
 | `--children` | `0` | 1 = also write the stage as a hierarchical session under <out-tag>_h (fiber-unmix-children: .clu + .clc + .clp, every one-unit spike under its unit as a child of its own). The flat .clu is written as always — choices: `0`, `1` |
 ### `fiber-unmix-children`
 
@@ -1765,8 +1778,8 @@ Positional: `base`, `elec`
 
 | flag | default | description |
 |---|---|---|
-| `--clu-method` | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `fiber_session` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `fiber_session` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--res-variant` | `""` | pin the .res variant ('' = the shared .res) |
 | `--gt-clu` | `""` | curated .clu path: score every stage against it (nothing is fitted to it) |
@@ -1801,7 +1814,7 @@ Positional: `base`, `elec`
 | `--hybrid-pcs` | `3` | features: standard-basis components per channel in the raw block of the hybrid space [FK_POLISH_HYBRID_PCS; default 3] |
 | `--hybrid-scale` | `2.0` | features: weight of the raw block (the hybrid-search winner's 2.0) [FK_POLISH_HYBRID_SCALE; default 2.0] |
 | `--seed` | `0` | random seed (subsamples, t-SNE runs, rkk) [FK_POLISH_SEED; default 0] |
-| `--out-tag` | — | output stage tag (default <clu-stage>_polish) |
+| `--out-tag` (`--out`) | — | output stage tag (default <clu-stage>_polish) |
 ### `fiber-bench`
 
 Run, score and compare pipeline-parameter variants under a config hash.  Sub-commands `run` (the config's
@@ -1894,8 +1907,8 @@ Positional: `base`, `elec`
 | `--signal-start` | `0` | absolute sample of the signal's first row |
 | `--space` | — | waveform space for the envelope (default: --clu-method's) |
 | `--sdiff-pairs` | — | sdiffPairs for a _C space (default: session yaml) |
-| `--clu-method` | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
-| `--clu-stage` | `""` | post-fiber stage tag at the end of the .clu name |
+| `--clu-method` (`--method`) | `stderiv_C5_D34` | method the clu stems from: standard \| stderiv \| stderiv_C5 |
+| `--clu-stage` (`--in`) | `""` | post-fiber stage tag at the end of the .clu name |
 | `--in-clu` | — | explicit .clu path, overriding --clu-method/--clu-stage |
 | `--fet-variant` | — | variant of the .fet to embed (default: --clu-method) |
 | `--units` | — | comma-separated units to study together (repeat with ';' for several groups); default: every envelope d' neighbourhood |
@@ -1933,7 +1946,7 @@ Positional: `base`, `elec`
 | `--workers` | `0` | parallel processes for the independent t-SNE runs and watershed maps (0 = every core, 1 = serial); results do not depend on it [FK_CONSENSUS_WORKERS; default 0] |
 | `--jobs` | `1` | openTSNE threads inside each run (keep 1 when workers > 1) [FK_CONSENSUS_JOBS; default 1] |
 | `--seed` | `0` | seed for subsampling, initialisation and Louvain [FK_CONSENSUS_SEED; default 0] |
-| `--out-tag` | — | stage tag of the output .clu (default: <clu-stage>.consensus) |
+| `--out-tag` (`--out`) | — | stage tag of the output .clu (default: <clu-stage>.consensus) |
 ### `fiber-calibrate`
 
 Learn the variance/energy envelope of a curated group's single units and write an .npz budget for `fiber-defrag --var-budget`.
@@ -2309,7 +2322,7 @@ Positional: `session`, `group`
 | `--hybrid-gain-fit` | `all` | FK_SESSION_HYBRID_GAIN_FIT. energy half of the spikes the block-equalising gain is fit over: all (default) \| low \| high. Over all, the big spikes set the gain and the low-energy spikes load more on the derivative block than the nominal share. — choices: `all`, `low`, `high` |
 | `--hybrid-deriv-basis` | `session` | FK_SESSION_HYBRID_DERIV_BASIS. basis of the method (derivative) block: session (the .pca.<method> basis, default) \| high (refit per channel on the high-energy half of a spike sample -- the low half's derivative variance is nearly unstructured). — choices: `session`, `high` |
 | `--exclude-clu` | — | per-spike exclusion mask in .clu form (nonzero = drop), aligned to the .res -- e.g. fiber-flag-artifacts' output. Excluded spikes never enter a chunk, so they cannot shape a cluster; they are emitted as cluster 0. |
-| `--in-stage` | — | input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused |
+| `--in-stage` (`--in`) | — | input stage: the clu <base>.clu.<in-method>.<elec>.<in-stage> that --exclude-units names clusters of ('' = the stage-less <base>.clu.<in-method>.<elec>). It must be aligned to the .res this run reads (same spike count); a stage with its own .res (e.g. decollided) is refused |
 | `--in-method` | — | variant token of the input-stage clu (default: --method), e.g. the --out-variant alias a curated clu was saved under |
 | `--exclude-units` | — | clusters of the input-stage clu whose spikes are excluded from the sort: comma-separated ids and ranges, e.g. 3,7,12-15. Excluded spikes never enter a chunk; see --exclude-as for what the output holds for them |
 | `--exclude-as` | `carry` | carry (default): each excluded unit is written back as one cluster of its own (one atom), after the new fibers; ids 0 and 1 of the input go to 0. noise: excluded spikes are cluster 0, like --exclude-clu — choices: `carry`, `noise` |

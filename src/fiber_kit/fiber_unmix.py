@@ -529,6 +529,11 @@ def main(argv=None):
                     help="1 = also write the stage as a hierarchical session under <out-tag>_h "
                          "(fiber-unmix-children: .clu + .clc + .clp, every one-unit spike under its unit "
                          "as a child of its own).  The flat .clu is written as always")
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-unmix")
     a = ap.parse_args(argv)
     log = lambda s: print(s, file=sys.stderr, flush=True)  # noqa: E731
 

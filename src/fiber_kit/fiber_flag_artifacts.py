@@ -112,6 +112,11 @@ def main():
                         help=f"{name} (default {_knob_default(name, typ, fb, gcfg)})")
     cfgmod.apply_profile_knobs(ap, "fiber-flag-artifacts", gcfg)     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-flag-artifacts")
     a = ap.parse_args()
 
     if os.environ.get("FK_DIR"):

@@ -216,6 +216,11 @@ def main():
                          "for identical positions ~5x faster (analytic sig_y is still written; the "
                          "percentile CIs become NaN).")
     ap.add_argument("--probe", nargs="*", default=None, help="probe file(s) for geometry (else from chunk xy via YAML)")
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-cpos")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, channels=a.channels, ntotal=a.ntotal, nsamp=a.nsamp)

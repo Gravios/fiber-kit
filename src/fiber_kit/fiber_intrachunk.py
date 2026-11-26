@@ -1233,6 +1233,11 @@ def main():
                     help="skip the .merge.tsv per-merge provenance sidecar (default: write it)")
     cfgmod.apply_profile_knobs(ap, "fiber-intrachunk")     # the knobs fiber-pipeline passes as flags: a run by hand reads them too
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-intrachunk")
     a = ap.parse_args()
 
     cfg = sy.resolve_session_params(a.session, a.group, require=("ntotal", "sr"))

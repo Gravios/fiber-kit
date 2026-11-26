@@ -840,6 +840,11 @@ def main(argv=None):
                         help=f"{hlp} [{name}; default {d}]")
     ap.add_argument("--out-tag", default=None, help="stage tag of the output .clu (default: <clu-stage>.consensus)")
     cfgmod.check_choice_defaults(ap)
+    try:                                                 # --in / --out / --method: one spelling on every stage
+        from . import stages as _stages
+    except ImportError:
+        import stages as _stages
+    _stages.add_io_aliases(ap, "fiber-consensus")
     a = ap.parse_args(argv)
     global _TSNE_BACKEND
     _TSNE_BACKEND = a.tsne_backend

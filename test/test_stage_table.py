@@ -70,6 +70,28 @@ def main():
     check(set(ed.CATALOG) == set(names), f"the editor's catalogue names the table's stages ({sorted(set(ed.CATALOG) ^ set(names))})")
     check(ed.STAGE_MODULES == {n: stages.module(n) for n in names}, "the editor's module map is the table's")
 
+    # --in / --out / --method: one spelling on every stage (stages.IO)
+    check(set(stages.IO) <= set(names), "stages.IO names stages of the table")
+    for st in names:
+        acts = ed._capture_parser(stages.module(st))._option_string_actions
+        io = stages.IO.get(st, {})
+        wrong = [f"{short}->{full}" for short, full in io.items() if acts.get(short) is None or acts.get(short) is not acts.get(full)]
+        check(not wrong, f"{st}: {', '.join(io) or 'no short names'} {'are' if len(io) != 1 else 'is'} the flag stages.IO says ({wrong})")
+        # nothing left out: a stage that takes the long name and has the short one free must be in IO
+        free = [short for short, longs in (("--in", ("--in-stage", "--clu-stage")), ("--out", ("--out-stage", "--out-tag")),
+                                           ("--method", ("--clu-method",)))
+                if short not in acts and any(f in acts for f in longs)
+                and not (short == "--in" and "--in-stage" not in acts and st in ("fiber-session", "fiber-stochastic"))]
+        check(not free, f"{st}: no short name is missing ({free})")
+        # and what the runner passes as the plan's in: / out: is what the short names stand for
+        fn = st.replace("-", "_")
+        body = run[run.index(f"\n{fn}() {{"):]
+        body = body[:body.index("\n}\n")]
+        for short, pat in (("--in", r'(--[a-z0-9-]+) "\$\{?(?:STEP_IN|min)\b'), ("--out", r'(--[a-z0-9-]+) "\$\{?(?:STEP_OUT|mout)\b')):
+            passed = set(re.findall(pat, body))
+            if short in io and passed:
+                check(io[short] in passed, f"{st}: the runner passes the plan's {short[2:]}: as {io[short]} ({sorted(passed)})")
+
     tmp = tempfile.mkdtemp()
     try:
         env = dict(os.environ, PYTHONPATH=SRC)
