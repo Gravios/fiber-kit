@@ -169,14 +169,3 @@ def decompose_pinned(w, dic, W, nmean, u1_key, u1_energy, mask=fl.MASK_FULL, u1_
                 gain=float(1.0 - r2n2 / (r1n2 + 1e-12)),
                 r1n=float(np.sqrt(r1n2)), r2n=float(np.sqrt(r2n2)))
 
-
-def detect_residual(w, dic, W, nmean, mask=fl.MASK_FULL):
-    """Whitened residual to the single best fiber (tau=0) — the inclusion-radius
-    collision detector.  Large => not explained by one fiber."""
-    M, norm2, s0 = dic['M'], dic['norm2'], dic['s0']
-    x = _feat(w, W, nmean, mask)
-    proj0 = M[:, s0, :] @ x
-    k1i = int(np.argmax(proj0 ** 2 / norm2[:, s0]))
-    a1 = proj0[k1i] / norm2[k1i, s0]
-    r = x - a1 * M[k1i, s0]
-    return float(np.sqrt(r @ r))

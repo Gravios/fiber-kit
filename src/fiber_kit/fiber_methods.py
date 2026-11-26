@@ -125,19 +125,6 @@ def _extend_zigzag(xy, lo, hi):
     return np.asarray(out, float)
 
 
-def truncated_channels(tmpl, chpos, *, edge_frac=0.5):
-    """Heuristic: which array-end channels carry enough amplitude that the footprint
-    likely extends off-probe (candidates the linker should complete before matching).
-    Returns the off-probe virtual-channel hint (which END, and how many)."""
-    pp = tmpl.max(0) - tmpl.min(0)
-    ends = []
-    if pp[0] >= edge_frac * pp.max():
-        ends.append("lo")
-    if pp[-1] >= edge_frac * pp.max():
-        ends.append("hi")
-    return ends
-
-
 def is_truncated(tmpl, *, edge_frac=0.5):
     """True if the footprint has large amplitude at an array end (so it probably extends
     off-probe and a same-neuron partner that drifted further on-array will mismatch it)."""

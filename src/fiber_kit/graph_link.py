@@ -222,16 +222,6 @@ def coherent_path_link(coords, budget, knn=8, candidate_pairs=None):
     return links
 
 
-def median_knn_edge(coords, knn=8):
-    """Median nearest-neighbour edge length — the LOCAL scale for sizing a
-    coherent_path_link budget (try budget = 1.5-2x this)."""
-    coords = np.asarray(coords, float)
-    nn1 = []
-    for i in range(len(coords)):
-        d = np.sqrt(((coords - coords[i]) ** 2).sum(1)); nn1.append(np.sort(d)[1])
-    return float(np.median(nn1))
-
-
 def link_groups(links, K):
     """Connected components of an edge list over K nodes -> list of index groups."""
     parent = list(range(K))

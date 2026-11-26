@@ -464,17 +464,6 @@ class StageConfig:
             setattr(args, f.name, getattr(self, f.name))
         return args
 
-    @classmethod
-    def to_yaml(cls, prefix="", profile="default"):
-        """Emit a commented YAML block, generated from metadata. profile='recommended' emits the pipeline
-        profile values, otherwise the plain field defaults."""
-        out = []
-        for f in _dc_fields(cls):
-            v = f.metadata.get("recommended", f.default) if profile == "recommended" else f.default
-            sv = '""' if v is None else v
-            out.append(f"{prefix}{f.name}: {sv}".ljust(30) + f"  # {f.metadata.get('help', '')}")
-        return "\n".join(out)
-
 @dataclass
 class IntrachunkConfig(StageConfig):
     """Tunable knobs for fiber-intrachunk (the within-chunk merge). Structural data-flow flags

@@ -353,10 +353,6 @@ def set_align_channels(n):
     _ALIGN_CHANNELS = max(0, int(n or 0))
 
 
-def align_channels():
-    return _ALIGN_CHANNELS
-
-
 def _align_view(W):
     """The channels the aligner measures on: all of W, or its first _ALIGN_CHANNELS."""
     n = _ALIGN_CHANNELS
@@ -595,12 +591,6 @@ def features(waveforms, W, nmean, mask=MASK_FULL):
         @ _bk.asarray(W)
     X = _bk.asnumpy(Xd); r = _bk.asnumpy(xp.linalg.norm(Xd, axis=1))
     return X, r, X / r[:, None]
-
-def location_cy(waveforms, y_um):
-    """Energy-weighted depth centroid (µm) from the mean template PTP."""
-    m = waveforms.mean(0); ptp = m.max(0) - m.min(0); ptp = np.maximum(ptp, 0)
-    return float((ptp * y_um).sum() / ptp.sum())
-
 
 # ── chunk whitener, memmap path ──────────────────────────────────────────────
 # Moved out of fiber_session: it is an adapter over chunk_whitener_mm just below,

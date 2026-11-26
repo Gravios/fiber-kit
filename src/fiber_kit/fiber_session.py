@@ -1435,16 +1435,6 @@ def _sliding_pairs(Xs, n_win=14, min_spikes=15, min_shared=2, min_cos=0.90, retu
     return [(i, j) for i, j, _ in pairs]
 
 
-def geoms_from_labels(waves, res_abs, lab, W, nmean, mask, sr, n_grid=40):
-    geoms = []
-    for f in np.unique(lab[lab >= 0]):
-        idx = np.flatnonzero(lab == f)
-        g = fiber_geom(waves[idx], res_abs[idx], W, nmean, mask, sr, n_grid)
-        g['coarse'] = int(f); g['radius_incl'] = float('nan'); g['n_rejected'] = 0
-        geoms.append(g)
-    return geoms
-
-
 def link_chunks(ext_idx, ext_lab, min_anchor=8, frac=0.5):
     parent = {}
     def find(x):

@@ -231,21 +231,6 @@ def align_shifts(waves, template=None, max_shift=3, chan=None):
     return best, score
 
 
-def realign_features(waves, pca, shifts):
-    """Project each spike through its own realigned window.
-
-    Grouped by shift so the projection stays a matmul per (channel, shift)
-    rather than a Python loop over spikes; on a 400k-spike group the difference
-    is minutes against hours.
-    """
-    w = np.asarray(waves, np.float64)
-    out = np.empty((len(w), pca.nch * pca.ncomp))
-    for s in np.unique(shifts):
-        m = shifts == s
-        out[m] = project(w[m], pca, shift=int(s))
-    return out
-
-
 # ── noise ───────────────────────────────────────────────────────────────────
 def baseline_noise_cov(raw_spk, nbase=8, nsamp=None, max_lag=None):
     """Spatiotemporal noise covariance from the pre-spike baseline of raw waveforms.

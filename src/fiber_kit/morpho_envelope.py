@@ -41,9 +41,9 @@
 import numpy as np
 
 try:
-    from . import morpho_eap as me, morpho_cable as mc
+    from . import morpho_eap as me
 except ImportError:
-    import morpho_eap as me, morpho_cable as mc
+    import morpho_eap as me
 
 
 # ── spike trains ────────────────────────────────────────────────────────────
@@ -392,50 +392,3 @@ class Recovery:
         return (f"<Recovery floor={self.floor:.3f} fast {self.a:.3f}/{self.tau_f:.1f}ms "
                 f"slow {self.b:.3f}/{self.tau_s:.0f}ms isi_min={self.isi_min:.1f}ms>")
 
-
-def fit_recovery(isi, ratio, isi_min=None, meta=None):
-    """Fit the double-exponential recovery function to (ISI, amplitude ratio)."""
-    from scipy.optimize import curve_fit
-    isi = np.asarray(isi, float); ratio = np.asarray(ratio, float)
-    m = np.isfinite(isi) & np.isfinite(ratio)
-    isi, ratio = isi[m], ratio[m]
-    if len(isi) < 4:
-        raise ValueError("need at least 4 (isi, ratio) points to fit a recovery curve")
-    lo = float(isi_min if isi_min is not None else isi.min())
-
-    def f(t, a, tf, b, ts, fl):
-        return fl - a * np.exp(-t / tf) - b * np.exp(-t / ts)
-
-    p0 = [0.4, 5.0, 0.05, 200.0, float(np.percentile(ratio, 95))]
-    bounds = ([0.0, 0.5, 0.0, 20.0, 0.5], [2.0, 60.0, 2.0, 5000.0, 1.5])
-    try:
-        p, _ = curve_fit(f, isi, ratio, p0=p0, bounds=bounds, maxfev=40000)
-    except Exception:
-        p = p0
-    return Recovery(p[0], p[1], p[2], p[3], p[4], lo, isi, ratio, meta)
-
-
-def measure_recovery(cmp_, bio_factory, sites, isis, dt=0.02, stim_amp=6.0,
-                     sr=32552.0, nsamp=42, peak=21, sigma=me.SIGMA_DEFAULT,
-                     v_thresh=0.0, detect_uv=0.0):
-    """Paired-pulse sweep: returns (isi, ratio) samples across ISIs and positions.
-
-    A doublet, not a long train, because the quantity wanted is the pure
-    dependence on ONE preceding interval.  In a burst the k-th spike's amplitude
-    depends on the whole history, which is the right thing to model for the
-    envelope and the wrong thing for a curve indexed by a single ISI.
-    """
-    out_isi, out_ratio = [], []
-    for isi in isis:
-        times = [5.0, 5.0 + float(isi)]
-        cell = mc.Cell(cmp_, bio_factory())
-        _, im, v = simulate_train(cell, times, dt=dt, stim_amp=stim_amp, tail=6.0)
-        for s in sites:
-            W, keep = train_footprints(im, cmp_, s, times, dt, sr=sr, nsamp=nsamp,
-                                       peak=peak, sigma=sigma, v=v, v_thresh=v_thresh,
-                                       detect_uv=detect_uv)
-            if len(W) < 2:
-                continue
-            p = (W.max(1) - W.min(1)).max(1)
-            out_isi.append(float(isi)); out_ratio.append(float(p[1] / max(p[0], 1e-30)))
-    return np.asarray(out_isi), np.asarray(out_ratio)

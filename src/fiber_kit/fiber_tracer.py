@@ -297,19 +297,6 @@ def assign(X, trajs, temperature=None):
     return hard, post, keys
 
 
-# ── convergence detection + soft zone  [BUILT, NOT YET VALIDATED] ───────────
-def convergence_radius(trajA, trajB, resolution_deg=25.0):
-    """Radius below which two fiber trajectories are within angular resolution.
-    UNTESTED on real data: needs a co-located converging pair."""
-    gA, gB = trajA[0], trajB[0]
-    rs = np.linspace(min(gA[0], gB[0]), max(gA[-1], gB[-1]), 50)
-    conv = None
-    for r in rs:                       # ascending radius; first (lowest) r where separated
-        ang = np.degrees(np.arccos(np.clip(predict(trajA, r) @ predict(trajB, r), -1, 1)))
-        if ang < resolution_deg: conv = r
-    return conv   # spikes below conv get soft posteriors from assign()
-
-
 def run(waveforms, W, nmean, y_um, mask=fl.MASK_FULL):
     """Full pass on one fiber-band's waveforms. Returns hard labels, posteriors,
     trajectories.  Seeding + assignment validated; convergence flagged untested."""

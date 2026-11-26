@@ -646,8 +646,6 @@ def dynamic_merge_split(realigned, times, init_label, mask, *, sr=32552.0,
     from sklearn.metrics import silhouette_score
     nspk, nsamp, nch = realigned.shape
     F = realigned[:, mask, :].reshape(nspk, -1)             # clustering/shape features (stderiv masked)
-    def _refrac(t):
-        t = np.sort(t); return 100.0 * np.mean(np.diff(t) < 0.002) if len(t) > 2 else 0.0
     nodes = {}; spike_node = np.full(nspk, -1, int); nid = 0
     def make_node(members):
         members = np.asarray(members, int); m = realigned[members]; tmpl = m.mean(0)

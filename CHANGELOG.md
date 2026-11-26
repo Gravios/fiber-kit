@@ -4,6 +4,18 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.15] — unused functions removed
+- 20 functions that nothing in the repository names were removed (275 lines with their comments): `fiber_geometry`
+  `temporal_offset`, `cross_spectrum_match`, `curl_feature`, `curl_distance`, `geo_veto`;
+  `morpho_envelope` `fit_recovery`, `measure_recovery`; `morpho_features.realign_features`;
+  `morpho_cable.find_spike`; `morpho_geom` `translate`, `is_soma`; `fiber_methods.truncated_channels`;
+  `fiber_collision.detect_residual`; `fiber_tracer.convergence_radius`; `config.to_yaml`;
+  `fiber_session.geoms_from_labels`; `graph_link.median_knn_edge`; `fiber_lib` `location_cy`,
+  `align_channels`; a nested `_refrac` in `fiber_intrachunk`.
+- Kept: `fiber_view.bundle_figure` and `default_mix`, `fiber_pca.realign_pca` and `stage2_shift`
+  (the workflow notes describe them); `neuro_io.session_rates` (the morphology manual names it);
+  the format readers `fiber_cpos.read_cpos` and `neuro_io.read_res_ticks`; the Qt overrides.
+
 ## [0.71.14] — a stage started by hand reads the knobs fiber-pipeline passes as flags
 - `fiber-pipeline` hands about a hundred knobs to seven stages as flags (`FK_SESSION_*`,
   `FK_REFINE_*`, `FK_LINK_*`, `FK_PEEL_*`, `FK_STOCH_*`, `FK_FLAG_SPK` / `FK_FLAG_STAGE` and a few

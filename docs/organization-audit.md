@@ -266,7 +266,7 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 5. Findings 5 and 6, which change what a user types and reads, together in one release.
 6. Findings 7 to 9 as they are met.
 
-## State after 0.71.14
+## State of the findings
 
 | Finding | State |
 |---|---|
@@ -278,4 +278,4 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 | 6 Profiles | open: the layout of the profiles is a choice |
 | 7 Untested modules | measured (62%); no test added |
 | 8 Where things are | open: sub-packages change import paths |
-| 9 Small debts | lint, the environment variables and the exception count done; the unused public functions left |
+| 9 Small debts | lint, the environment variables and the exception count done; 20 unused functions removed (0.71.15) |

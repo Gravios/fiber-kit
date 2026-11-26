@@ -322,13 +322,6 @@ def simulate(cell, dt=0.01, t_stop=15.0, stim_amp=2.0, stim_start=2.0, stim_dur=
     return dict(t=np.arange(nt) * dt, im=im, v=vv, dt=dt)
 
 
-def find_spike(v, dt, thresh=-20.0, comp=0):
-    """Index of the somatic spike peak, or None."""
-    tr = v[:, comp]
-    above = np.flatnonzero(tr > thresh)
-    return int(tr.argmax()) if above.size else None
-
-
 def bap_profile(res, cmp_, thresh=-20.0):
     """Back-propagation summary per compartment.
 

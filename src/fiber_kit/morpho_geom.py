@@ -318,10 +318,6 @@ class Compartments:
     def __len__(self):
         return len(self.L)
 
-    @property
-    def is_soma(self):
-        return self.type == SOMA
-
     def summary(self):
         by = {}
         for t in np.unique(self.type):
@@ -506,13 +502,6 @@ def rotate_z(cmp_, deg):
     out = Compartments(**{k: getattr(cmp_, k) for k in Compartments.__slots__})
     for k in ("p0", "p1", "mid"):
         setattr(out, k, getattr(cmp_, k) @ R.T)
-    return out
-
-
-def translate(cmp_, dx):
-    out = Compartments(**{k: getattr(cmp_, k) for k in Compartments.__slots__})
-    for k in ("p0", "p1", "mid"):
-        setattr(out, k, getattr(cmp_, k) + np.asarray(dx, float))
     return out
 
 

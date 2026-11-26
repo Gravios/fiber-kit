@@ -122,11 +122,6 @@ def curve_distance(curve_i, curve_j, mu, P):
     return float(np.mean(np.linalg.norm(ei - ej, axis=1)) / (0.5 * (_clen(ei) + _clen(ej))))
 
 
-def geo_veto(curve_i, curve_j, mu, P, thr=DEFAULT_GEO_THR):
-    """True == REFUSE the link (curves too distinct to be the same unit)."""
-    return curve_distance(curve_i, curve_j, mu, P) > thr
-
-
 # ── inter-channel temporal offsets ──────────────────────────────────────────
 # The drift-robust half of identity: WHEN the spike reaches each channel, not
 # the amplitude footprint.  Two units at different positions differ in their
@@ -366,78 +361,6 @@ def classify_celltype(raw_template, sr=32552.0, width_thr=0.40):
 CrossSpecMatch = namedtuple("CrossSpecMatch", "coherence delay")
 
 
-def cross_spectrum_match(temp_a, temp_b, sr=32552.0, band=(300.0, 9000.0), amp_frac=0.3):
-    """Complex-embedding match of two mean templates via the per-channel cross-spectrum phasor.
-
-    For each channel c, D_c = sum_xi F_a[c,xi] * conj(F_b[c,xi]) over the band -- one complex number
-    whose MODULUS is the matched-filter shape/amplitude agreement and whose ANGLE is the net timing
-    offset (the Omlor-Giese A(xi)=alpha*exp(-2pi i tau xi) phasor, band-collapsed).  Each channel's
-    phase is referenced to the dominant channel, and the phasors are summed magnitude-weighted into a
-    resultant R:
-        coherence = |R| / sum_c |D_c|   in [0,1]   (1 == identical per-channel timing structure)
-        delay     = arg(D_dom) / (2 pi f_bar) * sr  (mean global delay in samples; >0: a leads b)
-
-    A GLOBAL delay (drift) multiplies every channel's spectrum by the same exp(-2pi i xi tau), so it
-    rotates all phasors equally and is removed by the dominant-channel reference -- `coherence` is
-    drift-invariant by construction.  Unlike warp_correlation it needs no per-channel slope fit, so it
-    stays sharp at low spike count (synthetic high-cosine/different-timing pairs under random drift:
-    same-vs-different AUC ~1.0 by 100 spikes, vs ~0.70 for warp_correlation and ~chance for cosine).
-    It bundles the cosine (modulus) and warp (angle) signatures in one object.  Best on RAW,
-    FULL-window templates -- do not truncate the tails, the phase lives there.  `coherence` is only
-    APPROXIMATELY invariant to amplitude-reweighting drift (the magnitude weighting absorbs moderate
-    reweighting).  Returns CrossSpecMatch(coherence, delay); coherence is the same-neuron scalar.
-
-    REAL-DATA CAVEAT (g5 180-210 min, split-half SAME vs cross-cluster DIFFERENT): as a same-vs-
-    different gate this UNDERPERFORMS plain cosine -- coherence AUC ~0.88 vs cosine ~0.98, because real
-    co-located different units share enough per-channel phase structure that coherence stays high
-    (DIFFERENT median ~0.94, poorly specific).  The synthetic edge appears only on shape-matched /
-    timing-different pairs.  Keep this as a shift-invariant utility, NOT as a replacement for the
-    cosine identity gate.
-    """
-    A = np.asarray(temp_a, float); B = np.asarray(temp_b, float); nt, nc = A.shape
-    FA = np.fft.rfft(A - A.mean(0), axis=0); FB = np.fft.rfft(B - B.mean(0), axis=0)
-    fr = np.fft.rfftfreq(nt, 1.0 / sr); m = (fr >= band[0]) & (fr <= band[1])
-    p2pA = A.max(0) - A.min(0); p2pB = B.max(0) - B.min(0)
-    dom = int(np.argmax(p2pA + p2pB))
-    if m.sum() < 3:
-        return CrossSpecMatch(0.0, float("nan"))
-    D = (FA[m] * np.conj(FB[m])).sum(0)                       # (nc,) per-channel cross-spectrum
-    keep = (p2pA >= amp_frac * p2pA[dom]) & (p2pB >= amp_frac * p2pB[dom])
-    if keep.sum() < 3 or abs(D[dom]) < 1e-12:
-        return CrossSpecMatch(0.0, float("nan"))
-    phi = np.angle(D) - np.angle(D[dom])                      # reference out the global drift
-    w = np.abs(D)
-    R = (w[keep] * np.exp(1j * phi[keep])).sum() / w[keep].sum()
-    fbar = float((fr[m] * np.abs(FA[m, dom])).sum() / (np.abs(FA[m, dom]).sum() + 1e-12))
-    delay = float(np.angle(D[dom]) / (2 * np.pi * fbar) * sr) if fbar > 0 else float("nan")
-    return CrossSpecMatch(float(np.abs(R)), delay)
-
-
-def temporal_offset(ta, tb, mask=None, maxlag=6):
-    """Global sub-sample temporal offset (samples) of template `tb` relative to `ta`: the lag that,
-    applied to tb (tb -> tb shifted by +offset), best aligns it to ta.  Channel-summed cross-
-    correlation (matched filter over the whole footprint) with a 3-pt parabolic sub-sample refine --
-    the accurate estimator for a single GLOBAL shift (sharper than the band-collapsed phase of
-    cross_spectrum_match, which biases low for multi-sample shifts).  Intended for align-at-merge:
-    once cross_spectrum_match.coherence confirms two fragments are the same unit despite an offset,
-    this gives the value to shift one onto the other before combining.  mask: optional (T,C) bool to
-    restrict to footprint channels."""
-    A = np.asarray(ta, float); B = np.asarray(tb, float); T = A.shape[0]
-    if mask is not None:
-        A = np.where(mask, A, 0.0); B = np.where(mask, B, 0.0)
-    A = A - A.mean(0); B = B - B.mean(0)
-    xc = np.fft.irfft(np.fft.rfft(A, axis=0) * np.conj(np.fft.rfft(B, axis=0)), n=T, axis=0).real.sum(1)
-    xc = np.roll(xc, T // 2)                                   # zero lag at T//2
-    lag0 = T // 2
-    lo = max(lag0 - maxlag, 1); hi = min(lag0 + maxlag + 1, T - 1)
-    k = lo + int(np.argmax(xc[lo:hi]))
-    d = float(k - lag0)
-    y0, y1, y2 = xc[k - 1], xc[k], xc[k + 1]; den = y0 - 2 * y1 + y2
-    if abs(den) > 1e-9:
-        d += float(np.clip(0.5 * (y0 - y2) / den, -0.5, 0.5))
-    return d
-
-
 def interchannel_offsets(template, amp_frac=0.3, method="trough", up=8, maxlag=None):
     """Per-channel sub-sample timing (samples) of each channel relative to the dominant
     channel.  Channels below amp_frac of the dominant peak-to-peak carry no reliable
@@ -573,39 +496,3 @@ def link_chunks_strict(ext_idx, ext_lab, waves, mask, *, min_anchor=20, frac=0.5
             r = find((c, l)); roots.setdefault(r, len(roots)); gid[(c, l)] = roots[r]
     return gid, len(roots)
 
-
-# ── curl: intra-chunk fiber fingerprint from the inter-channel timing field ──
-# Treat per-channel cross-correlation lags as a 1-form on the channel graph and
-# take its CURL (the circulation / non-integrable part, via discrete Helmholtz):
-# the part of the pairwise timing NOT explained by any single consistent
-# wavefront.  It is a reproducible per-fiber fingerprint that distinguishes
-# fibers whose median templates are similar but whose spatiotemporal timing
-# differs -- exactly the template-near-duplicates an envelope/template metric
-# merges (on real g5: same-fiber curl distance ~0.74 vs template-similar pairs
-# 3.4-26; intra-chunk match AUC 0.83).  INTRA-CHUNK ONLY: it is computed from the
-# median waveform and is NOT drift-invariant, so it discriminates fibers within
-# one chunk's frame, not across chunks.  Geometry-free (graph Helmholtz); pair
-# with interchannel_offsets for the gradient/slowness half if positions help.
-def curl_feature(template, maxlag=5):
-    """Curl 1-form of the inter-channel CC-lag field of a (denoised) median
-    template (nsamp, nchan).  Returns a vector over the nchan*(nchan-1)/2 channel
-    pairs; compare two fibers with curl_distance.  Denoise the template first."""
-    T = np.asarray(template, float); nch = T.shape[1]
-    pairs = [(i, j) for i in range(nch) for j in range(i + 1, nch)]
-    lag = np.zeros(len(pairs))
-    for k, (i, j) in enumerate(pairs):
-        wi, wj = T[:, i], T[:, j]
-        cc = [float(wi @ np.roll(wj, t)) for t in range(-maxlag, maxlag + 1)]
-        t0 = int(np.argmax(cc)) - maxlag
-        cm, c0, cp = float(wi @ np.roll(wj, t0 - 1)), float(wi @ np.roll(wj, t0)), float(wi @ np.roll(wj, t0 + 1))
-        dn = cm - 2 * c0 + cp
-        lag[k] = t0 + (0.5 * (cm - cp) / dn if abs(dn) > 1e-9 else 0.0)
-    inc = np.zeros((len(pairs), nch))                       # graph incidence
-    for k, (i, j) in enumerate(pairs): inc[k, i] = 1; inc[k, j] = -1
-    phi, *_ = np.linalg.lstsq(np.vstack([inc, np.eye(1, nch)]), np.append(lag, 0.0), rcond=None)
-    return lag - inc @ phi                                  # Helmholtz curl part (gradient removed)
-
-
-def curl_distance(c1, c2):
-    """Euclidean distance between two curl 1-forms (same channel set)."""
-    return float(np.linalg.norm(np.asarray(c1, float) - np.asarray(c2, float)))
