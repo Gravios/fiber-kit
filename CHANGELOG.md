@@ -4,6 +4,15 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.18] — fiber-pipeline's log says how long every step took
+- The log of a `fiber-pipeline` run had no times; how long a stage took had to be read off the
+  modification times of its output files.
+- Each step's header is now followed by the clock time it started at, and its end by
+  `<step> took <time>`.  The run ends with `== timing ==`: one line per step, in order, and the
+  total.  A step that fails says `<step> stopped after <time>` and the finished steps are still
+  listed.  The same for a run of named stages and for the realign that follows a stage.
+- A `--dry-run` prints none of it.  test_runner_timing (new) runs plans of stand-in stages.
+
 ## [0.71.17] — cluster_chunk_fine takes its 85 settings as one object
 - `fiber_session.cluster_chunk_fine` had 96 parameters.  85 were settings, passed one by one from
   the command line through `build_cf` and the chunk worker.  They are the fields of

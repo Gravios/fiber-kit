@@ -42,7 +42,7 @@ set -euo pipefail
 # keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
 # starts.  When the versions differ: hand over to the checkout's own script if there is one,
 # otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
-FK_RUNNER_VERSION="0.71.17"
+FK_RUNNER_VERSION="0.71.18"
 if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
     _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
 print(fiber_kit.__version__)
@@ -905,6 +905,42 @@ _shielded() {       # $1 = stage, $2.. = the command that runs it.  In a subshel
     )
 }
 
+# ---------- wall time of every step, in the log --------------------------------------------------
+# A step's header is followed by the clock time it started at; when it ends, one line says how long
+# it took; the run ends with the list of all steps and the total.  A step that fails says how long
+# it ran before it stopped.  Nothing is printed on a --dry-run (no step runs).
+_TIMING=""; _TIMING_T0=""; _TIMING_STEP=""; _TIMING_RUN0=""
+_dur() {            # seconds -> "3h 02m 05s" | "2m 05s" | "5s"
+    local t="$1"
+    if   [ "$t" -ge 3600 ]; then printf '%dh %02dm %02ds' $((t / 3600)) $((t % 3600 / 60)) $((t % 60))
+    elif [ "$t" -ge 60 ];   then printf '%dm %02ds' $((t / 60)) $((t % 60))
+    else printf '%ds' "$t"; fi
+}
+_timing_begin() {   # $1 = the step's label
+    [ -n "${FK_DRYRUN:-}" ] && return 0
+    _TIMING_STEP="$1"; _TIMING_T0="$(date +%s)"; [ -n "$_TIMING_RUN0" ] || _TIMING_RUN0="$_TIMING_T0"
+    printf '   started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+    trap _timing_stopped EXIT
+}
+_timing_end() {
+    [ -n "${FK_DRYRUN:-}" ] && return 0
+    local t=$(( $(date +%s) - _TIMING_T0 ))
+    printf '   %s took %s\n' "$_TIMING_STEP" "$(_dur "$t")"
+    _TIMING+="$(printf '   %-28s %12s' "$_TIMING_STEP" "$(_dur "$t")")"$'\n'
+    _TIMING_STEP=""
+    trap - EXIT
+}
+_timing_stopped() { # EXIT while a step was running: it failed (set -e) or was interrupted
+    [ -n "$_TIMING_STEP" ] || return 0
+    printf '   %s stopped after %s\n' "$_TIMING_STEP" "$(_dur $(( $(date +%s) - _TIMING_T0 )))" >&2
+    _timing_summary >&2
+}
+_timing_summary() {
+    [ -n "$_TIMING" ] || return 0
+    printf '== timing ==\n%s' "$_TIMING"
+    printf '   %-28s %12s\n' total "$(_dur $(( $(date +%s) - _TIMING_RUN0 )))"
+}
+
 run_stage() {
     if ! _chunks_guard "$1"; then local _st="$1"; shift; _shielded "$_st" run_stage_direct "$_st" "$@"; return; fi
     run_stage_direct "$@"
@@ -1078,15 +1114,18 @@ run_plan() {           # run an ordered, possibly-repeating plan of steps ($2.. 
         # leaves behind (cpos augments `in` in place: out == in).
         case "$st" in fiber-rdr|fiber-realign) ;; *) FINAL_TAG="$pout"; FINAL_TAG_SET=1 ;; esac
         printf '== [plan %d/%d] %s%s ==\n' "$n" "$total" "$sid" "${sname:+ ($sname)}"
+        _timing_begin "${sname:-$sid}"
         (   # subshell: STEP_* and STEP_ARGS are local to this step (no leak between steps)
             STEP_IN="$pin"; STEP_OUT="$pout"; STEP_UNITS="${punits:-$last_intrachunk_out}"; STEP_SPK="$pspk"; STEP_CPOS="$pcpos"
             STEP_DRIFT="$pdrift"
             eval "STEP_ARGS=( $pargs )"
             run_plan_stage "$st"
         )
+        _timing_end
     done <<EOF
 $spec
 EOF
+    _timing_summary
     [ "$n" -gt 0 ] || { echo "fiber-pipeline: plan produced no steps" >&2; exit 1; }
     [ "$ran" -gt 0 ] || { echo "fiber-pipeline: no plan step selected" >&2; exit 1; }
     if [ -n "${FINAL_CLU:-}" ]; then
@@ -1349,18 +1388,23 @@ main() {
                 echo "== fiber-realign  (skipped: fiber-session committed its own realign, FK_SESSION_REALIGN=$SESSION_REALIGN) =="
                 continue
             fi
+            _timing_begin "$s"
             run_stage "$s"
+            _timing_end
             case " $REALIGN_AFTER " in                 # Klusters re-roll spikes into their new groups after the step
                 *" $s "*)
+                    _timing_begin "realign after $s"
                     if [ "$s" = "$final_realign" ]; then
                         realign_after "$(stage_out_tag "$s")" "$REALIGN_FINAL_MODE"
                     else
                         realign_after "$(stage_out_tag "$s")" "$REALIGN_AFTER_MODE"
                     fi
+                    _timing_end
                     ;;
             esac
         fi
     done
+    _timing_summary
     if [ -n "${FINAL_CLU:-}" ]; then
         [ "$final_tag_set" = 1 ] || { echo "fiber-pipeline: --final-clu: no stage that writes a .clu ran" >&2; exit 1; }
         deliver_final_clu "$final_tag"

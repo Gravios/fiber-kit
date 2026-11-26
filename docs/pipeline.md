@@ -450,6 +450,12 @@ session -> psame-chunk (per-chunk: 1) -> cpos-session -> chunk -> realign-chunk 
 intrachunk's `units.npz`, which a relabel after intrachunk would leave stale.  That combination has not
 been scored on a ground truth; the plan without the merges is kept commented out in the template.
 
+### Timing in the log
+
+Every step's header is followed by `started <date time>`; when the step ends the log says
+`<step> took <time>`, and the run ends with a `== timing ==` list of all steps and the total.  A
+step that fails says `<step> stopped after <time>`.  The times are wall time, to the second.
+
 ### Environment variables that are not knobs
 
 The `FK_*` knobs of [config.md](config.md) can be set in a profile.  These cannot; they are read
