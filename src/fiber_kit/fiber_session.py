@@ -35,6 +35,7 @@
 #        --method stderiv [--no-fine] [--no-link]
 # ════════════════════════════════════════════════════════════════════════════
 import argparse, time
+import dataclasses
 import os
 import shutil
 import numpy as np
@@ -770,28 +771,117 @@ def _neigh_recluster(fine, waves, waves_std, basis, mask, dims, min_size, *, k=3
     return fine, accepted_total
 
 
-def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gmm", coarse_dr=0.15, coarse_seed_density=0.0,
-                       fine_kappa=40.0, fine_dedup=5.0, fine_mg=40, pca_k=6, max_sub=8, basis=None,
-                       n_grid=40, incl_k=3.0, incl_assign=False, no_noise=False, keep_small=False, keep_small_min=5,
-                       assign_unsorted=False, shed=None, cone_channel_k=0.0, split_var_margin=0.0,
-                       energy_band=False, eband_width=0.45, eband_overlap=0.2, eband_confound=0.4, eband_min_span=0.6, eband_min_band=60, eband_low_assign=0.0,
-                       var_split=0.0, var_split_depth=4,
-                       dipsplit=True, dip_dim=4, dip_alpha=0.01, dip_min=40, dip_realign=True,
-                       nudge_split=True, nudge_max=3, nudge_amp_pct=40.0, nudge_min_channels=4, nudge_alpha=0.01,
-                       rkk_dims=6, rkk_max=50, rkk_realign=True, rkk_realign_iters=2, rkk_delete=True, merge_corr=0.0, merge_method="template", sliding_nwin=14, cfiber_gate=False, cfiber_q=0.90, off_thr=0.0, off_amp_frac=0.3, waves_std=None,
-                       profile_thr=None, profile_floor_pct=90.0, profile_min_n=120,
-                       resplit_passes=0, resplit_residual_thr=0.08, resplit_topch=3, resplit_min_reduction=0.20, resplit_min_n=10, resplit_merge_corr=0.99,
-                       resplit_detrend_episode=False, resplit_detrend_win=90.0, resplit_detrend_min_n=100,
-                       reseed_residual_thr=0.0, reseed_min_reduction=0.05,
-                       refit_iters=0,
-                       refrac_ms=0.0, refrac_thr=0.3, refrac_min_exp=5.0, refrac_censor_ms=0.0,
-                       emit_candidates=False, candidates_out=None,
-                       deadapt=False, deadapt_min_corr=0.2,
-                       adapt_clean=False, adapt_z=3.0, adapt_isi_ms=10.0,
-                       adapt_clean_corr=0.4, adapt_clean_snr=0.5, adapt_taumax=0.5,
-                       collision_flag=False, collision_gain=0.09, collision_shift=8,
-                       neigh_passes=0, neigh_k=3, neigh_cos=0.7, neigh_seed=0,
-                       quality_metrics=False, quality_dims=10):
+@dataclasses.dataclass(frozen=True)
+class FineSettings:
+    """The settings of cluster_chunk_fine: one fiber-session chunk, coarse fibers refined into sub-units.
+
+    These were the keyword parameters of that function, one by one; the names and defaults are
+    unchanged, and a keyword passed to the function still replaces the field of that name.  Arrays
+    and paths (basis, waves_std, shed, candidates_out) are not settings and stay arguments."""
+    # coarse pass and fine splitter
+    method: str = "gmm"
+    coarse_dr: float = 0.15
+    coarse_seed_density: float = 0.0
+    fine_kappa: float = 40.0
+    fine_dedup: float = 5.0
+    fine_mg: int = 40
+    pca_k: int = 6
+    max_sub: int = 8
+    n_grid: int = 40
+    # inclusion, small clusters and the unsorted
+    incl_k: float = 3.0
+    incl_assign: bool = False
+    no_noise: bool = False
+    keep_small: bool = False
+    keep_small_min: int = 5
+    assign_unsorted: bool = False
+    cone_channel_k: float = 0.0
+    split_var_margin: float = 0.0
+    # energy-band split
+    energy_band: bool = False
+    eband_width: float = 0.45
+    eband_overlap: float = 0.2
+    eband_confound: float = 0.4
+    eband_min_span: float = 0.6
+    eband_min_band: int = 60
+    eband_low_assign: float = 0.0
+    # variance split
+    var_split: float = 0.0
+    var_split_depth: int = 4
+    # dip split
+    dipsplit: bool = True
+    dip_dim: int = 4
+    dip_alpha: float = 0.01
+    dip_min: int = 40
+    dip_realign: bool = True
+    # nudge split
+    nudge_split: bool = True
+    nudge_max: int = 3
+    nudge_amp_pct: float = 40.0
+    nudge_min_channels: int = 4
+    nudge_alpha: float = 0.01
+    # rkk fine split
+    rkk_dims: int = 6
+    rkk_max: int = 50
+    rkk_realign: bool = True
+    rkk_realign_iters: int = 2
+    rkk_delete: bool = True
+    # merge of the fine pieces
+    merge_corr: float = 0.0
+    merge_method: str = "template"
+    sliding_nwin: int = 14
+    cfiber_gate: bool = False
+    cfiber_q: float = 0.90
+    off_thr: float = 0.0
+    off_amp_frac: float = 0.3
+    profile_thr: object = None
+    profile_floor_pct: float = 90.0
+    profile_min_n: int = 120
+    # residual re-split and re-seed
+    resplit_passes: int = 0
+    resplit_residual_thr: float = 0.08
+    resplit_topch: int = 3
+    resplit_min_reduction: float = 0.20
+    resplit_min_n: int = 10
+    resplit_merge_corr: float = 0.99
+    resplit_detrend_episode: bool = False
+    resplit_detrend_win: float = 90.0
+    resplit_detrend_min_n: int = 100
+    reseed_residual_thr: float = 0.0
+    reseed_min_reduction: float = 0.05
+    refit_iters: int = 0
+    # refractory gate
+    refrac_ms: float = 0.0
+    refrac_thr: float = 0.3
+    refrac_min_exp: float = 5.0
+    refrac_censor_ms: float = 0.0
+    # candidates
+    emit_candidates: bool = False
+    # adaptation
+    deadapt: bool = False
+    deadapt_min_corr: float = 0.2
+    adapt_clean: bool = False
+    adapt_z: float = 3.0
+    adapt_isi_ms: float = 10.0
+    adapt_clean_corr: float = 0.4
+    adapt_clean_snr: float = 0.5
+    adapt_taumax: float = 0.5
+    # collision flag
+    collision_flag: bool = False
+    collision_gain: float = 0.09
+    collision_shift: int = 8
+    # neighbour reassignment
+    neigh_passes: int = 0
+    neigh_k: int = 3
+    neigh_cos: float = 0.7
+    neigh_seed: int = 0
+    # quality metrics
+    quality_metrics: bool = False
+    quality_dims: int = 10
+
+
+def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, settings=None, *, basis=None, shed=None,
+                       waves_std=None, candidates_out=None, **overrides):
     """Coarse fibers (for linking), refined WITHIN the chunk into sub-units so each
     fiber keeps its own geometry per chunk.  Split = method ('gmm' BIC mixture |
     'fiber' mean-shift | 'none'), then an optional DipSplit pass (dip test on lowered
@@ -799,12 +889,19 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     re-seeded as a fiber: own trajectory + per-fiber inclusion radius rebuilt on it.
     deadapt=True: de-adapt each coarse fiber's amplitudes (EWMA-τ) before splitting,
     so RS fibers don't get carved into energy bands (the 'before' placement)."""
+    # `settings` is a FineSettings; a keyword the old signature took (method=..., dipsplit=...) still works
+    # and replaces that field.  s.<name> below is one setting.
+    if settings is not None and not isinstance(settings, FineSettings):
+        raise TypeError("cluster_chunk_fine: the 8th argument is a FineSettings; pass method=... by keyword")
+    s = settings if settings is not None else FineSettings()
+    if overrides:
+        s = dataclasses.replace(s, **overrides)
     # coarse_dr sets the radial (whitened-amplitude) band half-width for spike->seed association in
     # the coarse pass: wider -> each coarse fiber sweeps up a broader amplitude range -> fewer, fatter
     # coarse groups; narrower -> tighter bands, so amplitude-distinct cells stay separate coarse fibers
     # for the fine splitter to resolve.  Only the COARSE call is exposed; the per-fiber fine re-cluster
     # keeps the default band (it already operates within one coarse fiber).
-    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=coarse_dr, seed_density=coarse_seed_density,
+    coarse = cluster_chunk(waves, W, nmean, min_group=coarse_mg, dr_frac=s.coarse_dr, seed_density=s.coarse_seed_density,
                            mask=mask)
     ct0 = float(res_abs.min()); ct1 = float(res_abs.max())   # chunk time bounds for rate/presence
     fine = np.full(len(waves), -1, int); geoms = []; nid = 0
@@ -815,89 +912,89 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         hyb = basis is not None and basis.get("_hyb") is not None and waves_std is not None
         wraw = waves_std[cidx] if hyb else None
         H = (lambda w: _fpca.hybrid_stack(w, wraw)) if hyb else (lambda w: w)
-        if deadapt:
+        if s.deadapt:
             try:
                 from . import fiber_adapt as _fa
             except ImportError:
                 import fiber_adapt as _fa
-            wsplit, _ = _fa.deadapt(wcf, res_abs[cidx], W, nmean, mask, sr, min_corr=deadapt_min_corr)
+            wsplit, _ = _fa.deadapt(wcf, res_abs[cidx], W, nmean, mask, sr, min_corr=s.deadapt_min_corr)
         else:
             wsplit = wcf
         groups = None
-        if energy_band:                                # confound-gated energy-band split; None => not confounded, fall through
-            groups = _energy_band_split(wsplit, mask, eband_width, eband_overlap, pca_k, max_sub,
-                                        eband_min_band, eband_confound, eband_min_span, eband_low_assign)
+        if s.energy_band:                                # confound-gated energy-band split; None => not confounded, fall through
+            groups = _energy_band_split(wsplit, mask, s.eband_width, s.eband_overlap, s.pca_k, s.max_sub,
+                                        s.eband_min_band, s.eband_confound, s.eband_min_span, s.eband_low_assign)
         if groups is not None:
             pass
-        elif method == "none":
+        elif s.method == "none":
             groups = [np.arange(len(cidx))]
-        elif method == "fiber":
-            sub = cluster_chunk(wsplit, W, nmean, min_group=fine_mg, kappa=fine_kappa, dedup_deg=fine_dedup, mask=mask)
+        elif s.method == "fiber":
+            sub = cluster_chunk(wsplit, W, nmean, min_group=s.fine_mg, kappa=s.fine_kappa, dedup_deg=s.fine_dedup, mask=mask)
             groups = ([np.arange(len(cidx))] if (sub < 0).all()
                       else [np.flatnonzero(sub == s) for s in np.unique(sub[sub >= 0])])
-        elif method == "rkk":
-            if rkk_realign:                                # per-cluster realign EM loop
-                sub = _rkk_realign(H(wsplit), mask, rkk_dims, rkk_max, fine_mg, rkk_realign_iters, delete=rkk_delete, basis=basis)
+        elif s.method == "rkk":
+            if s.rkk_realign:                                # per-cluster realign EM loop
+                sub = _rkk_realign(H(wsplit), mask, s.rkk_dims, s.rkk_max, s.fine_mg, s.rkk_realign_iters, delete=s.rkk_delete, basis=basis)
             else:                                          # legacy: one parent realign, fixed features
-                Fc = _fpca.cluster_features(fl.realign(H(wsplit)), basis, realign=False, dims=rkk_dims) if basis is not None else None
+                Fc = _fpca.cluster_features(fl.realign(H(wsplit)), basis, realign=False, dims=s.rkk_dims) if basis is not None else None
                 if Fc is None:
                     wc = fl.realign(wsplit)[:, mask, :].reshape(len(cidx), -1); wc = wc - wc.mean(0)
-                    Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :rkk_dims] * Sc[:rkk_dims]
-                sub = _rkk_labels(Fc, rkk_max, fine_mg, seed=42, delete=rkk_delete)
+                    Uc, Sc, _ = np.linalg.svd(wc, full_matrices=False); Fc = Uc[:, :s.rkk_dims] * Sc[:s.rkk_dims]
+                sub = _rkk_labels(Fc, s.rkk_max, s.fine_mg, seed=42, delete=s.rkk_delete)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
         else:
-            sub = gmm_split(H(wsplit), pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
+            sub = gmm_split(H(wsplit), pca_k=s.pca_k, max_sub=s.max_sub, mask=mask, basis=basis)
             groups = [np.flatnonzero(sub == s) for s in np.unique(sub)]
-        if dipsplit and _HAVE_DIP:
+        if s.dipsplit and _HAVE_DIP:
             newg = []
             wcfh = H(wcf)
             for grp in groups:                       # PCA each GROUP (within-unit variance)
-                if len(grp) < 2 * dip_min:
+                if len(grp) < 2 * s.dip_min:
                     newg.append(grp); continue
-                if dip_realign:                      # realign EACH node to its own median (per step)
-                    pieces = _dipsplit_realign(wcfh[grp], mask, dip_dim, dip_min, dip_alpha, basis=basis)
+                if s.dip_realign:                      # realign EACH node to its own median (per step)
+                    pieces = _dipsplit_realign(wcfh[grp], mask, s.dip_dim, s.dip_min, s.dip_alpha, basis=basis)
                 else:                                # legacy: one parent realign, fixed features
-                    Fg = _fpca.cluster_features(fl.realign(wcfh[grp]), basis, realign=False, dims=dip_dim) if basis is not None else None
+                    Fg = _fpca.cluster_features(fl.realign(wcfh[grp]), basis, realign=False, dims=s.dip_dim) if basis is not None else None
                     if Fg is None:
                         wg = fl.realign(wcf[grp])[:, mask, :].reshape(len(grp), -1); wg = wg - wg.mean(0)
-                        Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :dip_dim] * Sg[:dip_dim]
-                    pieces = _dipsplit_rec(Fg, np.arange(len(grp)), dip_min, dip_alpha)
+                        Ug, Sg, _ = np.linalg.svd(wg, full_matrices=False); Fg = Ug[:, :s.dip_dim] * Sg[:s.dip_dim]
+                    pieces = _dipsplit_rec(Fg, np.arange(len(grp)), s.dip_min, s.dip_alpha)
                 newg += [grp[piece] for piece in pieces]
             groups = newg
-        if split_var_margin > 0 and len(groups) > 1:
+        if s.split_var_margin > 0 and len(groups) > 1:
             # accept the split only if it lowers the spike-weighted mean per-channel
             # RESIDUAL variance by >= margin (real shape sub-units do; energy splits don't)
             sub = np.full(len(cidx), -1, int)
             for gi, grp in enumerate(groups):
                 sub[grp] = gi
-            _, _, red = ft.split_meanvar(wcf, sub, W, nmean, mask, n_grid=n_grid, min_n=fine_mg)
-            if red < split_var_margin:
+            _, _, red = ft.split_meanvar(wcf, sub, W, nmean, mask, n_grid=s.n_grid, min_n=s.fine_mg)
+            if red < s.split_var_margin:
                 groups = [np.arange(len(cidx))]   # reject: insufficient variance reduction
-        if var_split > 0:
+        if s.var_split > 0:
             # auto-split fibers whose per-channel residual profile is peaked,
             # using the per-channel residual variance itself as the stop criterion
-            vmargin = split_var_margin if split_var_margin > 0 else 0.05
+            vmargin = s.split_var_margin if s.split_var_margin > 0 else 0.05
             newg = []
             for grp in groups:
-                pieces = (_variance_split(wcf[grp], W, nmean, mask, n_grid, var_split,
-                                          vmargin, fine_mg, rkk_dims, max_depth=var_split_depth)
-                          if len(grp) >= 2 * fine_mg else [np.arange(len(grp))])
+                pieces = (_variance_split(wcf[grp], W, nmean, mask, s.n_grid, s.var_split,
+                                          vmargin, s.fine_mg, s.rkk_dims, max_depth=s.var_split_depth)
+                          if len(grp) >= 2 * s.fine_mg else [np.arange(len(grp))])
                 newg += [grp[pc] for pc in pieces]
             groups = newg
-        if nudge_split:                                  # gated: split temporally-offset overlaid units
-            gate = [(grp,) + (_amp_spread(wcf[grp], mask) if len(grp) >= 2 * fine_mg else (np.inf, 0))
+        if s.nudge_split:                                  # gated: split temporally-offset overlaid units
+            gate = [(grp,) + (_amp_spread(wcf[grp], mask) if len(grp) >= 2 * s.fine_mg else (np.inf, 0))
                     for grp in groups]
             finite = [a for _, a, _ in gate if np.isfinite(a)]
-            amp_thr = float(np.percentile(finite, nudge_amp_pct)) if finite else 0.0
+            amp_thr = float(np.percentile(finite, s.nudge_amp_pct)) if finite else 0.0
             newg = []
             for grp, amp, nch in gate:                   # low amplitude + many channels = the condition
-                if amp <= amp_thr and nch >= nudge_min_channels and len(grp) >= 2 * fine_mg:
-                    newg += [grp[pc] for pc in _nudge_split(wcf[grp], mask, dip_dim, fine_mg,
-                                                            nudge_alpha, nudge_max)]
+                if amp <= amp_thr and nch >= s.nudge_min_channels and len(grp) >= 2 * s.fine_mg:
+                    newg += [grp[pc] for pc in _nudge_split(wcf[grp], mask, s.dip_dim, s.fine_mg,
+                                                            s.nudge_alpha, s.nudge_max)]
                 else:
                     newg.append(grp)
             groups = newg
-        if reseed_residual_thr > 0 and method not in ("none",):
+        if s.reseed_residual_thr > 0 and s.method not in ("none",):
             # RESIDUAL-GATED reseed: a fiber whose median-subtracted residual/signal exceeds the threshold
             # is heterogeneous -- typically two co-located cells of different shape averaged into one
             # (the welding the consensus matcher also reveals).  Re-run the fine splitter on JUST that
@@ -905,16 +1002,16 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             # does; noise does not).  Targeted by the residual detector, so clean fibers are untouched.
             newg = []
             for grp in groups:
-                if len(grp) < 2 * fine_mg or _median_resid_ratio(wcf[grp], mask) < reseed_residual_thr:
+                if len(grp) < 2 * s.fine_mg or _median_resid_ratio(wcf[grp], mask) < s.reseed_residual_thr:
                     newg.append(grp); continue
-                sub = cluster_chunk(wcf[grp], W, nmean, min_group=fine_mg, kappa=fine_kappa,
-                                    dedup_deg=fine_dedup, seed_density=coarse_seed_density, mask=mask)
+                sub = cluster_chunk(wcf[grp], W, nmean, min_group=s.fine_mg, kappa=s.fine_kappa,
+                                    dedup_deg=s.fine_dedup, seed_density=s.coarse_seed_density, mask=mask)
                 if (sub < 0).all() or len(np.unique(sub[sub >= 0])) < 2:
                     newg.append(grp); continue
                 pieces = [np.flatnonzero(sub == u) for u in np.unique(sub[sub >= 0])]
                 before = _median_resid_ratio(wcf[grp], mask)
-                after = max(_median_resid_ratio(wcf[grp[pc]], mask) for pc in pieces if len(pc) >= fine_mg)
-                if after < before - reseed_min_reduction:
+                after = max(_median_resid_ratio(wcf[grp[pc]], mask) for pc in pieces if len(pc) >= s.fine_mg)
+                if after < before - s.reseed_min_reduction:
                     newg += [grp[pc] for pc in pieces]           # accept: reseed lowered residual
                 else:
                     newg.append(grp)                             # reject: no improvement
@@ -923,10 +1020,10 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             """keep_small: a group the size gates would shed becomes a fiber of its own (all its
             spikes, no inclusion gate) instead of noise.  Returns True if kept."""
             nonlocal nid
-            if not keep_small or len(gidx) < keep_small_min:
+            if not s.keep_small or len(gidx) < s.keep_small_min:
                 return False
             try:
-                g = fiber_geom(waves[gidx], res_abs[gidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                g = fiber_geom(waves[gidx], res_abs[gidx], W, nmean, mask, sr, s.n_grid, chunk_t0=ct0, chunk_t1=ct1)
             except Exception:                                    # too small / degenerate: left to assign_unsorted
                 return False
             fine[gidx] = nid
@@ -938,12 +1035,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
 
         for grp in groups:
             g0 = len(grp)
-            if g0 < fine_mg:
+            if g0 < s.fine_mg:
                 if not _keep_whole(cidx[grp], 'group') and shed is not None:
                     shed['small_group'] = shed.get('small_group', 0) + g0
                 continue
             sidx = cidx[grp]; rad = float('nan'); rej = 0; rej_incl = 0; incl_rej = None
-            if incl_k > 0 and len(sidx) >= 20:
+            if s.incl_k > 0 and len(sidx) >= 20:
                 # REALIGN -> REFIT -> RE-JUDGE.  A true member at a bad sub-sample offset lands far from
                 # the fiber trajectory and is rejected as an outlier (an alignment artifact, not a wrong
                 # cell), and its offset blurs the template judging everyone else.  Iterating {align this
@@ -953,9 +1050,9 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                 # original single pass.
                 base = sidx.copy()
                 keep_mask = np.ones(len(base), bool)
-                for _it in range(max(1, refit_iters + 1)):
+                for _it in range(max(1, s.refit_iters + 1)):
                     cur = base[keep_mask]
-                    if len(cur) < fine_mg:
+                    if len(cur) < s.fine_mg:
                         break
                     w_al = fl.realign(waves[cur])
                     Xg = (w_al[:, mask, :].reshape(len(cur), -1) - nmean) @ W
@@ -966,63 +1063,63 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
                     resid_all = np.linalg.norm(Xall - rr_all[:, None] * ft.predict_many((grid, D), rr_all), axis=1)
                     rc = resid_all[keep_mask] if keep_mask.any() else resid_all
                     med = float(np.median(rc)); mad = 1.4826 * float(np.median(np.abs(rc - med)))
-                    rad = med + incl_k * mad
+                    rad = med + s.incl_k * mad
                     new_mask = resid_all <= rad
-                    if new_mask.sum() < fine_mg:
+                    if new_mask.sum() < s.fine_mg:
                         break
                     if np.array_equal(new_mask, keep_mask) and _it > 0:
                         keep_mask = new_mask; break
                     keep_mask = new_mask
                 keep = keep_mask; rej = int((~keep).sum()); rej_incl = rej
-                if incl_assign:
+                if s.incl_assign:
                     incl_rej = base[~keep]            # remember the inclusion tail (good spikes) to keep in the sort
                 sidx = base[keep]
-                if len(sidx) < fine_mg:
+                if len(sidx) < s.fine_mg:
                     if not _keep_whole(cidx[grp], 'core') and shed is not None:
                         shed['small_core'] = shed.get('small_core', 0) + g0
                     continue
-            if cone_channel_k > 0 and len(sidx) >= 40:
+            if s.cone_channel_k > 0 and len(sidx) >= 40:
                 # tighten the cone PER CHANNEL: drop spikes that are residual outliers
                 # on the discriminative (high-residual-variance) channels — peels
                 # channel-localized contaminants the global norm averages away.
-                prof = ft.channel_residual_profile(waves[sidx], W, nmean, mask, n_grid=n_grid)
+                prof = ft.channel_residual_profile(waves[sidx], W, nmean, mask, n_grid=s.n_grid)
                 disc = prof['per_channel'] >= np.percentile(prof['per_channel'], 70)
                 if disc.any():
                     ed = prof['per_spike_channel'][:, disc]
                     cmed = np.median(ed, 0); cmad = 1.4826 * np.median(np.abs(ed - cmed), 0) + 1e-9
-                    keep2 = ((ed - cmed) / cmad).max(1) <= cone_channel_k
+                    keep2 = ((ed - cmed) / cmad).max(1) <= s.cone_channel_k
                     rcone = int((~keep2).sum()); rej += rcone; sidx = sidx[keep2]
                     if shed is not None: shed['cone'] = shed.get('cone', 0) + rcone
-                    if len(sidx) < fine_mg:
+                    if len(sidx) < s.fine_mg:
                         if not _keep_whole(cidx[grp], 'core') and shed is not None:
                             shed['small_core'] = shed.get('small_core', 0) + g0
                         continue
             arej = 0
-            if adapt_clean and len(sidx) >= 40:
+            if s.adapt_clean and len(sidx) >= 40:
                 try:
                     from . import fiber_adapt as _fa
                 except ImportError:
                     import fiber_adapt as _fa
                 z, ai = _fa.adaptation_residual(waves[sidx], res_abs[sidx], W, nmean, mask, sr)
                 # only act where a fast adaptation law is real (gate on corr/snr/tau)
-                if (abs(ai['corr']) >= adapt_clean_corr and ai['snr'] >= adapt_clean_snr
-                        and ai['tau'] <= adapt_taumax):
+                if (abs(ai['corr']) >= s.adapt_clean_corr and ai['snr'] >= s.adapt_clean_snr
+                        and ai['tau'] <= s.adapt_taumax):
                     t = res_abs[sidx].astype(float) / sr; o = np.argsort(t)
                     isi = np.full(len(sidx), 1e9); isi[o[1:]] = np.diff(t[o]) * 1000.0
-                    akeep = ~((isi < adapt_isi_ms) & (z > adapt_z))   # high energy at short ISI = impossible
+                    akeep = ~((isi < s.adapt_isi_ms) & (z > s.adapt_z))   # high energy at short ISI = impossible
                     arej = int((~akeep).sum()); sidx = sidx[akeep]
                     if shed is not None: shed['adapt'] = shed.get('adapt', 0) + arej
-                    if len(sidx) < fine_mg:
+                    if len(sidx) < s.fine_mg:
                         if not _keep_whole(cidx[grp], 'core') and shed is not None:
                             shed['small_core'] = shed.get('small_core', 0) + g0
                         continue
             fine[sidx] = nid
             if shed is not None and rej_incl:
-                _k = 'incl_tail_kept' if incl_assign else 'incl_tail_dropped'
+                _k = 'incl_tail_kept' if s.incl_assign else 'incl_tail_dropped'
                 shed[_k] = shed.get(_k, 0) + rej_incl
             if incl_rej is not None and len(incl_rej):
                 fine[incl_rej] = nid                  # inclusion-tail kept in the sort; geometry below stays on the pure core
-            g = fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+            g = fiber_geom(waves[sidx], res_abs[sidx], W, nmean, mask, sr, s.n_grid, chunk_t0=ct0, chunk_t1=ct1)
             g['coarse'] = int(cf); g['radius_incl'] = rad; g['n_rejected'] = rej
             g['n_adapt_rejected'] = arej
             geoms.append(g); nid += 1
@@ -1034,42 +1131,42 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # ── Block A: consolidate fragments by template / sliding-direction correlation.
     #    'template' = mean-template correlation (fast); 'sliding' = direction profile
     #    in a sliding radius window (energy-resolved).  merge_corr ~0.95 / ~0.90. ──
-    vetoes = dict(cfiber_gate=cfiber_gate, cfiber_q=cfiber_q, off_thr=off_thr, off_amp_frac=off_amp_frac,
-                  waves_std=waves_std, refrac_ms=refrac_ms, refrac_thr=refrac_thr, refrac_min_exp=refrac_min_exp,
-                  refrac_censor_ms=refrac_censor_ms)
-    if resplit_passes == 0 and merge_corr and merge_method in ("template", "sliding") and len(geoms) > 1:
+    vetoes = dict(cfiber_gate=s.cfiber_gate, cfiber_q=s.cfiber_q, off_thr=s.off_thr, off_amp_frac=s.off_amp_frac,
+                  waves_std=waves_std, refrac_ms=s.refrac_ms, refrac_thr=s.refrac_thr, refrac_min_exp=s.refrac_min_exp,
+                  refrac_censor_ms=s.refrac_censor_ms)
+    if s.resplit_passes == 0 and s.merge_corr and s.merge_method in ("template", "sliding") and len(geoms) > 1:
         Kg = len(geoms)
-        if merge_method == "sliding":
+        if s.merge_method == "sliding":
             Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
                   for u in range(Kg)]
-            scores = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=merge_corr, return_scores=True)
+            scores = _sliding_pairs(Xs, n_win=s.sliding_nwin, min_cos=s.merge_corr, return_scores=True)
         else:
             T = np.array([g['template'].ravel() for g in geoms]); T = T - T.mean(1, keepdims=True)
             T = T / (np.linalg.norm(T, axis=1, keepdims=True) + 1e-12); C = T @ T.T
-            scores = {(int(i), int(j)): float(C[i, j]) for i, j in zip(*np.where(np.triu(C, 1) > merge_corr))}
+            scores = {(int(i), int(j)): float(C[i, j]) for i, j in zip(*np.where(np.triu(C, 1) > s.merge_corr))}
         edges = _merge_vetoes(list(scores), fine, waves, mask, res_abs, sr, **vetoes)
         edges = _complete_link(edges, scores)
-        fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+        fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, s.n_grid, ct0, ct1)
     # ── Block B: same-neuron grouping by energy-resolved DIRECTION PROFILE d(r).
     #    Direction is the validated same-neuron signal (AUC ~0.98 same-fiber-halves
     #    vs distinct fibers); curvature/tangent add noise and are NOT used.  Threshold
     #    defaults to the within-fiber (same-neuron) floor.  emit_candidates=True writes
     #    proposals WITHOUT merging (curation); merge_method='profile' applies them.
     #    Runs AFTER Block A, so it can review/merge already-consolidated fibers. ──
-    if resplit_passes == 0 and (merge_method == "profile" or emit_candidates) and len(geoms) > 1:
+    if s.resplit_passes == 0 and (s.merge_method == "profile" or s.emit_candidates) and len(geoms) > 1:
         Kg = len(geoms)
         Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
               for u in range(Kg)]
         trj = [ft.trajectory(X) for X in Xs]
         rng_p = [np.percentile(np.linalg.norm(X, axis=1), [15, 85]) for X in Xs]
         sz = [len(X) for X in Xs]
-        thr_p = profile_thr if profile_thr is not None else _same_fiber_floor(Xs, profile_floor_pct, profile_min_n)
+        thr_p = s.profile_thr if s.profile_thr is not None else _same_fiber_floor(Xs, s.profile_floor_pct, s.profile_min_n)
         cand = []
         for ai in range(Kg):
-            if sz[ai] < profile_min_n:            # unreliable trajectory -> not a merge anchor
+            if sz[ai] < s.profile_min_n:            # unreliable trajectory -> not a merge anchor
                 continue
             for bi in range(ai + 1, Kg):
-                if sz[bi] < profile_min_n:
+                if sz[bi] < s.profile_min_n:
                     continue
                 d = _profile_dir_dist(trj[ai], rng_p[ai], trj[bi], rng_p[bi])
                 if d is not None and d < thr_p:
@@ -1077,14 +1174,14 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         cand.sort(key=lambda z: z[2])
         if candidates_out is not None:
             candidates_out.extend((ai, bi, d, thr_p) for ai, bi, d in cand)
-        if merge_method == "profile" and not emit_candidates:
+        if s.merge_method == "profile" and not s.emit_candidates:
             # a profile-merge is PERMANENT (relink/defrag only ever merge): every veto applies
             # (the refractory one is power-aware, so it only ever removes a false merge)
             scores = {(ai, bi): -d for ai, bi, d in cand}
             edges = _merge_vetoes([(ai, bi) for ai, bi, _ in cand], fine, waves, mask, res_abs, sr, **vetoes)
             edges = _complete_link(edges, scores)
             fine, geoms = _apply_edges(fine, geoms, edges,
-                                       waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+                                       waves, res_abs, W, nmean, mask, sr, s.n_grid, ct0, ct1)
     # ── nearest-neighbour isolation in the validated direction-profile space:
     #    per fiber, the closest other fiber and that distance (free; reuses the
     #    stored trajectory + radius range).  nn_dist is one isolation number AND
@@ -1104,12 +1201,12 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             geoms[i]['nn_local'] = int(best[1])
     # ── optional L-ratio / isolation distance (Schmitzer-Torbert) in PCA-reduced
     #    whitened space.  O(N*K); behind a flag.  Field-standard quality metrics. ──
-    if quality_metrics and len(geoms) > 1:
+    if s.quality_metrics and len(geoms) > 1:
         from scipy.stats import chi2
         Xall = (fl.realign(waves)[:, mask, :].reshape(len(waves), -1) - nmean) @ W
         Xc = Xall - Xall.mean(0)
         _, _, Vt = np.linalg.svd(Xc, full_matrices=False)
-        F = Xc @ Vt[:quality_dims].T; df = F.shape[1]
+        F = Xc @ Vt[:s.quality_dims].T; df = F.shape[1]
         for u in range(len(geoms)):
             mem = np.flatnonzero(fine == u)
             others = np.flatnonzero(fine >= 0); others = others[fine[others] != u]
@@ -1126,58 +1223,58 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # ── Block C (opt-in): iterative residual-gated re-split (em_swap, target-channel residual) +
     #    correlation merge, to convergence.  klustakwik/gmm over-split PLUS this cleanup were validated
     #    to converge and drop within-cluster residual; replaces Block A/B when resplit_passes > 0. ──
-    if resplit_passes > 0:
-        for _rp in range(resplit_passes):
+    if s.resplit_passes > 0:
+        for _rp in range(s.resplit_passes):
             src_fine = fine.copy(); src_geoms = geoms       # parents, for metadata carry after re-split
             nid = (int(fine.max()) + 1) if (fine >= 0).any() else 0
             nsplit = 0
             for u in np.unique(fine[fine >= 0]):
                 loc = np.flatnonzero(fine == u)
-                if loc.size < 2 * resplit_min_n:
+                if loc.size < 2 * s.resplit_min_n:
                     continue
                 w = fl.realign(waves[loc])                                  # primary alignment
-                if _shape_residual(w) <= resplit_residual_thr:             # residual gate: skip tight fibers
+                if _shape_residual(w) <= s.resplit_residual_thr:             # residual gate: skip tight fibers
                     continue
-                sub = _em_swap(w, topk=resplit_topch, min_reduction=resplit_min_reduction, min_n=resplit_min_n,
-                               episode=(_episode_position(res_abs[loc] / float(sr) * 1000.0, resplit_detrend_win)
-                                        if resplit_detrend_episode else None),
-                               detrend_min_n=resplit_detrend_min_n)
+                sub = _em_swap(w, topk=s.resplit_topch, min_reduction=s.resplit_min_reduction, min_n=s.resplit_min_n,
+                               episode=(_episode_position(res_abs[loc] / float(sr) * 1000.0, s.resplit_detrend_win)
+                                        if s.resplit_detrend_episode else None),
+                               detrend_min_n=s.resplit_detrend_min_n)
                 if np.unique(sub).size >= 2:
                     for sv in np.unique(sub)[1:]:
                         fine[loc[sub == sv]] = nid; nid += 1
                     nsplit += 1
             if nsplit:
-                fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
+                fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, s.n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
             nmerge = 0
             if len(geoms) > 1:
                 Xs = [(fl.realign(waves[np.flatnonzero(fine == u)])[:, mask, :].reshape(-1, len(mask) * waves.shape[2]) - nmean) @ W
                       for u in range(len(geoms))]
                 # the same vetoes as Blocks A/B (until 0.56 this merge had none), and complete linkage:
                 # A~B and B~C no longer weld A to C when A and C are not themselves a pair
-                scores = _sliding_pairs(Xs, n_win=sliding_nwin, min_cos=resplit_merge_corr, return_scores=True)
+                scores = _sliding_pairs(Xs, n_win=s.sliding_nwin, min_cos=s.resplit_merge_corr, return_scores=True)
                 edges = _merge_vetoes(list(scores), fine, waves, mask, res_abs, sr, **vetoes)
                 edges = _complete_link(edges, scores)
                 nmerge = len(edges)
-                fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1)
+                fine, geoms = _apply_edges(fine, geoms, edges, waves, res_abs, W, nmean, mask, sr, s.n_grid, ct0, ct1)
             if nsplit == 0 and nmerge == 0:
                 break
     # ── Block N (opt-in): neighbourhood re-cluster -- rkk over the union of a random set of neighbouring
     #    clusters, from the current labels, accepted on KK's own score.  Revisits boundaries the
     #    per-cluster passes above cannot (they only ever split one cluster or merge two whole ones). ──
-    if neigh_passes > 0 and len(geoms) > 1:
+    if s.neigh_passes > 0 and len(geoms) > 1:
         src_fine = fine.copy(); src_geoms = geoms
-        fine, nacc = _neigh_recluster(fine, waves, waves_std, basis, mask, rkk_dims, fine_mg, k=neigh_k,
-                                      cos_thr=neigh_cos, min_n=2 * resplit_min_n, passes=neigh_passes,
-                                      seed=neigh_seed, shed=shed)
+        fine, nacc = _neigh_recluster(fine, waves, waves_std, basis, mask, s.rkk_dims, s.fine_mg, k=s.neigh_k,
+                                      cos_thr=s.neigh_cos, min_n=2 * s.resplit_min_n, passes=s.neigh_passes,
+                                      seed=s.neigh_seed, shed=shed)
         if nacc:
-            fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
+            fine, geoms = _rebuild_geoms(fine, waves, res_abs, W, nmean, mask, sr, s.n_grid, ct0, ct1, src_fine=src_fine, src_geoms=src_geoms)
     # ── collision flag: route recoverable collisions OUT of the noise cluster.
     #    The inclusion radius already sent collisions to noise; the two-template
     #    matching-pursuit gain (fiber_collision) separates recoverable collisions
     #    (gain > collision_gain) from junk.  They go to ONE dedicated collision
     #    cluster (heterogeneous by construction) and are NOT dual-assigned to a
     #    fiber pair (decomposition to a specific pair is unreliable on this data). ──
-    if collision_flag and len(geoms) > 1:
+    if s.collision_flag and len(geoms) > 1:
         try:
             from . import fiber_collision as fcol
         except ImportError:
@@ -1186,13 +1283,13 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
         T = fcol.build_templates(waves, fine, mask=mask) if len(noise) >= 20 else {}
         if len(T) > 1:
             dic = fcol.whiten_atoms(T, W, nmean, mask=mask,
-                                    shifts=range(-collision_shift, collision_shift + 1))
+                                    shifts=range(-s.collision_shift, s.collision_shift + 1))
             gvec = fcol.decompose_batch(waves[noise], dic, W, nmean, mask)['gain']
             gains = {int(noise[j]): float(gvec[j]) for j in range(len(noise))}
-            coll = [i for i, gn in gains.items() if gn > collision_gain]
+            coll = [i for i, gn in gains.items() if gn > s.collision_gain]
             if len(coll) >= 20:
                 try:
-                    g = fiber_geom(waves[coll], res_abs[coll], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                    g = fiber_geom(waves[coll], res_abs[coll], W, nmean, mask, sr, s.n_grid, chunk_t0=ct0, chunk_t1=ct1)
                     g['coarse'] = -1; g['radius_incl'] = float('nan')
                     g['n_rejected'] = 0; g['n_merged'] = 0
                     g['collision'] = True; g['n_collision'] = len(coll)
@@ -1209,7 +1306,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     #    the remainder goes to the nearest fiber.  Collision / undefined fibers never receive.  Artifacts are removed BEFORE clustering (fiber-flag-artifacts
     #    -> --exclude-clu), so nothing real is left for the noise cluster.  A chunk with no fiber at
     #    all becomes one fiber.  Off by default. ──
-    if assign_unsorted:
+    if s.assign_unsorted:
         un = np.flatnonzero(fine < 0)
         tgt = [l for l, g in enumerate(geoms) if not (g.get('collision') or g.get('undefined'))]
         n_asg = 0
@@ -1218,7 +1315,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             cen = np.stack([np.median(Xall[fine == l], 0) for l in tgt])
             def _radius(dl):                                # the fiber's own inclusion rule: median + k*MAD
                 med = float(np.median(dl)); mad = 1.4826 * float(np.median(np.abs(dl - med)))
-                return med + (incl_k if incl_k > 0 else 3.0) * mad
+                return med + (s.incl_k if s.incl_k > 0 else 3.0) * mad
             rad = np.array([_radius(np.linalg.norm(Xall[fine == l] - cen[q], axis=1)) for q, l in enumerate(tgt)])
             near = np.empty(un.size, int); dist = np.empty(un.size)
             for b0 in range(0, un.size, 4096):
@@ -1230,16 +1327,16 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             far = un[~inside]; far_near = near[~inside]
             # spikes outside every fiber's spread: their own groups first (a sparse cell that never
             # made a fiber), only the rest to the nearest fiber
-            if keep_small and far.size >= 2 * keep_small_min:
+            if s.keep_small and far.size >= 2 * s.keep_small_min:
                 try:
-                    sub = gmm_split(waves[far], pca_k=pca_k, max_sub=max_sub, mask=mask, basis=basis)
+                    sub = gmm_split(waves[far], pca_k=s.pca_k, max_sub=s.max_sub, mask=mask, basis=basis)
                 except Exception:
                     sub = np.zeros(far.size, int)
                 for u in np.unique(sub):
                     m = sub == u
-                    if m.sum() >= keep_small_min:
+                    if m.sum() >= s.keep_small_min:
                         try:
-                            g = fiber_geom(waves[far[m]], res_abs[far[m]], W, nmean, mask, sr, n_grid,
+                            g = fiber_geom(waves[far[m]], res_abs[far[m]], W, nmean, mask, sr, s.n_grid,
                                            chunk_t0=ct0, chunk_t1=ct1)
                         except Exception:
                             continue
@@ -1253,7 +1350,7 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
             fine[far[rest]] = np.asarray(tgt)[far_near[rest]]; n_asg += int(rest.sum())
         elif un.size and not geoms:
             try:
-                g = fiber_geom(waves[un], res_abs[un], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                g = fiber_geom(waves[un], res_abs[un], W, nmean, mask, sr, s.n_grid, chunk_t0=ct0, chunk_t1=ct1)
                 g['coarse'] = -1; g['radius_incl'] = float('nan'); g['n_rejected'] = 0; g['n_merged'] = 0
                 fine[un] = len(geoms); geoms.append(g); n_asg += int(un.size)
             except Exception:
@@ -1262,11 +1359,11 @@ def cluster_chunk_fine(waves, res_abs, W, nmean, coarse_mg, mask, sr, method="gm
     # ── no-noise: sweep every REMAINING noise spike into ONE undefined fiber (a real cluster, not the
     #    noise cluster).  Heterogeneous by construction (rejected inclusion tails / coarse rejects / junk);
     #    kept in the sort so it is cleaned in subsequent steps rather than dropped.  Off by default. ──
-    if no_noise:
+    if s.no_noise:
         noise = np.flatnonzero(fine < 0)
         if noise.size >= 8:
             try:
-                g = fiber_geom(waves[noise], res_abs[noise], W, nmean, mask, sr, n_grid, chunk_t0=ct0, chunk_t1=ct1)
+                g = fiber_geom(waves[noise], res_abs[noise], W, nmean, mask, sr, s.n_grid, chunk_t0=ct0, chunk_t1=ct1)
                 g['coarse'] = -1; g['radius_incl'] = float('nan'); g['n_rejected'] = 0; g['n_merged'] = 0
                 g['undefined'] = True; g['n_undefined'] = int(noise.size)
                 fine[noise] = len(geoms); geoms.append(g)

@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.17] — cluster_chunk_fine takes its 85 settings as one object
+- `fiber_session.cluster_chunk_fine` had 96 parameters.  85 were settings, passed one by one from
+  the command line through `build_cf` and the chunk worker.  They are the fields of
+  `fiber_session.FineSettings` (a frozen dataclass, grouped: coarse pass, energy band, dip split,
+  nudge split, rkk, merge, re-split, refractory gate, adaptation, collision flag, neighbours,
+  quality); the function takes the seven data arguments, `settings`, and `basis`, `shed`,
+  `waves_std`, `candidates_out`.  Names and defaults are unchanged.
+- A keyword the old signature took still works and replaces that field, so `build_cf`,
+  fiber-refine, fiber-stochastic and `raw_vs_stderiv` call it as before.  The eighth positional
+  argument used to be `method`; passing it positionally is refused now.
+- The body was rewritten by program (`s.<name>` for each of 170 reads of a setting; none of the
+  85 names is assigned anywhere in the function).  **No sort should change.**  Checked on a
+  synthetic session under six configurations (`tools/audit/session_identity.py`): every output
+  file byte-identical before and after.  Not checked on a recording.
+- test_fine_settings (new).
+
 ## [0.71.16] — --in, --out and --method on every stage
 - The stage of the clustering a stage reads was `--clu-stage` on 18 stages and `--in-stage` on two;
   the one it writes `--out-stage` on some and `--out-tag` on others; the method token `--clu-method`

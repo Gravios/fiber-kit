@@ -270,7 +270,7 @@ unchanged); `tools/research/`; `neuro_io` split into formats, paths and tokens.
 
 | Finding | State |
 |---|---|
-| 1 Large functions | open. `cluster_chunk_fine` and the `main` functions are as they were |
+| 1 Large functions | `cluster_chunk_fine`: 85 settings in `FineSettings` (0.71.17), the body still 500 lines. The `main` functions are as they were |
 | 2 Two routes of a knob | the stage side done (0.71.14); the runner still builds the flags. 23 defaults differ with no profile: to decide |
 | 3 Stage lists | one table, tested (0.71.12); every command documented. The runner's per-stage functions remain |
 | 4 Runner from `PATH` | done (0.71.11) |
