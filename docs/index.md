@@ -33,6 +33,14 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   pitch and the cell size, spikes assigned to a tile by their spatial profile, a drift field from
   the signal's depth profile, a transient filtered file and a sparse kept one.
 
+- **[roadmap.md](roadmap.md)** — planned work that is not scheduled yet, each item with its status,
+  its design document and when to revisit it.
+
+- **[python-upgrade-plan.md](python-upgrade-plan.md)** — a **design plan** (deferred, 2026-11-27)
+  for moving past Python 3.12: what 3.14/3.15 offer fiber-kit and what they don't, the `fork` →
+  `forkserver` default that affects three process pools, the stated `>=3.9` floor, and the steps and
+  triggers for the move.
+
 - **fiber-view/**, **linking/** — the figures the README and `WORKFLOW.md` show, and the
   synthetic hybrid-linker prototype that made `linking/hybrid_linker.png`.
 
