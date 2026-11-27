@@ -4,6 +4,24 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.22] — fiber-profile: sample a command with py-spy, pool workers included
+A way to see where a stage's time goes on the Python fiber-kit runs on now (3.12, 3.13), with no
+code change. `fiber-profile record [options] -- CMD ...` runs the command under py-spy with
+`--subprocesses`, so the `ProcessPoolExecutor` workers of fiber-session, fiber-refine and
+fiber-stochastic are sampled too; `--pid PID --duration SEC` attaches to a running job.
+
+- Writes `<name>-<time>.raw` (collapsed stacks; drag into speedscope.app), `.json` (wall, CPU time and
+  peak RSS of the command and its children, versions, the `FK_*`/BLAS variables) and `.txt`.
+- The summary: cores used on average; parent and workers with the workers' load balance; time spent
+  importing, waiting, pickling and computing; computing by package and by function; the fiber-kit
+  functions that include the most time. `fiber-profile summary RUN.raw [--json]` prints it again.
+- `FK_PROFILE=<dir>` makes fiber-pipeline profile every command it runs (`FK_PROFILE_ARGS` adds
+  record flags). py-spy exits 0 whatever the command did; the command runs under a small shell that
+  keeps its exit status, so a failing step still stops the plan.
+- `py-spy>=0.4` is a dependency (a binary wheel). `test_profile`: the stack parser (command lines
+  holding `;` and quotes, the shell dropped from the chain), the summary arithmetic, and a real record
+  of a two-worker pool that exits 3. Guide: `docs/profiling.md`.
+
 ## [0.71.21] — fiber-unmix-children: the collision files are copies, not hard links
 `fiber-unmix-children` put the stage's `.eap` and `.spkc` under `<tag>_h` as hard links. Klusters
 writes its stage's `.eap` (the fitted offsets, at Save) and `.spkc` in place, so a Save of the

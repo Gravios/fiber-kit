@@ -1845,6 +1845,31 @@ Positional: `cmd`
 
 | flag | default | description |
 |---|---|---|
+### `fiber-profile`
+
+Sample a command, or a job that is already running, with py-spy -- the `ProcessPoolExecutor` workers
+included -- and summarise where the time goes.  Sub-commands `record` (`fiber-profile record [options] --
+CMD ...`, or `--pid PID --duration SEC`; writes `<name>-<time>.raw` (collapsed stacks, opens in
+speedscope), `.json` (wall, CPU, peak RSS, versions) and `.txt`) and `summary` (the report again from a
+`.raw`: processes and worker balance; time spent importing, waiting, pickling and computing; computing by
+package and by function; the fiber-kit functions that include the most time).  In a plan run,
+`FK_PROFILE=<dir>` profiles every step.  See [profiling.md](profiling.md).
+
+Positional: `cmd`, `raw`
+
+| flag | default | description |
+|---|---|---|
+| `--out` | `fk-profile` | record: output directory (default ./fk-profile) |
+| `--name` | — | record: file name stem (default the command's name); a time stamp is appended |
+| `--rate` | `100` | samples per second (default 100) |
+| `--native` | flag (off) | record: include C/C++/Cython frames |
+| `--gil` | flag (off) | record: only samples holding the GIL |
+| `--idle` | flag (off) | record: include idle threads |
+| `--nonblocking` | flag (off) | record: do not pause the process to sample (less overhead, less exact) |
+| `--pid` | — | record: attach to a running process |
+| `--duration` | — | record --pid: seconds to sample |
+| `--top` | `15` | rows per table (default 15) |
+| `--json` | flag (off) | summary: print the numbers as JSON |
 ### `fiber-gt-review`
 
 Lists where a sort (`--clu-stage`) and a curated ground truth disagree, with waveform (roll-cosine of the raw templates) and refractory (cross-refractory ratio) evidence for which one is wrong: curated units that violate their own refractory period, sort clusters holding two curated units or curator-noise spikes, and curated units split over sort clusters.  Writes `<base>.gtreview.<group>.<stage>.tsv` and a review `.clu` (`<stage>_gtreview`) with every listed spike set as a cluster.  See [bench.md](bench.md#reviewing-the-ground-truth-fiber-gt-review).

@@ -45,6 +45,10 @@ stage pay the full import cost.
 
 **Tachyon sampling profiler (`profiling.sampling`, PEP 799).** It profiles a running process with
 near-zero overhead, with no code change or restart.
+Most of this is available before any upgrade: `fiber-profile` (py-spy, fiber-kit 0.71.22) records
+and attaches on 3.12/3.13, follows the pool workers and has `--gil`; see [profiling.md](profiling.md).
+What Tachyon adds is being in the standard library, the line heatmap and higher rates; it is no
+reason to move on its own.
 
 - `attach <PID>`: profile a `fiber-session` or `fiber-pipeline` that is already running.
 - `dump`: one snapshot of every thread's stack; the first thing to run on a job that looks stuck.
@@ -177,8 +181,8 @@ are worth doing on 3.12 and need no new Python.
    so it can ship before the floor moves. Keep eager anything that registers on import or that
    must fail early. Test: `test/run_all.py` under both `PYTHON_LAZY_IMPORTS` values.
 5. **Run the workstations on 3.15** for a few sessions (no floor change). Compare `fiber-bench` scores
-   and wall time against 3.12 on the reference session, and profile one long `fiber-session` with
-   Tachyon (`attach`, `--mode cpu` and `--mode gil`) to record where the time goes.
+   and wall time against 3.12 on the reference session, and profile one long `fiber-session` to record where the time goes
+   (`fiber-profile`, with and without `--gil`; Tachyon once on 3.15).
 6. **Raise the floor to 3.15** only to use the § 1 APIs and the `lazy` keyword without version
    checks. Until then the APIs can be guarded:
    ```python

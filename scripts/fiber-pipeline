@@ -42,7 +42,7 @@ set -euo pipefail
 # keeps importing the checkout, so after a `git pull` the copy on PATH is older than the stages it
 # starts.  When the versions differ: hand over to the checkout's own script if there is one,
 # otherwise stop.  FK_RUNNER_ANY_VERSION=1 runs regardless.
-FK_RUNNER_VERSION="0.71.21"
+FK_RUNNER_VERSION="0.71.22"
 if [ -z "${FK_RUNNER_ANY_VERSION:-}" ]; then
     _pk="$("${FK_PYTHON:-python3}" -c 'import os, fiber_kit
 print(fiber_kit.__version__)
@@ -433,6 +433,16 @@ _run() {   # run the command, or (dry-run) just print it
         local s=${starts[i]} e=${starts[i+1]:-$n} j
         for ((j = s; j < e; j++)); do out+=("${argv[j]}"); done
     done
+    # FK_PROFILE=<dir>: run the command under fiber-profile (py-spy, workers included); one
+    # <step>-<time>.raw/.json/.txt per command in <dir>.  FK_PROFILE_ARGS adds record flags.
+    if [ -n "${FK_PROFILE:-}" ] && [ -z "${FK_DRYRUN:-}" ]; then
+        local -a prof=()
+        if command -v fiber-profile >/dev/null 2>&1; then prof=(fiber-profile)
+        else prof=("${FK_PYTHON:-python3}" -m fiber_kit.fiber_profile); fi
+        local -a pargs=()
+        read -r -a pargs <<< "${FK_PROFILE_ARGS:-}"
+        out=("${prof[@]}" record --out "$FK_PROFILE" --name "${out[0]}${STEP_OUT:+_$STEP_OUT}" "${pargs[@]}" -- "${out[@]}")
+    fi
     if [ -n "${FK_DRYRUN:-}" ]; then printf '    + '; printf '%q ' "${out[@]}"; printf '\n'
     else "${out[@]}"; fi
 }

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "fiber-kit"
-version = "0.71.21"
+version = "0.71.22"
 description = "Drift-stable 'fiber' reorganization of spike sorts (neurosuite-3)"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -36,6 +36,7 @@ dependencies = [
     "scikit-image>=0.19",
     "umap-learn>=0.5",              # tools/theta_bg_topology.py latent map
     "gudhi>=3.8",                   # tools/theta_bg_topology.py persistent homology (wheels; ripser also used if present)
+    "py-spy>=0.4",                  # fiber-profile (sampling profiler; a binary wheel, no compiler needed)
 ]
 
 [project.optional-dependencies]
@@ -94,6 +95,7 @@ fiber-contam = "fiber_kit.fiber_contam:main"
 fiber-rdr = "fiber_kit.fiber_rdr:main"
 fiber-bench = "fiber_kit.fiber_bench:main"
 fiber-tune = "fiber_kit.fiber_tune:main"
+fiber-profile = "fiber_kit.fiber_profile:main"
 fiber-defrag = "fiber_kit.fiber_defrag:main"
 fiber-calibrate = "fiber_kit.fiber_calibrate:main"
 fiber-score = "fiber_kit.fiber_score:main"

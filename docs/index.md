@@ -33,6 +33,10 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   pitch and the cell size, spikes assigned to a tile by their spatial profile, a drift field from
   the signal's depth profile, a transient filtered file and a sparse kept one.
 
+- **[profiling.md](profiling.md)** — `fiber-profile`: sample a stage or a plan run with py-spy (pool
+  workers included) and read where the time goes: imports, waiting, pickling, computing by package and
+  function; the options, the permissions, and the first measurements to take.
+
 - **[roadmap.md](roadmap.md)** — planned work that is not scheduled yet, each item with its status,
   its design document and when to revisit it.
 
