@@ -37,9 +37,9 @@ with the Qt/C++ **neurosuite-3** toolchain (klusters, neuroscope, ndmanager) for
   its design document and when to revisit it.
 
 - **[python-upgrade-plan.md](python-upgrade-plan.md)** — a **design plan** (deferred, 2026-11-27)
-  for moving past Python 3.12: what 3.14/3.15 offer fiber-kit and what they don't, the `fork` →
-  `forkserver` default that affects three process pools, the stated `>=3.9` floor, and the steps and
-  triggers for the move.
+  for moving from Python 3.12 to 3.15: lazy imports for start-up, the Tachyon profiler, what 3.14/3.15
+  offer fiber-kit and what they don't, the `fork` → `forkserver` default that affects three process
+  pools, the stated `>=3.9` floor, and the steps and triggers for the move.
 
 - **fiber-view/**, **linking/** — the figures the README and `WORKFLOW.md` show, and the
   synthetic hybrid-linker prototype that made `linking/hybrid_linker.png`.
