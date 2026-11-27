@@ -42,6 +42,7 @@
 import contextlib
 import glob
 import os
+import re
 import sys
 from collections import namedtuple
 
@@ -1412,70 +1413,102 @@ def write_tcl(base, elec, entries, n_classes=None):
     return path
 
 
+def _tcl_int(t):
+    """neurofileio's parseIntStrict: an optional sign and digits only, in int32 range."""
+    if not re.fullmatch(r"[+-]?[0-9]+", t):
+        return None
+    v = int(t)
+    return v if -2**31 <= v <= 2**31 - 1 else None
+
+
+_TCL_STATUSES = {"active", "tomb", "free"}
+
+
 def read_tcl(base, elec):
     """Read <base>.tcl.<elec> -> dict(version, nClasses, entries=[...], ok).  Each
     entry: {col, status, label, provenance_clu, provenance_stage, created,
-    merged_into}.  Mirrors neurofileio::readTcl."""
+    merged_into}; entries[c] is column c.
+
+    Accepts and refuses exactly what neurofileio::readTcl does (doc tcl.md): a
+    malformed row, an unknown status, a bad integer, a merged: target outside the
+    table or equal to its own column, or anything but one row per column
+    0..nClasses-1 makes the whole read fail ({ok: False}), because the
+    engines index the entries by column and skipping a row would shift the
+    later ones."""
     path = session_path(base, "tcl", elec, variant="", tag="")
     empty = dict(version=0, nClasses=0, entries=[], ok=False)
-    out = dict(version=0, nClasses=0, entries=[], ok=False)
-    have = False
+    version = 0
     declared = -1
+    rows = []
     try:
-        with open(path) as f:
-            for line in f:
-                s = line.strip()
-                if not s or s.startswith("#"):
-                    continue
-                if not have:
-                    p = s.split()
-                    if (len(p) < 2 or p[0] != "tcl" or not p[1].isdigit()
-                            or not 1 <= int(p[1]) <= TCL_VERSION[0]):
-                        return dict(empty)
-                    out["version"] = int(p[1])
-                    have = True
-                    continue
-                if s.startswith("nClasses"):
-                    try:
-                        declared = int(s.split()[1])
-                    except (ValueError, IndexError):
-                        pass
-                    continue
-                parts = line.rstrip("\n").split("\t")
-                if len(parts) < 2:
-                    continue
-                try:
-                    col = int(parts[0])
-                except ValueError:
-                    continue
-                st = parts[1]
-                merged_into = -1
-                if st.startswith("merged:"):
-                    try:
-                        merged_into = int(st[7:])
-                    except ValueError:
-                        merged_into = -1
-                    st = "merged"
-                def und(x):
-                    return "" if x == "-" else x
-                label = und(parts[2]) if len(parts) > 2 else ""
-                clu_s = parts[3] if len(parts) > 3 else "-"
-                try:
-                    clu = -1 if clu_s == "-" else int(clu_s)
-                except ValueError:
-                    clu = -1
-                stage = und(parts[4]) if len(parts) > 4 else ""
-                created = und(parts[5]) if len(parts) > 5 else ""
-                out["entries"].append(dict(col=col, status=st, label=label,
-                                           provenance_clu=clu, provenance_stage=stage,
-                                           created=created, merged_into=merged_into))
-        if not have:
-            return dict(empty)
-        out["nClasses"] = declared if declared >= 0 else len(out["entries"])
-        out["ok"] = True
+        with open(path, newline="") as f:
+            lines = f.read().split("\n")
     except OSError:
         return dict(empty)
-    return out
+    for line in lines:
+        if line.endswith("\r"):
+            line = line[:-1]
+        s = line.lstrip(" \t")
+        if not s or s.startswith("#"):
+            continue
+        if not version:
+            p = line.split()
+            v = _tcl_int(p[1]) if len(p) >= 2 and p[0] == "tcl" else None
+            if v is None or not 1 <= v <= TCL_VERSION[0]:
+                return dict(empty)
+            version = v
+            continue
+        if line.startswith("nClasses "):
+            p = line.split()
+            n = _tcl_int(p[1]) if len(p) == 2 else None
+            if n is None or n < 0:
+                return dict(empty)
+            declared = n
+            continue
+        parts = line.split("\t")
+        if len(parts) < 2:
+            return dict(empty)
+        col = _tcl_int(parts[0])
+        if col is None:
+            return dict(empty)
+        st = parts[1]
+        merged_into = -1
+        if st.startswith("merged:"):
+            merged_into = _tcl_int(st[7:])
+            if merged_into is None:
+                return dict(empty)
+            st = "merged"
+        elif st not in _TCL_STATUSES:
+            return dict(empty)
+
+        def und(x):
+            return "" if x == "-" else x
+
+        clu = -1
+        if len(parts) > 3 and und(parts[3]):
+            clu = _tcl_int(parts[3])
+            if clu is None:
+                return dict(empty)
+        rows.append(dict(col=col, status=st,
+                         label=und(parts[2]) if len(parts) > 2 else "",
+                         provenance_clu=clu,
+                         provenance_stage=und(parts[4]) if len(parts) > 4 else "",
+                         created=und(parts[5]) if len(parts) > 5 else "",
+                         merged_into=merged_into))
+    if not version:
+        return dict(empty)
+    n = declared if declared >= 0 else len(rows)
+    if len(rows) != n:
+        return dict(empty)
+    by_col = [None] * n
+    for e in rows:
+        c = e["col"]
+        if not 0 <= c < n or by_col[c] is not None:
+            return dict(empty)
+        if e["status"] == "merged" and not (0 <= e["merged_into"] < n and e["merged_into"] != c):
+            return dict(empty)
+        by_col[c] = e
+    return dict(version=version, nClasses=n, entries=by_col, ok=True)
 
 
 # ── group-wide spike-count edit (dedup propagation) ──────────────────────────

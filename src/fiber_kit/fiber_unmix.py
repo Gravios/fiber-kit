@@ -614,7 +614,7 @@ def main(argv=None):
             log(f"[unmix] wrote {os.path.basename(em['eap'])} ({em['cells']:,} cells, "
                 f"{os.path.getsize(em['eap']) / 1e6:.0f} MB) + {os.path.basename(em['tcl'])}")
         else:
-            log("[unmix] .eap not written (nothing to mark, or its spike count disagrees)")
+            log("[unmix] .eap not written (nothing to mark, its spike count disagrees, or the .tcl is not valid)")
         if a.spkc == 1 and em:
             _write_spkc(base, a.elec, new, tag, a.clu_method, int(cfg["nsamp"]), int(cfg["nchan"]), log)
     elif a.spkc == 1:

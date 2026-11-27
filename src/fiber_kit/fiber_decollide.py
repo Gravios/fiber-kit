@@ -31,6 +31,7 @@
 #  a detection-level edit; feature extraction follows it.
 # ═══════════════════════════════════════════════════════════════════════════
 import os
+import sys
 
 import numpy as np
 
@@ -239,7 +240,8 @@ def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
     all-absent N × n_cells (process_initeap normally pre-builds it).  Each unit maps
     to a stable .tcl class column (reuse by provenance, else allocate; grow when the
     free pool is exhausted).  Returns {'eap':…, 'tcl':…, 'cells':N_written} or None
-    (nothing to write / an N mismatch that would corrupt the matrix).
+    (nothing to write / an N mismatch that would corrupt the matrix / a .tcl that is
+    there but not valid, which is kept rather than overwritten, as in Klusters).
 
     A manifest row whose k1 or k2 is negative names no unit there and writes no
     cell for it (fiber-unmix: a spike explained by ONE unit, or by a neighbour
@@ -272,6 +274,14 @@ def write_eap_membership(base, elec, *, parent_tag, n_spikes, manifest,
         return None                   # parent spike count disagrees -> refuse
 
     reg = nio.read_tcl(base, elec)
+    tcl_path = nio.session_path(base, "tcl", elec, variant="", tag="")
+    if not reg["ok"] and os.path.exists(tcl_path):
+        # As Klusters does: only an ABSENT .tcl starts fresh.  A present one that
+        # read_tcl refuses would be overwritten with free slots below, losing the
+        # session's classes; refuse instead and leave both files as they are.
+        print(f"fiber-decollide: {tcl_path} is not a valid .tcl registry (tcl.md); "
+              "the .eap membership is not written", file=sys.stderr)
+        return None
     entries = (reg["entries"] if reg["ok"]
                else [_blank_tcl_entry(i) for i in range(cells.shape[1])])
 

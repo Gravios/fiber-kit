@@ -4,6 +4,23 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.23] — read_tcl reads what neurosuite-3's readTcl reads; an invalid .tcl is kept
+`neuro_io.read_tcl` was lenient where `neurofileio::readTcl` is strict, and returned the entries in
+file order while `fiber_decollide` indexes them by column.  On 21 edge-case files the two readers
+disagreed on 13: fiber-kit read a table whose rows are out of order with its columns shifted, and
+accepted unknown statuses, malformed rows, duplicate or missing columns and out-of-range `merged:`
+targets that Klusters refuses.
+
+- `read_tcl` applies readTcl's rules (doc tcl.md): a malformed row, an unknown status, a bad
+  integer, a `merged:` target outside the table or equal to its own column, or anything but one row
+  per column 0..nClasses-1 fails the whole read; `entries[c]` is column c.
+- `fiber_decollide.write_eap_membership` (fiber-decollide, fiber-envelope, fiber-unmix) keeps a
+  `.tcl` that is there but refused, and writes no `.eap`, as Klusters does; only a missing `.tcl`
+  starts a fresh registry.  Before, it started from free slots and overwrote the session's classes.
+- `test_tcl_reader`: the 21 files, each checked against what readTcl returned for it (libneurosuite-core
+  at 12a9abf4), plus the column order, a write/read round trip and the kept registry.  15 of its 26
+  checks fail on 0.71.22.
+
 ## [0.71.22] — fiber-profile: sample a command with py-spy, pool workers included
 A way to see where a stage's time goes on the Python fiber-kit runs on now (3.12, 3.13), with no
 code change. `fiber-profile record [options] -- CMD ...` runs the command under py-spy with
