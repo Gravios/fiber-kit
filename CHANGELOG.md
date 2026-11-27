@@ -4,6 +4,22 @@ All notable changes to **fiber-kit**. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/); this project uses semantic-ish
 `0.MINOR.PATCH` versions (each minor adds a tool or a self-contained capability).
 
+## [0.71.24] — a dedup moves Klusters' residual tables of the group aside
+`.spkx`, `.spkr` and `.fetr` (neurosuite-3 doc/ndmanager-plugins/formats/) are Klusters' sparse tables
+that name `.spk` rows: the extended records of a residual stage, and the residual spike of a collision
+row and its features.  fiber-kit neither reads nor writes them, and a dedup used to leave them with
+a warning about a file type it does not know: after dropping spikes 0 and 1 of 10, a `.spkx` still said
+10 spikes and named rows 3 and 8, which had become rows 1 and 6.
+
+- `apply_spike_keep` renames the group's `.spkx.*`, `.spkr.*` and `.fetr.*` (every method and stage) to
+  `<file>.stalebkp` and prints, for each, how Klusters rebuilds it: Clusters > Rebuild Residual Spikes'
+  Extended Records for the `.spkx`; Save with Preferences > Cluster view > Subtract the partner from
+  collision rows on for the `.spkr` / `.fetr`.  Another group's are left alone.  Nothing Klusters needs
+  for the rebuild is lost: the `.eap` collision marks are subset with the group, as before.
+- `neuro_io.KLUSTERS_ROW_TABLES` lists the three with their rebuild; they join `_SWEEP_NAMED_TYPES`, so
+  the dedup no longer calls them files of an unknown type.
+- `test_dedup_klusters_tables`: 14 checks; 12 fail on 0.71.23.
+
 ## [0.71.23] — read_tcl reads what neurosuite-3's readTcl reads; an invalid .tcl is kept
 `neuro_io.read_tcl` was lenient where `neurofileio::readTcl` is strict, and returned the entries in
 file order while `fiber_decollide` indexes them by column.  On 21 edge-case files the two readers

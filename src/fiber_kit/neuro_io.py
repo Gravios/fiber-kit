@@ -1533,9 +1533,21 @@ PER_SPIKE_TYPES = ("res", "clu", "clc", "spk", "spkD", "fet", "fetD", "eap")
 # tables, logs.  Left alone by a sweep.
 NOT_PER_SPIKE_TYPES = frozenset({"pca", "nst", "clp", "cli", "cur", "wti", "wtf", "wtl", "mti", "mtf",
                                  "tcl", "model", "klg", "cpos", "probe"})
+# Klusters' sparse tables that name .spk rows (neurosuite-3 doc/ndmanager-plugins/formats/): the
+# residual stages' extended records (.spkx) and the residual spikes and their features of collision
+# rows (.spkr, .fetr).  fiber-kit neither reads nor writes them; after a dedup their row numbers name
+# other spikes, so apply_spike_keep moves the group's aside as <file>.stalebkp and says how Klusters
+# rebuilds each.
+KLUSTERS_ROW_TABLES = {
+    "spkx": "Klusters rebuilds it: Clusters > Rebuild Residual Spikes' Extended Records",
+    "spkr": ("Klusters rebuilds it at Save, with Preferences > Cluster view > Subtract the partner "
+             "from collision rows on"),
+    "fetr": ("Klusters rebuilds it at Save, with Preferences > Cluster view > Subtract the partner "
+             "from collision rows on"),
+}
 # Group files a sweep handles by name (apply_spike_keep: the realign offsets are subset, the
-# manifests moved aside).
-_SWEEP_NAMED_TYPES = frozenset({"offsets", "deconv", "realign", "spkc"})
+# manifests and Klusters' row tables moved aside).
+_SWEEP_NAMED_TYPES = frozenset({"offsets", "deconv", "realign", "spkc"} | set(KLUSTERS_ROW_TABLES))
 # Last name token of files that are never binary per-spike data, whatever their type token.
 _NOT_DATA_SUFFIX = frozenset({"tsv", "txt", "csv", "json", "yaml", "yml", "log", "md", "png", "pdf", "svg",
                               "npy", "npz", "gz", "zip", "probe", "bak", "old", "tmp", "swp", "stalebkp"})
@@ -1595,7 +1607,8 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
     the base stage: the realign offsets (<base>.offsets.<group>.npy) are subset, and every
     deconvolution manifest and realign pair list of the group (<base>.deconv.*.tsv,
     <base>.realign.*.tsv; rows indexed by spike) is moved aside as <file>.stalebkp -- its indices
-    would otherwise name other spikes.
+    would otherwise name other spikes.  So are Klusters' residual tables of the group (.spkx, .spkr,
+    .fetr: KLUSTERS_ROW_TABLES), with a line saying how Klusters rebuilds each.
 
     `nsamp` is the session's nSamples.  A waveform file under a super-sampled token
     (<base>.spk.standard_U4.<g>) holds factor x nsamp samples per channel and is read that way
@@ -1862,6 +1875,19 @@ def apply_spike_keep(base, elec, keep, n_orig, nsamp, nchan,
             if verbose:
                 print(f"dedup: {os.path.basename(sp)} names rows of another spike set -> "
                       f"{os.path.basename(sp)}.stalebkp (fiber-spkc rebuilds it)")
+        # Klusters' residual tables name .spk rows too (and .spkr its twins, .spkx its sources);
+        # fiber-kit does not write them, so the group's are moved aside for Klusters to rebuild.
+        for kind, how in KLUSTERS_ROW_TABLES.items():
+            for rt in sorted(glob.glob(f"{glob.escape(base)}.{kind}.*")):
+                if rt.endswith((".stalebkp", ".dedup.old")):
+                    continue
+                toks = os.path.basename(rt)[len(bname) + 1:].split(".")  # <kind>.<method>.<elec>[.<stage>]
+                ei = next((i for i in range(1, len(toks)) if toks[i].isdigit()), None)
+                if ei is None or toks[ei] != elec:
+                    continue
+                os.replace(rt, rt + ".stalebkp")
+                print(f"dedup: {os.path.basename(rt)} names rows of the old spike set -> "
+                      f"{os.path.basename(rt)}.stalebkp ({how})")
 
     if verbose:
         if rewritten:
