@@ -31,7 +31,8 @@ BEST = os.path.join(ROOT, "src", "fiber_kit", "fiber-kit-best.yaml")
 DOC = os.path.join(ROOT, "docs", "config.md")
 
 RUNNER = {"FK_CONFIG", "FK_DIR", "FK_DRYRUN", "FK_ELEC", "FK_KEY", "FK_PYTHON", "FK_SESS", "FK_SPK_VARIANT",
-          "FK_RUNNER_VERSION", "FK_RUNNER_ANY_VERSION", "FK_RUNNER_HANDED_OVER"}
+          "FK_RUNNER_VERSION", "FK_RUNNER_ANY_VERSION", "FK_RUNNER_HANDED_OVER",
+          "FK_PROFILE", "FK_PROFILE_ARGS"}   # fiber-profile around each step (docs/profiling.md)
 LEGACY = {"FK_REFINE_DEDUP_STRICT": "FK_REFINE_DEDUP_STALE"}
 
 BANNER = re.compile(r"^#\s+\[([A-Z0-9])\]\s+(.*\S)\s*$")
